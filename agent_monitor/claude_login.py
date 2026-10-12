@@ -110,11 +110,14 @@ def account_environment(
     base: Mapping[str, str] | None = None,
 ) -> dict[str, str]:
     """Environment for Claude subscription commands, with API routes removed."""
-    from agent_monitor.subprocess_env import child_process_env
+    from agent_monitor.subprocess_env import child_process_env, server_elan_home
 
     env = child_process_env(base)
     for name in _PROVIDER_ENV_VARS:
         env.pop(name, None)
+    # HOME becomes the private account home below; Lean's elan shims must keep
+    # using the server's toolchains instead of installing new ones there.
+    env.setdefault("ELAN_HOME", server_elan_home())
     env["CLAUDE_CONFIG_DIR"] = str(home)
     # A private HOME also prevents a subprocess from discovering another
     # account's legacy config, keychain fallback, plugins, or project history.

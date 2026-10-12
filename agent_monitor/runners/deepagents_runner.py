@@ -23,6 +23,7 @@ import re
 import shlex
 import signal
 import shutil
+import stat
 import subprocess
 import sys
 from pathlib import Path
@@ -184,12 +185,54 @@ def _compiled_lean_artifact_ready(
     return re.search(r"(?i)\b(?:sorry|admit)\b", source) is None
 
 
+_MAX_CHECK_SCRIPT_BYTES = 16_384
+
+
+def _snapshot_check_script(workspace: Path) -> tuple[Path, str] | None:
+    """Return ``(path, text)`` of a regular, unlinked ``check.sh``, if any."""
+    path = workspace / "check.sh"
+    flags = os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0)
+    try:
+        fd = os.open(path, flags)
+    except OSError:
+        return None
+    try:
+        metadata = os.fstat(fd)
+        if (
+            not stat.S_ISREG(metadata.st_mode)
+            or metadata.st_nlink != 1
+            or metadata.st_size > _MAX_CHECK_SCRIPT_BYTES
+        ):
+            return None
+        payload = os.read(fd, _MAX_CHECK_SCRIPT_BYTES + 1)
+    except OSError:
+        return None
+    finally:
+        os.close(fd)
+    if len(payload) > _MAX_CHECK_SCRIPT_BYTES or b"\x00" in payload:
+        return None
+    try:
+        return path, payload.decode("utf-8")
+    except UnicodeDecodeError:
+        return None
+
+
 def _create_lean_check_tool(
     workspace: Path,
     state: dict[str, Any],
 ):
-    """Expose one fixed compiler action without granting an arbitrary host shell."""
+    """Expose one fixed compiler action without granting an arbitrary host shell.
+
+    When the Formal harness scaffold installed ``./check.sh`` (it borrows the
+    shared prebuilt Mathlib mirror, which ``lake env lean`` in the per-run
+    directory cannot see), that wrapper is used.  Its bytes are captured here,
+    before the agent can touch the workspace, and exactly those bytes are
+    executed later; a changed or relinked ``check.sh`` is refused, so the
+    agent's file tools can never turn this action into a shell.
+    """
     from langchain_core.tools import StructuredTool
+
+    trusted_checker = _snapshot_check_script(workspace)
 
     def lean_check() -> str:
         candidate = workspace / "Proof.lean"
@@ -209,7 +252,20 @@ def _create_lean_check_tool(
 
         lake = shutil.which("lake")
         lean = shutil.which("lean")
-        if lake and any(
+        if trusted_checker is not None:
+            current = _snapshot_check_script(workspace)
+            if current != trusted_checker:
+                state.clear()
+                state.update({"exit_code": 2, "sha256": None})
+                return (
+                    "exit 2\ncheck.sh was modified, removed, or relinked after the "
+                    "harness started; refusing to run it"
+                )
+            script_path, script = trusted_checker
+            # ``sh -c`` runs the captured bytes; $0 keeps the wrapper's own path
+            # so it resolves its directory exactly as ``./check.sh`` would.
+            command = ["/bin/sh", "-c", script, str(script_path), "Proof.lean"]
+        elif lake and any(
             (workspace / name).is_file() for name in ("lakefile.lean", "lakefile.toml")
         ):
             command = [lake, "env", "lean", "Proof.lean"]
@@ -282,7 +338,11 @@ def _create_lean_check_tool(
             {
                 "exit_code": exit_code,
                 "sha256": checked_sha256,
-                "command": [Path(part).name for part in command],
+                "command": (
+                    ["check.sh", "Proof.lean"]
+                    if trusted_checker is not None
+                    else [Path(part).name for part in command]
+                ),
             }
         )
         return f"exit {exit_code}\n{output[-12000:]}".rstrip()

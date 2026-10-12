@@ -76,6 +76,161 @@ def graph_snapshot(value):
     return {'title': _text(raw.get('title'), 240), 'nodes': nodes, 'edges': edges}
 
 
+# How a shared Analyze snapshot names each verdict.  Model judgements are
+# never called verified: "checked" means checked by a model verifier.
+VERDICT_STATUS = {
+    'checked': 'checked by a model verifier',
+    'gap': 'gap',
+    'error': 'error',
+    'unclear': 'unclear',
+    'not_checked': 'not checked',
+}
+ANALYSIS_NOTICE = (
+    'Read-only snapshot of an analysis of an existing manuscript, selected by the run owner. '
+    'Verdicts are checked by a model verifier — not a certificate, a refereed review or a Lean proof; '
+    'they can be wrong in both directions. The manuscript itself is not included: follow the source link.'
+)
+
+
+def is_analysis(data):
+    return isinstance(data, dict) and (data.get('run_kind') == 'analyze' or data.get('engine') == 'analyze')
+
+
+def analysis_graph_snapshot(graph):
+    """The shared Manuscript DAG: statements already in the graph, labels and
+    verdicts; never proof excerpts, notes or anything from analysis/source."""
+    if not isinstance(graph, dict):
+        return {'nodes': [], 'edges': []}
+    nodes = []
+    for node in (graph.get('nodes') or [])[:100]:
+        if not isinstance(node, dict):
+            continue
+        meta = node.get('meta') if isinstance(node.get('meta'), dict) else {}
+        verdict = meta.get('verdict') if meta.get('verdict') in VERDICT_STATUS else 'not_checked'
+        closure = meta.get('closure') if meta.get('closure') in VERDICT_STATUS else None
+        # A reply the verifier's output could not be read from is no
+        # judgement: it is "not checked" (as in the report), never "unclear".
+        uninterpreted = meta.get('interpreted') is False
+        if uninterpreted:
+            verdict, status = 'not_checked', 'not checked (no usable verifier output)'
+        else:
+            status = VERDICT_STATUS[verdict]
+        entry = {
+            'id': _text(node.get('id'), 240), 'kind': _text(node.get('kind'), 240),
+            'label': _text(node.get('label'), 240),
+            'statement': _text(' '.join(str(node.get('statement') or '').split()), 1200),
+            'status': status, 'verdict': verdict,
+            'closure': VERDICT_STATUS[closure] if closure else '',
+            'main_result': bool(meta.get('main_result')),
+        }
+        if uninterpreted:
+            entry['uninterpreted'] = True
+        nodes.append(entry)
+    ids = {n['id'] for n in nodes}
+    edges = [{'from': _text(e.get('from'), 240), 'to': _text(e.get('to'), 240), 'label': 'uses',
+              'provenance': _text(e.get('provenance'), 20)}
+             for e in (graph.get('edges') or [])[:300]
+             if isinstance(e, dict) and e.get('from') in ids and e.get('to') in ids]
+    title = ((graph.get('source') or {}).get('title') if isinstance(graph.get('source'), dict) else '') or ''
+    return {'title': _text(title, 240), 'nodes': nodes, 'edges': edges}
+
+
+_VERDICT_HEADER = (('checked', 'checked by a model verifier'), ('gap', 'gap'), ('error', 'error'),
+                   ('unclear', 'unclear'), ('not_checked', 'not checked'))
+
+
+def _uninterpretable(summary):
+    coverage = summary.get('coverage') if isinstance(summary.get('coverage'), dict) else {}
+    try:
+        return max(0, int(coverage.get('uninterpretable') or 0))
+    except (TypeError, ValueError):
+        return 0
+
+
+def _shared_summary(summary):
+    """The summary block of a shared analysis, with unusable verifier output
+    counted as not checked (the analysis counts it as "unclear")."""
+    if not summary:
+        return {}
+    out = {key: summary.get(key) for key in ('nodes', 'checked', 'gap', 'error', 'unclear', 'not_checked',
+                                             'main_closure', 'model', 'route') if key in summary}
+    unusable = _uninterpretable(summary)
+    if unusable and 'unclear' in out and 'not_checked' in out:
+        out['unclear'] = max(0, int(out['unclear'] or 0) - unusable)
+        out['not_checked'] = int(out['not_checked'] or 0) + unusable
+        out['no_usable_output'] = unusable
+    return out
+
+
+def _verdict_counts(shared_graph, summary):
+    """The "Verdicts:" line, counted as the DAG and the report count them
+    (unusable verifier output is not checked): the stored summary covers
+    every node; the shared nodes (at most 100) stand in when it is missing."""
+    if summary:
+        tally = _shared_summary(summary)
+        unusable = int(tally.get('no_usable_output') or 0)
+    elif shared_graph and shared_graph.get('nodes'):
+        tally = {key: 0 for key, _label in _VERDICT_HEADER}
+        unusable = 0
+        for node in shared_graph['nodes']:
+            tally[node['verdict']] += 1
+            unusable += 1 if node.get('uninterpreted') else 0
+    else:
+        return ''
+    parts = [f"{int(tally.get(key) or 0)} {label}" for key, label in _VERDICT_HEADER]
+    if unusable:
+        parts[-1] += f' ({unusable} with no usable verifier output)'
+    return ', '.join(parts)
+
+
+def _analysis_snapshot(run_id, data, read, graph):
+    from agent_monitor.analyze import graph as analysis_graph
+    from agent_monitor.analyze.titles import plain_title
+
+    ws = RUNS_DIR / 'workspaces' / run_id
+    block = data.get('analyze') if isinstance(data.get('analyze'), dict) else {}
+    source = block.get('source') if isinstance(block.get('source'), dict) else {}
+    summary = block.get('summary') if isinstance(block.get('summary'), dict) else {}
+    link = next((str(source.get(key)) for key in ('resolved_url', 'input_url')
+                 if str(source.get(key) or '').startswith('https://')), '')
+    title = _text(plain_title(source.get('title')), 240) or 'manuscript'
+    try:
+        manuscript_graph = analysis_graph.load(ws)
+    except Exception:  # noqa: BLE001 - a damaged graph shares nothing
+        manuscript_graph = None
+    shared_graph = analysis_graph_snapshot(manuscript_graph) if manuscript_graph else None
+    counts = _verdict_counts(shared_graph, summary)
+    problem = f'Analysis of {title}' + (f' ({_text(source.get("version"), 80)})' if source.get('version') else '')
+    if source.get('license'):
+        problem += f'\nLicence: {_text(source.get("license"), 200)}'
+    if counts:
+        problem += f'\nVerdicts: {counts}'
+    lean = read('lean/Proof.lean')
+    result = {
+        'version': 1, 'type': 'shared', 'kind': 'analysis',
+        'title': _text(f'Analyze · {title}', 240),
+        'status': _text(data.get('status'), 80), 'engine': 'analyze',
+        'problem': problem,
+        # The report quotes labels and model findings, never the manuscript.
+        'proof': read('analysis/report.md'),
+        'agents': [],
+        'informal_graph': shared_graph if shared_graph else graph('proof_graph.json'),
+        'formal_graph': graph('lean_proof_graph.json'), 'lean_source': lean,
+        'analysis': {
+            'source': {key: _text(source.get(key), 300) for key in ('title', 'version', 'license', 'format', 'canonical_id')
+                       if source.get(key)},
+            'warnings': [_text(item, 400) for item in (source.get('warnings') or [])[:12] if isinstance(item, str)],
+            'summary': _shared_summary(summary),
+            'verdict_note': 'checked by a model verifier — not a certificate',
+            'lean_note': 'Lean statements only (proofs not attempted) on Lean 4.14 / Mathlib; upstream Lean, if any, is not re-checked by this server.',
+        },
+        'notice': ANALYSIS_NOTICE,
+    }
+    if link:
+        result['source_url'] = link
+    return result
+
+
 def snapshot(run_id, data):
     ws = RUNS_DIR / 'workspaces' / run_id
     # The workspace itself must not redirect into another user's files.
@@ -87,6 +242,16 @@ def snapshot(run_id, data):
             return graph_snapshot(json.loads(read(name)))
         except (ValueError, TypeError):
             return graph_snapshot({})
+    if is_analysis(data):
+        # Never analysis/source/** and no manuscript text beyond the node
+        # statements already in the graph; no agent transcripts either.
+        result = _analysis_snapshot(run_id, data, read, graph)
+        if not result['formal_graph']['nodes'] and result['lean_source']:
+            from agent_monitor.proof_graph import graph_from_lean
+            result['formal_graph'] = graph_snapshot(graph_from_lean(result['lean_source']))
+        if len(json.dumps(result).encode()) > 4_000_000:
+            raise ValueError('This snapshot is too large to share (4 MB maximum).')
+        return result
     agents = []
     for item in (data.get('agents') or [])[:100]:
         if not isinstance(item, dict):

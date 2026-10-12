@@ -1,0 +1,7 @@
+interface:
+  display_name: "Verify Proof"
+  short_description: "Self-review a result and write it as a fact via fact_submit"
+  default_prompt: "Use $verify-proof to review your own result against the verification rubric and, on your own acceptance, write it as a fact via fact_submit (glossary-coverage check, your verdict + review report, write-iff-you-accept; the trace is auto-logged to global memory)."
+
+policy:
+  allow_implicit_invocation: true

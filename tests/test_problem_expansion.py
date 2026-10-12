@@ -40,7 +40,7 @@ def test_ratings_distinguish_verification_size_from_bound_gap():
 
 def test_removed_difference_set_collection_is_absent_from_catalogue():
     data = json.loads((ROOT / 'agent_monitor/data/open_problems.json').read_text())
-    assert not data['compact_families']
+    assert not data.get('compact_families')
     assert 'difference-sets' not in data['counts']
     assert all(row['source'] != 'difference-sets' for row in data['problems'])
     assert all(source['id'] != 'difference-sets' for source in data['sources'])
@@ -54,10 +54,16 @@ def test_parameter_collections_are_not_in_the_selected_catalogue():
     assert all(source['id'] not in removed for source in data['sources'])
 
 
-def test_clay_list_does_not_include_solved_poincare_problem():
-    rows = clay_records()
-    assert len(rows) == 6
-    assert all('poincar' not in r['id'] for r in rows)
+def test_millennium_collection_lists_poincare_as_solved_by_the_clay_listing():
+    # The archived expansion input kept the six problems Clay listed as unsolved;
+    # the catalogue lists all seven and Clay's Solved heading makes Poincaré solved.
+    assert len(clay_records()) == 6 and all('poincar' not in r['id'] for r in clay_records())
+    data = json.loads((ROOT / 'agent_monitor/data/open_problems.json').read_text())
+    clay = {row['id']: row for row in data['problems'] if row['source'] == 'clay'}
+    assert len(clay) == 7
+    assert clay['clay-poincare-conjecture']['category'] == 'solved'
+    assert clay['clay-poincare-conjecture']['category_rule'] == 'S1'
+    assert all(row['category'] != 'solved' for key, row in clay.items() if key != 'clay-poincare-conjecture')
 
 
 def test_malformed_code_table_fails_closed():

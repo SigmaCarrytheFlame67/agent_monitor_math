@@ -1,0 +1,1 @@
+[ABLATION1-MAIN ab1_fpb08_dressian] 你是本题的 CGM main agent（ablation 1 运行）。本部署已初始化，不要跑 initialize。先完整读 experiments/ablation/RUNBOOK_ABLATION1.md，然后严格按其单题流程跑项目 ab1_fpb08_dressian（题面文件 problems/FirstProofBench/fpb08_dressian.txt，逐字进 PROBLEM.md）。verify 服务已由外层起好。完成或触发判停条款后：按手册第 8/9 步收尾（停 swarm、杀 curator、停 dashboard），输出一行 ABLATION_PROBLEM_DONE + 简报，然后停下等待，不要开下一题、不要 finalize、不要 push。

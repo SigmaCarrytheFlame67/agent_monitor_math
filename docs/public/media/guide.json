@@ -1,0 +1,35 @@
+{
+  "note": "Screen recording of one real guest run on ansatze.ai (27 Sep 2026), silent and sped up. The opening shot and the closing title card were captured from the homepage of 28 Sep 2026 (the 'Proofs that show their work.' design, since replaced). The run's problem id is blurred and no session, run or account ids are on screen.",
+  "duration": 33.83,
+  "chapters": [
+    {
+      "t": 0,
+      "title": "Try as guest"
+    },
+    {
+      "t": 3.4,
+      "title": "Ask for a proof"
+    },
+    {
+      "t": 7.9,
+      "title": "Watch the pipeline"
+    },
+    {
+      "t": 15.7,
+      "title": "Read the proof"
+    },
+    {
+      "t": 19.1,
+      "title": "Explore + Facts graphs",
+      "seek": 20.0
+    },
+    {
+      "t": 25.3,
+      "title": "Lean 4 check"
+    }
+  ],
+  "codecs": {
+    "webm": "vp9",
+    "mp4": "avc1.640028"
+  }
+}

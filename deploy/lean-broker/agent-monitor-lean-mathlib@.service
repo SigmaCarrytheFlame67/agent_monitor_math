@@ -43,7 +43,9 @@ SystemCallArchitectures=native
 CapabilityBoundingSet=
 AmbientCapabilities=
 
-MemoryMax=2147483648
+# The whole `import Mathlib` maps ~4.4 GiB of prebuilt .olean data (measured
+# with Lean 4.14.0 / Mathlib v4.14.0); 8 GiB leaves headroom for elaboration.
+MemoryMax=8589934592
 MemorySwapMax=0
 TasksMax=128
 LimitCORE=0

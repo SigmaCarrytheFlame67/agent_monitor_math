@@ -1,0 +1,7 @@
+interface:
+  display_name: "Construct Witnesses"
+  short_description: "Build and fully verify a witness for an existence goal"
+  default_prompt: "Use $construct-witnesses to discharge an existential goal: build an explicit, recursive, algorithmic, or indirect candidate witness, then verify every domain, boundary, compatibility, and target condition before submitting the verified construction."
+
+policy:
+  allow_implicit_invocation: true

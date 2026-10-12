@@ -128,6 +128,29 @@ def test_project_runs_require_membership_use_shared_problem_and_own_account(api)
     assert api('GET','/api/projects/'+pid,user=2)[0]==404
 
 
+def test_project_members_cannot_delete_each_others_runs(api, monkeypatch):
+    deleted=[]
+    monkeypatch.setattr(jobs,'delete_run',lambda rid:(deleted.append(rid),{'deleted':True,'run_id':rid})[1])
+    pid=api('POST','/api/projects',{'title':'Joint work','problem':'Shared problem'})[2]['id']
+    token=api('POST','/api/projects/'+pid+'/invite',{})[2]['path'].split('/')[-1]
+    assert api('POST','/api/projects/join',{'token':token},user=2)[0]==200
+    rid=api('POST','/api/runs',{'project_id':pid,'project_task':'Find a lemma','engine':'plain'},user=2)[2]['run_id']
+    # The project owner can read the member's run but not delete it.
+    assert api('GET','/api/projects/'+pid)[0]==200
+    status,_,data=api('DELETE','/api/runs/'+rid,user=1)
+    assert status==403 and data['error']=='Only the member who started this run can delete it.' and deleted==[]
+    assert api('DELETE','/api/runs/'+rid,user=3)[0]==404 and deleted==[]
+    assert api('DELETE','/api/runs/'+rid,user=2)[0]==200 and deleted==[rid]
+
+
+def test_operators_may_still_delete_any_run(monkeypatch):
+    monkeypatch.setattr(jobs,'run_owner',lambda rid:{'mine':5}.get(rid))
+    owner=console.Handler._is_run_owner
+    assert owner(None,'mine',{'id':5}) and not owner(None,'mine',{'id':6})
+    assert owner(None,'mine',{'id':6,'is_admin':True}) and owner(None,'legacy',{'id':6,'is_admin':True})
+    assert not owner(None,'legacy',{'id':6}) and not owner(None,'mine',{'id':6,'is_admin':True,'guest':True})
+
+
 def test_public_example_never_requires_account_or_creates_run(api):
     status,_,data=api('GET','/api/examples/erdos-straus',user=None)
     assert status==200 and data['type']=='example'

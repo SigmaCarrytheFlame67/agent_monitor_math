@@ -135,14 +135,21 @@ def forward_as_codex_event(
     ):
         return
     usage = event.get("usage") or {}
+    cache_read = int(usage.get("cache_read_input_tokens") or 0)
+    cache_write = int(usage.get("cache_creation_input_tokens") or 0)
     emit(
         {
             "type": "turn.completed",
             "usage": {
+                # Claude reports cache reads/writes apart from input_tokens.
+                # They stay apart on the wire, flagged, and the server's
+                # parser folds them into input (Codex semantics).  A parser
+                # that predates the flag reads this exactly as it always did,
+                # so it never prices cached input twice.
                 "input_tokens": int(usage.get("input_tokens") or 0),
-                "cached_input_tokens": int(
-                    usage.get("cache_read_input_tokens") or 0
-                ),
+                "cached_input_tokens": cache_read,
+                "cache_write_tokens": cache_write,
+                "input_excludes_cache": True,
                 "output_tokens": int(usage.get("output_tokens") or 0),
                 "reasoning_output_tokens": 0,
             },
@@ -228,6 +235,8 @@ _PASSTHROUGH_ENV = (
     "PATH",
     "HOME",
     "CLAUDE_CONFIG_DIR",
+    # The server's Lean toolchains; HOME is the private account home here.
+    "ELAN_HOME",
     "LANG",
     "LANGUAGE",
     "LC_ALL",
@@ -921,9 +930,12 @@ attempt to a proof. End with the outcome contract requested by the task."""
 _LEAN_SYSTEM = """You are the native Claude Code Lean formalization harness.
 Work only inside the current Lean task directory. Preserve the requested theorem
 statement and maintain the complete formal artifact as ./Proof.lean directly at
-the workspace root, never as a symlink. Use the installed Lean toolchain to
-compile and repair the file. Do not claim success with sorry, admit, axioms that
-encode the result, or an uncompiled artifact."""
+the workspace root, never as a symlink. Use the installed Lean toolchain through
+./check.sh to compile and repair the file. The target is exactly Lean 4.14.0
+with Mathlib v4.14.0 (December 2024): `import Mathlib` is supported, and names
+added or renamed after 2024 do not exist, so confirm doubtful names with
+`#check`. Do not claim success with sorry, admit, axioms that encode the
+result, native_decide, or an uncompiled artifact."""
 
 
 def claude_proof(

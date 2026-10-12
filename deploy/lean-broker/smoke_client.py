@@ -27,10 +27,12 @@ CASES = {
         Path("/run/agent-monitor-lean/core.sock"),
         "example : 1 + 1 = 2 := by decide\n",
     ),
+    # The application recommends the whole `import Mathlib`; smoke exactly
+    # that so an undersized MemoryMax fails at activation, not per request.
     "mathlib": (
         Path("/run/agent-monitor-lean/mathlib.sock"),
-        "import Mathlib.Data.Int.Notation\n"
-        "example : (1 : Int) + 1 = 2 := by decide\n",
+        "import Mathlib\n"
+        "example : (2 : ℕ) + 2 = 4 := by norm_num\n",
     ),
 }
 

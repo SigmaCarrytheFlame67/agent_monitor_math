@@ -53,9 +53,13 @@ class EngineGraphUiTests(unittest.TestCase):
             self.assertEqual(modes.count(f'data-mode="{mode}"'), 1)
         self.assertIn('class="on" data-mode="engine"', modes)
         self.assertIn("let dagMode='engine', dagEngineView='workflow';", SCRIPT)
-        self.assertIn('id="dag-title">Engine graph', HTML)
-        self.assertIn("informal:'Informal proof graph'", SCRIPT)
-        self.assertIn("Harness-native fact, workflow, or execution graph", modes)
+        # The engine mode is presented as the headline informal DAG: the CGM
+        # Explore / Facts graphs. The LLM-derived graph is the Outline.
+        self.assertIn('id="dag-title">Informal · CGM', HTML)
+        self.assertIn(">Informal · CGM</button>", modes)
+        self.assertIn(">Outline</button>", modes)
+        self.assertIn("engine:'Informal · CGM',informal:'Informal outline'", SCRIPT)
+        self.assertIn("other harnesses show their execution trace", modes)
 
         view_start = HTML.index('id="dag-engine-view"')
         view_end = HTML.index("</div>", view_start)
@@ -68,7 +72,7 @@ class EngineGraphUiTests(unittest.TestCase):
     def test_engine_payload_is_separate_and_unavailable_is_honest(self) -> None:
         source = "\n".join(
             _js_function(name)
-            for name in ("dagPayloadForMode", "dagUnavailableState")
+            for name in ("dagIsCgmEngine", "dagPayloadForMode", "dagUnavailableState")
         )
         program = """
 %s
@@ -103,8 +107,14 @@ console.log(JSON.stringify({
         self.assertIn("const isLean=!isEngine", render)
         self.assertIn("(isCompiler||isEngine)?null", render)
         self.assertIn("never a Lean certificate", render)
-        self.assertIn("unattested fact dependencies", render)
-        self.assertIn("agent execution — not proof logic", render)
+        meaning = _js_function("dagEngineMeaning")
+        self.assertIn("unattested fact dependencies", meaning)
+        self.assertIn("agent execution — not proof logic", meaning)
+        self.assertIn(
+            "model-verifier-accepted fact dependencies (not a Lean certificate)",
+            meaning,
+        )
+        self.assertNotIn("critic-accepted", SCRIPT)
 
     def test_engine_view_switch_is_explicit_and_invalid_values_fail_safe(self) -> None:
         switch = _js_function("setDagEngineView")
@@ -142,7 +152,8 @@ console.log(JSON.stringify(escapeHtml(`x" onmouseover="alert(1)' >`)));
         render = _js_function("renderDag")
         self.assertIn("const posXY=new Map()", render)
         self.assertIn("posXY.set(String(n.id)", render)
-        self.assertIn("posXY.get(String(e.from))", render)
+        self.assertIn("posXY.get(String(e.from))", _js_function("dagEdgeSvg"))
+        self.assertIn("dagEdgeSvg(edgeRoutes,posXY,", render)
         program = """
 %s
 const graph={

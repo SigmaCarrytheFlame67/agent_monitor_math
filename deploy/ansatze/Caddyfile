@@ -1,0 +1,156 @@
+# Public edge for https://ansatze.ai (template; rendered by install.sh into
+# /etc/caddy/Caddyfile).  Written for the Ubuntu 26.04 caddy package (2.6.2).
+#
+# The installer replaces the MOUNT token (the word MOUNT wrapped in double
+# at-signs) with the private console mount, /proof-<40 hex>, which must equal
+# AGENT_MONITOR_BASE_PATH in agent-monitor.service; ACME_EMAIL likewise.
+# Blocks between "#@<name>-begin" and "#@<name>-end" are removed when the
+# installer is told to omit them (--www no, no --acme-email).
+#
+# Never add a route to 127.0.0.1:4610 (the sponsored Kimi broker) or to any
+# /internal/* path: the broker's session API trusts loopback peers only.
+#
+# Global options.  Caddy's admin API defaults to an unauthenticated TCP
+# listener on localhost:2019 that every local process can reach, including
+# the console's harnesses (same host, user ubuntu): one POST /load would
+# rewrite the public edge (for example publish 127.0.0.1:4610).  It listens
+# instead on a unix socket inside Caddy's own home (/var/lib/caddy, mode
+# 0750 caddy:caddy), where `systemctl reload caddy` (ExecReload runs as
+# caddy) still reaches it.  Switching an already running Caddy from the TCP
+# listener to the socket needs one restart, not a reload; install.sh does it.
+{
+	admin unix//var/lib/caddy/admin.sock
+	#@acme-begin
+	email @@ACME_EMAIL@@
+	#@acme-end
+}
+
+# Edge response headers.  Imported by every site and again inside
+# handle_errors: error routes (the docs 404 page) are a separate route list
+# that the site-level header directive does not reach.
+(edge_headers) {
+	header {
+		-Server
+		Strict-Transport-Security "max-age=31536000"
+		?X-Content-Type-Options "nosniff"
+		?Referrer-Policy "strict-origin-when-cross-origin"
+		?X-Frame-Options "SAMEORIGIN"
+		defer
+	}
+}
+
+#@www-begin
+# One origin only: the docs site hands problems to the console through
+# same-origin localStorage, and its research client requires a same-origin
+# /sign-in redirect.
+www.ansatze.ai {
+	import edge_headers
+	redir https://ansatze.ai{uri} 308
+}
+
+http://www.ansatze.ai {
+	import edge_headers
+	redir https://ansatze.ai{uri} 308
+}
+
+#@www-end
+# Port 80.  An explicit site replaces Caddy's automatic HTTP->HTTPS redirect
+# only so the redirect carries the edge headers too (no "Server: Caddy").
+# ACME HTTP-01 challenges are still answered before these routes, and
+# certificates can also be obtained over TLS-ALPN on port 443.
+http://ansatze.ai {
+	import edge_headers
+	redir https://ansatze.ai{uri} 308
+}
+
+ansatze.ai {
+	encode zstd gzip
+
+	import edge_headers
+
+	@internal path /internal /internal/* @@MOUNT@@/internal @@MOUNT@@/internal/*
+	handle @internal {
+		respond 404
+	}
+
+	# Stable console entry.  It must land on <mount>/login: the docs research
+	# client follows this redirect and derives the API base from that path.
+	# Matched before the static site, whose sign-in.html bridge would loop.
+	# URL fragments such as #guest and #solve survive the redirect; a query
+	# string is kept explicitly (caddy 2.6 has no {?query} shorthand).
+	@signin path /sign-in /sign-in/ /sign-in.html /docs/sign-in /docs/sign-in/ /docs/sign-in.html
+	handle @signin {
+		header Cache-Control "no-store"
+		@signin_query expression {query} != ""
+		redir @signin_query @@MOUNT@@/login?{query} 302
+		redir * @@MOUNT@@/login 302
+	}
+
+	# Private console (agent-monitor.service on loopback).  The app itself
+	# maps the bare mount to its home page.  30MiB covers the console's
+	# 29 MiB attachment request ceiling.
+	@console path @@MOUNT@@ @@MOUNT@@/*
+	handle @console {
+		request_body {
+			max_size 30MiB
+		}
+		reverse_proxy 127.0.0.1:4600
+	}
+
+	# Live news feed from ansatze-news.service when it has published one;
+	# otherwise the snapshot bundled with the docs build is served below.
+	@livenews {
+		path /research/news.json
+		file {
+			root /var/lib/ansatze-news
+			try_files /news.json
+		}
+	}
+	handle @livenews {
+		root * /var/lib/ansatze-news
+		rewrite * /news.json
+		header Cache-Control "no-cache"
+		file_server
+	}
+
+	# Live problem-status overlay from ansatze-problems.service when it has
+	# published one; otherwise the empty overlay bundled with the docs build.
+	@liveproblemstatus {
+		path /research/problem-status.json
+		file {
+			root /var/lib/ansatze-problems
+			try_files /problem-status.json
+		}
+	}
+	handle @liveproblemstatus {
+		root * /var/lib/ansatze-problems
+		rewrite * /problem-status.json
+		header Cache-Control "no-cache"
+		file_server
+	}
+
+	# Documentation site (VitePress, clean URLs).
+	handle {
+		root * /home/repo/agent_monitor_math/docs/.vitepress/dist
+		@assets path /assets/*
+		header @assets Cache-Control "public, max-age=31536000, immutable"
+		# The problem catalogue and its overlay change schema between releases:
+		# browsers revalidate them (ETag) instead of reusing a heuristic copy.
+		@problemdata path /research/open-problems.json /open-problems.json /research/problem-status.json
+		header @problemdata Cache-Control "no-cache"
+		try_files {path} {path}.html {path}/index.html
+		file_server {
+			precompressed gzip
+		}
+	}
+
+	handle_errors {
+		import edge_headers
+		@notfound expression {err.status_code} == 404
+		handle @notfound {
+			root * /home/repo/agent_monitor_math/docs/.vitepress/dist
+			rewrite * /404.html
+			file_server
+		}
+	}
+}

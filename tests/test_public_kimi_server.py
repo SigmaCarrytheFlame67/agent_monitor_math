@@ -14,7 +14,11 @@ from unittest.mock import Mock, patch
 
 import agent_monitor
 from agent_monitor import auto_pipeline, jobs
-from agent_monitor.public_kimi_gateway import PublicKimiGateway, _sanitize_payload
+from agent_monitor.public_kimi_gateway import (
+    PublicKimiGateway,
+    _FairCapacity,
+    _sanitize_payload,
+)
 from agent_monitor.public_kimi_server import (
     SPONSORED_ENGINES,
     PublicAPIError,
@@ -26,6 +30,8 @@ from agent_monitor.public_kimi_server import (
     SubmissionLimiter,
     _bounded_regular_file,
     _install_worker_environment,
+    gateway_options,
+    gateway_wait_seconds,
 )
 from agent_monitor.runners import metaharness_runner
 from agent_monitor.runners import api_backend
@@ -92,7 +98,11 @@ class PublicKimiApplicationTests(unittest.TestCase):
         self.assertNotIn("max_iterations", config["limits"])
         self.assertEqual(config["limits"]["problem_characters"], 12_000)
         self.assertEqual(config["limits"]["max_output_tokens"], 8192)
-        self.assertEqual(app.limits.gateway_concurrent_calls, 4)
+        # Raised for the public multi-stage informal + Formal pipeline; the
+        # hourly gateway cap and per-token call cap remain the cost boundary.
+        self.assertEqual(app.limits.gateway_concurrent_calls, 8)
+        self.assertEqual(app.limits.gateway_calls_per_hour, 900)
+        self.assertEqual(app.limits.sponsor_calls_per_token, 200)
 
     def test_start_accepts_exact_contract_and_binds_route_model_and_limits(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -458,6 +468,50 @@ class PublicKimiBoundaryTests(unittest.TestCase):
             self.assertNotIn("HTTPS_PROXY", os.environ)
             self.assertNotIn("real-secret-value", text)
             self.assertIn("KIMI_REASONING_EFFORT=high", text)
+            self.assertEqual(os.environ["AGENT_MONITOR_API_MAX_TOKENS"], "8192")
+
+    def test_worker_output_ceiling_follows_the_configured_gateway_limit(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp, patch.dict(os.environ, {}, clear=False):
+            _install_worker_environment(
+                Path(tmp),
+                token="local-secret-value",
+                base_url="http://127.0.0.1:1234/v1",
+                max_output_tokens=16384,
+            )
+            self.assertEqual(os.environ["AGENT_MONITOR_API_MAX_TOKENS"], "16384")
+
+    def test_worker_environment_survives_a_stale_temporary_file(self) -> None:
+        """Under PrivatePIDs=yes the broker is PID 1 on every start; a temp
+        file left by a crash or a failed write must not block the next start."""
+        with tempfile.TemporaryDirectory() as tmp, patch.dict(os.environ, {}, clear=False):
+            data_dir = Path(tmp)
+            stale = [
+                data_dir / f"..public-kimi-runtime.env.{os.getpid()}.tmp",
+                data_dir / "..public-kimi-runtime.env.1.tmp",
+                data_dir / ".public-kimi-runtime.leftover.tmp",
+            ]
+            for path in stale:
+                path.write_text("KIMI_API_KEY=old-token\n", encoding="utf-8")
+            runtime = _install_worker_environment(
+                data_dir, token="local-secret-value", base_url="http://127.0.0.1:1234/v1"
+            )
+            self.assertIn("KIMI_API_KEY=local-secret-value", runtime.read_text(encoding="utf-8"))
+            self.assertEqual(runtime.stat().st_mode & 0o777, 0o600)
+            self.assertFalse([path for path in stale if path.exists()])
+            self.assertEqual(sorted(p.name for p in data_dir.iterdir()), [runtime.name])
+
+            # A failed write (for example ENOSPC) leaves no temporary behind,
+            # so the broker recovers by itself once space is freed.
+            with patch("agent_monitor.public_kimi_server.os.fsync", side_effect=OSError(28, "No space")):
+                with self.assertRaises(OSError):
+                    _install_worker_environment(
+                        data_dir, token="second-token", base_url="http://127.0.0.1:1234/v1"
+                    )
+            self.assertEqual(sorted(p.name for p in data_dir.iterdir()), [runtime.name])
+            again = _install_worker_environment(
+                data_dir, token="third-token", base_url="http://127.0.0.1:1234/v1"
+            )
+            self.assertIn("KIMI_API_KEY=third-token", again.read_text(encoding="utf-8"))
 
     def test_proxy_header_is_trusted_only_from_loopback_and_only_as_one_ip(self) -> None:
         handler = object.__new__(PublicKimiHandler)
@@ -470,6 +524,157 @@ class PublicKimiBoundaryTests(unittest.TestCase):
         handler.client_address = ("127.0.0.1", 1234)
         handler.headers.replace_header("X-Public-Client-IP", "198.51.100.8, 10.0.0.1")
         self.assertEqual(handler._client_ip(), "127.0.0.1")
+
+
+class PublicLimitsEnvironmentTests(unittest.TestCase):
+    def test_defaults_cover_a_multi_stage_public_pipeline(self) -> None:
+        limits = PublicLimits.from_env({})
+        self.assertEqual(limits, PublicLimits())
+        # One full guest run is about 12-16 informal plus up to ~12 Formal calls.
+        self.assertGreaterEqual(limits.sponsor_calls_per_token, 28)
+        self.assertGreaterEqual(limits.gateway_calls_per_hour // 28, 30)
+        self.assertEqual(limits.max_output_tokens, 8192)
+
+    def test_overrides_are_parsed_and_clamped_to_strict_ceilings(self) -> None:
+        limits = PublicLimits.from_env(
+            {
+                "PUBLIC_KIMI_GATEWAY_CALLS_PER_HOUR": "1500",
+                "PUBLIC_KIMI_GATEWAY_CONCURRENCY": " 12 ",
+                "PUBLIC_KIMI_MAX_OUTPUT_TOKENS": "16384",
+                "PUBLIC_KIMI_SPONSOR_CALLS_PER_TOKEN": "300",
+                "PUBLIC_KIMI_SPONSOR_STARTS_PER_HOUR": "90",
+                "PUBLIC_KIMI_SPONSOR_TOKENS_PER_CLIENT": "",
+            }
+        )
+        self.assertEqual(limits.gateway_calls_per_hour, 1500)
+        self.assertEqual(limits.gateway_concurrent_calls, 12)
+        self.assertEqual(limits.max_output_tokens, 16384)
+        self.assertEqual(limits.sponsor_calls_per_token, 300)
+        self.assertEqual(limits.sponsor_token_starts_per_hour, 90)
+        self.assertEqual(limits.sponsor_tokens_per_ip, PublicLimits().sponsor_tokens_per_ip)
+
+        ceiling = PublicLimits.from_env(
+            {
+                "PUBLIC_KIMI_GATEWAY_CALLS_PER_HOUR": "999999",
+                "PUBLIC_KIMI_GATEWAY_CONCURRENCY": "64",
+                "PUBLIC_KIMI_MAX_OUTPUT_TOKENS": "65536",
+                "PUBLIC_KIMI_SPONSOR_CALLS_PER_TOKEN": "100000",
+                "PUBLIC_KIMI_SPONSOR_STARTS_PER_HOUR": "100000",
+                "PUBLIC_KIMI_SPONSOR_TOKENS_PER_CLIENT": "100000",
+                "PUBLIC_KIMI_RUNS_PER_HOUR": "100000",
+                "PUBLIC_KIMI_GLOBAL_RUNS_PER_HOUR": "100000",
+                "PUBLIC_KIMI_ACTIVE_RUNS": "100",
+                "PUBLIC_KIMI_GLOBAL_ACTIVE_RUNS": "100",
+            }
+        )
+        self.assertEqual(ceiling.gateway_calls_per_hour, 2000)
+        self.assertEqual(ceiling.gateway_concurrent_calls, 16)
+        self.assertEqual(ceiling.max_output_tokens, 16384)
+        self.assertEqual(ceiling.sponsor_calls_per_token, 1000)
+        self.assertEqual(ceiling.sponsor_token_starts_per_hour, 600)
+        self.assertEqual(ceiling.sponsor_tokens_per_ip, 256)
+        self.assertEqual(ceiling.requests_per_hour, 120)
+        self.assertEqual(ceiling.global_requests_per_hour, 1000)
+        self.assertEqual(ceiling.active_runs, 4)
+        self.assertEqual(ceiling.global_active_runs, 16)
+
+        floor = PublicLimits.from_env(
+            {"PUBLIC_KIMI_MAX_OUTPUT_TOKENS": "1", "PUBLIC_KIMI_GATEWAY_CONCURRENCY": "0"}
+        )
+        self.assertEqual(floor.max_output_tokens, 1024)
+        self.assertEqual(floor.gateway_concurrent_calls, 1)
+
+    def test_gateway_queue_is_configurable_bounded_and_passed_to_the_gateway(self) -> None:
+        limits = PublicLimits.from_env({})
+        self.assertEqual(limits.gateway_queue_seconds, 60)
+        self.assertEqual(limits.gateway_queue_depth, 32)
+        options = gateway_options(limits)
+        self.assertEqual(options["queue_seconds"], 60)
+        self.assertEqual(options["queue_depth"], 32)
+        self.assertEqual(options["max_concurrency"], limits.gateway_concurrent_calls)
+        # The wait comes out of the per-call total budget, and every hop waits
+        # longer than the one behind it: sponsored clients (630 s) > broker >
+        # gateway total, so the gateway always answers first.
+        self.assertEqual(options["upstream_timeout"], limits.upstream_timeout_seconds)
+        broker_wait = gateway_wait_seconds(limits)
+        self.assertGreater(broker_wait, options["upstream_timeout"])
+        self.assertGreater(630, broker_wait)
+
+        disabled = PublicLimits.from_env(
+            {"PUBLIC_KIMI_GATEWAY_QUEUE_SECONDS": "0", "PUBLIC_KIMI_GATEWAY_QUEUE_DEPTH": "0"}
+        )
+        self.assertEqual((disabled.gateway_queue_seconds, disabled.gateway_queue_depth), (0, 0))
+        ceiling = PublicLimits.from_env(
+            {"PUBLIC_KIMI_GATEWAY_QUEUE_SECONDS": "86400", "PUBLIC_KIMI_GATEWAY_QUEUE_DEPTH": "100000"}
+        )
+        self.assertEqual((ceiling.gateway_queue_seconds, ceiling.gateway_queue_depth), (120, 128))
+        with self.assertRaisesRegex(RuntimeError, "PUBLIC_KIMI_GATEWAY_QUEUE_SECONDS"):
+            PublicLimits.from_env({"PUBLIC_KIMI_GATEWAY_QUEUE_SECONDS": "1.5"})
+
+        # The gateway clamps a directly constructed queue too, and a queued
+        # call always keeps time for the upstream request itself.
+        gateway = PublicKimiGateway(
+            upstream_base="https://kimi.example/v1",
+            upstream_api_key="real-upstream-secret",
+            local_token="local-loopback-token",
+            queue_seconds=10**6,
+            queue_depth=10**6,
+            upstream_timeout=225,
+        )
+        try:
+            self.assertEqual(gateway._server.queue_seconds, 120)
+            self.assertEqual(gateway._server.queue_depth, 128)
+        finally:
+            gateway._server.server_close()
+        short = PublicKimiGateway(
+            upstream_base="https://kimi.example/v1",
+            upstream_api_key="real-upstream-secret",
+            local_token="local-loopback-token",
+            queue_seconds=60,
+            queue_depth=4,
+            upstream_timeout=90,
+        )
+        try:
+            self.assertEqual(short._server.queue_seconds, 30)
+        finally:
+            short._server.server_close()
+
+    def test_fixed_limits_are_not_environment_configurable(self) -> None:
+        limits = PublicLimits.from_env(
+            {
+                "PUBLIC_KIMI_PROBLEM_CHARACTERS": "999999",
+                "PUBLIC_KIMI_SPONSOR_TOKEN_TTL_SECONDS": "999999",
+                "PUBLIC_KIMI_MAX_ITERATIONS": "999",
+            }
+        )
+        self.assertEqual(limits, PublicLimits())
+
+    def test_malformed_override_refuses_to_start(self) -> None:
+        for value in ("12abc", "-5", "1e3", "0x10", "12.5", "9999999999"):
+            with self.subTest(value=value), self.assertRaisesRegex(
+                RuntimeError, "PUBLIC_KIMI_GATEWAY_CALLS_PER_HOUR"
+            ) as raised:
+                PublicLimits.from_env({"PUBLIC_KIMI_GATEWAY_CALLS_PER_HOUR": value})
+            self.assertNotIn(value, str(raised.exception))
+
+    def test_process_environment_is_the_default_source(self) -> None:
+        with patch.dict(os.environ, {"PUBLIC_KIMI_GATEWAY_CONCURRENCY": "3"}, clear=False):
+            self.assertEqual(PublicLimits.from_env().gateway_concurrent_calls, 3)
+
+    def test_gateway_clamps_output_tokens_even_if_constructed_directly(self) -> None:
+        gateway = PublicKimiGateway(
+            upstream_base="https://kimi.example/v1",
+            upstream_api_key="real-upstream-secret",
+            local_token="local-loopback-token",
+            max_output_tokens=65536,
+            max_concurrency=99,
+            calls_per_hour=10**6,
+        )
+        try:
+            self.assertEqual(gateway._server.max_output_tokens, 16384)
+            self.assertEqual(gateway._server.calls_per_hour, 2000)
+        finally:
+            gateway._server.server_close()
 
 
 class SponsoredSessionTests(unittest.TestCase):
@@ -586,7 +791,7 @@ class SponsoredSessionTests(unittest.TestCase):
                     "function": {"name": "write_file", "parameters": {"type": "object"}},
                 }
                 with patch(
-                    "agent_monitor.public_kimi_server.urlrequest.urlopen",
+                    "agent_monitor.public_kimi_server.LOOPBACK_OPENER.open",
                     side_effect=urlopen,
                 ):
                     connection.request(
@@ -713,7 +918,7 @@ class PublicKimiGatewayTests(unittest.TestCase):
             local_token="local-loopback-token",
             calls_per_hour=10,
         )
-        with patch("agent_monitor.public_kimi_gateway.urlrequest.urlopen", side_effect=rejected):
+        with patch("agent_monitor.public_kimi_gateway._UPSTREAM_OPENER.open", side_effect=rejected):
             with gateway:
                 status, body, headers = self._request(
                     gateway,
@@ -724,10 +929,284 @@ class PublicKimiGatewayTests(unittest.TestCase):
         self.assertEqual(headers.get("Retry-After"), "17")
         self.assertNotIn(b"real-upstream-secret", body)
         self.assertNotIn(b"billing", body)
+        error = json.loads(body)["error"]
+        self.assertEqual(
+            {key: error[key] for key in ("message", "type", "forwarded", "upstream_status", "retry_after")},
+            {
+                "message": "Kimi request was rejected",
+                "type": "upstream_rejected",
+                "forwarded": True,
+                "upstream_status": 401,
+                "retry_after": 17,
+            },
+        )
+        self.assertIsInstance(error["upstream_elapsed_ms"], int)
         self.assertEqual(captured[0].get_header("Authorization"), "Bearer real-upstream-secret")
         forwarded = json.loads(captured[0].data)
         self.assertEqual(forwarded["model"], "kimi-k3")
         self.assertEqual(forwarded["max_tokens"], 8192)
+
+    def test_gateway_never_follows_an_upstream_redirect_with_the_real_key(self) -> None:
+        """A 3xx from the relay must not carry the key to the Location host."""
+        from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+
+        stolen: list[str | None] = []
+
+        class Capture(BaseHTTPRequestHandler):
+            def _steal(self) -> None:
+                stolen.append(self.headers.get("Authorization"))
+                body = b'{"choices":[{"message":{"content":"attacker reply"}}]}'
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+
+            do_GET = do_POST = _steal
+
+            def log_message(self, *_args) -> None:
+                pass
+
+        capture = ThreadingHTTPServer(("127.0.0.1", 0), Capture)
+        threading.Thread(target=capture.serve_forever, daemon=True).start()
+        redirect_code = [302]
+
+        class Redirecting(BaseHTTPRequestHandler):
+            def do_POST(self) -> None:
+                self.rfile.read(int(self.headers.get("Content-Length") or 0))
+                self.send_response(redirect_code[0])
+                self.send_header(
+                    "Location", f"http://localhost:{capture.server_address[1]}/steal"
+                )
+                self.send_header("Content-Length", "0")
+                self.end_headers()
+
+            def log_message(self, *_args) -> None:
+                pass
+
+        upstream = ThreadingHTTPServer(("127.0.0.1", 0), Redirecting)
+        threading.Thread(target=upstream.serve_forever, daemon=True).start()
+        gateway = PublicKimiGateway(
+            upstream_base=f"http://127.0.0.1:{upstream.server_address[1]}/v1",
+            upstream_api_key="real-upstream-secret",
+            local_token="local-loopback-token",
+            calls_per_hour=20,
+        )
+        try:
+            with patch.dict(os.environ, {"NO_PROXY": "*", "no_proxy": "*"}), gateway:
+                for code in (301, 302, 303, 307, 308):
+                    redirect_code[0] = code
+                    status, body, _headers = self._request(
+                        gateway,
+                        "local-loopback-token",
+                        {"model": "kimi-k3", "messages": [{"role": "user", "content": "prove"}]},
+                    )
+                    self.assertEqual(status, 502, (code, body))
+                    self.assertNotIn(b"attacker reply", body)
+                    self.assertNotIn(b"real-upstream-secret", body)
+                    error = json.loads(body)["error"]
+                    self.assertEqual(
+                        (error["type"], error["upstream_status"], error["forwarded"]),
+                        ("upstream_rejected", code, True),
+                    )
+        finally:
+            for server in (upstream, capture):
+                server.shutdown()
+                server.server_close()
+        self.assertEqual(stolen, [])
+
+    def test_kimi_proxies_never_follow_an_upstream_redirect(self) -> None:
+        from agent_monitor import kimi_responses_proxy
+        from agent_monitor.runners import kimi_chat_completions_proxy
+
+        for module in (kimi_chat_completions_proxy, kimi_responses_proxy):
+            handlers = module._UPSTREAM_OPENER.handlers
+            redirect = [h for h in handlers if isinstance(h, module._NoRedirect)]
+            self.assertEqual(len(redirect), 1, module.__name__)
+            self.assertFalse(
+                [
+                    h
+                    for h in handlers
+                    if type(h) is __import__("urllib.request").request.HTTPRedirectHandler
+                ],
+                module.__name__,
+            )
+            self.assertIsNone(
+                redirect[0].redirect_request(None, None, 302, "Found", {}, "http://evil/")
+            )
+
+
+class GatewayCapacityQueueTests(unittest.TestCase):
+    """A saturated gateway queues calls briefly instead of an immediate 429."""
+
+    def test_fair_capacity_serves_waiters_in_arrival_order(self) -> None:
+        capacity = _FairCapacity(1)
+        self.assertTrue(capacity.acquire())
+        self.assertFalse(capacity.acquire())  # no queueing unless allowed
+        order: list[str] = []
+
+        def waiter(name: str) -> None:
+            if capacity.acquire(timeout=10, max_waiting=4):
+                order.append(name)
+                time.sleep(0.05)
+                capacity.release()
+
+        threads = []
+        for name in ("first", "second", "third"):
+            thread = threading.Thread(target=waiter, args=(name,))
+            thread.start()
+            threads.append(thread)
+            deadline = time.monotonic() + 5
+            while capacity.waiting < len(threads) and time.monotonic() < deadline:
+                time.sleep(0.01)
+        self.assertEqual(capacity.waiting, 3)
+        # A newcomer never overtakes the queue, and the queue depth is bounded.
+        self.assertFalse(capacity.acquire(timeout=0.05, max_waiting=3))
+        capacity.release()
+        for thread in threads:
+            thread.join(timeout=5)
+        self.assertEqual(order, ["first", "second", "third"])
+        self.assertEqual(capacity.waiting, 0)
+        self.assertTrue(capacity.acquire())
+        capacity.release()
+        with self.assertRaises(ValueError):
+            capacity.release()
+
+    def test_fair_capacity_wait_is_bounded(self) -> None:
+        capacity = _FairCapacity(1)
+        self.assertTrue(capacity.acquire())
+        started = time.monotonic()
+        self.assertFalse(capacity.acquire(timeout=0.3, max_waiting=2))
+        self.assertGreaterEqual(time.monotonic() - started, 0.25)
+        self.assertEqual(capacity.waiting, 0)
+
+    @staticmethod
+    def _gateway(**options) -> PublicKimiGateway:
+        return PublicKimiGateway(
+            upstream_base="https://kimi.example/v1",
+            upstream_api_key="real-upstream-secret",
+            local_token="local-loopback-token",
+            max_concurrency=1,
+            calls_per_hour=100,
+            upstream_timeout=225,
+            **options,
+        )
+
+    @staticmethod
+    def _post(gateway: PublicKimiGateway, text: str, results: dict) -> None:
+        results[text] = PublicKimiGatewayTests._request(
+            gateway,
+            "local-loopback-token",
+            {"model": "kimi-k3", "messages": [{"role": "user", "content": text}]},
+        )
+
+    def _blocking_upstream(self):
+        entered = threading.Event()
+        release = threading.Event()
+        forwarded: list[tuple[str, float]] = []
+
+        class Upstream:
+            status = code = 200
+
+            def __init__(self) -> None:
+                self.headers = Message()
+                self.headers["Content-Type"] = "application/json"
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *_args):
+                return None
+
+            def read(self, _size=-1):
+                return b'{"choices":[{"message":{"role":"assistant","content":"ok"}}]}'
+
+        def urlopen(request, *, timeout):
+            text = json.loads(request.data)["messages"][0]["content"]
+            forwarded.append((text, timeout))
+            if text == "holder":
+                entered.set()
+                release.wait(10)
+            return Upstream()
+
+        return urlopen, entered, release, forwarded
+
+    def _request_in_thread(self, gateway, text, results) -> threading.Thread:
+        thread = threading.Thread(target=self._post, args=(gateway, text, results))
+        thread.start()
+        return thread
+
+    def test_saturated_gateway_queues_a_call_until_a_slot_frees(self) -> None:
+        urlopen, entered, release, forwarded = self._blocking_upstream()
+        gateway = self._gateway(queue_seconds=30, queue_depth=4)
+        results: dict = {}
+        with patch("agent_monitor.public_kimi_gateway._UPSTREAM_OPENER.open", side_effect=urlopen):
+            with gateway:
+                holder = self._request_in_thread(gateway, "holder", results)
+                self.assertTrue(entered.wait(5))
+                queued = self._request_in_thread(gateway, "queued", results)
+                deadline = time.monotonic() + 5
+                while gateway._server.capacity.waiting < 1 and time.monotonic() < deadline:
+                    time.sleep(0.01)
+                self.assertEqual(gateway._server.capacity.waiting, 1)
+                time.sleep(0.4)
+                self.assertNotIn("queued", results)  # waiting, not rejected
+                release.set()
+                holder.join(timeout=5)
+                queued.join(timeout=5)
+        self.assertEqual(results["holder"][0], 200)
+        self.assertEqual(results["queued"][0], 200)
+        self.assertEqual([text for text, _ in forwarded], ["holder", "queued"])
+        # The wait was carved out of the queued call's own upstream budget.
+        self.assertAlmostEqual(forwarded[0][1], 225, delta=0.5)
+        self.assertLessEqual(forwarded[1][1], 225 - 0.4)
+        self.assertGreater(forwarded[1][1], 225 - 30)
+
+    def test_queue_is_bounded_in_depth_and_time_and_can_be_disabled(self) -> None:
+        for options, expect_wait in (
+            ({"queue_seconds": 1, "queue_depth": 1}, True),
+            ({"queue_seconds": 0, "queue_depth": 8}, False),
+        ):
+            with self.subTest(**options):
+                urlopen, entered, release, forwarded = self._blocking_upstream()
+                gateway = self._gateway(**options)
+                results: dict = {}
+                with patch(
+                    "agent_monitor.public_kimi_gateway._UPSTREAM_OPENER.open", side_effect=urlopen
+                ):
+                    with gateway:
+                        holder = self._request_in_thread(gateway, "holder", results)
+                        self.assertTrue(entered.wait(5))
+                        started = time.monotonic()
+                        waiting = self._request_in_thread(gateway, "waiting", results)
+                        if expect_wait:
+                            deadline = time.monotonic() + 5
+                            while gateway._server.capacity.waiting < 1 and time.monotonic() < deadline:
+                                time.sleep(0.01)
+                            # The queue is full: the next call is refused at once.
+                            before = time.monotonic()
+                            self._post(gateway, "overflow", results)
+                            self.assertLess(time.monotonic() - before, 0.5)
+                            self.assertEqual(results["overflow"][0], 429)
+                        waiting.join(timeout=5)
+                        waited = time.monotonic() - started
+                        release.set()
+                        holder.join(timeout=5)
+                status, body, headers = results["waiting"]
+                self.assertEqual(status, 429)
+                self.assertIn(b"concurrency reached", body)
+                self.assertEqual(headers.get("Retry-After"), "2")
+                error = json.loads(body)["error"]
+                self.assertEqual(
+                    (error["type"], error["forwarded"], error["retry_after"]),
+                    ("gateway_busy", False, 2),
+                )
+                if expect_wait:
+                    self.assertGreaterEqual(waited, 0.9)
+                else:
+                    self.assertLess(waited, 0.5)
+                # Rejected calls never reached the provider.
+                self.assertEqual([text for text, _ in forwarded], ["holder"])
 
 
 class PublicKimiExecutionGuardTests(unittest.TestCase):

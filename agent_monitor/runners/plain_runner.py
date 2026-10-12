@@ -217,19 +217,41 @@ def _api_chat_with_output_limit(
     model: str,
     max_output_tokens: int | None,
 ):
-    """Apply a per-call limit without leaking it into later in-process runs."""
+    """Apply a per-call limit without leaking it into later in-process runs.
+
+    The limit is both the request budget and a hard ceiling. api_backend
+    floors its request budget at 1024 tokens, so a bounded run below that
+    floor is enforced only through AGENT_MONITOR_MAX_OUTPUT_TOKENS, which can
+    lower the provider limit but never raise it. A stricter ceiling already
+    set by the job is kept.
+    """
     if max_output_tokens is None:
         return api_chat(system, prompt, model=model)
-    key = "AGENT_MONITOR_API_MAX_TOKENS"
-    previous = os.environ.get(key)
-    os.environ[key] = str(max_output_tokens)
+    ceiling = max_output_tokens
+    inherited = os.environ.get("AGENT_MONITOR_MAX_OUTPUT_TOKENS", "").strip()
+    if inherited:
+        try:
+            inherited_ceiling = int(inherited)
+        except ValueError as exc:
+            raise APIBackendError(
+                "AGENT_MONITOR_MAX_OUTPUT_TOKENS must be an integer"
+            ) from exc
+        if 0 < inherited_ceiling < ceiling:
+            ceiling = inherited_ceiling
+    overrides = {
+        "AGENT_MONITOR_API_MAX_TOKENS": str(max_output_tokens),
+        "AGENT_MONITOR_MAX_OUTPUT_TOKENS": str(ceiling),
+    }
+    previous = {key: os.environ.get(key) for key in overrides}
+    os.environ.update(overrides)
     try:
         return api_chat(system, prompt, model=model)
     finally:
-        if previous is None:
-            os.environ.pop(key, None)
-        else:
-            os.environ[key] = previous
+        for key, value in previous.items():
+            if value is None:
+                os.environ.pop(key, None)
+            else:
+                os.environ[key] = value
 
 
 def main() -> int:

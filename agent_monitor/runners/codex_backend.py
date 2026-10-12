@@ -20,10 +20,26 @@ class CodexBackendError(RuntimeError):
 
 # Callers that persist a no-tools provenance claim can fail closed on this
 # contract instead of assuming that an `enable_tools` keyword is enforced.
-RESPONSE_ONLY_TOOL_ISOLATION_VERSION = 4
-# Re-vet the installed binary with the loopback transport contract before
-# changing this exact pin. A newer version alone does not prove tool isolation.
-RESPONSE_ONLY_CODEX_CLI_VERSION = "codex-cli 0.153.4"
+# Version 5: the safe model catalog also strips ``tool_mode`` and the
+# multi-agent fields, so "responses lite" models no longer receive the
+# code-mode and multi-agent tools inside an ``additional_tools`` input item.
+# Version-4 claims predate that fix and are no longer trusted.
+RESPONSE_ONLY_TOOL_ISOLATION_VERSION = 5
+# Exact CLI builds whose response-only turn was re-vetted end to end with the
+# loopback provider in tests/test_codex_response_only_contract.py: the request
+# must carry no tool anywhere (neither the top-level ``tools`` field nor an
+# ``input`` item that carries tools, which is how "responses lite" models
+# deliver them) and must run from an empty backend-owned cwd. A newer version
+# alone does not prove tool isolation; re-run that harness before adding one.
+RESPONSE_ONLY_CODEX_CLI_VERSIONS = frozenset(
+    {"codex-cli 0.153.4", "codex-cli 0.157.1", "codex-cli 0.160.0"}
+)
+# The vetted build operators are told to install when none is present.
+RESPONSE_ONLY_CODEX_CLI_VERSION = "codex-cli 0.160.0"
+RESPONSE_ONLY_CODEX_INSTALL_HINT = (
+    "npm i -g --prefix ~/.npm-global @openai/codex@"
+    + RESPONSE_ONLY_CODEX_CLI_VERSION.rsplit(" ", 1)[-1]
+)
 
 _MAX_BUNDLED_MODEL_CATALOG_BYTES = 2 * 1024 * 1024
 _MODEL_CATALOG_TIMEOUT_SECONDS = 20.0
@@ -131,6 +147,13 @@ def _response_only_args(*, enable_tools: bool) -> list[str]:
                 "tools.update_plan.enabled=false",
                 "-c",
                 "tools.experimental_request_user_input.enabled=false",
+                # Bundled skills are instructions to open SKILL.md files, which
+                # a tool-free turn cannot do; keep them out of the prompt and
+                # out of the account's CODEX_HOME.
+                "-c",
+                "skills.include_instructions=false",
+                "-c",
+                "skills.bundled.enabled=false",
             ]
         )
     return args
@@ -170,10 +193,14 @@ def _write_response_only_model_catalog(
 
     Feature switches alone do not disable every orchestration tool: nested
     switches control planning and user input, while the model catalog selects
-    patch and experimental tools. Response-only callers use the exact bundled
-    entry with these capabilities removed. CLI 0.153.4 is pinned and checked
-    against a loopback provider because future clients may reinterpret these
-    config fields or add default tools.
+    patch, experimental, code-mode and multi-agent tools. Code-mode catalog
+    entries (``tool_mode``) add an ``exec`` orchestration tool, and
+    ``multi_agent_version`` adds the spawn_agent/send_message collaboration
+    tools, even when every related feature switch is disabled. Response-only
+    callers use the exact bundled entry with these capabilities removed. The
+    CLI builds in ``RESPONSE_ONLY_CODEX_CLI_VERSIONS`` are pinned exactly and
+    checked against a loopback provider because future clients may
+    reinterpret these config fields or add default tools.
     """
     metadata_env = {
         "PATH": runtime_path,
@@ -184,11 +211,17 @@ def _write_response_only_model_catalog(
     version = _metadata_command(
         [codex, "--version"], env=metadata_env, cwd=temp_dir
     )
-    if version.returncode or version.stdout.strip() != RESPONSE_ONLY_CODEX_CLI_VERSION:
-        observed = version.stdout.strip() or "unavailable"
+    observed = version.stdout.strip()
+    if version.returncode or observed not in RESPONSE_ONLY_CODEX_CLI_VERSIONS:
+        vetted = " or ".join(
+            repr(item) for item in sorted(RESPONSE_ONLY_CODEX_CLI_VERSIONS)
+        )
         raise CodexBackendError(
-            "Codex response-only mode requires vetted CLI "
-            f"{RESPONSE_ONLY_CODEX_CLI_VERSION!r}; found {observed!r}"
+            f"Codex response-only mode requires vetted CLI {vetted}; found "
+            f"{observed or 'unavailable'!r} at {codex}. Install a vetted build "
+            f"(for example `{RESPONSE_ONLY_CODEX_INSTALL_HINT}`) and put it "
+            "first on the service PATH; unvetted builds are refused because "
+            "they may add tools to a response-only turn"
         )
 
     bundled = _metadata_command(
@@ -230,6 +263,13 @@ def _write_response_only_model_catalog(
         safe_model = dict(source_model)
         safe_model.pop("apply_patch_tool_type", None)
         safe_model["experimental_supported_tools"] = []
+        # Without removing ``tool_mode`` and ``multi_agent_version`` both
+        # vetted builds still send ``exec``/``wait`` and the six collaboration
+        # tools in an ``additional_tools`` input item (loopback-verified).
+        safe_model.pop("tool_mode", None)
+        safe_model.pop("multi_agent_version", None)
+        safe_model.pop("multi_agent_reasoning_effort", None)
+        safe_model["node_repl_disabled"] = True
         safe_model["include_apps_usage_instructions"] = False
         safe_model["include_plugin_usage_instructions"] = False
         safe_model["include_skills_usage_instructions"] = False

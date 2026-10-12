@@ -8,12 +8,15 @@ import urllib.error
 import urllib.request
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlsplit
 
-from agent_monitor import ROOT
+from agent_monitor import DATA_DIR, ROOT
 from agent_monitor import kimi_k3
 
 ENV_PATH = Path(os.environ.get("AGENT_MONITOR_ENV_PATH") or ROOT / ".env").expanduser().resolve()
-SYSTEM_SETTINGS_PATH = ROOT / "data" / "system_settings.json"
+# The UI overlay is host state, so it lives with the rest of the data directory
+# (never in the checkout when AGENT_MONITOR_DATA_DIR points elsewhere).
+SYSTEM_SETTINGS_PATH = DATA_DIR / "system_settings.json"
 
 
 def _server_settings_are_operator_managed() -> bool:
@@ -42,13 +45,13 @@ PROVIDERS: list[dict[str, Any]] = [
         "default_base": "https://api.openai.com/v1",
         "models": [
             "gpt-6-astra",
-            "gpt-5.6",
+            "gpt-6.1-sol",
+            "gpt-6-sol",
+            "gpt-6-luna",
             "chat-latest",
             "gpt-5.6-sol",
             "gpt-5.6-terra",
             "gpt-5.6-luna",
-            "gpt-5.6",
-            "chat-latest",
             "gpt-5.5-2026-04-23",
             "gpt-5.2-2025-12-11",
             "gpt-5-mini-2025-08-07",
@@ -183,6 +186,79 @@ GUEST_ENV_KEYS = frozenset({"OPENAI_API_KEY", "KIMI_API_KEY", "AGENT_MONITOR_MOD
 GUEST_DEFAULT_MODEL = "kimi-k3"
 
 
+OPERATOR_KIMI_BASE_VAR = "AGENT_MONITOR_KIMI_BASE_URL"
+
+
+def _https_base(value: object) -> str | None:
+    """Return a credential-free HTTPS API base, or ``None``."""
+    raw = str(value or "").strip().rstrip("/")
+    if not raw:
+        return None
+    parsed = urlsplit(raw)
+    try:
+        parsed.port
+    except ValueError:
+        return None
+    if (
+        parsed.scheme != "https"
+        or not parsed.hostname
+        or parsed.username
+        or parsed.password
+        or parsed.query
+        or parsed.fragment
+    ):
+        return None
+    return raw
+
+
+def operator_kimi_base_url() -> str:
+    """Endpoint for non-sponsored (own-key or hosted-key) Kimi engine runs.
+
+    Only the operator chooses it: ``AGENT_MONITOR_KIMI_BASE_URL`` from the
+    server environment or the operator's server env file.  It is not an
+    account setting, so a user-settable ``KIMI_API_BASE`` can never redirect
+    a key (SSRF guard).  Anything but a credential-free HTTPS URL falls back
+    to ``kimi_k3.DEFAULT_BASE_URL``.
+    """
+    configured = os.environ.get(OPERATOR_KIMI_BASE_VAR)
+    if not str(configured or "").strip():
+        configured = _read_env_file().get(OPERATOR_KIMI_BASE_VAR)
+    return _https_base(configured) or kimi_k3.DEFAULT_BASE_URL
+
+
+def _account_base_vars() -> tuple[str, ...]:
+    names = [str(spec["base_var"]) for spec in PROVIDERS if spec.get("base_var")]
+    return tuple(dict.fromkeys([*names, "AGENT_MONITOR_BASE_URL", "KIMI_BASE_URL"]))
+
+
+def restrict_account_base_urls(
+    env: dict[str, str], user: dict[str, Any] | None
+) -> dict[str, str]:
+    """SSRF guard: only the operator chooses where server-side calls go.
+
+    For the operator (no account, or a signed-in admin) ``env`` is returned
+    unchanged.  For every other account, a provider base URL survives only when
+    it is exactly the operator's own server value; anything an account stored
+    is dropped so the provider's built-in endpoint is used, and Kimi uses the
+    operator's Kimi base (as the ``kimi`` engine does).  Mutates and returns
+    ``env``; a sponsored credential applied afterwards still wins.
+    """
+    if user is None or (bool(user.get("is_admin")) and not user.get("guest")):
+        return env
+    server = _read_env_file()
+    for name in _account_base_vars():
+        value = str(env.get(name) or "").strip().rstrip("/")
+        if not value:
+            continue
+        operator_value = str(
+            os.environ.get(name) or server.get(name) or ""
+        ).strip().rstrip("/")
+        if value != operator_value:
+            env.pop(name, None)
+    env[kimi_k3.BASE_VAR] = operator_kimi_base_url()
+    return env
+
+
 def hosted_guest_kimi_key() -> str:
     """The only operator credential available to the bounded guest harness."""
     if os.environ.get("AGENT_MONITOR_GUEST_HOSTED_KIMI", "1").lower() in {"0", "false", "off", "no"}:
@@ -307,7 +383,7 @@ def _read_env_file() -> dict[str, str]:
             key, _, val = line.partition("=")
             out[key.strip()] = val.strip()
 
-    # 2. Overlay dynamic UI settings from data/system_settings.json
+    # 2. Overlay dynamic UI settings from DATA_DIR/system_settings.json
     if SYSTEM_SETTINGS_PATH.exists():
         try:
             with open(SYSTEM_SETTINGS_PATH, "r", encoding="utf-8") as f:
@@ -507,10 +583,12 @@ def get_settings(user: dict[str, Any] | None = None) -> dict[str, Any]:
     if user and user.get("guest"):
         providers.sort(key=lambda provider: provider["id"] != "kimi")
         for provider in providers:
+            # Anonymous visitors never configure an endpoint; the upstream
+            # provider URL (a code default or the operator's) stays private.
+            provider["base_url"] = ""
+            provider["default_base"] = ""
             if provider["id"] == "kimi":
                 provider["hosted_available"] = hosted_guest_available
-                provider["base_url"] = "https://api.moonshot.ai/v1"
-                provider["default_base"] = "https://api.moonshot.ai/v1"
                 if hosted_guest_available and not provider["api_key_set"]:
                     provider["api_key_set"] = True
                     provider["api_key_masked"] = None
@@ -530,12 +608,17 @@ def get_settings(user: dict[str, Any] | None = None) -> dict[str, Any]:
     saved_default_engine = str(env.get("AGENT_MONITOR_ENGINE") or "").strip()
     default_engine = "kimi" if user and user.get("guest") else _preferred_default_engine(saved_default_engine)
 
-    runtime = account_runtime(user, env=env)
+    from agent_monitor import account_policy
+
+    # A member cannot connect or use a subscription, so its runtime is always
+    # the API route and its (never linked) account homes are not probed.
+    member = account_policy.is_member(user)
+    runtime = "api" if member else account_runtime(user, env=env)
     use_codex = runtime == "codex"
     use_claude = runtime == "claude"
     codex_connected = False
     codex_models: list[str] = []
-    if user is not None and not user.get("guest"):
+    if user is not None and not user.get("guest") and not member:
         try:
             from agent_monitor import codex_login
 
@@ -546,10 +629,25 @@ def get_settings(user: dict[str, Any] | None = None) -> dict[str, Any]:
         except (KeyError, OSError, ValueError):
             codex_models = []
 
+    # A sign-in a member linked before subscriptions became administrator-only
+    # is never used, but it stays on the server until removed.  Look for its
+    # credential file only: no CLI probe, and no account home is created.
+    stored_logins: dict[str, bool] = {}
+    if member:
+        try:
+            from agent_monitor import claude_login, codex_login
+
+            stored_logins = {
+                "claude": (claude_login.account_home(int(user["id"])) / ".credentials.json").is_file(),
+                "codex": (codex_login.account_home(int(user["id"])) / "auth.json").is_file(),
+            }
+        except (KeyError, OSError, ValueError):
+            stored_logins = {}
+
     claude_connected = False
     claude_reauth_required = False
     claude_models: list[str] = []
-    if user is not None and not user.get("guest"):
+    if user is not None and not user.get("guest") and not member:
         try:
             from agent_monitor import claude_login
 
@@ -561,6 +659,13 @@ def get_settings(user: dict[str, Any] | None = None) -> dict[str, Any]:
                 claude_reauth_required = claude_login.account_reauth_required(home)
         except (KeyError, OSError, ValueError):
             claude_models = []
+
+    # Ansatz CGM Max needs both linked accounts; the console offers it then.
+    cgm_max_plan: dict[str, Any] = {"available": False, "reason": ""}
+    if user is not None and not user.get("guest"):
+        from agent_monitor import cgm_max
+
+        cgm_max_plan = cgm_max.plan_for(user)
 
     api_models: list[str] = []
     visible_providers = [p for p in providers if p["api_key_set"]]
@@ -628,7 +733,6 @@ def get_settings(user: dict[str, Any] | None = None) -> dict[str, Any]:
         "hosted_guest_available": hosted_guest_available,
         "default_model": selected_default,
         "saved_default_model": default_model,
-        "hosted_guest_available": hosted_guest_available,
         "max_iterations": max_iter,
         "model_presets": model_presets,
         "runtime_models": model_presets,
@@ -660,6 +764,10 @@ def get_settings(user: dict[str, Any] | None = None) -> dict[str, Any]:
         "claude_enabled": use_claude,
         "claude_connected": claude_connected,
         "claude_reauth_required": claude_reauth_required,
+        "cgm_max": cgm_max_plan,
+        "subscription_policy": account_policy.subscription_policy(user),
+        "subscription_notes": account_policy.subscription_notes() if member else {},
+        "subscription_stored": stored_logins,
         "auth_mode": auth_mode,
         "general": {
             k: {
@@ -699,6 +807,13 @@ def save_settings(body: dict[str, Any], user: dict[str, Any] | None = None) -> d
         # too; otherwise an existing AGENT_MONITOR_ACCOUNT_RUNTIME value wins
         # forever and the switch appears to save while changing nothing.
         runtime = "codex" if bool(body["codex_enabled"]) else "api"
+    if runtime is not None and runtime != "api":
+        from agent_monitor import account_policy
+
+        if account_policy.is_member(user):
+            # Subscription sign-in is administrator-only, so a member's runs
+            # always bill an API key; keep the stored runtime consistent.
+            runtime = "api"
     if runtime is not None:
         updates["AGENT_MONITOR_ACCOUNT_RUNTIME"] = runtime
         updates["AGENT_MONITOR_USE_CODEX"] = "1" if runtime == "codex" else "0"
@@ -761,6 +876,20 @@ def save_settings(body: dict[str, Any], user: dict[str, Any] | None = None) -> d
     return {"ok": True, "settings": get_settings()}
 
 
+class _NoRedirect(urllib.request.HTTPRedirectHandler):
+    """Surface a 3xx as its status instead of following it.
+
+    urllib would otherwise forward the Authorization header (a provider key or
+    sponsored token) to whatever host a redirect names.
+    """
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):  # noqa: D102
+        return None
+
+
+_HTTP_OPENER = urllib.request.build_opener(_NoRedirect())
+
+
 def _http_json(url: str, *, headers: dict[str, str], method: str = "GET", payload: dict | None = None, timeout: int = 20) -> tuple[int, dict | str]:
     data = None
     if payload is not None:
@@ -768,7 +897,7 @@ def _http_json(url: str, *, headers: dict[str, str], method: str = "GET", payloa
         headers = {**headers, "Content-Type": "application/json"}
     req = urllib.request.Request(url, data=data, headers=headers, method=method)
     try:
-        with urllib.request.urlopen(req, timeout=timeout) as resp:
+        with _HTTP_OPENER.open(req, timeout=timeout) as resp:
             raw = resp.read().decode("utf-8", errors="replace")
             try:
                 return resp.status, json.loads(raw)
@@ -782,6 +911,46 @@ def _http_json(url: str, *, headers: dict[str, str], method: str = "GET", payloa
             return exc.code, raw
     except urllib.error.URLError as exc:
         return 0, str(exc.reason)
+
+
+_SAFE_ERROR_TEXT_RE = re.compile(r"[^\x20-\x7e]+")
+
+
+def _default_verify_base(spec: dict[str, Any]) -> str:
+    if spec["id"] == "kimi":
+        return operator_kimi_base_url()
+    return str(spec.get("default_base") or "")
+
+
+def _verify_failure(
+    spec: dict[str, Any], code: int, body: object, *, echo_provider_message: bool
+) -> dict[str, Any]:
+    """A bounded verification error that never reflects a raw upstream body.
+
+    Only a short printable ``error.message`` from a JSON reply of the
+    provider's own built-in endpoint may be shown; responses from any custom
+    base (or non-JSON bodies) are summarized by HTTP status alone, so the
+    check cannot be used to read internal URLs.
+    """
+    label = str(spec.get("label") or spec["id"])
+    message = ""
+    if echo_provider_message and isinstance(body, dict):
+        error = body.get("error")
+        raw = error.get("message") if isinstance(error, dict) else body.get("message")
+        if isinstance(raw, str):
+            message = " ".join(_SAFE_ERROR_TEXT_RE.sub(" ", raw).split())[:200]
+    if not message:
+        if code == 0:
+            message = f"Could not reach {label}"
+        elif code in {401, 403}:
+            message = f"{label} rejected this API key (HTTP {code})"
+        elif code == 429:
+            message = f"{label} is rate-limiting this key (HTTP 429)"
+        elif 300 <= code < 400:
+            message = f"{label} answered with a redirect (HTTP {code}); redirects are not followed"
+        else:
+            message = f"{label} verification failed (HTTP {code})"
+    return {"ok": False, "provider": spec["id"], "error": message}
 
 
 def verify_provider(
@@ -798,6 +967,9 @@ def verify_provider(
     is_guest = bool(user and user.get("guest"))
     if is_guest and provider_id not in GUEST_PROVIDER_IDS:
         raise ValueError("That provider requires a signed-in account")
+    # The server-level check (no user) and the admin account are the operator;
+    # every other account may verify keys only against built-in endpoints.
+    operator = user is None or (bool(user.get("is_admin")) and not is_guest)
 
     env = resolved_user_env(user) if user is not None else _read_env_file()
     key = (api_key or "").strip() or env.get(spec["key_var"]) or ""
@@ -812,17 +984,35 @@ def verify_provider(
     if is_guest:
         key = validate_guest_api_key(key)
 
+    default_base = _default_verify_base(spec)
     if is_guest:
         # Begin every anonymous verification at the canonical provider origin;
         # ignore request input and any stale custom route stored in the DB.
-        base = "https://api.moonshot.ai/v1" if provider_id == "kimi" else str(spec.get("default_base") or "")
+        base = default_base
+    elif not operator:
+        # SSRF guard: a signed-in non-admin account cannot make the server
+        # fetch an arbitrary URL, whether it is sent now or stored earlier.
+        requested = (base_url or "").strip().rstrip("/")
+        stored = str(env.get(spec.get("base_var") or "") or "").strip().rstrip("/")
+        builtin = {default_base.rstrip("/"), str(spec.get("default_base") or "").rstrip("/")}
+        if any(value and value not in builtin for value in (requested, stored)):
+            return {
+                "ok": False,
+                "provider": provider_id,
+                "error": (
+                    "Custom API base URLs can be verified only by the operator; "
+                    "clear the custom base to verify this key"
+                ),
+            }
+        base = default_base
     else:
         base = (
             (base_url or "").strip()
             or env.get(spec.get("base_var") or "")
-            or spec.get("default_base")
+            or default_base
             or ""
         )
+    echo_provider_message = base.rstrip("/") == default_base.rstrip("/")
 
     if provider_id == "kimi":
         effort = kimi_k3.reasoning_effort(
@@ -846,12 +1036,15 @@ def verify_provider(
                 "message": f"Kimi K3 Chat Completions succeeded ({effort} reasoning)",
                 "model": kimi_k3.MODEL_ID,
             }
-        if isinstance(body, dict):
-            error = body.get("error")
-            err = error.get("message") if isinstance(error, dict) else str(error or body.get("message") or "")
-        else:
-            err = str(body)
-        return {"ok": False, "provider": provider_id, "error": err or f"HTTP {code}"}
+        if code == 200:
+            return {
+                "ok": False,
+                "provider": provider_id,
+                "error": "Kimi K3 returned no text for the verification prompt",
+            }
+        return _verify_failure(
+            spec, code, body, echo_provider_message=echo_provider_message
+        )
 
     if provider_id == "openai":
         code, body = _http_json(
@@ -861,8 +1054,9 @@ def verify_provider(
         if code == 200:
             count = len(body.get("data") or []) if isinstance(body, dict) else 0
             return {"ok": True, "provider": provider_id, "message": f"{spec['label']} key valid ({count} models)"}
-        err = body.get("error", {}).get("message") if isinstance(body, dict) else str(body)
-        return {"ok": False, "provider": provider_id, "error": err or f"HTTP {code}"}
+        return _verify_failure(
+            spec, code, body, echo_provider_message=echo_provider_message
+        )
 
     if provider_id == "anthropic":
         code, body = _http_json(
@@ -884,12 +1078,9 @@ def verify_provider(
                 "provider": provider_id,
                 "message": "Anthropic Messages API call succeeded",
             }
-        err = body.get("error", {}).get("message") if isinstance(body, dict) else str(body)
-        return {
-            "ok": False,
-            "provider": provider_id,
-            "error": err or f"Anthropic Messages API returned HTTP {code}",
-        }
+        return _verify_failure(
+            spec, code, body, echo_provider_message=echo_provider_message
+        )
 
     if provider_id == "openrouter":
         code, body = _http_json(
@@ -898,8 +1089,9 @@ def verify_provider(
         )
         if code == 200:
             return {"ok": True, "provider": provider_id, "message": "OpenRouter key valid"}
-        err = body.get("error", {}).get("message") if isinstance(body, dict) else str(body)
-        return {"ok": False, "provider": provider_id, "error": err or f"HTTP {code}"}
+        return _verify_failure(
+            spec, code, body, echo_provider_message=echo_provider_message
+        )
 
     if provider_id == "google":
         code, body = _http_json(
@@ -908,8 +1100,9 @@ def verify_provider(
         )
         if code == 200:
             return {"ok": True, "provider": provider_id, "message": "Gemini key valid"}
-        err = body.get("error", {}).get("message") if isinstance(body, dict) else str(body)
-        return {"ok": False, "provider": provider_id, "error": err or f"HTTP {code}"}
+        return _verify_failure(
+            spec, code, body, echo_provider_message=echo_provider_message
+        )
 
     # OpenAI-compatible providers
     if provider_id in {"deepseek", "groq", "together", "xai"}:
@@ -919,7 +1112,8 @@ def verify_provider(
         )
         if code == 200:
             return {"ok": True, "provider": provider_id, "message": f"{spec['label']} key valid"}
-        err = body.get("error", {}).get("message") if isinstance(body, dict) else str(body)
-        return {"ok": False, "provider": provider_id, "error": err or f"HTTP {code}"}
+        return _verify_failure(
+            spec, code, body, echo_provider_message=echo_provider_message
+        )
 
     return {"ok": False, "provider": provider_id, "error": "Verification not implemented"}

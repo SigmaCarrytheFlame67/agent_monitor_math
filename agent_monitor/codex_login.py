@@ -24,6 +24,7 @@ import os
 import re
 import shutil
 import subprocess
+import tempfile
 import threading
 import time
 from pathlib import Path
@@ -41,20 +42,33 @@ _MAX_OUTPUT_CHARS = 4000
 # A newly completed device login has valid OAuth tokens before Codex has made
 # its first model-list request and written models_cache.json. Keep the first
 # run usable during that short bootstrap window; the account's real cache takes
-# precedence as soon as Codex creates it.
+# precedence as soon as Codex creates it. This is the visible catalog of the
+# vetted CLI (codex-cli 0.160.0, `codex debug models --bundled`), which is also
+# what connected accounts report, so the list does not change under the UI
+# after the first run. ``refresh_models_cache`` fetches the real catalog right
+# after a login.
 DEFAULT_CODEX_MODELS = (
+    "gpt-6.1-sol",
     "gpt-6-astra",
+    "gpt-6-sol",
+    "gpt-6-luna",
     "gpt-5.6-sol",
     "gpt-5.6-terra",
     "gpt-5.6-luna",
     "gpt-5.5",
-    "gpt-5.4",
-    "gpt-5.4-mini",
-    "gpt-5.3-codex-spark",
 )
+# ``codex debug models`` renders the catalog after refreshing it with the
+# account's login (a metadata request, not a model call) and writes
+# models_cache.json; its stdout is discarded.
+_MODELS_REFRESH_TIMEOUT_S = 30
 
 _lock = threading.Lock()
 _states: dict[int, dict[str, Any]] = {}
+# Codex records the CLI build that wrote models_cache.json and ignores another
+# build's cache, but only the next time it runs for that account. The model
+# list below reads the file directly, so after a CLI upgrade it refreshes such
+# a cache in the background, once per account and installed build.
+_CACHE_CHECKS: set[tuple[str, str, float]] = set()
 
 
 def _state_for(user_id: int) -> dict[str, Any]:
@@ -87,10 +101,52 @@ def account_login_ready(home: Path) -> bool:
     return bool(tokens.get("access_token") or tokens.get("id_token"))
 
 
+def _installed_cli_version(codex: str) -> str:
+    """Bare version (``0.160.0``) that ``codex --version`` reports."""
+    with tempfile.TemporaryDirectory() as isolated_home:
+        try:
+            completed = subprocess.run(
+                [codex, "--version"],
+                env={"PATH": os.environ.get("PATH", os.defpath), "HOME": isolated_home,
+                     "CODEX_HOME": isolated_home, "NO_COLOR": "1"},
+                stdin=subprocess.DEVNULL,
+                capture_output=True,
+                text=True,
+                timeout=_MODELS_REFRESH_TIMEOUT_S,
+                check=False,
+                cwd=isolated_home,
+            )
+        except (OSError, subprocess.SubprocessError):
+            return ""
+    return completed.stdout.strip().rsplit(" ", 1)[-1]
+
+
+def _refresh_cache_from_another_cli(user_id: int, home: Path, cached_version: str) -> None:
+    codex = codex_binary()
+    if not codex:
+        return
+    try:
+        key = (str(home), codex, os.path.getmtime(codex))
+    except OSError:
+        return
+    with _lock:
+        if key in _CACHE_CHECKS:
+            return
+        _CACHE_CHECKS.add(key)
+
+    def check() -> None:
+        installed = _installed_cli_version(codex)
+        if installed and installed != cached_version:
+            refresh_models_cache(user_id)
+
+    threading.Thread(target=check, daemon=True, name=f"codex-models-{user_id}").start()
+
+
 def available_models(user_id: int) -> list[str]:
     """Return visible model IDs from this user's Codex cache without reading tokens."""
     home = account_home(user_id)
-    fallback = list(DEFAULT_CODEX_MODELS) if account_login_ready(home) else []
+    logged_in = account_login_ready(home)
+    fallback = list(DEFAULT_CODEX_MODELS) if logged_in else []
     cache = home / "models_cache.json"
     if not cache.exists():
         return fallback
@@ -98,6 +154,8 @@ def available_models(user_id: int) -> list[str]:
         payload = json.loads(cache.read_text(encoding="utf-8"))
     except (OSError, ValueError):
         return fallback
+    if logged_in and isinstance(payload, dict):
+        _refresh_cache_from_another_cli(user_id, home, str(payload.get("client_version") or ""))
     entries = payload.get("models") if isinstance(payload, dict) else []
     ranked: list[tuple[int, str]] = []
     for item in entries or []:
@@ -120,6 +178,38 @@ def codex_binary() -> str | None:
     from agent_monitor.engines_registry import which_tool
 
     return which_tool("codex")
+
+
+def refresh_models_cache(user_id: int, *, timeout: float = _MODELS_REFRESH_TIMEOUT_S) -> bool:
+    """Ask the Codex CLI to fetch this account's model catalog into its cache.
+
+    Runs right after a successful login so the model list the Settings UI
+    shows is the list the server validates runs against (both read
+    ``available_models``), instead of the built-in fallback changing after the
+    first run. Best effort: no tokens are read here and failures are ignored.
+    """
+    home = account_home(user_id)
+    codex = codex_binary()
+    if not codex or not account_login_ready(home):
+        return False
+    from agent_monitor.subprocess_env import child_process_env
+
+    env = child_process_env()
+    env["CODEX_HOME"] = str(home)
+    env.setdefault("NO_COLOR", "1")
+    try:
+        subprocess.run(
+            [codex, "debug", "models"],
+            env=env,
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            timeout=timeout,
+            check=False,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return False
+    return (home / "models_cache.json").is_file()
 
 
 def _augment(user_id: int, snapshot: dict[str, Any]) -> dict[str, Any]:
@@ -170,6 +260,10 @@ def _reader(proc: subprocess.Popen, home: Path, user_id: int) -> None:
     except subprocess.TimeoutExpired:
         proc.kill()
         rc = -1
+    if rc == 0 and account_login_ready(home):
+        # Before reporting success (the UI then reloads its model list), fetch
+        # the account's real catalog.
+        refresh_models_cache(user_id)
     with _lock:
         st = _state_for(user_id)
         if st.get("status") == "cancelled":

@@ -1,0 +1,7 @@
+interface:
+  display_name: "Reformulate Problem"
+  short_description: "Rewrite the goal in an equivalent, more workable form"
+  default_prompt: "Use $reformulate-problem to rewrite the current goal as a proved equivalent statement whose structure is more transparent, establishing both directions of the equivalence as verified fact(s)."
+
+policy:
+  allow_implicit_invocation: true

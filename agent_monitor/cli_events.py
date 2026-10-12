@@ -16,11 +16,29 @@ from pathlib import Path
 from typing import Any
 
 
+# Engines whose trusted runner announces CGM pipeline stages as
+# ``{"type": "pipeline.stage", "stage": <id>, "label": ...}`` events. The ids
+# match ``jobs._pipeline_for`` for these engines.  The Analyze runner reuses
+# the same five ids (Ingest, Segment, Check, Roll-up, Report).
+PIPELINE_STAGE_ENGINES = frozenset({"math_harness", "kimi", "analyze"})
+PIPELINE_STAGE_IDS = frozenset({"scaffold", "work", "verify", "curate", "finalize"})
+
+
 class CLIEventParser:
     """Feed raw stdout lines; accumulates usage + readable log lines."""
 
-    def __init__(self, engine: str):
+    def __init__(self, engine: str, *, source_engine: str | None = None):
+        # ``engine`` selects the stream protocol (parser style); the source
+        # engine is the product engine, which decides whether runner-emitted
+        # pipeline stage events are trusted.
         self.engine = engine
+        # Codex (OpenAI) usage counts cached input inside ``input_tokens``;
+        # Claude-style streams (claude, openclaude, openclaw) report cache
+        # reads and writes separately from ``input_tokens``.
+        self.input_includes_cache = engine == "codex"
+        self.source_engine = str(source_engine or engine or "").strip().lower()
+        self.pipeline_stage: str | None = None
+        self.pipeline_stage_label: str | None = None
         self.lines: list[str] = []
         self.usage: dict[str, Any] = {
             "input_tokens": 0,
@@ -91,7 +109,9 @@ class CLIEventParser:
 
     def _codex_event(self, ev: dict) -> None:
         t = ev.get("type") or ""
-        if t == "thread.started":
+        if t == "pipeline.stage":
+            self._pipeline_stage_event(ev)
+        elif t == "thread.started":
             self._log(f"◦ session {ev.get('thread_id', '')[:18]}…")
         elif t == "item.completed":
             item = ev.get("item") or {}
@@ -138,17 +158,28 @@ class CLIEventParser:
             self.terminal_status = "completed"
             self.terminal_error = None
             u = ev.get("usage") or {}
-            self.usage["input_tokens"] += int(u.get("input_tokens") or 0)
-            self.usage["cache_read_tokens"] += int(u.get("cached_input_tokens") or 0)
+            # Codex semantics: both cached parts are inside input_tokens.
+            # cache_write_tokens only comes from our own projections of
+            # Claude usage (Codex has no cache writes); those projections send
+            # input without the cache, flagged, so fold it in here.
+            cached = int(u.get("cached_input_tokens") or u.get("cache_read_tokens") or 0)
+            written = int(u.get("cache_write_tokens") or 0)
+            input_tokens = int(u.get("input_tokens") or 0)
+            if u.get("input_excludes_cache") is True:
+                input_tokens += cached + written
+            self.usage["input_tokens"] += input_tokens
+            self.usage["cache_read_tokens"] += cached
+            self.usage["cache_write_tokens"] += written
             self.usage["output_tokens"] += int(u.get("output_tokens") or 0)
             self.usage["reasoning_tokens"] += int(u.get("reasoning_output_tokens") or 0)
             self._log(
-                f"· usage in {u.get('input_tokens', 0)} / out {u.get('output_tokens', 0)}"
+                f"· usage in {input_tokens} / out {u.get('output_tokens', 0)}"
             )
             self._close_turn(
-                input_tokens=int(u.get("input_tokens") or 0),
+                input_tokens=input_tokens,
                 output_tokens=int(u.get("output_tokens") or 0),
-                cache_read=int(u.get("cached_input_tokens") or 0),
+                cache_read=cached,
+                cache_write=written,
                 reasoning=int(u.get("reasoning_output_tokens") or 0),
             )
         elif t in {"turn.failed", "turn.cancelled"}:
@@ -160,6 +191,21 @@ class CLIEventParser:
             self._log(f"error · {_clip(self.terminal_error)}")
         elif t == "error":
             self._log(f"error · {_clip(ev.get('message'))}")
+
+    def _pipeline_stage_event(self, ev: dict) -> None:
+        """Remember the CGM stage so later turn nodes land in its column."""
+        if self.source_engine not in PIPELINE_STAGE_ENGINES:
+            return
+        stage = str(ev.get("stage") or "").strip().lower()
+        if stage not in PIPELINE_STAGE_IDS:
+            return
+        # A stage boundary closes the previous stage's pending items.
+        self._close_turn()
+        self.pipeline_stage = stage
+        label = " ".join(str(ev.get("label") or stage).split())[:60]
+        self.pipeline_stage_label = label
+        detail = " ".join(str(ev.get("detail") or "").split())[:120]
+        self._log(f"stage · {label}" + (f" · {detail}" if detail else ""))
 
     # ── openclaude (claude-code protocol) ────────────────────────────────
 
@@ -388,6 +434,32 @@ class CLIEventParser:
     def output(self) -> str:
         return "\n".join(self.lines)
 
+    def input_total(self, input_tokens: Any, cache_read: Any = 0, cache_write: Any = 0) -> int:
+        """Every input token the model read, cached or not, for this stream."""
+        total = int(input_tokens or 0)
+        if not self.input_includes_cache:
+            total += int(cache_read or 0) + int(cache_write or 0)
+        return total
+
+    def uncached_input(self, input_tokens: Any, cache_read: Any = 0, cache_write: Any = 0) -> int:
+        """Input billed at the plain input rate (cache reads/writes excluded).
+
+        Cost estimates price cache reads and writes at their own rates, so
+        Codex-semantics input (which already contains them) must drop them
+        first or they are charged twice.
+        """
+        total = int(input_tokens or 0)
+        if self.input_includes_cache:
+            total -= int(cache_read or 0) + int(cache_write or 0)
+        return max(0, total)
+
+    def total_input_tokens(self) -> int:
+        """Run-level input including cache reads/writes (see ``input_total``)."""
+        u = self.usage
+        return self.input_total(
+            u.get("input_tokens"), u.get("cache_read_tokens"), u.get("cache_write_tokens")
+        )
+
     def final_message(self) -> str:
         """Return the latest normalized assistant message, if one was parsed."""
         for turn in reversed(self.turns):
@@ -436,6 +508,7 @@ class CLIEventParser:
                 "reasoning_tokens": reasoning,
                 "model": model or self.usage.get("model"),
                 "model_source": model_source,
+                "pipeline_stage": self.pipeline_stage,
             }
         )
         self._cur = self._new_turn()
@@ -451,6 +524,11 @@ class CLIEventParser:
                 stage, role = "write", "assistant"
             else:
                 stage, role = "plan", "reasoning"
+            if t.get("pipeline_stage"):
+                stage = t["pipeline_stage"]
+            elif self.source_engine in PIPELINE_STAGE_ENGINES:
+                # Output before the first stage event is the pipeline header.
+                stage = "scaffold"
             label = "+".join(sorted(kinds)) or "call"
             nodes.append(
                 {
@@ -472,6 +550,9 @@ class CLIEventParser:
                     "model": t.get("model"),
                     "model_source": t.get("model_source"),
                     "input_tokens": t["input_tokens"] or None,
+                    "total_input_tokens": self.input_total(
+                        t["input_tokens"], t["cache_read_tokens"], t["cache_write_tokens"]
+                    ),
                     "output_tokens": t["output_tokens"] or None,
                     "cache_read_tokens": t["cache_read_tokens"] or 0,
                     "cache_write_tokens": t["cache_write_tokens"] or 0,
@@ -486,7 +567,7 @@ class CLIEventParser:
                     "trace_id": f"{run_id}::turn-{i}",
                     "stage_name": f"turn-{i} (running)",
                     "role": "agent",
-                    "pipeline_stage": "act",
+                    "pipeline_stage": self.pipeline_stage or "act",
                     "call_seq": i,
                     "round_id": i,
                     "output": "\n\n".join(self._cur["detail"])[:8000],

@@ -24,8 +24,8 @@ from typing import Any
 from agent_monitor import lean_broker
 
 
-SCHEMA_VERSION = 3
-PRODUCER = "agent-monitor-lean-env-v3"
+SCHEMA_VERSION = 4
+PRODUCER = "agent-monitor-lean-env-v4"
 ARTIFACT_FILENAME = "lean_kg_snapshot.json"
 MAX_SOURCE_BYTES = 2_000_000
 MAX_ARTIFACT_BYTES = 2_000_000
@@ -37,6 +37,7 @@ _ATTESTATION_LOCK = threading.Lock()
 _ATTESTED_SNAPSHOTS: dict[str, str] = {}
 MAX_ATTESTATIONS = 2048
 TRUSTED_SANDBOXES = {lean_broker.SANDBOX_MARKER}
+SORRY_AXIOM = "sorryAx"
 
 
 def normalized_source_sha256(source: str) -> str:
@@ -71,8 +72,16 @@ def _checker_receipt(checked: Any) -> dict[str, str] | None:
     source_sha = str(receipt.get("source_sha256") or "").lower()
     profile = str(receipt.get("checker_profile") or "")
     uses_mathlib = checked.get("uses_mathlib")
+    status = checked.get("status")
+    # A file that compiled with `sorry` has a kernel receipt too; its facts
+    # are extracted with sorry-dependent declarations marked, never promoted.
+    bound_sha = (
+        checked.get("verified_source_sha256")
+        if status in {"verified", "unfaithful"}
+        else checked.get("checked_source_sha256")
+    )
     if (
-        checked.get("status") not in {"verified", "unfaithful"}
+        status not in {"verified", "unfaithful", "incomplete"}
         or receipt.get("ok") is not True
         or receipt.get("status") != "verified"
         or receipt.get("exit_code") != 0
@@ -83,7 +92,7 @@ def _checker_receipt(checked: Any) -> dict[str, str] | None:
         or not isinstance(uses_mathlib, bool)
         or uses_mathlib != (profile == "mathlib")
         or not re.fullmatch(r"[0-9a-f]{64}", source_sha)
-        or checked.get("verified_source_sha256") != source_sha
+        or bound_sha != source_sha
     ):
         return None
     toolchain = checked.get("toolchain")
@@ -255,10 +264,10 @@ def _unsafe_source_reason(source: str) -> str:
     for match in re.finditer(r"(?m)^\s*import\s+([^\n]+)$", executable):
         modules = [part for part in match.group(1).split() if part]
         for module in modules:
-            if module == "Mathlib":
-                return "broad import Mathlib is disabled"
+            # The whole `Mathlib` import is supported: the Mathlib broker
+            # profile loads the prebuilt library within its fixed limits.
             if not (
-                module in {"Init", "Lean", "Std"}
+                module in {"Init", "Lean", "Std", "Mathlib"}
                 or module.startswith(("Init.", "Lean.", "Std.", "Mathlib."))
             ):
                 return (
@@ -378,11 +387,29 @@ def _names(value: Any) -> tuple[list[str], bool]:
         if isinstance(item, str) and item.strip()
     })
     truncated = len(value) > len(bounded) or len(names) > MAX_DEPENDENCIES
-    return names[:MAX_DEPENDENCIES], truncated
+    kept = names[:MAX_DEPENDENCIES]
+    # `sorryAx` sorts after every capitalised namespace, so a plain cut drops
+    # it first; it is the one dependency the sorry taint must never lose.
+    if SORRY_AXIOM in names and SORRY_AXIOM not in kept:
+        kept = [SORRY_AXIOM] + kept[: MAX_DEPENDENCIES - 1]
+    return kept, truncated
 
 
-def _normalize(source: str, rows: Any) -> list[dict[str, Any]]:
-    from agent_monitor.lean_verify import _decls_with_docs
+def _normalize(
+    source: str, rows: Any, *, may_use_sorry: bool | None = None
+) -> list[dict[str, Any]]:
+    """Bind compiler rows to source declarations and mark sorry-dependence.
+
+    ``may_use_sorry`` says whether the checked file can depend on ``sorryAx``
+    at all (it was accepted as incomplete, or has sorry/admit tokens). For
+    such a file a truncated dependency list cannot prove a declaration clean,
+    so truncation counts as sorry-dependent (fail closed). A verified file
+    passed the axioms probe, so truncation there says nothing about sorry.
+    """
+    from agent_monitor.lean_verify import _decls_with_docs, _sorry_lines
+
+    if may_use_sorry is None:
+        may_use_sorry = bool(_sorry_lines(source))
 
     if not isinstance(rows, list) or len(rows) > 4096:
         raise ValueError("invalid or oversized Lean KG payload")
@@ -455,6 +482,33 @@ def _normalize(source: str, rows: Any) -> list[dict[str, Any]]:
         decl["local_proof_uses"] = [
             n for n in decl["proof_dependencies"] if n in local
         ]
+    # `sorryAx` in a declaration's own terms, or in anything it uses, means
+    # the declaration is not proved. Propagate through local dependencies.
+    tainted = {
+        d["qualified_name"]
+        for d in normalized
+        if SORRY_AXIOM in d["proof_dependencies"]
+        or SORRY_AXIOM in d["statement_dependencies"]
+        or (
+            may_use_sorry
+            and (
+                d["proof_dependencies_truncated"]
+                or d["statement_dependencies_truncated"]
+            )
+        )
+    }
+    changed = True
+    while changed:
+        changed = False
+        for decl in normalized:
+            name = decl["qualified_name"]
+            if name not in tainted and (
+                set(decl["local_proof_uses"]) | set(decl["local_statement_mentions"])
+            ) & tainted:
+                tainted.add(name)
+                changed = True
+    for decl in normalized:
+        decl["uses_sorry"] = decl["qualified_name"] in tainted
     return normalized
 
 
@@ -467,12 +521,19 @@ def _verified_source_reason(workspace: Path, current: str) -> str:
     from agent_monitor import lean_verify
 
     checked = lean_verify.load_cached(workspace) or {}
-    if str(checked.get("status") or "") not in {"verified", "unfaithful"}:
-        return "Lean KG requires a kernel-verified current Proof.lean"
+    status = str(checked.get("status") or "")
+    if status not in {"verified", "unfaithful", "incomplete"}:
+        return "Lean KG requires a kernel-checked current Proof.lean"
     recorded = str(checked.get("lean") or "")
     if not recorded:
         return "Lean verification cache has no source to attest"
-    expected_sha = str(checked.get("verified_source_sha256") or "").lower()
+    expected_sha = str(
+        checked.get(
+            "checked_source_sha256" if status == "incomplete"
+            else "verified_source_sha256"
+        )
+        or ""
+    ).lower()
     current_sha = hashlib.sha256(current.encode()).hexdigest()
     if not re.fullmatch(r"[0-9a-f]{64}", expected_sha):
         return "Lean verification cache has no authoritative source hash"
@@ -480,7 +541,7 @@ def _verified_source_reason(workspace: Path, current: str) -> str:
         return "current Proof.lean hash differs from the kernel-verified source"
     if current not in {recorded, recorded.rstrip() + "\n"}:
         return "current Proof.lean differs from the kernel-verified source bytes"
-    if lean_verify._sorry_lines(current):
+    if status != "incomplete" and lean_verify._sorry_lines(current):
         return "Lean KG is unavailable while sorry/admit remains"
     blocked_flags = {
         str(flag.get("id") or "")
@@ -579,6 +640,7 @@ def load_snapshot(
         "proof_edge_count": MAX_DECLARATIONS * MAX_DEPENDENCIES,
         "statement_edge_count": MAX_DECLARATIONS * MAX_DEPENDENCIES,
         "dependency_truncated_count": MAX_DECLARATIONS * 2,
+        "sorry_dependent_count": MAX_DECLARATIONS,
     }
     for key, limit in numeric_limits.items():
         raw = value.get(key, 0)
@@ -614,7 +676,8 @@ def load_snapshot(
             ):
                 return None
         for key in (
-            "statement_dependencies_truncated", "proof_dependencies_truncated"
+            "statement_dependencies_truncated", "proof_dependencies_truncated",
+            "uses_sorry",
         ):
             if not isinstance(declaration.get(key), bool):
                 return None
@@ -644,6 +707,9 @@ def load_snapshot(
             int(declaration["statement_dependencies_truncated"])
             + int(declaration["proof_dependencies_truncated"])
             for declaration in declarations
+        )
+        or value.get("sorry_dependent_count", 0) != sum(
+            int(declaration["uses_sorry"]) for declaration in declarations
         )
         or matched == 0
     ):
@@ -703,7 +769,7 @@ def extract_snapshot(
     source = current
     uses_mathlib = (
         bool(uses_mathlib) if uses_mathlib is not None else
-        bool(re.search(r"(?m)^\s*import\s+Mathlib(?:\.|\s)", source))
+        bool(re.search(r"(?m)^\s*import\s+Mathlib\b", source))
     )
     verified_error = _verified_source_reason(workspace, source)
     if verified_error:
@@ -783,7 +849,18 @@ def extract_snapshot(
                     raise ValueError(
                         "Lean KG broker release differs from the verified checker release"
                     )
-                declarations = _normalize(source, raw["rows"])
+                declarations = _normalize(
+                    source,
+                    raw["rows"],
+                    may_use_sorry=(
+                        str(checked.get("status") or "") == "incomplete"
+                        or (
+                            bool(checked.get("checked_source_sha256"))
+                            and not checked.get("verified_source_sha256")
+                        )
+                        or bool(lean_verify._sorry_lines(source))
+                    ),
+                )
                 matched_count = sum(d["matched"] for d in declarations)
                 if not declarations or not matched_count:
                     raise ValueError(
@@ -818,6 +895,9 @@ def extract_snapshot(
                         int(d["statement_dependencies_truncated"])
                         + int(d["proof_dependencies_truncated"])
                         for d in declarations
+                    ),
+                    "sorry_dependent_count": sum(
+                        int(d["uses_sorry"]) for d in declarations
                     ),
                     "declarations": declarations,
                 }
@@ -890,6 +970,7 @@ def snapshot_summary(value: dict[str, Any] | None) -> dict[str, Any]:
         "proof_edge_count": integer("proof_edge_count"),
         "statement_edge_count": integer("statement_edge_count"),
         "dependency_truncated_count": integer("dependency_truncated_count"),
+        "sorry_dependent_count": integer("sorry_dependent_count"),
         "duration_s": duration,
         "error": str(value.get("error") or "")[:300],
     }

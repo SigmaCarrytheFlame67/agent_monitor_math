@@ -1,20 +1,34 @@
 """Lean verification — translate an informal proof into Lean 4 and check it.
 
-Pipeline
---------
-1. Read ``problem.txt`` + ``proof.md`` (or ``proof.tex`` / final agent output).
-2. Ask an LLM for a self-contained Lean 4 file that formalises the claim.
-3. Write it under ``<workspace>/lean/Proof.lean`` and try to compile with
-   ``lake`` / ``lean``.
-4. On compiler errors, feed the log back to the model for up to
-   ``max_repairs`` repair rounds.
-5. Cache the whole result as ``lean_verify.json`` so reopening the tab is free.
+Pipeline (``generate``)
+-----------------------
+1. Read ``problem.txt`` + ``proof.md`` (or ``proof.tex`` / final agent output)
+   and an optional blueprint (the run's fact DAG or informal DAG).
+2. Statement first: ask for a Lean 4.14 / Mathlib v4.14 skeleton that STATES
+   the problem (``main`` plus blueprint lemmas) with ``sorry`` proofs, compile
+   it through the sandboxed broker, and run an independent statement-fidelity
+   audit before any proof effort. A major finding gets one bounded fix.
+3. Lock the audited statement of ``main``: a normalized text hash of its
+   signature and of every non-theorem command above it (commands are found at
+   any column and after ``… in`` prefixes), plus a Lean-computed fingerprint of
+   the elaborated statement and the local definitions it depends on. Every
+   later round must keep both; the statement audit is reused for the proved
+   file only when Lean confirms the fingerprint, otherwise it is re-run.
+4. Prove: fill the skeleton, then repair with line-numbered source, the first
+   compiler errors with context, goals at remaining ``sorry`` and a compact
+   attempt history. Sorry elimination continues while repair budget remains;
+   the best checked candidate (not merely the last one) is kept.
+5. Soundness: a clean compile additionally needs a root-anchored
+   ``#print axioms`` probe of every named declaration (the locked ``main``
+   must exist under exactly that name) showing only ``propext`` /
+   ``Classical.choice`` / ``Quot.sound``, and a ``declaration uses 'sorry'``
+   warning always means incomplete.
+6. Cache the whole result as ``lean_verify.json`` so reopening the tab is free.
 
-If no Lean toolchain is installed the translation still runs — status becomes
-``toolchain_missing`` and the generated source is shown for the user to check
-elsewhere. Prefer proofs that compile against Lean core (``Init``) so a bare
-``lean`` binary is enough; fall back to Mathlib only when the claim truly needs
-it.
+The kernel check only ever runs through ``lean_broker.check_source``. If the
+broker is unavailable the status becomes ``toolchain_missing`` immediately:
+the drafted statement is kept for review and no repair or audit calls are
+spent on an infrastructure error. There is no local/unsandboxed fallback.
 """
 from __future__ import annotations
 
@@ -34,14 +48,13 @@ import time
 from pathlib import Path
 from typing import Any
 
-from agent_monitor import usage_ledger
+from agent_monitor import lean_broker, usage_ledger
 from agent_monitor.proof_graph import (  # reuse LLM plumbing and safe reads
     CLAUDE_DERIVED_TIMEOUT_ENV,
     MAX_PROBLEM_BYTES as MAX_WORKSPACE_PROBLEM_BYTES,
     MAX_SOURCE_BYTES as MAX_WORKSPACE_SOURCE_BYTES,
     _call_llm,
     _claude_derived_timeout,
-    _extract_json,
     _proof_source,
     _read_workspace_text,
 )
@@ -166,26 +179,92 @@ LEAN_CHECK_MAX_OUTPUT_BYTES = 4_000_000
 LEAN_CHECK_TRUSTED_SANDBOXES = {
     "systemd-socket-dynamic-user-v1",
 }
+# The broker's fixed per-profile wall-clock limits (AMLB_TIMEOUT_SEC written by
+# deploy/lean-broker/prepare_release.py), quoted in timeout diagnostics.
+LEAN_BROKER_LIMIT_SECONDS = {"core": 60, "mathlib": 90}
 
-# Prefer a recent stable Lean 4. Mathlib pins matter only when the generated
-# file imports Mathlib — the scaffold omits that dependency by default.
-DEFAULT_TOOLCHAIN = "leanprover/lean4:v4.14.0"
+# The scaffold pins the exact broker toolchain. The lakefile never declares a
+# git dependency: Mathlib is provided by the broker (authoritative checks) or
+# by the shared read-only mirror behind the harness `check.sh` wrapper.
+DEFAULT_TOOLCHAIN = lean_broker.EXPECTED_LEAN_TOOLCHAIN
+
+# Repair budgets. The automatic pipeline and manual Verify share these
+# defaults; guests use the sponsored gateway and are capped at the same four
+# rounds (a harder proof often fixes one Lean/Mathlib error per round), while
+# signed-in manual requests may ask for more (the console caps them at six).
+AUTO_MAX_REPAIRS = 4
+GUEST_MAX_REPAIRS = 4
+# A guest feedback revision gets a single repair round (the console mirrors it
+# as ``_GUEST_REVISE_MAX_REPAIRS`` in its guest policy).
+GUEST_REVISE_MAX_REPAIRS = 1
+# Skeleton compile repairs and statement-fix rounds are bounded separately so
+# statement work cannot silently consume the whole proof budget.
+STATEMENT_REPAIRS = 2
+GUEST_STATEMENT_REPAIRS = 1
+STATEMENT_FIX_ROUNDS = 1
+# Optional independent auditor model (for example a different provider). When
+# unset, the audit still runs as a cold, separately-prompted call.
+AUDIT_MODEL_ENV = "AGENT_MONITOR_FORMAL_AUDIT_MODEL"
+# Diagnostics handed to the repair model: the FIRST errors are root causes.
+REPAIR_ERROR_LIMIT = 6
+# Only these axioms may appear in any `#print axioms` report of a verified file.
+STANDARD_AXIOMS = frozenset({"propext", "Classical.choice", "Quot.sound"})
+
+LEAN_TARGET = f"""LEAN TARGET (exact): Lean 4.14.0 (`{lean_broker.EXPECTED_LEAN_TOOLCHAIN}`) with
+Mathlib {lean_broker.EXPECTED_MATHLIB_INPUT_REV} (commit {lean_broker.EXPECTED_MATHLIB_REV[:8]}, early December 2024). Nothing newer is
+installed. You may know later Mathlib: declarations added or renamed in
+2025-2026 do NOT exist here, so prefer long-standing names and automation.
+- Start the file with `import Mathlib` (the whole library is supported and
+  recommended; a narrower `Mathlib.*` import also works). Add `open` lines as
+  needed, e.g. `open Finset` or `open Real`.
+- Tactics available here: `simp`, `simp_all`, `omega`, `decide`, `norm_num`,
+  `ring`, `ring_nf`, `linarith`, `nlinarith`, `positivity`, `field_simp`,
+  `push_cast`, `exact_mod_cast`, `gcongr`, `interval_cases`, `rcases`/`obtain`,
+  `induction ... with`, `aesop`. NOT available in this version: `grind`,
+  `decide +kernel`. Never leave `exact?`/`apply?` in the file.
+- Notation that works: `∑ i ∈ Finset.range n, f i`, `∏ i ∈ s, f i`, `√x`
+  (`Real.sqrt x`), `a ≡ b [ZMOD n]`, `n !` (after `open Nat`), `a ∣ b`.
+  Standard notions: `Nat.Prime p`, `Irrational x`, `Even n`, `Odd n`,
+  `Nat.Coprime a b`, `Nat.gcd a b`.
+- Names checked against this exact Mathlib: `Finset.sum_range_succ`,
+  `Finset.prod_range_succ`, `Finset.sum_range_id_mul_two`,
+  `Nat.exists_infinite_primes`, `Nat.Prime.two_le`,
+  `Nat.Prime.eq_one_or_self_of_dvd`, `Nat.Prime.dvd_mul`, `Nat.minFac_prime`,
+  `irrational_sqrt_two`, `Nat.even_or_odd`, `Int.even_or_odd`, `Nat.odd_iff`,
+  `Int.odd_iff`, `Odd.mul`, `Nat.coprime_self_add_right`,
+  `Int.emod_emod_of_dvd`, `two_mul_le_add_sq`, `abs_add`, `sq_nonneg`,
+  `Real.sq_sqrt`, `Real.sqrt_nonneg`.
+- 2024 forms differ from newer ones: `le_div_iff₀` and `div_le_iff₀` exist
+  (the unsubscripted names are deprecated but still compile); `Nat.dvd_sub'`
+  is the two-hypothesis form (`Nat.dvd_sub` here also needs `n ≤ m`);
+  `Nat.lt_pow_self` takes `1 < a` explicitly.
+- `ℕ` subtraction truncates (`2 - 5 = 0`) and `/` on `ℕ`/`ℤ` is floor
+  division. State claims about negatives or fractions over `ℤ`, `ℚ` or `ℝ` and
+  cast explicitly, e.g. `(n : ℝ)`.
+"""
 
 STATEMENT_FIDELITY = """STATEMENT FIDELITY — read this first. A file that compiles but states the
 wrong thing is worse than one that fails to compile, because it looks verified.
 - The main theorem must transcribe the PROBLEM itself, not a convenient special
   case: quantify over everything the problem quantifies over, keep every
   hypothesis, keep the exact conclusion. If the problem says "for all n", the
-  statement starts `∀ n` (or takes `(n : Nat)`) — not a fixed `n = 7`.
+  statement starts `∀ n` (or takes `(n : ℕ)`) — not a fixed `n = 7`.
+- The PROBLEM fixes each variable's domain; conventions in the informal proof
+  do not. "Every natural number n" is `(n : ℕ)` with no `1 ≤ n`, `0 < n` or
+  `n ≠ 0` hypothesis (Lean's ℕ includes 0), even when the proof writes
+  ℕ = {1, 2, 3, …} or starts at n = 1. Add a bound only when the problem states
+  it, or when the claim is false or undefined without it (say why in `notes`).
 - Never add a hypothesis that already assumes the conclusion, and never let the
   hypotheses be contradictory: a vacuous theorem proves nothing.
-- Do not hand-roll a standard notion (`Odd`, `Even`, `Prime`, `Irrational`,
-  `Dvd`, …) unless core Lean lacks it. If you must define one, define it exactly
-  as the standard notion and say so in its docstring.
-- Forbidden entirely: `axiom` (anything follows from it), `unsafe`, `opaque`,
-  `@[implemented_by]`, `set_option debug.skipKernelTC true`.
-- `native_decide` is not a kernel proof — avoid it. `decide` is fine when the
-  goal is genuinely decidable and small.
+- Use Mathlib's standard notions (`Odd`, `Even`, `Nat.Prime`, `Irrational`,
+  `Nat.Coprime`, `∣`, `Real.sqrt`, `Finset.sum`, …) instead of hand-rolled
+  definitions. Define something yourself only when Mathlib lacks it, exactly
+  as the problem defines it, and say so in its docstring.
+- Forbidden entirely: `axiom`, `sorry`-hiding tricks, `admit`, `unsafe`,
+  `opaque`, `@[implemented_by]`, `@[extern]`, `native_decide`,
+  `set_option debug.skipKernelTC`, and every metaprogramming command
+  (`run_cmd`, `run_tac`, `run_elab`, `elab`, `macro`, `syntax`, `initialize`,
+  `#eval`). `decide` is fine when the goal is genuinely decidable and small.
 """
 
 CITATION_RULE = """Citations attach to EACH declaration — never one list at the top of the file.
@@ -196,125 +275,190 @@ last line starts with `Cites:`, entries separated by semicolons, each shaped
   /-- Product of two odd naturals is odd.
   Cites: self-derived — direct expansion of (2a+1)(2b+1);
   [Hardy & Wright, Thm 1.2] — parity of products -/
-  theorem main (a b : Nat) : ...
+  theorem main (a b : ℕ) : ...
 
 Use `self-derived` when you proved it inline here, and `uncited` when the
 informal proof leans on something it never sourced. Never invent a source.
-Mirror the same entries in the JSON `citations` array, each with a `decl` field
-naming the declaration it belongs to.
+Mirror the same entries in the metadata `citations` array, each with a `decl`
+field naming the declaration it belongs to.
 """
 
-TRANSLATE_PROMPT = """You are a Lean 4 formalisation expert. Read the PROBLEM and the informal PROOF, then produce a Lean 4 file that states and proves the claim.
+LEAN_IDIOMS = """LEAN 4.14 / MATHLIB IDIOMS (fixes for errors this checker has reported):
+- Factorial: `open Nat`, then `n !` with a space (`n!` is an unknown
+  identifier). Parenthesise it inside arithmetic, `4 * (n !) - 1` (`n ! - 1`
+  misparses: "function expected"), or write `Nat.factorial n`.
+- Sums: `Finset.sum_range_succ` rewrites `∑ i ∈ Finset.range (n + 1), f i` to
+  `∑ i ∈ Finset.range n, f i + f n`. For `Finset.Icc a (b + 1)` use
+  `Finset.sum_Icc_succ_top (h : a ≤ b + 1)`; the `h` you pass fixes `b`, so for
+  `Icc 1 (m + 1 + 1)` pass `(show 1 ≤ m + 1 + 1 by omega)`. A wrong `h` fails
+  ("did not find instance of the pattern") or rewrites a different sum and
+  leaves "unsolved goals".
+- Casts: when `↑(m + 1)` meets `↑m + 1` ("type mismatch"), normalise with
+  `push_cast` (or `rw [Nat.cast_succ]`) and then `ring` / `field_simp`; move a
+  ℕ fact into ℚ or ℝ with `exact_mod_cast`.
+- `%` with numerals: `omega` proves linear goals like `(3 + k * 4) % 4 = 3`
+  (terms such as `n !` are atoms). `Nat.add_mul_mod_self_right` is
+  `(a + b * n) % n = a % n`; the `_left` form reduces modulo `b`.
+- "no goals to be solved": an earlier tactic already closed that goal; delete
+  the tactic at the reported line instead of adding another.
+- "has already been declared": Mathlib owns that name (even `factorization`);
+  rename your helper, e.g. `aux_factorization`.
+"""
 
-Respond with STRICT JSON only — no markdown fences, no commentary:
-{
-  "title": "short theorem name",
-  "lean": "complete Lean 4 source for a single file named Proof.lean",
-  "uses_mathlib": false,
-  "main_decl": "name of the theorem that IS the problem's claim",
-  "notes": "one short sentence about what was formalised / any gaps",
-  "citations": [
-    {"id": "1", "decl": "main", "text": "identifier or named result — what it contributes", "kind": "arxiv|doi|theorem|self-derived|uncited"}
-  ]
-}
+OUTPUT_CONTRACT = """OUTPUT FORMAT — reply with exactly two fenced blocks and nothing else:
+1. The COMPLETE Proof.lean in ONE fenced block (plain Lean, never escaped):
+```lean
+import Mathlib
+...
+```
+2. Small metadata in ONE fenced JSON block (no Lean source inside it):
+```json
+{"main_decl": "main", "title": "short theorem name", "notes": "one short sentence", "citations": [{"id": "1", "decl": "main", "text": "source — contribution", "kind": "theorem|self-derived|arxiv|doi|uncited"}]}
+```
+"""
 
+TRANSLATE_PROMPT = """You are a Lean 4 autoformalization expert. PHASE 1 OF 2 — STATE, DO NOT PROVE.
+Write the Lean 4 skeleton that STATES the PROBLEM faithfully: imports, any
+definitions the statement needs, one lemma per BLUEPRINT item (when a
+blueprint is given) and the main theorem `main`. Every proof in this phase is
+exactly `sorry`. The skeleton is compiled, audited for fidelity by an
+independent reviewer, and then LOCKED: later proof rounds may not change the
+statement of `main` or anything above it except theorem/lemma declarations.
+
+{target}
 {fidelity}
 {citation_rule}
-Rules for the Lean source:
-- Lean 4 syntax only (not Lean 3).
-- Prefer the Lean **core** library only (`Init` / `Nat` / `Int` / `List`).
-  Set `uses_mathlib` to true ONLY if Mathlib is genuinely required, and then
-  import only the specific modules required (for example,
-  `Mathlib.Data.Nat.Choose.Basic`). Never use the broad `import Mathlib`: it
-  loads the full library and can exhaust the checker timeout or memory budget.
-  Core-only proofs are strongly preferred.
-- Prefer `Nat` over `Int` when the claim is about non-negative integers /
-  parity / divisibility — core `Nat` lemmas + `omega` / `ac_rfl` work; `Int`
-  algebra and `ring` usually need Mathlib.
-- Useful core patterns (copy freely):
-  - Existentials: `obtain ⟨k, hk⟩ := h` then `refine ⟨…, ?_⟩`.
-  - Nat algebra: `simp [Nat.mul_add, Nat.add_mul, Nat.mul_one, Nat.one_mul,
-    Nat.mul_assoc]; ac_rfl`.
-  - Linear Nat/Int goals: `omega`.
-  - Concrete closed goals: `native_decide` / `decide`.
-- Do NOT use Mathlib-only tactics (`ring`, `linarith`, `nlinarith`, `field_simp`,
-  `norm_num`, `polyrith`) unless `uses_mathlib` is true.
-- Include a single main theorem named `main` when possible, matching the PROBLEM.
+Rules for the skeleton:
+- Name the main theorem `main`; its statement is the PROBLEM's claim, exactly.
+- Put a helper definition above `main` only when the statement genuinely needs
+  it; prefer Mathlib's own definitions.
 - For a **Counterexample**, make `main` prove only a faithful negation of the
   original universal claim using the explicit witness. Do not conjoin optional
   minimality, every-case audits, or stronger side claims into `main`. Omit such
   bonus claims from the file unless the PROBLEM explicitly asks for them; a
   failed optional helper makes the whole Lean file fail.
-- The proof must be complete: no `sorry`, no `admit`, no invented `axiom`.
-- Keep the file self-contained. Add short helper lemmas with proofs if needed.
 - If the informal artifact is **Partial Progress** or **Known/Open Status**, keep
-  the exact open target as `main` with one honest `sorry`, but also formalise
-  each feasible self-derived lemma as a separate, fully proved declaration.
+  the exact open target as `main` (it will keep one honest `sorry`), and formalise
+  each feasible self-derived lemma as a separate declaration.
   Do not discard verified partial progress merely because `main` remains open.
+- When a BLUEPRINT is given, state one `lemma` per blueprint item in the given
+  order, faithfully to its statement, with a doc comment containing the line
+  `Informal: <id>` (the item's id). The target item is `main`; give `main` the
+  line `Informal: <target id>` as well.
 - Use ASCII Lean identifiers. Put informal commentary in `/-- ... -/` docs.
 - Do not copy ProvingConsole runtime, harness, tool, skill-availability, or
   candidate-audit status into the Lean source or `notes`. The informal
   candidate audit is a separate pipeline; report only formalization, compiler,
   admission, and statement-fidelity facts here.
-- If the informal proof has a genuine gap you cannot close, leave a SINGLE
-  `sorry` on that subgoal and explain it in `notes` — do not invent a fake proof.
-  A visible `sorry` is far better than a statement weakened until it goes through.
 
+{output_contract}
 PROBLEM:
 {problem}
 
-PROOF:
+BLUEPRINT (advisory structure; the PROBLEM stays authoritative):
+{blueprint}
+
+INFORMAL PROOF (context for choosing the lemmas; do not prove anything yet):
 {proof}
 """
 
-REPAIR_PROMPT = """You are fixing a Lean 4 file that failed to compile. Respond with STRICT JSON only:
-{
-  "lean": "the full corrected Lean 4 source",
-  "uses_mathlib": false,
-  "notes": "what you changed",
-  "citations": [{"id": "1", "decl": "main", "text": "…", "kind": "theorem|self-derived|arxiv|doi|uncited"}]
-}
+PROVE_PROMPT = """You are a Lean 4 proof engineer. PHASE 2 — PROVE THE LOCKED SKELETON.
+The skeleton below compiles. Replace every `sorry` with a complete proof,
+following the INFORMAL PROOF and the BLUEPRINT.
 
-Rules: fix the ERRORS, do not dodge them. Keep the exact original PROBLEM claim
-unchanged — weakening or specialising it to compile counts as a failure. If the
-current `main` added nonessential conjuncts beyond the original claim, move those
-to separate helpers only when they already compile; otherwise omit them from the
-file rather than treating their removal as weakening. If a
-subgoal is genuinely out of reach, leave one `sorry` there and
-say so in `notes`. Do not invent Mathlib imports unless the errors clearly
-require them. Keep the per-declaration `Cites:` doc comments intact.
+LOCK (checked mechanically; a violating reply is rejected unseen): keep the
+statement of `{main_decl}` and every non-theorem command above it (definitions,
+instances, attributes, `open`, `variable`, notation, options, namespaces and
+sections) exactly as written. Lean also checks that `{main_decl}` still
+elaborates to the same statement. You may add, split,
+reorder or restate helper `lemma`/`theorem` declarations, add imports, and put
+anything you like below `{main_decl}`. Keep the `Informal:` and `Cites:` doc lines.
 
+How to prove well here:
+- Work bottom-up: prove helper lemmas first, then `{main_decl}` from them.
+- Split hard steps into `have` statements; close routine goals with automation
+  (`simp`, `omega`, `norm_num`, `ring`, `linarith`, `nlinarith`, `positivity`,
+  `decide` for small finite checks, `aesop`).
+- If you are unsure a lemma name exists in this 2024 Mathlib, prove the fact
+  inline or with automation instead of guessing a name.
+- If one step is genuinely out of reach, leave `sorry` on exactly that step and
+  say which in `notes`. A precise `sorry` beats a weakened statement.
+
+{target}
+{idioms}
 {fidelity}
-ORIGINAL SOURCE:
+{output_contract}
+PROBLEM:
+{problem}
+
+BLUEPRINT:
+{blueprint}
+
+INFORMAL PROOF:
+{proof}
+
+LOCKED SKELETON (Proof.lean):
 ```lean
 {lean}
 ```
+"""
 
-COMPILER OUTPUT:
-```
+REPAIR_PROMPT = """You are repairing a Lean 4 file for Lean 4.14.0 + Mathlib v4.14.0 (Dec 2024).
+TASK: {task}
+
+Rules: fix the ERRORS and close the goals, do not dodge them. Keep the exact
+original PROBLEM claim unchanged — weakening or specialising it to compile counts
+as a failure. If the current `main` added nonessential conjuncts beyond the
+original claim, move those to separate helpers only when they already compile;
+otherwise omit them from the file rather than treating their removal as
+weakening. {lock_rule}
+Make targeted edits: change only the lines the diagnostics point at (and what
+they force), keep everything else identical, keep the `Cites:` and `Informal:`
+doc lines. The first error is usually the root cause; later errors are often
+consequences. An `unknown identifier`/`unknown constant` means the name does
+not exist in this 2024 Mathlib: prove the fact inline or with a tactic instead
+of guessing another name. If a subgoal is genuinely out of reach, leave one
+`sorry` there and say so in `notes`.
+
+{target}
+{idioms}
+{fidelity}
+{output_contract}
+PROBLEM:
+{problem}
+
+ATTEMPT HISTORY (oldest first):
+{history}
+
+CURRENT SOURCE (line-numbered for reference; the numbers are NOT part of the file):
+{numbered}
+
+DIAGNOSTICS (first errors first, with the offending lines):
 {errors}
-```
+
+GOALS AT REMAINING `sorry` (from the checker):
+{goals}
+
+BLUEPRINT:
+{blueprint}
+
+INFORMAL PROOF (relevant part):
+{proof}
 """
 
 FEEDBACK_PROMPT = """You are revising a Lean 4 formalisation based on human feedback.
-Respond with STRICT JSON only:
-{
-  "lean": "the full revised Lean 4 source",
-  "uses_mathlib": false,
-  "notes": "what you changed in response to the feedback",
-  "citations": [{"id": "1", "decl": "main", "text": "…", "kind": "theorem|self-derived|arxiv|doi|uncited"}]
-}
 
 Rules:
 - Apply the human's request faithfully.
-- Prefer Lean core (`Init` / `Nat` / `Int`); only set uses_mathlib true if required.
+- Target Lean 4.14.0 + Mathlib v4.14.0; `import Mathlib` is supported.
 - Prefer eliminating `sorry` / `admit` when the feedback asks for a complete proof.
 - Keep theorem names stable unless the human asks to rename them.
-- Do not invent Mathlib-only tactics unless uses_mathlib is true.
 - Keep the per-declaration `Cites:` doc comments accurate; update them if the
   revision changes what a declaration relies on.
 
+{target}
 {fidelity}
+{output_contract}
 CURRENT SOURCE:
 ```lean
 {lean}
@@ -352,44 +496,55 @@ USER QUESTION:
 {question}
 """
 
-AUDIT_PROMPT = """You are a strict Lean 4 formalisation auditor. The file below COMPILES. That
-only means it is well-typed — it does NOT mean it formalises the PROBLEM. Your job
-is to catch a Lean file that passes the compiler while proving the wrong thing.
+AUDIT_PROMPT = """You are an independent, strict reviewer of a Lean 4 autoformalization. You did
+not write this file and owe its author nothing. The file compiles (proofs may
+still be `sorry` placeholders — ignore proof completeness here). Compiling only
+means it is well-typed; it does NOT mean it states the PROBLEM. Your job is to
+catch a file that would let a wrong or weaker claim be reported as proved.
 
-Respond with STRICT JSON only:
+Method:
+1. Back-translate first: read ONLY the Lean statement of the main declaration
+   (and any local definitions it uses) and write, in `back_translation`, the
+   precise English claim it makes — quantifiers, domains (ℕ vs ℤ vs ℝ,
+   truncated subtraction, floor division), hypotheses and conclusion.
+2. Then compare that claim with the PROBLEM, in order:
+   a. Same quantifiers and domains, same hypotheses, same conclusion? A
+      statement specialised to one instance, with an extra convenient
+      hypothesis, or over a different number system is `major`. Domains come
+      from the PROBLEM, never from the informal proof's conventions: for
+      "every natural number n" (Lean's ℕ includes 0) an unstated `1 ≤ n`,
+      `0 < n` or `n ≠ 0` is an extra hypothesis (`major`) even when the proof
+      declares ℕ = {1, 2, 3, …}; it is `minor` only if the claim is false or
+      undefined without it (say so in `issues`).
+   b. Are the hypotheses satisfiable? Contradictory or self-assuming
+      hypotheses make the theorem vacuous — `major`.
+   c. Is the conclusion the real one, not `True`, a restatement of a
+      hypothesis, or strictly weaker? Otherwise — `major`.
+   d. Do local `def`s that model standard notions match the standard meaning?
+      A subtly wrong definition is `major`.
+   e. Is anything smuggled in via `axiom`, `admit`, `native_decide`,
+      `set_option debug.skipKernelTC`, `unsafe`, `opaque`, `@[implemented_by]`,
+      or a metaprogramming command (`run_cmd`, `elab`, `macro`, …)? — `major`.
+Equivalent reformulations are fine (e.g. `Odd n` vs `n % 2 = 1`, `∀ n` binder
+vs argument, `≥` vs `≤` flipped). Set `severity` to `major` only for a real
+mismatch, `minor` for cosmetic or trust caveats, `ok` if faithful. Name the
+declaration and quantifiers concretely.
+
+Respond with STRICT JSON only (no Lean fences inside strings):
 {
+  "main_decl": "name of the declaration that is supposed to be the problem's claim",
+  "back_translation": "the claim the Lean statement makes, in precise English",
   "faithful": true,
   "severity": "ok|minor|major",
-  "main_decl": "name of the declaration that is supposed to be the problem's claim",
-  "verdict": "one sentence — what this file actually proves",
+  "verdict": "one sentence — what this file actually states",
   "issues": ["concrete, specific problems (empty if none)"],
   "statement_suggestion": "a faithful Lean signature for the main claim, or \\"\\""
 }
 
-Check, in order:
-1. Does the main declaration's statement quantify over everything the PROBLEM
-   quantifies over, with the same hypotheses and the same conclusion? A statement
-   specialised to one instance, or with an extra convenient hypothesis, is `major`.
-2. Are the hypotheses satisfiable? Contradictory or self-assuming hypotheses make
-   the theorem vacuous — `major`.
-3. Is the conclusion the real conclusion, not `True` / a restatement of a
-   hypothesis / a strictly weaker claim? — `major`.
-4. Do any local `def`s that model standard notions (`Odd`, `Prime`, `Irrational`,
-   divisibility, …) actually match the standard meaning? A subtly wrong definition
-   is `major`.
-5. Is anything smuggled in via `axiom`, `sorry`, `admit`, `native_decide`,
-   `set_option debug.skipKernelTC`, `unsafe`, `opaque`, `@[implemented_by]`?
-6. Do the helper lemmas actually feed the main result, or is the main result
-   proved by an unrelated shortcut?
-
-Set `severity` to `major` if this file would let a wrong or materially weaker
-claim be reported as verified, `minor` for cosmetic or trust caveats, `ok` if the
-formalisation is faithful. Be concrete: name declarations and quantifiers.
-
 PROBLEM:
 {problem}
 
-INFORMAL PROOF (context — may be longer than what was formalised):
+INFORMAL PROOF (context only — may be longer than what was formalised):
 {proof}
 
 LEAN SOURCE:
@@ -398,30 +553,28 @@ LEAN SOURCE:
 ```
 """
 
-STATEMENT_FIX_PROMPT = """A Lean 4 file compiled, but an audit found the STATEMENT unfaithful to the
-PROBLEM. Rewrite the file so the statement is faithful, then prove it.
+STATEMENT_FIX_PROMPT = """An independent audit or a mechanical fidelity check found the STATEMENT of this
+Lean 4 skeleton unfaithful to the PROBLEM. Rewrite the skeleton so the statement
+is faithful. Proofs may stay `sorry` (they are filled in a later phase); fix the
+statement FIRST. An honest `sorry` on the right claim beats a complete proof of
+the wrong claim. Do not silence the audit by renaming things. Keep `main` as the
+name of the main theorem and keep the `Informal:` / `Cites:` doc lines. When the
+findings name a lower bound (`1 ≤ n`, `0 < n`, `n ≠ 0`, …) the PROBLEM does not
+state, drop it so `main` covers every value the problem quantifies over; keep it
+only if the claim is false or undefined without it, and say why in `notes`.
 
-Respond with STRICT JSON only:
-{
-  "lean": "the full corrected Lean 4 source",
-  "uses_mathlib": false,
-  "main_decl": "name of the faithful main theorem",
-  "notes": "how the statement changed",
-  "citations": [{"id": "1", "decl": "main", "text": "…", "kind": "theorem|self-derived|arxiv|doi|uncited"}]
-}
-
-Fix the statement FIRST, then the proof. If the faithful statement is harder than
-what you can close, keep the faithful statement and leave a single `sorry` on the
-open subgoal — an honest `sorry` on the right claim beats a complete proof of the
-wrong claim. Do not silence the audit by renaming things.
-
+{target}
 {fidelity}
 {citation_rule}
+{output_contract}
 PROBLEM:
 {problem}
 
 AUDIT FINDINGS:
 {audit}
+
+INFORMAL PROOF (context):
+{proof}
 
 CURRENT SOURCE:
 ```lean
@@ -434,49 +587,56 @@ HARNESS_TASK = """You are formalising a mathematical proof in Lean 4, inside thi
 Files here:
 - `Proof.lean`  — the file you must produce/repair (this is the deliverable).
 - `TASK.md`     — the problem statement and the informal proof, for reference.
-- `lean-toolchain`, `lakefile.lean` — the project scaffold; leave them alone
-  unless you genuinely need Mathlib.
+- `check.sh`    — the local checker wrapper (see below).
+- `lean-toolchain`, `lakefile.lean` — the pinned project scaffold; leave them
+  alone. The lakefile has no git dependencies, so never run `lake update` or
+  `lake build`: Mathlib is already provided by a shared, prebuilt mirror.
 
 This run requires a fresh `Proof.lean` whose bytes differ from the file present
-when you started. Even if the current proof already compiles, make a real,
-semantics-preserving improvement (for example simplify the proof term or
-improve its theorem documentation/citation annotation), save the file, and
-compile the changed bytes. Merely inspecting or compiling an unchanged file is
-a failed harness run. Preserve the exact requested theorem statement.
+when you started. If the current file is not yet a complete, faithful proof,
+that means making real progress on it. If it already compiles cleanly with no
+`sorry`, make a genuine, semantics-preserving improvement instead (for example
+simplify a proof or improve its documentation/citation annotation), save the
+file, and check the changed bytes. Merely inspecting or
+compiling an unchanged file is a failed harness run.
+Preserve the exact requested theorem statement.
 
 How to work — you have a shell, so use it. Do not guess whether Lean accepts your
-file. For a core-only file run:
+file. Run:
 
-    lean Proof.lean          # exit 0 and no output means accepted
+    ./check.sh               # checks Proof.lean; no errors and no output = accepted
 
-If the file imports Mathlib, import only the specific modules needed (never the
-broad `import Mathlib`) and run:
+`check.sh` runs `lean Proof.lean` for a core-only file and, for a file that
+imports Mathlib, `lake env lean Proof.lean` inside the shared Mathlib mirror
+(Lean 4.14.0 + Mathlib v4.14.0). `import Mathlib` is supported and recommended.
+Iterate: edit `Proof.lean`, run `./check.sh`, read the first error (it is
+usually the root cause), fix it with a targeted edit, and repeat until it is
+clean. Do not rewrite the file from scratch on every failure. `#check @name` in
+a scratch copy is a quick way to confirm that a lemma name exists here.
 
-    lake env lean Proof.lean
-
-Iterate: edit `Proof.lean`, run the appropriate command above, read the errors,
-fix, and repeat until it is clean. Read the actual error messages — do not
-rewrite the file from scratch on every failure. `lean --version` tells you the
-toolchain. Prefer Lean core (`Init`, `Nat`, `Int`, `List`); `omega`, `decide`,
-`simp`, `ac_rfl`, `induction`, `rcases`/`obtain` all work in core. `ring`,
-`linarith`, `norm_num`, `field_simp` need Mathlib — use them only with a narrow
-module import.
-
+{target}
 {fidelity}
 {citation_rule}
-When you are done, `lean Proof.lean` must exit 0. Finish by printing a short
-summary: what the main theorem states, whether any `sorry` remains and why, and
-which declarations carry which citations. Write no other files.
+When you are done, `./check.sh` must report no errors. A `declaration uses
+'sorry'` warning means the proof is still incomplete; say so honestly. The
+outer sandboxed checker re-checks the file after you finish. Finish by printing
+a short summary: what the main theorem states, whether any `sorry` remains and
+why, and which declarations carry which citations. Write no other files.
 """
 
 
 def _fill_prompt_shared(text: str) -> str:
-    return text.replace("{fidelity}", STATEMENT_FIDELITY).replace(
-        "{citation_rule}", CITATION_RULE
+    return (
+        text.replace("{fidelity}", STATEMENT_FIDELITY)
+        .replace("{idioms}", LEAN_IDIOMS)
+        .replace("{citation_rule}", CITATION_RULE)
+        .replace("{target}", LEAN_TARGET)
+        .replace("{output_contract}", OUTPUT_CONTRACT)
     )
 
 
 TRANSLATE_PROMPT = _fill_prompt_shared(TRANSLATE_PROMPT)
+PROVE_PROMPT = _fill_prompt_shared(PROVE_PROMPT)
 REPAIR_PROMPT = _fill_prompt_shared(REPAIR_PROMPT)
 FEEDBACK_PROMPT = _fill_prompt_shared(FEEDBACK_PROMPT)
 STATEMENT_FIX_PROMPT = _fill_prompt_shared(STATEMENT_FIX_PROMPT)
@@ -797,7 +957,7 @@ def monitor_summary(workspace: Path) -> dict[str, Any]:
         action = str(attempt.get("action") or "check")
         attempt_status = str(check.get("status") or "")
         if check.get("ok"):
-            if sorry_count:
+            if sorry_count or check.get("reports_sorry"):
                 attempt_status = "incomplete"
             elif action == "compile":
                 attempt_status = "compiled"
@@ -805,6 +965,23 @@ def monitor_summary(workspace: Path) -> dict[str, Any]:
                 attempt_status = "verified"
         elif not attempt_status:
             attempt_status = "failed"
+        recorded = attempt.get("result_status")
+        if isinstance(recorded, str) and recorded.strip():
+            attempt_status = recorded.strip()
+        probe = check.get("axioms") if isinstance(check.get("axioms"), dict) else None
+        axioms_view = (
+            {
+                "ok": bool(probe.get("ok")),
+                "decl": str(probe.get("decl") or "")[:200],
+                "axioms": [
+                    str(name)[:120]
+                    for name in (probe.get("axioms") or [])
+                    if isinstance(name, str)
+                ][:20],
+            }
+            if probe is not None
+            else None
+        )
         log = "\n".join(
             part.strip()
             for part in (
@@ -825,6 +1002,7 @@ def monitor_summary(workspace: Path) -> dict[str, Any]:
                 "sorry_count": sorry_count,
                 "uses_mathlib": bool(attempt.get("uses_mathlib")),
                 "toolchain": str(check.get("toolchain") or "")[:200],
+                "axioms": axioms_view,
                 "log": log[-2400:],
             }
         )
@@ -895,6 +1073,11 @@ def monitor_summary(workspace: Path) -> dict[str, Any]:
         "source": str(cached.get("source") or "")[:160],
         "lean_path": str(cached.get("lean_path") or f"{LEAN_DIRNAME}/{PROOF_FILENAME}")[:240],
         "lean_lines": len(lean_src.splitlines()),
+        "scope": str(cached.get("scope") or "proof")[:20],
+        "proofs_attempted": cached.get("proofs_attempted") is not False,
+        "status_label": str(cached.get("status_label") or "")[:200],
+        "targets": [str(item)[:80] for item in (cached.get("targets") or [])][:40]
+        if isinstance(cached.get("targets"), list) else [],
         "uses_mathlib": bool(cached.get("uses_mathlib")),
         "sorry_count": int(cached.get("sorry_count") or 0),
         "sorry_lines": list(cached.get("sorry_lines") or [])[:20],
@@ -931,31 +1114,116 @@ def monitor_summary(workspace: Path) -> dict[str, Any]:
 
 
 def _write_scaffold(ldir: Path, *, uses_mathlib: bool) -> None:
+    """Write the pinned toolchain and a dependency-free lakefile.
+
+    The lakefile deliberately never declares ``require mathlib from git``:
+    running Lake in a per-run directory would otherwise clone and build
+    Mathlib. Authoritative checks go through the broker; harness agents use
+    the ``check.sh`` wrapper, which borrows the shared prebuilt mirror.
+    """
+    del uses_mathlib  # The scaffold is identical for core and Mathlib files.
     ldir.mkdir(parents=True, exist_ok=True)
     (ldir / "lean-toolchain").write_text(DEFAULT_TOOLCHAIN + "\n", encoding="utf-8")
-    # Minimal lakefile — Mathlib is only declared when the model asks for it.
-    # Users who already have a global Mathlib cache can `lake update` later.
-    if uses_mathlib:
-        lake = (
-            "import Lake\nopen Lake DSL\n\n"
-            "package «proof» where\n"
-            "  leanOptions := #[⟨`pp.unicode.fun, true⟩]\n\n"
-            "require mathlib from git\n"
-            '  "https://github.com/leanprover-community/mathlib4.git" @ "v4.14.0"\n\n'
-            "@[default_target]\n"
-            "lean_lib Proof where\n"
-            "  roots := #[`Proof]\n"
-        )
-    else:
-        lake = (
-            "import Lake\nopen Lake DSL\n\n"
-            "package «proof» where\n"
-            "  leanOptions := #[⟨`pp.unicode.fun, true⟩]\n\n"
-            "@[default_target]\n"
-            "lean_lib Proof where\n"
-            "  roots := #[`Proof]\n"
-        )
+    lake = (
+        "import Lake\nopen Lake DSL\n\n"
+        "package «proof» where\n"
+        "  leanOptions := #[⟨`pp.unicode.fun, true⟩]\n\n"
+        "@[default_target]\n"
+        "lean_lib Proof where\n"
+        "  roots := #[`Proof]\n"
+    )
     (ldir / "lakefile.lean").write_text(lake, encoding="utf-8")
+
+
+def _harness_mathlib_mirror() -> Path | None:
+    """The shared prebuilt Mathlib mirror for harness-local advisory checks.
+
+    This is deliberately separate from ``_mathlib_project()``: authoritative
+    checks never use a local project. The mirror only lets a coding agent get
+    fast feedback before the sandboxed broker re-checks its artifact.
+    """
+    candidates = [
+        os.environ.get("AGENT_MONITOR_MATHLIB_PROJECT") or "",
+        str(Path.home() / ".cache" / "agent-monitor" / "mathlib-v4.14.0"),
+    ]
+    for raw in candidates:
+        if not raw:
+            continue
+        path = Path(raw).expanduser()
+        if (path / "lake-manifest.json").is_file() and (
+            path / ".lake" / "packages" / "mathlib"
+        ).is_dir():
+            return path.resolve()
+    return None
+
+
+def _harness_lean_bin_dirs() -> list[str]:
+    """Directories holding the user's elan shims (``lean``/``lake``)."""
+    from agent_monitor.subprocess_env import server_elan_home
+
+    dirs: list[str] = []
+    elan_bin = Path(server_elan_home()) / "bin"
+    if (elan_bin / "lean").exists():
+        dirs.append(str(elan_bin))
+    import shutil
+
+    found = shutil.which("lean")
+    if found:
+        dirs.append(str(Path(found).parent))
+    return list(dict.fromkeys(dirs))
+
+
+def _write_harness_checker(ldir: Path) -> Path:
+    """Install ``check.sh``: core files use ``lean``; Mathlib files use the mirror."""
+    import shlex
+
+    from agent_monitor.subprocess_env import server_elan_home
+
+    mirror = _harness_mathlib_mirror()
+    mirror_literal = shlex.quote(str(mirror) if mirror else "")
+    script = (
+        "#!/bin/sh\n"
+        "# Advisory local Lean check for the Formal harness. The sandboxed broker\n"
+        "# re-checks Proof.lean after the run; only that result is authoritative.\n"
+        "set -eu\n"
+        "# The server's toolchains: an agent may run with a private account HOME,\n"
+        "# and elan's shims would otherwise install a toolchain under it.\n"
+        f"ELAN_HOME={shlex.quote(server_elan_home())}\n"
+        "export ELAN_HOME\n"
+        "here=$(CDPATH= cd -- \"$(dirname -- \"$0\")\" && pwd)\n"
+        "file=${1:-Proof.lean}\n"
+        "case \"$file\" in /*) ;; *) file=\"$here/$file\" ;; esac\n"
+        f"mirror={mirror_literal}\n"
+        "if grep -Eq '^[[:space:]]*import[[:space:]]+Mathlib' \"$file\"; then\n"
+        "  if [ -z \"$mirror\" ] || [ ! -d \"$mirror\" ]; then\n"
+        "    echo 'check.sh: no local Mathlib mirror; submit the file for the sandboxed check' >&2\n"
+        "    exit 3\n"
+        "  fi\n"
+        "  cd \"$mirror\" && exec lake env lean \"$file\"\n"
+        "fi\n"
+        "cd \"$here\" && exec lean \"$file\"\n"
+    )
+    # A previous harness could have left a symlink named check.sh; replace
+    # the directory entry instead of writing through it.
+    directory = os.open(
+        Path(ldir), os.O_RDONLY | os.O_DIRECTORY | getattr(os, "O_NOFOLLOW", 0)
+    )
+    try:
+        try:
+            os.unlink("check.sh", dir_fd=directory)
+        except FileNotFoundError:
+            pass
+        descriptor = os.open(
+            "check.sh",
+            os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0),
+            0o755,
+            dir_fd=directory,
+        )
+        with os.fdopen(descriptor, "w", encoding="utf-8") as stream:
+            stream.write(script)
+    finally:
+        os.close(directory)
+    return Path(ldir) / "check.sh"
 
 
 def _strip_lean_fences(text: str) -> str:
@@ -964,6 +1232,136 @@ def _strip_lean_fences(text: str) -> str:
     if m:
         return m.group(1).strip()
     return text
+
+
+_FENCE_RE = re.compile(
+    r"(?m)^[ \t]*```[ \t]*(?P<tag>[A-Za-z0-9_+-]*)[^\n]*\n(?P<body>.*?)^[ \t]*```[ \t]*$",
+    re.S,
+)
+_LEAN_DECL_HINT_RE = re.compile(r"\b(?:theorem|lemma|example|def|abbrev)\b")
+
+
+_LEAN_FENCE_OPEN_RE = re.compile(r"(?m)^[ \t]*```[ \t]*(?i:lean4?)(?![\w])[^\n]*\n")
+_FENCE_CLOSE_LINE_RE = re.compile(r"(?m)^[ \t]*```[ \t]*$")
+
+
+def _lean_block_spans(text: str) -> list[tuple[int, int, int, int]]:
+    """``(open, body_start, body_end, close_end)`` for each ```lean fence.
+
+    A fence closes at the first ``` line OUTSIDE Lean comments and strings,
+    so a markdown example inside a doc comment (idiomatic in Mathlib-style
+    docs) does not truncate the file. If Lean text never closes (an
+    unterminated comment), the first plain fence line closes it; a reply cut
+    off inside the block runs to the end of the text.
+    """
+    raw = str(text or "")
+    spans: list[tuple[int, int, int, int]] = []
+    position = 0
+    while True:
+        opened = _LEAN_FENCE_OPEN_RE.search(raw, position)
+        if opened is None:
+            break
+        body_start = opened.end()
+        tail = raw[body_start:]
+        close = _FENCE_CLOSE_LINE_RE.search(_lean_executable_text(tail))
+        if close is None:
+            close = _FENCE_CLOSE_LINE_RE.search(tail)
+        if close is None:
+            spans.append((opened.start(), body_start, len(raw), len(raw)))
+            break
+        spans.append(
+            (opened.start(), body_start, body_start + close.start(), body_start + close.end())
+        )
+        position = body_start + close.end()
+    return spans
+
+
+def _extract_lean_block(text: str) -> str | None:
+    """Return the Lean file from a ```lean fence, if the reply has one.
+
+    Several Lean fences can appear (a snippet in prose and the full file);
+    the longest fence that contains a declaration is the file. An unclosed
+    final fence (a truncated reply) still yields its body so the checker can
+    report the damage instead of the parser discarding the whole attempt.
+    """
+    raw = str(text or "")
+    candidates = [raw[body:end] for _open, body, end, _close in _lean_block_spans(raw)]
+    usable = [body for body in candidates if _LEAN_DECL_HINT_RE.search(body)]
+    if not usable:
+        return None
+    return max(usable, key=len).strip("\n")
+
+
+def _without_lean_blocks(text: str) -> str:
+    """The reply with every ```lean block cut out (where the metadata lives)."""
+    raw = str(text or "")
+    pieces: list[str] = []
+    position = 0
+    for opened, _body, _end, close in _lean_block_spans(raw):
+        pieces.append(raw[position:opened])
+        position = close
+    pieces.append(raw[position:])
+    return "".join(pieces)
+
+
+def _json_object_candidates(text: str) -> list[str]:
+    """Balanced top-level ``{...}`` spans, string-aware, in reply order."""
+    spans: list[str] = []
+    depth = 0
+    start = -1
+    in_string = False
+    escaped = False
+    for index, char in enumerate(text):
+        if in_string:
+            if escaped:
+                escaped = False
+            elif char == "\\":
+                escaped = True
+            elif char == '"':
+                in_string = False
+            continue
+        if char == '"' and depth:
+            in_string = True
+        elif char == "{":
+            if depth == 0:
+                start = index
+            depth += 1
+        elif char == "}" and depth:
+            depth -= 1
+            if depth == 0 and start >= 0:
+                spans.append(text[start : index + 1])
+                start = -1
+    return spans
+
+
+def _extract_json_object(text: str) -> dict[str, Any]:
+    """Robust JSON-object extraction for Lean-side replies.
+
+    Unlike ``proof_graph._extract_json`` this never mistakes a ```lean fence
+    for the JSON payload, tries strict parsing before any TeX-escape repair
+    (the repair can rewrite a JSON ``\\n`` that precedes ``exists``/``eq``),
+    and scans balanced objects when prose surrounds the JSON.
+    """
+    from agent_monitor.proof_graph import _repair_latex_json_escapes
+
+    raw = str(text or "").strip()
+    blobs: list[str] = []
+    for match in _FENCE_RE.finditer(raw):
+        if match.group("tag").lower() in {"json", ""}:
+            blobs.append(match.group("body").strip())
+    blobs.append(raw)
+    for blob in blobs:
+        spans = [blob] if blob.startswith("{") else []
+        spans += _json_object_candidates(blob)
+        for span in spans:
+            for candidate in (span, _repair_latex_json_escapes(span)):
+                try:
+                    value = json.loads(candidate)
+                except (json.JSONDecodeError, RecursionError, ValueError):
+                    continue
+                if isinstance(value, dict):
+                    return value
+    raise ValueError("model response contained no JSON object")
 
 
 def _citation_text_key(text: str) -> str:
@@ -1136,6 +1534,492 @@ def _decls_with_docs(lean: str) -> list[dict[str, Any]]:
             )
         pending = []
     return decls
+
+
+# ── Lean command structure (statement lock, declarations, axioms probe) ──
+#
+# A Lean 4 command need not start in column 0: `open X in instance …` may be
+# indented under a theorem, and `def a := 1 def b := 2` is two commands on one
+# line. Reserved command keywords cannot occur inside terms or tactic blocks,
+# so the splitter cuts on those tokens wherever they appear in executable text
+# (comments and strings blanked) instead of trusting column-0 lines. A keyword
+# the splitter does not know is absorbed into the previous command, so the
+# statement lock is only a fast, explainable pre-compile screen; the Lean-side
+# statement fingerprint (``_statement_fingerprint``) is the semantic check.
+_COMMAND_KEYWORDS = frozenset({
+    "theorem", "def", "abbrev", "instance", "structure", "inductive",
+    "class", "example", "axiom", "opaque", "namespace", "section", "end",
+    "variable", "universe", "notation", "infix", "infixl", "infixr", "prefix",
+    "postfix", "macro", "macro_rules", "syntax", "elab", "elab_rules",
+    "attribute", "import", "mutual", "export", "initialize",
+    "builtin_initialize", "run_cmd", "run_elab", "run_meta",
+    "declare_syntax_cat", "include", "omit", "unif_hint", "binder_predicate",
+    "deriving", "add_decl_doc", "simproc", "dsimproc",
+    "simproc_decl", "dsimproc_decl", "open", "set_option",
+})
+# Batteries/Mathlib commands: reserved only when Mathlib is imported (a
+# core-only file may use these words as ordinary identifiers, and cannot use
+# them as commands without Mathlib).
+_MATHLIB_COMMAND_KEYWORDS = frozenset({
+    "lemma", "irreducible_def", "alias", "notation3", "variable?",
+    "initialize_simps_projections", "library_note", "assert_not_exists",
+    "suppress_compilation", "register_simp_attr", "mk_iff_of_inductive_prop",
+})
+_HASH_COMMANDS = frozenset({
+    "#eval", "#exit", "#print", "#check", "#check_failure", "#reduce", "#synth",
+    "#guard", "#guard_msgs", "#guard_expr", "#help", "#lint", "#find", "#simp",
+    "#norm_num", "#conv", "#whnf", "#time", "#where", "#version",
+    "#adaptation_note", "#count_heartbeats", "#explode", "#kernel_reduce",
+})
+_COMMAND_MODIFIERS = frozenset({
+    "private", "protected", "noncomputable", "partial", "unsafe", "nonrec",
+    "local", "scoped",
+})
+_WORD_TOKEN_RE = re.compile(r"(?<![\w.'«!?])(variable\?|[A-Za-z_][A-Za-z_]*)(?![\w'»!?])")
+_HASH_TOKEN_RE = re.compile(r"(?m)^[ \t]*(#[a-z_]+)(?![\w'])")
+_IN_TOKEN_RE = re.compile(r"(?<![\w.'«!?])in(?![\w'»!?])")
+_TRAILING_IN_RE = re.compile(r"(?<![\w.'«!?])in\s*$")
+_NON_SPACE_RE = re.compile(r"\S+")
+_DECLARATION_KINDS = frozenset({
+    "theorem", "lemma", "def", "abbrev", "instance", "structure", "inductive",
+    "class", "axiom", "opaque", "irreducible_def",
+})
+_DECL_NAME_RE = re.compile(r"(?:«[^»\n]*»|[^\s:({\[⦃«])+")
+# Proof-only options may change between rounds without touching the statement.
+_LOCK_EXEMPT_OPTION_RE = re.compile(
+    r"^set_option\s+(?:maxHeartbeats|maxRecDepth|synthInstance\.maxHeartbeats|linter\.\S+)\b"
+)
+
+
+def _command_keywords(source: str) -> frozenset[str]:
+    if _detect_mathlib(source):
+        return _COMMAND_KEYWORDS | _MATHLIB_COMMAND_KEYWORDS
+    return _COMMAND_KEYWORDS
+
+
+def _attribute_spans(executable: str) -> tuple[list[tuple[int, int]], dict[int, int]]:
+    """Bracket spans of ``@[…]`` and ``attribute […]`` (keywords there are attributes).
+
+    Returns every span plus a map from the end of each ``@[…]`` span to its
+    start, used to walk from a keyword back to its command's attributes.
+    """
+    spans: list[tuple[int, int]] = []
+    at_spans: dict[int, int] = {}
+    for match in re.finditer(r"@\[|(?<![\w.'«!?])attribute\s*\[", executable):
+        bracket = match.end() - 1
+        depth = 0
+        index = bracket
+        while index < len(executable):
+            char = executable[index]
+            if char == "[":
+                depth += 1
+            elif char == "]":
+                depth -= 1
+                if depth == 0:
+                    break
+            index += 1
+        end = min(len(executable), index + 1)
+        if match.group(0) == "@[":
+            spans.append((match.start(), end))
+            at_spans[end] = match.start()
+        else:
+            spans.append((bracket, end))
+    return spans, at_spans
+
+
+def _in_spans(position: int, spans: list[tuple[int, int]]) -> bool:
+    return any(start <= position < end for start, end in spans)
+
+
+def _in_form_target(executable: str, position: int) -> int | None:
+    """For ``open …``/``set_option …`` at ``position``: where the ``… in`` body starts."""
+    line_end = executable.find("\n", position)
+    if line_end < 0:
+        line_end = len(executable)
+    word = _NON_SPACE_RE.match(executable, position)
+    match = _IN_TOKEN_RE.search(executable, word.end() if word else position, line_end)
+    return match.end() if match else None
+
+
+def _starts_command(
+    executable: str,
+    position: int,
+    keywords: frozenset[str],
+    spans: list[tuple[int, int]],
+    depth: int = 0,
+) -> bool:
+    """Does a command begin at ``position`` (after whitespace, attributes, modifiers)?"""
+    if depth > 8:
+        return True
+    index = position
+    while True:
+        while index < len(executable) and executable[index].isspace():
+            index += 1
+        if executable.startswith("@[", index):
+            end = next((e for s, e in spans if s == index), None)
+            if end is None:
+                return True
+            index = end
+            continue
+        if executable.startswith("#", index):
+            word = re.match(r"#[a-z_]+", executable[index : index + 40])
+            return bool(word and word.group(0) in _HASH_COMMANDS)
+        word = _WORD_TOKEN_RE.match(executable, index)
+        if not word:
+            return False
+        token = word.group(1)
+        if token in _COMMAND_MODIFIERS:
+            index = word.end()
+            continue
+        if token in {"open", "set_option"}:
+            target = _in_form_target(executable, index)
+            if target is None:
+                return True
+            return _starts_command(executable, target, keywords, spans, depth + 1)
+        return token in keywords
+
+
+def _command_start(
+    executable: str, position: int, keyword: str, at_spans: dict[int, int]
+) -> int:
+    """Walk back from a keyword over modifiers and ``@[…]`` attributes."""
+    modifiers = set(_COMMAND_MODIFIERS)
+    if keyword in {"inductive", "abbrev"}:
+        modifiers.add("class")
+    if keyword == "instance":
+        modifiers.add("deriving")
+    start = position
+    while True:
+        index = start
+        while index > 0 and executable[index - 1].isspace():
+            index -= 1
+        if index > 0 and executable[index - 1] == "]" and index in at_spans:
+            start = at_spans[index]
+            continue
+        word = re.search(r"(?<![\w.'«!?])([A-Za-z_]+)$", executable[max(0, index - 40) : index])
+        if word and word.group(1) in modifiers:
+            start = index - len(word.group(1))
+            continue
+        return start
+
+
+def _lean_commands(source: str) -> list[dict[str, Any]]:
+    """Split a Lean file into top-level commands on executable text.
+
+    Comments and strings are blanked first (offsets are preserved), so a
+    commented-out command never counts. A command that ends in ``in``
+    (``open … in``, ``variable … in``, ``attribute […] x in`` …) is a scoped
+    prefix of the command that follows it and is merged into it.
+    """
+    source = source or ""
+    executable = _lean_executable_text(source)
+    keywords = _command_keywords(source)
+    spans, at_spans = _attribute_spans(executable)
+    candidates: list[tuple[int, str]] = []
+    for match in _WORD_TOKEN_RE.finditer(executable):
+        token = match.group(1)
+        if token not in keywords or _in_spans(match.start(), spans):
+            continue
+        if token in {"open", "set_option"}:
+            target = _in_form_target(executable, match.start())
+            if target is not None and not _starts_command(
+                executable, target, keywords, spans
+            ):
+                continue  # a term- or tactic-level `open … in` / `set_option … in`
+        candidates.append((match.start(), token))
+    for match in _HASH_TOKEN_RE.finditer(executable):
+        if match.group(1) in _HASH_COMMANDS:
+            candidates.append((match.start(1), match.group(1)))
+    candidates.sort()
+    points: list[dict[str, Any]] = []
+    for position, token in candidates:
+        start = _command_start(executable, position, token, at_spans)
+        if points and start <= points[-1]["begin"]:
+            continue  # `class inductive`, `deriving instance`: one command
+        points.append({"begin": start, "keyword": token, "keyword_at": position})
+    first = points[0]["begin"] if points else len(executable)
+    if executable[:first].strip():
+        points.insert(0, {"begin": 0, "keyword": "", "keyword_at": 0})
+    raw_commands: list[dict[str, Any]] = []
+    for index, point in enumerate(points):
+        stop = points[index + 1]["begin"] if index + 1 < len(points) else len(executable)
+        raw_commands.append({**point, "stop": stop})
+    commands: list[dict[str, Any]] = []
+    pending: list[dict[str, Any]] = []
+    for command in raw_commands:
+        text = executable[command["begin"] : command["stop"]]
+        if _TRAILING_IN_RE.search(text) and command["keyword"]:
+            pending.append(command)
+            continue
+        begin = pending[0]["begin"] if pending else command["begin"]
+        entry = {
+            "begin": begin,
+            "body": command["begin"],
+            "stop": command["stop"],
+            "keyword": command["keyword"],
+            "keyword_at": command["keyword_at"],
+            "prefixes": [
+                _normalize_lean_text(executable[p["begin"] : p["stop"]]) for p in pending
+            ],
+        }
+        pending = []
+        commands.append(entry)
+    for command in pending:  # a dangling `… in` at end of file
+        commands.append(
+            {
+                "begin": command["begin"],
+                "body": command["begin"],
+                "stop": command["stop"],
+                "keyword": command["keyword"],
+                "keyword_at": command["keyword_at"],
+                "prefixes": [],
+            }
+        )
+    for entry in commands:
+        segment = executable[entry["begin"] : entry["stop"]]
+        trimmed = segment.rstrip()
+        entry["text"] = trimmed
+        entry["body_text"] = executable[entry["body"] : entry["begin"] + len(trimmed)]
+        entry["start"] = executable.count("\n", 0, entry["begin"]) + 1
+        entry["end"] = entry["start"] + trimmed.count("\n")
+        entry["line"] = executable.count("\n", 0, entry["keyword_at"]) + 1
+    return commands
+
+
+def _command_declaration(command: dict[str, Any]) -> tuple[str, str] | None:
+    """``(kind, raw name)`` declared by a command, or None (anonymous/other)."""
+    kind = command.get("keyword") or ""
+    if kind not in _DECLARATION_KINDS:
+        return None
+    body = command["body_text"]
+    rest = body[command["keyword_at"] - command["body"] + len(kind) :]
+    if kind == "class":
+        follow = re.match(r"\s*(inductive|abbrev)\b", rest)
+        if follow:
+            rest = rest[follow.end() :]
+    rest = rest.lstrip()
+    if kind == "instance":
+        priority = re.match(r"\(\s*priority\s*:=[^)]*\)\s*", rest)
+        if priority:
+            rest = rest[priority.end() :]
+        if not rest or rest[0] in ":([{⦃":
+            return None
+    match = _DECL_NAME_RE.match(rest)
+    if not match:
+        return None
+    return kind, match.group(0)
+
+
+def _split_lean_name(name: str) -> list[str]:
+    """Name components, respecting ``«…»`` quoting (quotes removed)."""
+    parts: list[str] = []
+    for chunk in re.finditer(r"«([^»]*)»|([^.«»]+)", name or ""):
+        parts.append(chunk.group(1) if chunk.group(1) is not None else chunk.group(2))
+    return [part for part in parts if part]
+
+
+def _qualified_declarations(
+    source: str, commands: list[dict[str, Any]] | None = None
+) -> list[dict[str, Any]]:
+    """Named declarations with namespace-qualified names, in file order.
+
+    Scopes come from the same command split as the lock (``namespace``,
+    ``section``, ``mutual`` and ``end`` at any column), so a declaration hidden
+    on the same line as another command still gets the right name.
+    """
+    if commands is None:
+        commands = _lean_commands(source)
+    scopes: list[list[str]] = []
+    out: list[dict[str, Any]] = []
+    for index, command in enumerate(commands):
+        keyword = command.get("keyword") or ""
+        body = command["body_text"]
+        if keyword == "namespace":
+            match = re.match(r"\s*namespace\s+(\S+)", body[command["keyword_at"] - command["body"] :])
+            scopes.append(_split_lean_name(match.group(1)) if match else [])
+            continue
+        if keyword in {"section", "mutual"}:
+            scopes.append([])
+            continue
+        if keyword == "end":
+            if scopes:
+                scopes.pop()
+            continue
+        declared = _command_declaration(command)
+        if declared is None:
+            continue
+        kind, raw = declared
+        if kind == "class" and re.match(
+            r"\s*class\s+inductive\b", body[command["keyword_at"] - command["body"] :]
+        ):
+            kind = "inductive"
+        parts = _split_lean_name(raw)
+        if parts[:1] == ["_root_"]:
+            qualified_parts = parts[1:]
+        else:
+            qualified_parts = [part for scope in scopes for part in scope] + parts
+        qualified = ".".join(qualified_parts)
+        if not qualified:
+            continue
+        out.append(
+            {
+                "kind": kind,
+                "name": ".".join(parts),
+                "raw_name": raw,
+                "line": command["line"],
+                "qualified": qualified,
+                "command": index,
+            }
+        )
+    return out
+
+
+def _signature_end(text: str) -> int:
+    """Offset where a declaration's statement ends (its proof begins).
+
+    The statement ends at the first depth-0 ``:=`` that does not belong to a
+    ``let``/``have`` binder inside the statement, at equation-compiler
+    alternatives (``| pat => …`` starting a line, unless the statement itself
+    opened a ``match``/``fun``), or at ``where``.
+    """
+    depth = 0
+    pending_binders = 0
+    alternatives_in_statement = False
+    index = 0
+    length = len(text)
+    while index < length:
+        char = text[index]
+        if char in "([{⟨⦃":
+            depth += 1
+        elif char in ")]}⟩⦄":
+            depth = max(0, depth - 1)
+        elif depth == 0:
+            if text.startswith(":=", index):
+                if pending_binders:
+                    pending_binders -= 1
+                    index += 2
+                    continue
+                return index
+            if char == "|" and not alternatives_in_statement:
+                # `| pat => …` alternatives start a line; an absolute value
+                # `|x| …` has no space after its bar.
+                line_start = text.rfind("\n", 0, index) + 1
+                line_end = text.find("\n", index)
+                line_text = text[index : line_end if line_end >= 0 else length]
+                if (
+                    not text[line_start:index].strip()
+                    and re.match(r"\|\s", line_text)
+                    and "=>" in line_text
+                ):
+                    return index
+            if char == "λ":
+                alternatives_in_statement = True
+            elif char.isalpha() or char == "_":
+                previous = text[index - 1] if index else " "
+                word_match = re.match(r"[^\W\d][\w'!?]*", text[index:])
+                if word_match and not (previous.isalnum() or previous in "_.'«!?"):
+                    word = word_match.group(0)
+                    if word in {"let", "have", "letI", "haveI", "let_fun"}:
+                        pending_binders += 1
+                    elif word in {"match", "fun"}:
+                        alternatives_in_statement = True
+                    elif word == "where":
+                        return index
+                    index += len(word)
+                    continue
+        index += 1
+    return length
+
+
+def _normalize_lean_text(text: str) -> str:
+    return re.sub(r"\s+", " ", text or "").strip()
+
+
+def _statement_lock(source: str, main_decl: str | None = None) -> dict[str, Any] | None:
+    """Fingerprint (textually) what fixes the meaning of the main theorem.
+
+    The lock covers (1) the main declaration's statement, including any
+    ``… in`` prefixes scoped to it, and (2) every command above it except
+    theorem/lemma/example declarations (with their own scoped prefixes),
+    imports and proof-only options — definitions, ``open``, ``variable``,
+    notation, instances, attributes and scoping commands can all change what
+    the statement means. Helper lemmas may be added, removed or restated
+    freely; content after ``main`` cannot affect its statement. The session
+    adds a Lean-computed fingerprint (``fingerprint``) on top of this.
+    """
+    wanted = str(main_decl or "main").strip() or "main"
+    commands = _lean_commands(source)
+    theorems = [
+        decl for decl in _qualified_declarations(source, commands)
+        if decl.get("kind") in {"theorem", "lemma"}
+    ]
+    wanted_key = ".".join(_split_lean_name(wanted))
+    target = next(
+        (d for d in theorems if wanted_key in {d["qualified"], d["name"]}), None
+    ) or next(
+        (
+            d for d in theorems
+            if d["qualified"].split(".")[-1] == wanted_key.split(".")[-1]
+        ),
+        None,
+    )
+    if target is None:
+        return None
+    main_index = int(target["command"])
+    main_command = commands[main_index]
+    body = main_command["body_text"]
+    cut = _signature_end(body)
+    prefixes = [
+        text for text in main_command["prefixes"]
+        if not _LOCK_EXEMPT_OPTION_RE.match(text)
+    ]
+    signature = _normalize_lean_text(" ".join(prefixes + [body[:cut]]))
+    raw_signature = (source or "")[main_command["body"] : main_command["body"] + cut]
+    if prefixes:
+        raw_signature = "\n".join(prefixes) + "\n" + raw_signature
+    preamble: list[str] = []
+    for command in commands[:main_index]:
+        keyword = command["keyword"]
+        text = _normalize_lean_text(command["text"])
+        if not text or keyword in {"theorem", "lemma", "example", "import"}:
+            continue
+        if keyword == "set_option" and not command["prefixes"] and _LOCK_EXEMPT_OPTION_RE.match(text):
+            continue
+        preamble.append(text)
+    signature_sha = hashlib.sha256(
+        (target["qualified"] + "\n" + signature).encode("utf-8")
+    ).hexdigest()
+    preamble_sha = hashlib.sha256("\n".join(preamble).encode("utf-8")).hexdigest()
+    return {
+        "main_decl": target["qualified"],
+        "name": target["name"],
+        "signature": raw_signature.rstrip(),
+        "signature_sha256": signature_sha,
+        "preamble_sha256": preamble_sha,
+        "preamble_commands": len(preamble),
+        "sha256": hashlib.sha256(
+            (signature_sha + preamble_sha).encode("ascii")
+        ).hexdigest(),
+    }
+
+
+def _lock_violation(lock: dict[str, Any] | None, source: str) -> str:
+    """Explain how ``source`` breaks a statement lock ("" when it holds)."""
+    if not lock:
+        return ""
+    current = _statement_lock(source, str(lock.get("main_decl") or "main"))
+    name = str(lock.get("main_decl") or "main")
+    if current is None or current["main_decl"] != name:
+        return f"the locked main theorem `{name}` is missing or was renamed"
+    if current["signature_sha256"] != lock.get("signature_sha256"):
+        return f"the statement of the locked theorem `{name}` was changed"
+    if current["preamble_sha256"] != lock.get("preamble_sha256"):
+        return (
+            f"a definition, instance, `open`, `variable`, notation, attribute, "
+            f"option or namespace/section command above `{name}` was added, "
+            "removed or edited (only theorem/lemma declarations may change there)"
+        )
+    return ""
 
 
 def _citations_by_decl(lean: str) -> list[dict[str, str]]:
@@ -1323,29 +2207,46 @@ def _reconcile_citations(
 
 
 def _parse_model_payload(content: str) -> dict[str, Any]:
-    """Accept either strict JSON or a bare Lean dump."""
-    try:
-        data = _extract_json(str(content))
-    except (ValueError, json.JSONDecodeError):
-        lean = _normalize_lean_imports(_strip_lean_fences(str(content)))
-        if "theorem" in lean or "lemma" in lean or "example" in lean:
-            return {
-                "title": "",
-                "lean": lean,
-                "uses_mathlib": "import Mathlib" in lean or "import mathlib" in lean.lower(),
-                "notes": "model returned raw Lean (no JSON wrapper)",
-                "main_decl": "",
-                "citations": _citations_from_lean(lean),
-            }
-        raise ValueError("model response contained neither JSON nor recognisable Lean")
-    lean = _normalize_lean_imports(
-        _strip_lean_fences(str(data.get("lean") or data.get("code") or ""))
-    )
+    """Parse a Lean reply: a ```lean fence plus small JSON metadata.
+
+    Backward compatible with the older contract (Lean escaped inside a JSON
+    ``lean`` string) and with a bare Lean dump. ``uses_mathlib`` is always
+    derived from the source's imports; a model's own flag is never trusted,
+    because a mismatch would route the file to the wrong checker profile.
+    """
+    text = str(content or "")
+    lean_block = _extract_lean_block(text)
+    data: dict[str, Any] = {}
+    if lean_block is not None:
+        remainder = _without_lean_blocks(text)
+        try:
+            data = _extract_json_object(remainder)
+        except ValueError:
+            data = {}
+        lean = lean_block
+        notes_default = ""
+    else:
+        try:
+            data = _extract_json_object(text)
+        except ValueError:
+            data = {}
+        lean = str(data.get("lean") or data.get("code") or "") if data else ""
+        if lean.strip():
+            lean = _strip_lean_fences(lean)
+            notes_default = ""
+        else:
+            lean = _strip_lean_fences(text)
+            if not _LEAN_DECL_HINT_RE.search(lean):
+                if data:
+                    raise ValueError("model returned empty Lean source")
+                raise ValueError(
+                    "model response contained neither JSON nor recognisable Lean"
+                )
+            data = {}
+            notes_default = "model returned raw Lean (no metadata block)"
+    lean = _normalize_lean_imports(lean)
     if not lean.strip():
         raise ValueError("model returned empty Lean source")
-    uses = data.get("uses_mathlib")
-    if uses is None:
-        uses = bool(re.search(r"(?m)^\s*import\s+Mathlib\b", lean))
     cites = _merge_citations(
         _anchor_citations(
             _normalize_citations(data.get("citations") or data.get("references")), lean
@@ -1355,62 +2256,281 @@ def _parse_model_payload(content: str) -> dict[str, Any]:
     return {
         "title": str(data.get("title") or "")[:200],
         "lean": lean,
-        "uses_mathlib": bool(uses),
-        "notes": str(data.get("notes") or "")[:500],
+        "uses_mathlib": _detect_mathlib(lean),
+        "notes": str(data.get("notes") or notes_default)[:500],
         "main_decl": str(data.get("main_decl") or "")[:80],
         "citations": cites,
     }
 
 
+def _lean_is_letter_like(char: str) -> bool:
+    """Lean 4 ``isLetterLike`` (Greek except λ/Π/Σ, Coptic, letterlike blocks)."""
+    code = ord(char)
+    return (
+        (0x3B1 <= code <= 0x3C9 and code != 0x3BB)
+        or (0x391 <= code <= 0x3A9 and code not in (0x3A0, 0x3A3))
+        or 0x3CA <= code <= 0x3FB
+        or 0x1F00 <= code <= 0x1FFE
+        or 0x2100 <= code <= 0x214F
+        or 0x1D49C <= code <= 0x1D59F
+    )
+
+
+def _lean_is_id_first(char: str) -> bool:
+    return (char.isascii() and char.isalpha()) or char == "_" or _lean_is_letter_like(char)
+
+
+def _lean_is_id_rest(char: str) -> bool:
+    """Lean 4 ``isIdRest``: ASCII alphanumerics, ``_ ' ! ?``, letterlike, subscripts."""
+    if (char.isascii() and char.isalnum()) or char in "_'!?":
+        return True
+    code = ord(char)
+    return (
+        _lean_is_letter_like(char)
+        or 0x2080 <= code <= 0x2089
+        or 0x2090 <= code <= 0x209C
+        or 0x1D62 <= code <= 0x1D6A
+    )
+
+
+# Keywords after which Lean parses a string literal as an interpolated string
+# (``{…}`` inside it is code).  Any identifier ending in ``!`` (``s!``,
+# ``m!``, ``f!``, ``panic!`` …) does the same.
+_LEAN_INTERPOLATING_KEYWORDS = frozenset(
+    {"throwError", "throwErrorAt", "dbg_trace", "trace", "logInfo", "logWarning", "logError"}
+)
+_LEAN_MAX_INTERPOLATION_DEPTH = 32
+# A character literal directly after one of these is unambiguous: no Lean
+# token (core, Mathlib or user notation) can have absorbed its opening quote.
+_LEAN_SIMPLE_CHAR_LITERAL_RE = re.compile(r"'[A-Za-z0-9 _]'")
+
+
+class _LeanLexer:
+    """Blank Lean comments, strings and character literals like Lean's tokenizer.
+
+    Follows Lean 4's own rules closely enough that code cannot hide inside
+    what the text screens take for a string (or vice versa): a ``'`` at a
+    token start is a character literal (``'"'`` included), identifiers use
+    Lean's ``isIdRest``, ``«…»`` names, ``r"…"``/``r#"…"#`` raw strings,
+    nested block comments and interpolated strings (``s!"…{code}…"``) are
+    handled.  Constructs whose reading depends on the notation table in force
+    are recorded as ``anomalies`` so the fidelity screen can refuse them.
+    """
+
+    def __init__(self, source: str) -> None:
+        self.src = source
+        self.n = len(source)
+        self.out = list(source)
+        self.anomalies: list[tuple[str, int]] = []
+        # 1 at every position inside an identifier other than its first
+        # character: a keyword there (`h1elab`, `Foo.elab`) is not a command.
+        self.inside_ident = bytearray(self.n)
+
+    def run(self) -> str:
+        self._code(0, until_brace=False, depth=0)
+        return "".join(self.out)
+
+    def _blank(self, start: int, end: int) -> None:
+        out = self.out
+        for index in range(start, min(end, self.n)):
+            if out[index] != "\n":
+                out[index] = " "
+
+    def _block_comment(self, start: int) -> int:
+        src, n = self.src, self.n
+        index, depth = start + 2, 1
+        while index < n and depth:
+            if src.startswith("/-", index):
+                depth += 1
+                index += 2
+            elif src.startswith("-/", index):
+                depth -= 1
+                index += 2
+            else:
+                index += 1
+        return index
+
+    def _char_literal(self, start: int) -> int | None:
+        """End index of a well-formed character literal at ``start``, if any."""
+        src, n = self.src, self.n
+        index = start + 1
+        if index >= n:
+            return None
+        if src[index] == "\\":
+            escape = src[index + 1] if index + 1 < n else ""
+            if escape == "x":
+                index += 4
+            elif escape == "u" and index + 2 < n and src[index + 2] == "{":
+                close = src.find("}", index + 3)
+                if close < 0:
+                    return None
+                index = close + 1
+            elif escape == "u":
+                index += 6
+            else:
+                index += 2
+        else:
+            index += 1
+        if index < n and src[index] == "'":
+            return index + 1
+        return None
+
+    def _raw_string_end(self, start: int) -> int | None:
+        """End of ``r"…"``/``r#"…"#`` starting at ``start`` (the ``r``), if one."""
+        src, n = self.src, self.n
+        index = start + 1
+        hashes = 0
+        while index < n and src[index] == "#":
+            hashes += 1
+            index += 1
+        if index >= n or src[index] != '"':
+            return None
+        closing = '"' + "#" * hashes
+        end = src.find(closing, index + 1)
+        return n if end < 0 else end + len(closing)
+
+    def _identifier(self, start: int) -> int:
+        src, n = self.src, self.n
+        index = start
+        while True:
+            if index < n and src[index] == "«":
+                close = src.find("»", index + 1)
+                index = n if close < 0 else close + 1
+            elif index < n and _lean_is_id_first(src[index]):
+                index += 1
+                while index < n and _lean_is_id_rest(src[index]):
+                    index += 1
+            else:
+                break
+            if index + 1 < n and src[index] == "." and (
+                src[index + 1] == "«" or _lean_is_id_first(src[index + 1])
+            ):
+                index += 1
+                continue
+            break
+        return index
+
+    def _string(self, start: int, *, interpolated: bool, depth: int) -> int:
+        src, n = self.src, self.n
+        self._blank(start, start + 1)
+        index = start + 1
+        while index < n:
+            char = src[index]
+            if char == "\\":
+                self._blank(index, index + 2)
+                index += 2
+                continue
+            if char == '"':
+                self._blank(index, index + 1)
+                return index + 1
+            if interpolated and char == "{":
+                self._blank(index, index + 1)
+                if depth >= _LEAN_MAX_INTERPOLATION_DEPTH:
+                    self.anomalies.append(("interpolated_string", index))
+                    return n
+                close = self._code(index + 1, until_brace=True, depth=depth + 1)
+                if close >= n:
+                    return n
+                self._blank(close, close + 1)
+                index = close + 1
+                continue
+            self._blank(index, index + 1)
+            index += 1
+        return n
+
+    def _code(self, start: int, *, until_brace: bool, depth: int) -> int:
+        src, n = self.src, self.n
+        index = start
+        previous = "space"
+        last_ident = ""
+        braces = 0
+        while index < n:
+            char = src[index]
+            if src.startswith("--", index):
+                end = src.find("\n", index)
+                end = n if end < 0 else end
+                self._blank(index, end)
+                index, previous = end, "space"
+                continue
+            if src.startswith("/-", index):
+                end = self._block_comment(index)
+                self._blank(index, end)
+                index, previous = end, "space"
+                continue
+            if char.isspace():
+                index += 1
+                previous = "space"
+                continue
+            if char == '"':
+                # `last_ident` is the previous token when it was an identifier
+                # (whitespace and comments in between do not reset it).
+                interpolated = last_ident.endswith("!") or last_ident in _LEAN_INTERPOLATING_KEYWORDS
+                if interpolated:
+                    self.anomalies.append(("interpolated_string", index))
+                elif last_ident == "#print":
+                    self.anomalies.append(("print_string", index))
+                index = self._string(index, interpolated=interpolated, depth=depth)
+                previous, last_ident = "string", ""
+                continue
+            if char == "'" and index + 1 < n and src[index + 1] != "'":
+                end = self._char_literal(index)
+                if end is not None:
+                    if previous == "symbol" and not _LEAN_SIMPLE_CHAR_LITERAL_RE.fullmatch(
+                        src[index:end]
+                    ):
+                        # A notation token ending in `'` (Mathlib `⁻¹'`, a
+                        # user `notation`) would read this differently.
+                        self.anomalies.append(("ambiguous_char_literal", index))
+                    self._blank(index, end)
+                    index, previous, last_ident = end, "char", ""
+                    continue
+                index += 1
+                previous, last_ident = "symbol", ""
+                continue
+            if char.isdigit():
+                index += 1
+                while index < n and (
+                    (src[index].isascii() and (src[index].isalnum() or src[index] == "_"))
+                    or (src[index] == "." and index + 1 < n and src[index + 1].isdigit())
+                ):
+                    index += 1
+                previous, last_ident = "number", ""
+                continue
+            if char == "r":
+                end = self._raw_string_end(index)
+                if end is not None:
+                    self._blank(index, end)
+                    index, previous, last_ident = end, "string", ""
+                    continue
+            if char == "«" or _lean_is_id_first(char):
+                end = self._identifier(index)
+                self.inside_ident[index + 1 : end] = b"\x01" * max(0, end - index - 1)
+                last_ident = src[index:end]
+                if index and src[index - 1] == "#":
+                    last_ident = "#" + last_ident
+                index, previous = end, "ident"
+                continue
+            if until_brace:
+                if char == "{":
+                    braces += 1
+                elif char == "}":
+                    if braces == 0:
+                        return index
+                    braces -= 1
+            index += 1
+            previous, last_ident = "symbol", ""
+        return n
+
+
+def _lean_lex(lean: str) -> tuple[str, list[tuple[str, int]]]:
+    lexer = _LeanLexer(lean or "")
+    text = lexer.run()
+    return text, lexer.anomalies
+
+
 def _lean_executable_text(lean: str) -> str:
-    """Blank Lean comments/strings while preserving executable line numbers."""
-    source = lean or ""
-    out: list[str] = []
-    i = 0
-    block_depth = 0
-    in_string = False
-    while i < len(source):
-        if block_depth:
-            if source.startswith("/-", i):
-                block_depth += 1
-                out.extend("  ")
-                i += 2
-            elif source.startswith("-/", i):
-                block_depth -= 1
-                out.extend("  ")
-                i += 2
-            else:
-                out.append("\n" if source[i] == "\n" else " ")
-                i += 1
-            continue
-        if in_string:
-            if source[i] == "\\" and i + 1 < len(source):
-                out.extend("  ")
-                i += 2
-            else:
-                if source[i] == '"':
-                    in_string = False
-                out.append("\n" if source[i] == "\n" else " ")
-                i += 1
-            continue
-        if source.startswith("--", i):
-            while i < len(source) and source[i] != "\n":
-                out.append(" ")
-                i += 1
-            continue
-        if source.startswith("/-", i):
-            block_depth = 1
-            out.extend("  ")
-            i += 2
-            continue
-        if source[i] == '"':
-            in_string = True
-            out.append(" ")
-            i += 1
-            continue
-        out.append(source[i])
-        i += 1
-    return "".join(out)
+    """Blank Lean comments/strings/char literals, preserving line numbers."""
+    return _lean_lex(lean)[0]
 
 
 def _count_sorry(lean: str) -> int:
@@ -1456,9 +2576,10 @@ def _normalize_lean_imports(lean: str) -> str:
 
 _CLAUDE_ACCOUNT_MODELS = {"sonnet", "opus", "fable", "claude-haiku-4-5"}
 _CLAUDE_LEAN_SYSTEM = (
-    "You are a Lean 4 formalization expert. Preserve the exact mathematical "
-    "claim, follow the requested strict output contract, and return only the "
-    "requested content without markdown commentary."
+    "You are a Lean 4 formalization expert targeting exactly Lean 4.14.0 with "
+    "Mathlib v4.14.0 (December 2024). Preserve the exact mathematical claim, "
+    "follow the requested output contract, and return only the requested "
+    "content without extra commentary."
 )
 
 # Response-only subscription adapters receive an explicit ``source_env``.  It
@@ -1509,7 +2630,7 @@ def _llm_environment(
     to an Anthropic API key or a cloud-provider credential.
     """
     from agent_monitor.jobs import _configure_auth_route, _route_from_record
-    from agent_monitor.settings import resolved_user_env
+    from agent_monitor.settings import restrict_account_base_urls, resolved_user_env
 
     if (user or {}).get("guest") or (run_record or {}).get("guest"):
         from agent_monitor import sponsored_kimi_client
@@ -1525,7 +2646,9 @@ def _llm_environment(
                 engine="formal",
                 client_id=(user or {}).get("id") or (run_record or {}).get("owner_id"),
                 cache_key=str((run_record or {}).get("run_id") or "guest-formal"),
-                minimum_ttl_seconds=600,
+                # A Formal action chains calls of up to 630 s each
+                # (kimi_k3.SPONSORED_TIMEOUT_SECONDS) on one credential.
+                minimum_ttl_seconds=1_500,
             ),
             "AGENT_MONITOR_GUEST_DERIVED": "1",
             "AGENT_MONITOR_MODEL": "kimi-k3",
@@ -1539,7 +2662,11 @@ def _llm_environment(
         for name in _FORMAL_RUNTIME_ENV_NAMES
         if os.environ.get(name)
     }
-    env = dict(resolved_user_env(user) or {})
+    # SSRF guard: a non-admin account never chooses where the server sends its
+    # Lean translation, audit and repair calls; only the operator's own bases
+    # (or the providers' built-in endpoints) remain. The operator and admin
+    # environments are unchanged.
+    env = restrict_account_base_urls(dict(resolved_user_env(user) or {}), user)
     route = _route_from_record(run_record)
     if route is None:
         # Only an explicitly persisted setting may select a subscription for a
@@ -1589,7 +2716,8 @@ def _llm_environment(
                 engine="formal",
                 client_id=owner_id,
                 cache_key=cache_key,
-                minimum_ttl_seconds=600,
+                # As for guests (above): it must outlast chained 630 s calls.
+                minimum_ttl_seconds=1_500,
             )
         )
     if route == "claude_subscription":
@@ -1651,6 +2779,9 @@ def _chat(
         if not content:
             raise ValueError("Codex returned an empty Lean response")
         return str(model or "codex"), content
+    # A sponsored Kimi call ignores this timeout: _call_llm waits the broker's
+    # own deadline (kimi_k3.SPONSORED_TIMEOUT_SECONDS), sends it as
+    # X-Ansatze-Timeout and never replays an ambiguous failure.
     chosen, content, _provider = _call_llm(
         env, model, prompt, timeout=legacy_timeout
     )
@@ -1738,18 +2869,442 @@ def _lean_source_snapshot(ldir: Path) -> tuple[Path, bytes]:
     return resolved, source
 
 
-def _run_lean_check(ldir: Path, uses_mathlib: bool) -> dict[str, Any]:
-    """Compile an exact source snapshot through the mandatory Lean broker."""
-    from agent_monitor import lean_broker
-
-    started = time.monotonic()
+def _lean_check_timeout() -> float:
     try:
         timeout_s = max(
             1, int(os.environ.get("AGENT_MONITOR_LEAN_CHECK_TIMEOUT", "100"))
         )
     except ValueError:
         timeout_s = 100
-    client_timeout = min(float(timeout_s), lean_broker.MAX_CLIENT_TIMEOUT)
+    return min(float(timeout_s), lean_broker.MAX_CLIENT_TIMEOUT)
+
+
+_SORRY_WARNING_RE = re.compile(r"declaration uses 'sorry'")
+# Lean's warning for `#exit`: elaboration stopped, the rest was never checked.
+_EXIT_WARNING_RE = re.compile(r"using 'exit' to interrupt Lean")
+# Lean prints `'name' depends on axioms: [..]` / `'name' does not depend on
+# any axioms`; a name may itself contain primes (`foo'`), so the name match is
+# lazy up to the quote that precedes the verdict.
+_AXIOMS_LINE_RE = re.compile(
+    r"'(?P<name>[^\n]+?)'\s+(?:depends on axioms:\s*\[(?P<axioms>[^\]]*)\]"
+    r"|does not depend on any axioms)",
+)
+_PRIVATE_NAME_RE = re.compile(r"^_private\.(?:[^.]+\.)*?0\.")
+# Every named declaration of these kinds is probed, not only `main`: a decoy
+# of the same short name elsewhere (`A.main`) or a theorem the parser missed
+# can then never stand in for the real one.
+_PROBED_KINDS = frozenset({
+    "theorem", "lemma", "def", "abbrev", "instance", "axiom", "opaque",
+    "irreducible_def",
+})
+MAX_PROBED_DECLARATIONS = 200
+
+
+def _output_reports_sorry(check: dict[str, Any]) -> bool:
+    """Lean's own ``declaration uses 'sorry'`` warning, wherever it came from."""
+    blob = str(check.get("stdout") or "") + "\n" + str(check.get("stderr") or "")
+    return bool(_SORRY_WARNING_RE.search(blob))
+
+
+def _output_reports_exit(check: dict[str, Any]) -> bool:
+    """Lean's ``using 'exit' to interrupt Lean`` warning (``#exit``)."""
+    blob = str(check.get("stdout") or "") + "\n" + str(check.get("stderr") or "")
+    return bool(_EXIT_WARNING_RE.search(blob))
+
+
+def _marked_output(output: str, begin: str, end: str) -> str | None:
+    """The output lines strictly between this probe's own marker lines.
+
+    The markers carry a fresh random nonce the checked file cannot know, so
+    anything the file printed itself comes before ``begin``.  Returns None
+    unless each marker appears exactly once, ``begin`` first: a file that
+    stops elaboration (``#exit``) or swallows the probe never prints them.
+    """
+    lines = output.splitlines()
+
+    def positions(marker: str) -> list[int]:
+        return [
+            index
+            for index, line in enumerate(lines)
+            if line.strip() == marker or line.rstrip().endswith(": " + marker)
+        ]
+
+    starts, ends = positions(begin), positions(end)
+    if len(starts) != 1 or len(ends) != 1 or starts[0] >= ends[0]:
+        return None
+    return "\n".join(lines[starts[0] + 1 : ends[0]])
+
+
+def _lean_name_literal(name: str) -> str:
+    """Quote each component so any declared name is accepted by ``#print``."""
+    parts = _split_lean_name(str(name))
+    if not parts or any("»" in part or "\n" in part for part in parts):
+        return ""
+    return ".".join(f"«{part}»" for part in parts)
+
+
+def _normalized_decl_name(name: str) -> str:
+    """Compare Lean-printed and parsed names: no quoting, no private prefix."""
+    text = _PRIVATE_NAME_RE.sub("", str(name or "").strip())
+    return ".".join(_split_lean_name(text))
+
+
+def _resolve_declared_main(source: str, main_decl: str) -> str | None:
+    """The theorem a declared/locked ``main_decl`` names — exactly, or None."""
+    theorems = [
+        d for d in _qualified_declarations(source)
+        if d["kind"] in {"theorem", "lemma"}
+    ]
+    wanted = _normalized_decl_name(main_decl)
+    if not wanted:
+        return None
+    exact = [d for d in theorems if d["qualified"] == wanted]
+    if len(exact) == 1:
+        return exact[0]["qualified"]
+    named = [d for d in theorems if d["name"] == wanted]
+    if len(named) == 1:
+        return named[0]["qualified"]
+    short = [
+        d for d in theorems
+        if d["qualified"].split(".")[-1] == wanted.split(".")[-1]
+    ]
+    return short[0]["qualified"] if len(short) == 1 else None
+
+
+def _probe_target(source: str, main_decl: str | None = None) -> str | None:
+    """Fully qualified name of the declaration reported as the main theorem.
+
+    Used to pick a target when none was locked (manual checks, harness runs):
+    the theorem named ``main_decl``/``main`` when unambiguous, otherwise the
+    last theorem. Soundness never depends on this choice — the axioms probe
+    inspects every named declaration.
+    """
+    decls = _qualified_declarations(source)
+    theorems = [d for d in decls if d["kind"] in {"theorem", "lemma"}]
+    if not theorems:
+        return None
+    resolved = _resolve_declared_main(source, str(main_decl or "main"))
+    return resolved or theorems[-1]["qualified"]
+
+
+def _axioms_probe(
+    source_text: str,
+    *,
+    uses_mathlib: bool,
+    timeout: float,
+    main_decl: str | None = None,
+) -> dict[str, Any]:
+    """Second broker check: ``#print axioms`` for every named declaration.
+
+    Exit 0 plus the absence of ``sorry`` tokens is not proof of soundness: a
+    macro or elaborator can admit a goal without the literal word. The kernel's
+    own axiom report is the ground truth. Each probe line names its target
+    from the root (``_root_.…``), so a declaration of the same short name in a
+    namespace the file leaves open cannot answer for it, and the reports must
+    be the last ones in the output, one per probed name, in order. Only
+    ``propext``, ``Classical.choice`` and ``Quot.sound`` are accepted anywhere
+    in the file. When the caller locked a main theorem (``main_decl``), it
+    must exist under exactly that name; otherwise the probe fails closed.
+    """
+    decls = _qualified_declarations(source_text)
+
+    def failure(error: str, decl: str = "") -> dict[str, Any]:
+        return {
+            "ok": False,
+            "decl": decl,
+            "axioms": [],
+            "file_axioms": [],
+            "unexpected": [],
+            "offenders": [],
+            "probed": 0,
+            "error": error,
+        }
+
+    if main_decl:
+        target = _resolve_declared_main(source_text, main_decl)
+        if not target:
+            return failure(
+                f"the main theorem `{main_decl}` was not found under that name"
+            )
+    else:
+        target = _probe_target(source_text)
+        if not target:
+            return failure("no theorem to probe")
+    names = [target] + [
+        d["qualified"] for d in decls
+        if d["kind"] in _PROBED_KINDS and d["qualified"] != target
+    ]
+    names = list(dict.fromkeys(names))[:MAX_PROBED_DECLARATIONS]
+    probed: list[tuple[str, str]] = []
+    for name in names:
+        literal = _lean_name_literal(name)
+        if not literal:
+            if name == target:
+                return failure(f"cannot name `{target}` in a probe", target)
+            continue
+        probed.append((name, literal))
+    # Bracket the reports with markers carrying a per-check nonce: output the
+    # file printed itself (a forged report followed by `#exit`) can never
+    # appear between them, and a file that stops the probe fails closed.
+    nonce = secrets.token_hex(16)
+    begin = f"AGENT_MONITOR_AXIOMS::{nonce}::begin"
+    end = f"AGENT_MONITOR_AXIOMS::{nonce}::end"
+    probe = (
+        source_text.rstrip()
+        + "\n\n"
+        + f'#print "{begin}"\n'
+        + "".join(f"#print axioms _root_.{literal}\n" for _name, literal in probed)
+        + f'#print "{end}"\n'
+    )
+    probe_sha256 = hashlib.sha256(probe.encode("utf-8")).hexdigest()
+    try:
+        result = lean_broker.check_source(
+            probe, uses_mathlib=uses_mathlib, timeout=timeout
+        )
+    except lean_broker.LeanBrokerError as exc:
+        return failure(f"axioms probe could not run: {exc}", target)
+    problems: list[str] = []
+    if result.get("source_sha256") != probe_sha256:
+        problems.append("broker did not attest the probe source")
+    if str(result.get("sandbox") or "") not in LEAN_CHECK_TRUSTED_SANDBOXES:
+        problems.append("probe sandbox attestation was not trusted")
+    if result.get("status") != "completed" or result.get("exit_code") != 0:
+        problems.append(
+            "probe did not complete cleanly"
+            + (f": {result.get('error')}" if result.get("error") else "")
+        )
+    if result.get("stdout_truncated") or result.get("stderr_truncated"):
+        problems.append("probe output was truncated")
+    output = str(result.get("stdout") or "") + "\n" + str(result.get("stderr") or "")
+    section = _marked_output(output, begin, end)
+    reports = list(_AXIOMS_LINE_RE.finditer(section)) if section is not None else []
+    by_name: dict[str, list[str]] = {}
+    if section is None:
+        problems.append(
+            f"no axiom report for `{target}`: the probe's own output markers are "
+            "missing or out of order (the file stopped elaboration or rewrote the probe)"
+        )
+    elif len(reports) != len(probed):
+        problems.append(
+            f"no axiom report for `{target}` and every other probed declaration "
+            f"(expected {len(probed)} report(s), found {len(reports)})"
+        )
+    else:
+        for (name, _literal), report in zip(probed, reports):
+            printed = _normalized_decl_name(report.group("name"))
+            if printed != _normalized_decl_name(name):
+                problems.append(
+                    f"axiom report for `{printed}` where `{name}` was probed"
+                )
+                continue
+            by_name[name] = [
+                item.strip()
+                for item in (report.group("axioms") or "").replace("\n", " ").split(",")
+                if item.strip()
+            ]
+    if target not in by_name and not problems:
+        problems.append(f"no axiom report for `{target}`")
+    file_axioms = sorted({axiom for axioms in by_name.values() for axiom in axioms})
+    unexpected = sorted(set(file_axioms) - STANDARD_AXIOMS)
+    offenders = [
+        name for name, axioms in by_name.items() if set(axioms) - STANDARD_AXIOMS
+    ]
+    if unexpected:
+        problems.append(
+            "non-standard axioms "
+            + ", ".join(unexpected)
+            + " (used by "
+            + ", ".join(f"`{name}`" for name in offenders[:6])
+            + ")"
+        )
+    return {
+        "ok": not problems,
+        "decl": target,
+        "axioms": by_name.get(target, []),
+        "file_axioms": file_axioms,
+        "unexpected": unexpected,
+        "offenders": offenders[:20],
+        "probed": len(probed),
+        "error": "; ".join(problems),
+    }
+
+
+# Lean-side statement fingerprint. Appended (with `import Lean` prepended) to
+# a file that compiles, it walks the main theorem's TYPE and, transitively,
+# every local constant that type mentions (definitions with their values,
+# inductives with their constructors, instances picked by elaboration) and
+# prints a structural hash row per constant. Two files whose main statements
+# elaborate to the same term over the same local definitions get the same
+# fingerprint, however the text is laid out; an instance, notation, `open`,
+# `variable` or definition that changes what the statement means changes it.
+# Only `_root_`-qualified names and dot notation are used, so declarations in
+# the checked file cannot shadow the probe's own calls.
+_FINGERPRINT_PROBE = """
+
+-- agent-monitor statement fingerprint @@MARKER@@
+run_cmd do
+  let env ← _root_.Lean.MonadEnv.getEnv
+  let out ← _root_.IO.getStdout
+  let mut todo : _root_.Array _root_.Lean.Name := #[@@TARGET@@]
+  let mut seen : _root_.Lean.NameSet := {}
+  let mut rows : _root_.Array _root_.Lean.Json := #[]
+  let mut fuel : _root_.Nat := 20000
+  while !todo.isEmpty && fuel != 0 do
+    fuel := fuel - 1
+    let name := todo.back!
+    todo := todo.pop
+    if seen.contains name then continue
+    seen := seen.insert name
+    if (env.getModuleIdxFor? name).isSome then continue
+    match env.find? name with
+    | none =>
+      rows := rows.push (_root_.Lean.Json.mkObj [("n", _root_.Lean.Json.str name.toString), ("k", _root_.Lean.Json.str "missing")])
+    | some ci =>
+      let (kind, value?, extra) : _root_.String × _root_.Option _root_.Lean.Expr × _root_.Array _root_.Lean.Name :=
+        match ci with
+        | .defnInfo d => ("def", some d.value, #[])
+        | .thmInfo _ => ("theorem", none, #[])
+        | .opaqueInfo d => ("opaque", some d.value, #[])
+        | .axiomInfo _ => ("axiom", none, #[])
+        | .inductInfo v => ("inductive", none, v.ctors.toArray)
+        | .ctorInfo v => ("ctor", none, #[v.induct])
+        | .recInfo _ => ("recursor", none, #[])
+        | .quotInfo _ => ("quot", none, #[])
+      let refs := ci.type.getUsedConstants ++ (match value? with | some v => v.getUsedConstants | none => #[]) ++ extra
+      for r in refs do
+        if (env.getModuleIdxFor? r).isNone && !seen.contains r then
+          todo := todo.push r
+      let fields : _root_.List (_root_.String × _root_.Lean.Json) :=
+        [("n", _root_.Lean.Json.str name.toString), ("k", _root_.Lean.Json.str kind),
+         ("th", _root_.Lean.Json.str ci.type.hash.toNat.repr),
+         ("ts", _root_.Lean.Json.str ci.type.dbgToString.hash.toNat.repr),
+         ("u", _root_.Lean.Json.str (_root_.String.intercalate "," (ci.levelParams.map (·.toString))))]
+      let vfields : _root_.List (_root_.String × _root_.Lean.Json) := match value? with
+        | some v => [("vh", _root_.Lean.Json.str v.hash.toNat.repr), ("vs", _root_.Lean.Json.str v.dbgToString.hash.toNat.repr)]
+        | none => []
+      rows := rows.push (_root_.Lean.Json.mkObj (fields ++ vfields))
+  let status := if fuel == 0 then "truncated" else "ok"
+  out.putStrLn ("AGENT_MONITOR_STATEMENT::@@MARKER@@::" ++ (_root_.Lean.Json.mkObj [("status", _root_.Lean.Json.str status), ("rows", _root_.Lean.Json.arr rows)]).compress)
+"""
+STATEMENT_FINGERPRINT_VERSION = 1
+
+
+def _lean_name_term(name: str) -> str | None:
+    """A Lean term building ``name`` component by component (no resolution)."""
+    parts = _split_lean_name(name)
+    if not parts:
+        return None
+    term = "_root_.Lean.Name.anonymous"
+    for part in parts:
+        if any(char in part for char in '"\\') or any(ord(char) < 32 for char in part):
+            return None
+        term = f'(_root_.Lean.Name.mkStr {term} "{part}")'
+    return term
+
+
+def _fingerprint_program(source: str, marker: str, target_term: str) -> str:
+    return (
+        "import Lean\n"
+        + (source or "").rstrip()
+        + "\n"
+        + _FINGERPRINT_PROBE.replace("@@MARKER@@", marker).replace("@@TARGET@@", target_term)
+    )
+
+
+def _statement_fingerprint(
+    source: str,
+    *,
+    uses_mathlib: bool,
+    main_decl: str,
+    timeout: float | None = None,
+) -> dict[str, Any]:
+    """Lean-computed fingerprint of what the main theorem states.
+
+    Runs one broker check of the file plus ``_FINGERPRINT_PROBE`` (sorry is
+    fine; the file must compile). The result is ``{"ok": True,
+    "fingerprint": sha256, …}`` or ``{"ok": False, "error": …}``; callers treat
+    a failure as "unconfirmed", never as a match.
+    """
+    target = _resolve_declared_main(source, main_decl)
+    term = _lean_name_term(target) if target else None
+    if not target or not term:
+        return {"ok": False, "error": f"main theorem `{main_decl}` not found"}
+    marker = secrets.token_hex(12)
+    program = _fingerprint_program(source, marker, term)
+    try:
+        with _LEAN_CHECK_SLOTS:
+            result = lean_broker.check_source(
+                program,
+                uses_mathlib=uses_mathlib,
+                timeout=float(timeout or _lean_check_timeout()),
+            )
+    except lean_broker.LeanBrokerError as exc:
+        return {"ok": False, "error": f"fingerprint probe could not run: {exc}"}
+    if (
+        result.get("source_sha256") != hashlib.sha256(program.encode("utf-8")).hexdigest()
+        or str(result.get("sandbox") or "") not in LEAN_CHECK_TRUSTED_SANDBOXES
+    ):
+        return {"ok": False, "error": "fingerprint probe attestation was not trusted"}
+    if (
+        result.get("status") != "completed"
+        or result.get("exit_code") != 0
+        or result.get("stdout_truncated")
+        or result.get("stderr_truncated")
+    ):
+        return {"ok": False, "error": "fingerprint probe did not complete cleanly"}
+    prefix = f"AGENT_MONITOR_STATEMENT::{marker}::"
+    lines = [
+        line[len(prefix) :]
+        for line in str(result.get("stdout") or "").splitlines()
+        if line.startswith(prefix)
+    ]
+    if len(lines) != 1:
+        return {"ok": False, "error": "fingerprint probe printed no single report"}
+    try:
+        payload = json.loads(lines[0])
+    except (json.JSONDecodeError, RecursionError, ValueError):
+        return {"ok": False, "error": "fingerprint report was not JSON"}
+    if not isinstance(payload, dict):
+        return {"ok": False, "error": "fingerprint report was not an object"}
+    rows = payload.get("rows")
+    if payload.get("status") != "ok" or not isinstance(rows, list) or not rows:
+        return {"ok": False, "error": "fingerprint closure was truncated or empty"}
+    rows = [row for row in rows if isinstance(row, dict)]
+    wanted = _normalized_decl_name(target)
+    if not any(
+        _normalized_decl_name(row.get("n")) == wanted and row.get("k") == "theorem"
+        for row in rows
+    ) or any(row.get("k") == "missing" for row in rows):
+        return {"ok": False, "error": f"fingerprint has no theorem `{target}`"}
+    canonical = json.dumps(
+        {
+            "version": STATEMENT_FINGERPRINT_VERSION,
+            "rows": sorted(rows, key=lambda row: str(row.get("n"))),
+        },
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+    return {
+        "ok": True,
+        "fingerprint": hashlib.sha256(canonical.encode("utf-8")).hexdigest(),
+        "decl": target,
+        "constants": len(rows),
+    }
+
+
+def _run_lean_check(
+    ldir: Path, uses_mathlib: bool, *, main_decl: str | None = None
+) -> dict[str, Any]:
+    """Compile an exact source snapshot through the mandatory Lean broker.
+
+    ``import Mathlib`` is accepted: the Mathlib profile loads the prebuilt
+    library from the broker's immutable release. A missing broker yields
+    ``toolchain_missing`` (never a local fallback). A clean compile with no
+    ``sorry`` must also pass the ``#print axioms`` probe; ``main_decl`` (the
+    locked main theorem, when there is one) must exist under exactly that name.
+    """
+    started = time.monotonic()
+    client_timeout = _lean_check_timeout()
 
     try:
         ldir, source_bytes = _lean_source_snapshot(Path(ldir))
@@ -1760,15 +3315,7 @@ def _run_lean_check(ldir: Path, uses_mathlib: bool) -> dict[str, Any]:
             started=started,
         )
     source_sha256 = hashlib.sha256(source_bytes).hexdigest()
-    if re.search(r"(?m)^\s*import\s+Mathlib\s*$", source_text):
-        return _lean_check_failure(
-            (
-                "Broad `import Mathlib` is disabled on this server because it can "
-                "exhaust the shared checker memory. Import only the specific "
-                "Mathlib modules required by this proof."
-            ),
-            started=started,
-        )
+    profile = "mathlib" if uses_mathlib else "core"
 
     try:
         with _LEAN_CHECK_SLOTS:
@@ -1778,13 +3325,17 @@ def _run_lean_check(ldir: Path, uses_mathlib: bool) -> dict[str, Any]:
                 timeout=client_timeout,
             )
     except lean_broker.LeanBrokerError as exc:
-        return _lean_check_failure(
+        failure = _lean_check_failure(
             (
                 "Lean checker broker unavailable; refused to run Proof.lean "
                 f"through any local fallback: {exc}"
             ),
             started=started,
         )
+        if isinstance(exc, lean_broker.LeanBrokerUnavailable):
+            failure["status"] = "toolchain_missing"
+            failure["checker_profile"] = profile
+        return failure
 
     try:
         _current_ldir, current_source = _lean_source_snapshot(ldir)
@@ -1802,7 +3353,12 @@ def _run_lean_check(ldir: Path, uses_mathlib: bool) -> dict[str, Any]:
     broker_status = str(broker_result.get("status") or "")
     exit_code = broker_result.get("exit_code")
     if broker_status == "timed_out":
-        failures.append("Lean broker timed out")
+        failures.append(
+            "Lean broker timed out (the fixed server limit is about "
+            f"{LEAN_BROKER_LIMIT_SECONDS.get(profile, 90)} seconds for "
+            f"{'Mathlib' if profile == 'mathlib' else 'core Lean'} files; "
+            "split the proof or use lighter tactics)"
+        )
     elif broker_status != "completed":
         failures.append(
             str(broker_result.get("error") or "Lean broker check failed")
@@ -1824,8 +3380,7 @@ def _run_lean_check(ldir: Path, uses_mathlib: bool) -> dict[str, Any]:
         and exit_code == 0
         and source_unchanged
     )
-    profile = "mathlib" if uses_mathlib else "core"
-    return {
+    result: dict[str, Any] = {
         "ok": ok,
         "status": "verified" if ok else "failed",
         "command": ["lean-broker", profile],
@@ -1845,6 +3400,40 @@ def _run_lean_check(ldir: Path, uses_mathlib: bool) -> dict[str, Any]:
             broker_result.get("mathlib_tree_sha256") or ""
         ),
     }
+    if ok and _output_reports_exit(result):
+        # `#exit` stops elaboration: whatever follows was never checked.
+        ok = False
+        result.update({"ok": False, "status": "failed"})
+        result["stderr"] = (
+            result["stderr"]
+            + "\nLean stopped elaborating early (`#exit`); the rest of the file was never checked."
+        ).strip()
+    if ok and _output_reports_sorry(result):
+        result["reports_sorry"] = True
+    if ok and not result.get("reports_sorry") and not _count_sorry(source_text):
+        with _LEAN_CHECK_SLOTS:
+            probe = _axioms_probe(
+                source_text,
+                uses_mathlib=uses_mathlib,
+                timeout=client_timeout,
+                main_decl=main_decl,
+            )
+        result["axioms"] = probe
+        result["duration_s"] = round(time.monotonic() - started, 2)
+        if not probe["ok"]:
+            reported_sorry = "sorryAx" in (probe.get("file_axioms") or [])
+            result.update({"ok": False, "status": "failed"})
+            result["stderr"] = (
+                result["stderr"]
+                + "\nSoundness probe rejected the file: "
+                + str(probe.get("error") or "axioms probe failed")
+                + (
+                    " (the proof admits a goal without a visible `sorry`)"
+                    if reported_sorry
+                    else ""
+                )
+            ).strip()
+    return result
 
 
 def _detect_mathlib(lean: str) -> bool:
@@ -1862,9 +3451,25 @@ def _sorry_lines(lean: str) -> list[int]:
 
 # Patterns that make a file compile while proving less than it appears to.
 # (regex, id, severity, message) — `{m}` is filled with the first capture group.
+# Keyword rules match at ANY position — after `… in`, mid-line or indented —
+# because a Lean command need not start a line (`open X in axiom …`).
+# A keyword is a command only when it does not continue an identifier: the
+# character before it must not be one of Lean's identifier characters (ASCII
+# letters, `_ ' ! ?`, letterlike and subscript symbols) or a `.`/`«`.  Digits
+# are deliberately not excluded: `1macro_rules` is a number, then a command.
+_KW = (
+    r"(?<![A-Za-z_.'«!?\u0391-\u03a9\u03b1-\u03fb\u1d62-\u1d6a"
+    r"\u1f00-\u1ffe\u2080-\u209c\u2100-\u214f\U0001d49c-\U0001d59f])"
+)
+_CORE_TYPES = r"(?:ℕ|ℤ|ℚ|ℝ|ℂ|Nat|Int|Rat|Real|Complex)\b"
+_CORE_CLASSES = (
+    r"(LE|LT|Add|Mul|Sub|Div|Neg|Pow|Dvd|Mod|HAdd|HMul|HSub|HDiv|HPow|HMod|OfNat|"
+    r"Preorder|PartialOrder|LinearOrder|Decidable|One|Zero|Inv|Abs|Max|Min|Ord|BEq|"
+    r"DecidableEq|Semiring|Ring|Field|CommRing|NatCast|IntCast)"
+)
 _CHEAT_RULES: tuple[tuple[str, str, str, str], ...] = (
     (
-        r"(?m)^\s*axiom\s+([^\s:({\[]+)",
+        _KW + r"axiom\s+([^\s:({\[]+)",
         "axiom",
         "major",
         "declares `axiom {m}` — an unproved axiom makes anything reachable",
@@ -1876,28 +3481,99 @@ _CHEAT_RULES: tuple[tuple[str, str, str, str], ...] = (
         "`set_option debug.skipKernelTC true` turns off the kernel check",
     ),
     (
-        r"(?m)^\s*unsafe\s+(?:def|theorem|lemma|abbrev)\b",
+        _KW + r"unsafe\b",
         "unsafe",
         "major",
         "`unsafe` declarations are not kernel-checked",
     ),
     (
-        r"@\[implemented_by",
+        r"(?:@\[|" + _KW + r"attribute\s*\[)\s*(?:[^\]]*,\s*)?(?:local\s+|scoped\s+)?implemented_by",
         "implemented_by",
         "major",
         "`@[implemented_by]` swaps in unverified code",
     ),
     (
-        r"(?m)^\s*opaque\s+([^\s:({\[]+)",
+        r"(?:@\[|" + _KW + r"attribute\s*\[)\s*(?:[^\]]*,\s*)?extern\b",
+        "extern",
+        "major",
+        "`@[extern]` binds a declaration to unverified native code",
+    ),
+    (
+        _KW + r"opaque\s+([^\s:({\[]+)",
         "opaque",
-        "minor",
+        "major",
         "`opaque {m}` asserts a value exists without defining it",
     ),
     (
-        r"\bnative_decide\b",
+        r"\bnative_decide\b|\bofReduceBool\b|\bLean\.ofReduceBool\b",
         "native_decide",
-        "minor",
+        "major",
         "`native_decide` trusts the compiler, not the kernel",
+    ),
+    (
+        _KW + r"(run_cmd|run_tac|run_elab|run_meta)(?![\w'])",
+        "metaprogram",
+        "major",
+        "`{m}` runs a metaprogram inside the file; it can alter what compiles",
+    ),
+    (
+        # `#` never continues an identifier, so these match wherever they
+        # stand (`open Nat#exit` is `open Nat` followed by `#exit`).
+        r"(#eval|#exit|#guard_msgs)(?![\w'!?])",
+        "metaprogram",
+        "major",
+        "`{m}` runs a metaprogram, stops elaboration or hides Lean's own "
+        "messages; it can alter what the checker sees",
+    ),
+    (
+        _KW + r"(elab|elab_rules|macro|macro_rules|syntax|declare_syntax_cat|binder_predicate)\b",
+        "custom_syntax",
+        "major",
+        "`{m}` defines new syntax or elaboration; proofs may bypass the kernel's view",
+    ),
+    (
+        _KW + r"(initialize|builtin_initialize)\b",
+        "initialize",
+        "major",
+        "`{m}` runs code when the file is loaded",
+    ),
+    (
+        r"\badmitGoal\b|\bLean\.Elab\.admitGoal\b|\bsorryAx\b",
+        "hidden_admit",
+        "major",
+        "a goal is admitted without a visible `sorry`",
+    ),
+    (
+        r"\bLean\.(?:Elab|Meta|Parser|Environment|MonadEnv|Kernel|Compiler)\b|"
+        r"\b(?:CommandElabM|TermElabM|TacticM|MetaM|CoreM|MonadEnv|modifyEnv|addDecl)\b",
+        "meta_api",
+        "major",
+        "uses Lean's metaprogramming API; a proof file has no business changing the environment",
+    ),
+    (
+        _KW + r"instance\b[^:\n]*:\s*" + _CORE_CLASSES + r"\s+" + _CORE_TYPES,
+        "core_instance",
+        "major",
+        "redefines the standard `{m}` instance on a built-in number type",
+    ),
+    (
+        r"@\[[^\]]*\binstance\b[^\]]*\]\s*(?:(?:private|protected|noncomputable)\s+)*"
+        r"(?:def|abbrev)\b[^:\n]*:\s*" + _CORE_CLASSES + r"\s+" + _CORE_TYPES,
+        "core_instance",
+        "major",
+        "registers a replacement `{m}` instance on a built-in number type",
+    ),
+    (
+        _KW + r"attribute\s*\[[^\]]*\binstance\b",
+        "instance_attribute",
+        "minor",
+        "`attribute [instance]` registers an instance — confirm it does not change a standard structure",
+    ),
+    (
+        _KW + r"(notation3?|infix|infixl|infixr|prefix|postfix)\b",
+        "custom_notation",
+        "minor",
+        "custom `{m}` — confirm it does not shadow a standard symbol",
     ),
     (
         r"(?m)(?::|→)\s*True\s*(?::=|$)",
@@ -1912,7 +3588,7 @@ _CHEAT_RULES: tuple[tuple[str, str, str, str], ...] = (
         "a hypothesis is `False`, so the theorem is vacuous",
     ),
     (
-        r"(?m)^\s*(?:private\s+)?(?:def|abbrev|inductive|structure)\s+"
+        _KW + r"(?:def|abbrev|inductive|structure)\s+"
         r"(Odd|Even|Prime|Irrational|Rational|Dvd|Divides|Divisible|Coprime|IsSquare"
         r"|Sqrt|Gcd|Lcm|Continuous|Differentiable|Deriv|Integral|Limit|Converges)\b",
         "handrolled_notion",
@@ -1922,17 +3598,418 @@ _CHEAT_RULES: tuple[tuple[str, str, str, str], ...] = (
 )
 
 
-def _fidelity_flags(lean: str) -> list[dict[str, Any]]:
-    """Mechanical red flags: ways a file can typecheck without proving the claim."""
+_LEXICAL_FLAGS = {
+    "ambiguous_char_literal": (
+        "a character literal directly after a symbol can be tokenized differently "
+        "by Lean's notation table, so the text screens cannot vouch for this file"
+    ),
+    "interpolated_string": (
+        "an interpolated string (`s!\"…{code}…\"`, `throwError \"…\"`) runs code "
+        "inside a string literal; a proof file does not need one"
+    ),
+    "print_string": (
+        "`#print \"…\"` writes arbitrary text into the checker output"
+    ),
+}
+
+
+# ── Narrowed domain (problem-aware, heuristic) ──
+#
+# A `main` that adds a lower bound such as `(hn : 1 ≤ n)` on a variable the
+# PROBLEM quantifies without restriction proves only a special case: Lean's ℕ
+# includes 0. Informal proofs often bring their own convention ("ℕ = {1, 2, 3,
+# …}"), so the bound is checked against the problem text alone. The screen is
+# deliberately conservative — any explicit bound, positivity wording,
+# restricted-set notation (ℝ⁺, ℕ \ {0}) or enumeration anywhere in the problem
+# suppresses it — and it is only ever
+# `minor`: it never downgrades a result, it prompts one statement-fix round.
+NARROWED_DOMAIN_FLAG = "narrowed_domain"
+# Minor flags worth one statement-fix round even when the audit is satisfied.
+STATEMENT_FIX_FLAGS = frozenset({NARROWED_DOMAIN_FLAG})
+
+_DOMAIN_TYPES = {
+    "ℕ": "nat", "Nat": "nat", "ℤ": "int", "Int": "int",
+    "ℚ": "rat", "Rat": "rat", "ℝ": "real", "Real": "real",
+}
+_BINDER_OPEN = {"(": ")", "{": "}", "[": "]", "⦃": "⦄"}
+_IDENT = r"[A-Za-z_][\w']*"
+_CMP_OPS = ("≤", "<=", "≥", ">=", "≠", "<", ">")
+# Lower-bound hypotheses are short; longer text (or a huge statement) is
+# skipped rather than parsed, which also keeps the screen cheap on any input.
+_MAX_STATEMENT_CHARS = 4000
+_MAX_HYPOTHESIS_CHARS = 200
+_NOT_ZERO_RE = re.compile(r"¬\s*\(\s*(" + _IDENT + r")\s*=\s*0\s*\)")
+_PRIME_HYP_RE = re.compile(
+    r"(?:Nat\.Prime|Prime)(?:\s+|\s*\(\s*)(" + _IDENT + r")\s*\)?|(" + _IDENT + r")\.Prime"
+)
+_ODD_HYP_RE = re.compile(r"Odd(?:\s+|\s*\(\s*)(" + _IDENT + r")\s*\)?")
+# Problem wording that states (or may state) a restriction somewhere. Every
+# pattern starts at a fixed token and has no adjacent ambiguous repeats, so
+# matching stays linear in the problem length.
+_PROBLEM_BOUND_WORDS_RE = re.compile(
+    r"(?i)\b(?:positive|non[\s-]?(?:negative|zero|trivial|empty|degenerate)|"
+    r"at\s+least|(?:not|no)\s+(?:less|smaller|fewer|lower)\s+than|"
+    r"greater|larger|bigger|more\s+than|exceed\w*|strictly|"
+    r"not\s+(?:equal\w*|zero)|unequal|different\s+from|other\s+than|except\w*|"
+    r"excluding|counting\s+numbers?|(?:starting|beginning)\s+(?:from|at|with)|"
+    # Wording whose objects carry an implicit lower bound: an odd prime is
+    # at least 3, a composite number at least 4, a side length positive.
+    r"odd\s+primes?|composites?|triangles?|polygons?|quadrilaterals?|"
+    r"lengths?|radi(?:us|i)|perimeters?|areas?|intervals?|"
+    r"(?:un|well[\s-])?defined)\b"
+)
+_PROBLEM_CMP = (
+    r"(?:≥|>=|>|≠|!=|=/=|≤|<=|<|⩾|⩽|≧|≦|"
+    r"\\g(?:eqslant|eqq|eq|e|t)(?![A-Za-z])|"
+    r"\\l(?:eqslant|eqq|eq|e|t)(?![A-Za-z])|\\neq?(?![A-Za-z]))"
+)
+_PROBLEM_BOUND_CMP_RE = re.compile(
+    r"(?<![\w'])[A-Za-z_]\w*'?\s*(?:[$}]\s*)?" + _PROBLEM_CMP + r"\s*(?:\$\s*)?[-−]?\d"
+    r"|\d\s*(?:\$\s*)?" + _PROBLEM_CMP + r"\s*(?:\$\s*)?[A-Za-z_]"
+)
+# A number set written as ℕ, ℝ, \mathbb{N}, \mathbb Z, \N or \mathbf{Q}.
+_PROBLEM_SET = (
+    r"(?:[ℕℤℚℝ]|\\(?:mathbb|mathbf|Bbb|mathds|mathrm)(?:\s*\{\s*[NZQR]\s*\}|\s*[NZQR])"
+    r"|\\[NZQR](?![A-Za-z]))"
+)
+# Restricted versions of such a set: ℝ⁺, ℝ₊, ℕ*, ℕ^+, ℝ_{>0}, ℕ_1, ℝ≥0, and
+# the set minus zero (ℕ \ {0}, ℕ∖{0}, \mathbb{N} \setminus \{0\}). A plain
+# ASCII N/Z/Q/R counts only when the + or * directly follows it and no operand
+# (a digit, bracket or one-letter name) comes next, so `N*M`, `N* k` and
+# `N + 1` stay arithmetic while `n in N* show …` reads as a restricted set.
+_PROBLEM_BOUND_SETS_RE = re.compile(
+    _PROBLEM_SET + r"\s*(?:[⁺₊*+]|[≥>≠]"
+    r"|\^\s*(?:\{\s*)?(?:[+*×]|\\ast|\\times)"
+    r"|_\s*(?:\{\s*)?(?:[+*1>≥≠]|\\ast|\\g|\\ne))"
+    r"|(?:" + _PROBLEM_SET + r"|(?<![A-Za-z\\])[NZQR])\s*"
+    r"(?:∖|\\(?:small)?setminus(?![A-Za-z])|\\backslash(?![A-Za-z])|\\|[-−])"
+    r"\s*(?:\\left\s*)?\\?\{\s*0\s*(?:\\right\s*)?\\?\}"
+    r"|(?<![A-Za-z\\])[NZQR](?:\^|_)?\{?[+*]\}?(?![\w(\\{]|\s+[\d(\\{]|\s+[A-Za-z]\b)"
+    r"|(?<![A-Za-z\\])[NZQR]_\{?(?:>|≥|\\g)"
+    # Membership in an interval: x ∈ (0, 1), x \in [1, n], (0, ∞).
+    r"|(?:∈|\\in(?![A-Za-z]))\s*(?:\\left\s*)?[\[(]"
+    r"|[\[(]\s*[-−]?\d+\s*,\s*(?:\+\s*)?(?:∞|\\infty)"
+    r"|\{\s*[1-9]\d*\s*,"
+    r"|\b[1-9]\s*,\s*[2-9]\s*,\s*(?:[3-9]\s*,\s*)?(?:\.\.\.|…|\\l?dots|\\cdots)"
+)
+
+
+def _closing_bracket(text: str, start: int) -> int:
+    """Index of the bracket closing ``text[start]`` (-1 if unbalanced)."""
+    depth = 0
+    for index in range(start, len(text)):
+        char = text[index]
+        if char in "([{⦃⟨":
+            depth += 1
+        elif char in ")]}⦄⟩":
+            depth -= 1
+            if depth == 0:
+                return index
+    return -1
+
+
+def _depth0_find(text: str, needles: tuple[str, ...], start: int = 0) -> tuple[int, str]:
+    depth = 0
+    for index in range(start, len(text)):
+        char = text[index]
+        if char in "([{⦃⟨":
+            depth += 1
+        elif char in ")]}⦄⟩":
+            depth = max(0, depth - 1)
+        elif depth == 0:
+            for needle in needles:
+                if text.startswith(needle, index):
+                    return index, needle
+    return -1, ""
+
+
+def _depth0_split(text: str, needles: tuple[str, ...]) -> list[str]:
+    parts: list[str] = []
+    rest = text
+    while True:
+        at, needle = _depth0_find(rest, needles)
+        if at < 0:
+            parts.append(rest)
+            return parts
+        parts.append(rest[:at])
+        rest = rest[at + len(needle):]
+
+
+def _strip_parens(text: str) -> str:
+    text = text.strip()
+    while text.startswith("(") and _closing_bracket(text, 0) == len(text) - 1:
+        text = text[1:-1].strip()
+    return text
+
+
+def _binder_groups(
+    text: str, variables: dict[str, str], hypotheses: list[str]
+) -> int:
+    """Consume leading ``(x y : T)`` / ``{…}`` / ``[…]`` groups; return the end."""
+    index = 0
+    while True:
+        while index < len(text) and text[index].isspace():
+            index += 1
+        if index >= len(text) or text[index] not in _BINDER_OPEN:
+            return index
+        close = _closing_bracket(text, index)
+        if close < 0:
+            return len(text)
+        group = text[index + 1:close]
+        colon, _ = _depth0_find(group, (":",))
+        if colon >= 0 and not group.startswith(":=", colon):
+            names = group[:colon].split()
+            kind = _DOMAIN_TYPES.get(re.sub(r"\s+", "", group[colon + 1:]))
+            if kind and all(re.fullmatch(_IDENT, name) for name in names):
+                for name in names:
+                    variables[name] = kind
+            else:
+                hypotheses.append(group[colon + 1:])
+        index = close + 1
+
+
+def _statement_hypotheses(signature: str) -> tuple[dict[str, str], list[str]]:
+    """Quantified variables (name → domain) and hypotheses of a statement.
+
+    ``signature`` is the text after the theorem's name, up to its ``:=``. Only
+    binders before the colon and the leading ``∀ …,`` / ``… →`` chain of the
+    conclusion are read; anything under ``∃``, ``fun`` or a sum is conclusion.
+    """
+    variables: dict[str, str] = {}
+    hypotheses: list[str] = []
+    end = _binder_groups(signature, variables, hypotheses)
+    rest = signature[end:].lstrip()
+    if not rest.startswith(":"):
+        return variables, hypotheses
+    conclusion = rest[1:]
+    for _ in range(24):
+        text = conclusion.strip()
+        quantifier = re.match(r"(?:∀|forall\b)", text)
+        if quantifier:
+            comma, _ = _depth0_find(text, (",",), quantifier.end())
+            if comma < 0:
+                break
+            binder = text[quantifier.end():comma].strip()
+            conclusion = text[comma + 1:]
+            if binder[:1] in _BINDER_OPEN:
+                _binder_groups(binder, variables, hypotheses)
+                continue
+            colon, _ = _depth0_find(binder, (":",))
+            names = binder[:colon].split() if colon >= 0 else []
+            if names and all(re.fullmatch(_IDENT, name) for name in names):
+                kind = _DOMAIN_TYPES.get(re.sub(r"\s+", "", binder[colon + 1:]), "")
+                for name in names:
+                    variables[name] = kind
+                continue
+            predicate = re.match(_IDENT, binder)
+            if predicate and binder[predicate.end():].lstrip()[:1] in {"≥", ">", "≠"}:
+                variables.setdefault(predicate.group(0), "")
+                hypotheses.append(binder)
+                continue
+            for name in binder.split():
+                if re.fullmatch(_IDENT, name):
+                    variables.setdefault(name, "")
+            continue
+        if re.match(r"(?:∃|¬|fun\b|λ|∑|∏|⋃|⋂)", text):
+            break
+        parts = _depth0_split(text, ("→", "->"))
+        if len(parts) < 2:
+            break
+        hypotheses.extend(parts[:-1])
+        conclusion = parts[-1]
+    return variables, hypotheses
+
+
+def _bound_atom(side: str) -> str:
+    """``1``, ``(1 : ℝ)``, ``n``, ``↑n``, ``(n : ℝ)`` → ``1`` / ``n``; else ""."""
+    text = _strip_parens(side)
+    colon, _ = _depth0_find(text, (":",))
+    if colon >= 0:
+        text = text[:colon]
+    text = _strip_parens(text.strip().lstrip("↑").strip())
+    if re.fullmatch(r"[0-9]+", text) or re.fullmatch(_IDENT, text):
+        return text
+    return ""
+
+
+def _lower_bound(text: str) -> tuple[str, int, bool] | None:
+    """``(variable, literal, strict)`` when ``text`` bounds a variable below."""
+    negated = _NOT_ZERO_RE.fullmatch(text)
+    if negated:
+        return negated.group(1), 0, True
+    at, op = _depth0_find(text, _CMP_OPS)
+    if at < 0:
+        return None
+    left, right = text[:at], text[at + len(op):]
+    if _depth0_find(right, _CMP_OPS)[0] >= 0:
+        return None  # a chain such as `0 < n < 9`
+    low, high = _bound_atom(left), _bound_atom(right)
+    if op in {"≥", ">=", ">"}:
+        low, high = high, low
+    if not low or not high:
+        return None
+    literal = r"[0-9]+"
+    if op == "≠":
+        if low == "0" and re.fullmatch(_IDENT, high):
+            return high, 0, True
+        if high == "0" and re.fullmatch(_IDENT, low):
+            return low, 0, True
+        return None
+    if re.fullmatch(literal, low) and re.fullmatch(_IDENT, high):
+        return high, int(low), op in {"<", ">"}
+    return None
+
+
+def _lower_bounds(
+    hypotheses: list[str], variables: dict[str, str]
+) -> tuple[list[tuple[str, str, int]], dict[str, int]]:
+    """``(variable, hypothesis text, integral lower bound)`` and implied bounds."""
+    bounds: list[tuple[str, str, int]] = []
+    implied: dict[str, int] = {}
+    for hypothesis in hypotheses:
+        if len(hypothesis) > _MAX_HYPOTHESIS_CHARS:
+            continue
+        for part in _depth0_split(hypothesis, ("∧",)):
+            text = _strip_parens(re.sub(r"\s+", " ", part))
+            prime = _PRIME_HYP_RE.fullmatch(text)
+            if prime:
+                name = prime.group(1) or prime.group(2)
+                if variables.get(name) in {"nat", ""}:
+                    implied[name] = max(implied.get(name, 0), 2)
+                continue
+            odd = _ODD_HYP_RE.fullmatch(text)
+            if odd:
+                if variables.get(odd.group(1)) in {"nat", ""}:
+                    implied[odd.group(1)] = max(implied.get(odd.group(1), 0), 1)
+                continue
+            found = _lower_bound(text)
+            if found is None or found[0] not in variables:
+                continue
+            name, literal, strict = found
+            kind = variables[name]
+            if not strict and literal == 0 and kind in {"nat", ""}:
+                continue  # `0 ≤ n` on ℕ restricts nothing
+            integral = kind in {"nat", "int", ""}
+            floor = literal + 1 if strict and integral else literal
+            bounds.append((name, text, floor))
+    return bounds, implied
+
+
+def _problem_states_a_bound(problem: str) -> bool:
+    text = problem or ""
+    return bool(
+        _PROBLEM_BOUND_WORDS_RE.search(text)
+        or _PROBLEM_BOUND_CMP_RE.search(text)
+        or _PROBLEM_BOUND_SETS_RE.search(text)
+    )
+
+
+def _main_statement(source: str, main_decl: str | None) -> tuple[str, str, int] | None:
+    """``(name, statement text after the name, line)`` of the main theorem."""
+    commands = _lean_commands(source)
+    target = _probe_target(source, main_decl)
+    if target is None:
+        return None
+    decl = next(
+        (
+            d for d in _qualified_declarations(source, commands)
+            if d["qualified"] == target and d["kind"] in {"theorem", "lemma"}
+        ),
+        None,
+    )
+    if decl is None:
+        return None
+    command = commands[int(decl["command"])]
+    body = command["body_text"]
+    signature = body[: _signature_end(body)]
+    after = signature[
+        command["keyword_at"] - command["body"] + len(command["keyword"]):
+    ].lstrip()
+    if not after.startswith(decl["raw_name"]):
+        return None
+    return decl["name"], after[len(decl["raw_name"]):], int(decl["line"])
+
+
+def _narrowed_domain_flags(
+    lean: str, problem: str, main_decl: str | None = None
+) -> list[dict[str, Any]]:
+    """Minor flag: `main` bounds a variable from below where the PROBLEM does not."""
+    if not (problem or "").strip() or _problem_states_a_bound(problem):
+        return []
+    try:
+        found = _main_statement(lean or "", main_decl)
+    except Exception:  # noqa: BLE001 - a heuristic never breaks a fidelity screen
+        return []
+    if found is None:
+        return []
+    name, statement, line = found
+    if len(statement) > _MAX_STATEMENT_CHARS:
+        return []
+    variables, hypotheses = _statement_hypotheses(statement)
+    bounds, implied = _lower_bounds(hypotheses, variables)
+    narrowing = [
+        (variable, text) for variable, text, floor in bounds
+        if not (variable in implied and floor <= implied[variable])
+    ]
+    if not narrowing:
+        return []
+    listed = ", ".join(f"`{text}`" for text in dict.fromkeys(t for _, t in narrowing))[:300]
+    # The ℕ-includes-0 reminder only explains a bound on a natural number.
+    nat_note = (
+        " (Lean's ℕ includes 0)"
+        if any(variables.get(variable) == "nat" for variable, _ in narrowing)
+        else ""
+    )
+    return [
+        {
+            "id": NARROWED_DOMAIN_FLAG,
+            "severity": "minor",
+            "message": (
+                f"`{name}` assumes {listed}, a restriction the PROBLEM never states"
+                f"{nat_note} — the theorem may cover only a special case; "
+                "drop it unless the claim fails without it"
+            ),
+            "lines": [line],
+        }
+    ]
+
+
+def _fidelity_flags(
+    lean: str, *, problem: str = "", main_decl: str | None = None
+) -> list[dict[str, Any]]:
+    """Mechanical red flags: ways a file can typecheck without proving the claim.
+
+    With the PROBLEM text, a conservative minor ``narrowed_domain`` screen is
+    added (see ``_narrowed_domain_flags``); without it only the source is read.
+    """
     raw = lean or ""
-    src = _lean_executable_text(raw)
+    lexer = _LeanLexer(raw)
+    src, anomalies = lexer.run(), lexer.anomalies
     flags: list[dict[str, Any]] = []
+    for kind, message in _LEXICAL_FLAGS.items():
+        offsets = [offset for found, offset in anomalies if found == kind]
+        if offsets:
+            flags.append(
+                {
+                    "id": kind,
+                    "severity": "major",
+                    "message": message,
+                    "lines": sorted({raw.count("\n", 0, offset) + 1 for offset in offsets})[:8],
+                }
+            )
     for pattern, fid, severity, message in _CHEAT_RULES:
-        hits = list(re.finditer(pattern, src))
+        hits = [
+            hit for hit in re.finditer(pattern, src)
+            if not lexer.inside_ident[hit.start()]
+        ]
         if not hits:
             continue
         first = hits[0].group(1) if hits[0].groups() else ""
         lines = sorted({src.count("\n", 0, h.start()) + 1 for h in hits})
+        existing = next((f for f in flags if f["id"] == fid), None)
+        if existing is not None:
+            existing["lines"] = sorted(set(existing["lines"]) | set(lines))[:8]
+            continue
         flags.append(
             {
                 "id": fid,
@@ -1962,7 +4039,18 @@ def _fidelity_flags(lean: str) -> list[dict[str, Any]]:
                 "lines": [],
             }
         )
+    if problem and named:
+        flags.extend(_narrowed_domain_flags(raw, problem, main_decl))
     return flags
+
+
+def _statement_fix_wanted(
+    flags: list[dict[str, Any]], audit: dict[str, Any] | None
+) -> bool:
+    """A statement-fix round is worth one call: major, or a fixable minor flag."""
+    return _fidelity_severity(flags, audit) == "major" or any(
+        f.get("id") in STATEMENT_FIX_FLAGS for f in flags
+    )
 
 
 def _fidelity_severity(flags: list[dict[str, Any]], audit: dict[str, Any] | None) -> str:
@@ -1975,25 +4063,24 @@ def _fidelity_severity(flags: list[dict[str, Any]], audit: dict[str, Any] | None
     return "ok"
 
 
-def _audit_faithfulness(
-    env: dict[str, str],
-    model: str | None,
-    *,
-    problem: str,
-    proof: str,
-    lean: str,
-) -> dict[str, Any]:
-    """Ask a model whether the Lean statement really is the problem's claim."""
-    prompt = (
-        AUDIT_PROMPT.replace("{problem}", (problem or "(not recorded)")[:6000])
-        .replace("{proof}", (proof or "(not available)")[:20000])
-        .replace("{lean}", (lean or "")[:40000])
-    )
-    try:
-        used, content = _chat(env, model, prompt)
-        data = _extract_json(str(content))
-    except (ValueError, json.JSONDecodeError, KeyError, TypeError) as exc:
-        return {"ok": False, "error": str(exc)[:300]}
+def _audit_model(
+    env: dict[str, str], model: str | None, *, guest: bool = False
+) -> str | None:
+    """The fidelity auditor model: an explicit independent choice, if any.
+
+    ``AGENT_MONITOR_FORMAL_AUDIT_MODEL`` (user settings first, then the
+    server environment) selects a different model for the audit. Guests are
+    bound to the sponsored Kimi route, so the override never applies to them.
+    """
+    if guest:
+        return model
+    configured = str(
+        env.get(AUDIT_MODEL_ENV) or os.environ.get(AUDIT_MODEL_ENV) or ""
+    ).strip()
+    return configured or model
+
+
+def _parse_audit_payload(data: Any, used: Any) -> dict[str, Any]:
     if not isinstance(data, dict):
         return {"ok": False, "error": "auditor returned a non-object"}
     issues = [str(x)[:400] for x in (data.get("issues") or []) if str(x).strip()][:10]
@@ -2009,6 +4096,7 @@ def _audit_faithfulness(
         "faithful": faithful,
         "severity": severity,
         "verdict": str(data.get("verdict") or "")[:600],
+        "back_translation": str(data.get("back_translation") or "")[:1200],
         "issues": issues,
         "main_decl": str(data.get("main_decl") or "")[:80],
         "statement_suggestion": str(data.get("statement_suggestion") or "")[:600],
@@ -2016,11 +4104,43 @@ def _audit_faithfulness(
     }
 
 
+def _audit_faithfulness(
+    env: dict[str, str],
+    model: str | None,
+    *,
+    problem: str,
+    proof: str,
+    lean: str,
+) -> dict[str, Any]:
+    """Ask a model whether the Lean statement really is the problem's claim.
+
+    The prompt is cold (no authoring context) and casts the model as an
+    independent reviewer that back-translates the statement before comparing.
+    """
+    prompt = (
+        AUDIT_PROMPT.replace("{problem}", (problem or "(not recorded)")[:6000])
+        .replace("{proof}", (proof or "(not available)")[:20000])
+        .replace("{lean}", (lean or "")[:40000])
+    )
+    try:
+        used, content = _chat(env, model, prompt)
+        data = _extract_json_object(str(content))
+    except Exception as exc:  # noqa: BLE001 - a provider outage (timeout, HTTP
+        # error, subprocess failure) means "no audit"; it must never discard a
+        # checked Lean result on the generate, revise or harness paths.
+        return {"ok": False, "error": (str(exc).strip() or exc.__class__.__name__)[:300]}
+    return _parse_audit_payload(data, used)
+
+
 def _apply_fidelity(
     status: str, flags: list[dict[str, Any]], audit: dict[str, Any] | None
 ) -> str:
-    """Downgrade a clean compile that provably doesn't state the problem."""
-    if status != "verified":
+    """Downgrade a compiling file that provably doesn't state the problem.
+
+    This applies to ``incomplete`` too: an honest ``sorry`` on the wrong
+    claim must not be presented as progress on the right one.
+    """
+    if status not in {"verified", "incomplete"}:
         return status
     return "unfaithful" if _fidelity_severity(flags, audit) == "major" else status
 
@@ -2032,7 +4152,10 @@ def _fidelity_summary(flags: list[dict[str, Any]], audit: dict[str, Any] | None)
             parts.append(f"Audit: {audit['verdict']}")
         for issue in (audit.get("issues") or [])[:3]:
             parts.append(f"• {issue}")
-    majors = [f for f in flags if f.get("severity") == "major"]
+    majors = [
+        f for f in flags
+        if f.get("severity") == "major" or f.get("id") in STATEMENT_FIX_FLAGS
+    ]
     for f in majors[:3]:
         where = f" (line {', '.join(map(str, f['lines']))})" if f.get("lines") else ""
         parts.append(f"• {f['message']}{where}")
@@ -2052,7 +4175,11 @@ def _status_from_check(check: dict[str, Any], sorry_n: int, *, mode: str) -> str
         return "failed"
     if mode == "compile":
         return "compiled"
-    return "incomplete" if sorry_n > 0 else "verified"
+    # Lean's own warning is authoritative even when no literal token is
+    # visible (for example a macro that expands to `sorry`).
+    if sorry_n > 0 or check.get("reports_sorry") or _output_reports_sorry(check):
+        return "incomplete"
+    return "verified"
 
 
 def _check_summary(lean: str, check: dict[str, Any], status: str) -> str:
@@ -2061,10 +4188,17 @@ def _check_summary(lean: str, check: dict[str, Any], status: str) -> str:
     if status == "verified":
         parts.append("Check passed — Lean accepted the file with no errors and no sorry.")
     elif status == "unfaithful":
-        parts.append(
-            "Lean accepted the file, but the statement does not faithfully capture "
-            "the problem — see Fidelity."
-        )
+        if lines or check.get("reports_sorry") or _output_reports_sorry(check):
+            parts.append(
+                f"Lean typechecks the file with {len(lines) or 'hidden'} sorry/admit "
+                "remaining, and the statement does not faithfully capture the "
+                "problem — see Fidelity."
+            )
+        else:
+            parts.append(
+                "Lean accepted the file, but the statement does not faithfully capture "
+                "the problem — see Fidelity."
+            )
     elif status == "compiled":
         parts.append("Compile succeeded (exit 0).")
         if lines:
@@ -2185,6 +4319,19 @@ def _trusted_kernel_receipt(check: Any) -> dict[str, Any] | None:
     }
 
 
+def _workspace_problem(workspace: Path) -> str:
+    """The run's problem text for problem-aware fidelity screens ("" if none)."""
+    try:
+        return (
+            _read_optional_workspace_text(
+                workspace, "problem.txt", limit=MAX_WORKSPACE_PROBLEM_BYTES
+            )
+            or ""
+        ).strip()
+    except (OSError, ValueError):
+        return ""
+
+
 def _persist(
     workspace: Path,
     *,
@@ -2207,7 +4354,8 @@ def _persist(
     lean_src = lean_src.rstrip() + "\n"
     kernel_receipt = _trusted_kernel_receipt(authoritative_check)
     verified_source_sha256 = ""
-    if status in {"verified", "unfaithful"} and kernel_receipt is not None:
+    checked_source_sha256 = ""
+    if status in {"verified", "unfaithful", "incomplete"} and kernel_receipt is not None:
         try:
             _current_dir, current_bytes = _lean_source_snapshot(
                 lean_dir(Path(workspace).resolve())
@@ -2221,8 +4369,22 @@ def _persist(
             kernel_receipt["source_sha256"] == current_sha256
             and source_matches
         ):
-            verified_source_sha256 = current_sha256
-    if status in {"verified", "unfaithful"} and not verified_source_sha256:
+            # `verified_source_sha256` keeps its meaning (a sorry-free,
+            # probe-clean kernel acceptance); a file that compiled with sorry
+            # (incomplete, or incomplete downgraded to unfaithful) is bound
+            # separately so compiler facts can mark sorry-dependence.
+            with_sorry = bool(
+                _count_sorry(lean_src)
+                or (authoritative_check or {}).get("reports_sorry")
+                or _output_reports_sorry(authoritative_check or {})
+            )
+            if status == "incomplete" or with_sorry:
+                checked_source_sha256 = current_sha256
+            else:
+                verified_source_sha256 = current_sha256
+    if (status == "verified" and not verified_source_sha256) or (
+        status == "unfaithful" and not (verified_source_sha256 or checked_source_sha256)
+    ):
         status = "failed"
         kernel_receipt = None
         authority_note = (
@@ -2243,7 +4405,13 @@ def _persist(
         _anchor_citations(_normalize_citations(prev.get("citations")), lean_src),
         _citations_from_proof_md(workspace),
     )
-    flags = _fidelity_flags(lean_src)
+    flags = _fidelity_flags(
+        lean_src,
+        problem=_workspace_problem(workspace),
+        main_decl=str(
+            (extra or {}).get("main_decl") or prev.get("main_decl") or ""
+        ) or None,
+    )
     if audit is None:
         prior_audit = (prev.get("fidelity") or {}).get("audit")
         # A stale audit describes different source, so only carry it over when the
@@ -2294,11 +4462,16 @@ def _persist(
         )
     elif provenance.get("sha256") != source_digest or action == "harness":
         provenance = {}
+    carried_model = prev.get("model")
+    if action in {"compile", "check"} and (
+        (prev.get("lean") or "").rstrip() != lean_src.rstrip()
+    ):
+        # A compile/check of edited or pasted source: no model wrote it.
+        carried_model = None
     result = {
         "source_provenance": provenance,
         "generated_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
-        "model": model or prev.get("model"),
-        "source_provenance": provenance,
+        "model": model or carried_model,
         "source": source or prev.get("source") or "",
         "title": title or prev.get("title") or "",
         "notes": _sanitize_formalization_notes(notes),
@@ -2322,6 +4495,9 @@ def _persist(
         result.update(extra)
     result["status"] = status
     result["verified_source_sha256"] = verified_source_sha256 or None
+    result["checked_source_sha256"] = (
+        checked_source_sha256 or verified_source_sha256 or None
+    )
     result["kernel_receipt"] = kernel_receipt
     result["toolchain"] = toolchain_record
     _write_cached(workspace, result)
@@ -2400,7 +4576,13 @@ def _write_lean_source(ldir: Path, source: str) -> tuple[Path, bytes]:
     return resolved, payload
 
 
-def _write_and_run(workspace: Path, lean_src: str, uses_mathlib: bool) -> dict[str, Any]:
+def _write_and_run(
+    workspace: Path,
+    lean_src: str,
+    uses_mathlib: bool,
+    *,
+    main_decl: str | None = None,
+) -> dict[str, Any]:
     workspace = Path(workspace).resolve()
     with _formal_io_lock(workspace):
         lean_src = _normalize_lean_imports(lean_src)
@@ -2414,7 +4596,12 @@ def _write_and_run(workspace: Path, lean_src: str, uses_mathlib: bool) -> dict[s
         if installed_source != expected_source:
             raise ValueError("Proof.lean changed immediately after its atomic write")
 
-        check = dict(_run_lean_check(ldir, uses_mathlib=uses_mathlib))
+        if main_decl:
+            check = dict(
+                _run_lean_check(ldir, uses_mathlib=uses_mathlib, main_decl=main_decl)
+            )
+        else:
+            check = dict(_run_lean_check(ldir, uses_mathlib=uses_mathlib))
         try:
             _observed_dir, observed_source = _lean_source_snapshot(ldir)
             source_unchanged = observed_source == expected_source
@@ -2436,16 +4623,34 @@ def _write_and_run(workspace: Path, lean_src: str, uses_mathlib: bool) -> dict[s
         return check
 
 
+def _install_unchecked_source(
+    workspace: Path, lean_src: str, uses_mathlib: bool
+) -> None:
+    """Write Proof.lean exactly as ``_write_and_run`` would, without checking it."""
+    workspace = Path(workspace).resolve()
+    with _formal_io_lock(workspace):
+        ldir = lean_dir(workspace)
+        if ldir.is_symlink():
+            raise ValueError("Refusing to write through symbolic-link lean directory")
+        _write_scaffold(ldir, uses_mathlib=uses_mathlib)
+        _write_lean_source(ldir, _normalize_lean_imports(lean_src))
+
+
 @_serialized_formal_operation("check")
 def compile_or_check(
     *,
     workspace: Path,
     lean: str | None = None,
     mode: str = "check",
+    statements_only: bool | None = None,
 ) -> dict[str, Any]:
     """Run Lean on the current (or provided) source without calling an LLM.
 
     ``mode`` is ``compile`` (exit-code only) or ``check`` (sorry-aware).
+    ``statements_only`` (an Analyze run's Lean; by default, whenever the
+    previous result was statement-only) keeps the result a statement-only
+    formalization: ``scope: "statements"``, ``proofs_attempted: false``, the
+    targets and the statement label, never an incomplete proof.
     """
     if mode not in {"compile", "check"}:
         raise ValueError(f"Unknown mode: {mode}")
@@ -2453,50 +4658,63 @@ def compile_or_check(
     if not lean_src:
         raise ValueError("No Proof.lean yet — press Verify first, or paste Lean source")
     uses_mathlib = _detect_mathlib(lean_src)
-    check = _write_and_run(workspace, lean_src, uses_mathlib)
-    sorry_n = _count_sorry(lean_src)
-    status = _status_from_check(check, sorry_n, mode=mode)
-    attempt = {
-        "round": 0,
-        "uses_mathlib": uses_mathlib,
-        "sorry_count": sorry_n,
-        "action": mode,
-        "check": {
-            k: check[k]
-            for k in (
-                "ok",
-                "status",
-                "exit_code",
-                "duration_s",
-                "command",
-                "toolchain",
-                "sandbox",
-                "source_sha256",
-                "checker_profile",
-                "release_id",
-                "toolchain_tree_sha256",
-                "mathlib_tree_sha256",
-            )
-            if k in check
-        },
-        "stderr_tail": (check.get("stderr") or "")[-2000:],
-        "stdout_tail": (check.get("stdout") or "")[-1000:],
-    }
-    prev = load_cached(workspace) or {}
-    # Preserve prior attempt history so the UI can show compile/check rounds.
-    prior = list(prev.get("attempts") or [])
-    # Renumber so the new action is the latest round.
-    attempt["round"] = len(prior)
     flags = _fidelity_flags(lean_src)
+    refused = _execution_refusal(flags)
+    if refused:
+        # Code that runs at elaboration time (IO, run_cmd, #eval, initialize,
+        # custom elaborators, the metaprogramming API) never reaches the
+        # sandbox from the editor path: such a file cannot be a verified
+        # proof, and the text screens already classify it as unfaithful.
+        # The source is still saved (unchecked) so Proof.lean and the cached
+        # result describe the same text.
+        _install_unchecked_source(workspace, lean_src, uses_mathlib)
+        check = {
+            "ok": False,
+            "status": "failed",
+            "exit_code": None,
+            "stdout": "",
+            "stderr": refused,
+            "duration_s": 0.0,
+            "refused_before_check": True,
+        }
+    else:
+        check = _write_and_run(workspace, lean_src, uses_mathlib)
+    status = _status_from_check(check, _count_sorry(lean_src), mode=mode)
+    prev = load_cached(workspace) or {}
+    # Preserve prior attempt history so the UI can show compile/check rounds;
+    # the new action is numbered as the latest round.
+    prior = list(prev.get("attempts") or [])
+    attempt = _attempt_record(
+        round_i=len(prior),
+        action=mode,
+        lean_src=lean_src,
+        uses_mathlib=uses_mathlib,
+        check=check,
+    )
+    if refused:
+        attempt["check"]["refused_before_check"] = True
     prior_audit = (prev.get("fidelity") or {}).get("audit")
     if not prior_audit or (prev.get("lean") or "") != lean_src:
         prior_audit = None
     if mode == "check":
         status = _apply_fidelity(status, flags, prior_audit)
+    attempt["result_status"] = status
     notes = _check_summary(lean_src, check, status)
+    if statements_only is None:
+        statements_only = prev.get("scope") == "statements"
+    statement_fields: dict[str, Any] | None = None
+    if statements_only:
+        targets = prev.get("targets") if isinstance(prev.get("targets"), list) else []
+        statement_fields = _statements_only_fields(status, None, targets)
+        notes = _statements_only_notes(status, statement_fields["status_label"], lean_src, notes)
+    if refused:
+        notes = f"{notes} {refused}".strip()
     fid_note = _fidelity_summary(flags, prior_audit)
-    if fid_note and mode == "check":
+    if fid_note and (mode == "check" or refused):
         notes = f"{notes} {fid_note}".strip()
+    # Hand-edited or pasted source was written by no model: only unchanged
+    # generated bytes keep the previous model and source labels.
+    same_source = (prev.get("lean") or "").rstrip() == lean_src.rstrip()
     return _persist(
         workspace,
         lean_src=lean_src,
@@ -2505,10 +4723,33 @@ def compile_or_check(
         attempts=prior + [attempt],
         notes=notes,
         title=str(prev.get("title") or ""),
-        model=prev.get("model"),
-        source=str(prev.get("source") or "editor"),
+        model=prev.get("model") if same_source else None,
+        source=str(prev.get("source") or "editor") if same_source else "editor",
         action=mode,
         authoritative_check=check,
+        extra=statement_fields,
+    )
+
+
+# Fidelity flags whose source runs code while Lean elaborates the file.
+EXECUTION_FLAG_IDS = frozenset(
+    {"metaprogram", "custom_syntax", "initialize", "meta_api", "interpolated_string"}
+)
+
+
+def _execution_refusal(flags: list[dict[str, Any]]) -> str:
+    """Why the editor path refuses to send this source to the checker ("" if not)."""
+    hits = [f for f in flags if f.get("id") in EXECUTION_FLAG_IDS]
+    if not hits:
+        return ""
+    details = "; ".join(
+        str(f.get("message") or f.get("id"))
+        + (f" (line {', '.join(map(str, f['lines']))})" if f.get("lines") else "")
+        for f in hits[:3]
+    )
+    return (
+        "Refused before checking: the file runs code while Lean elaborates it "
+        f"({details}). Remove it to compile or check this file."
     )
 
 
@@ -2798,13 +5039,14 @@ def _revise_with_feedback_impl(
         .replace("{errors}", err_blob or "(no prior compiler log)")
         .replace("{feedback}", feedback[:4000])
     )
+    # (uses_mathlib is always re-derived from the revised source below.)
     codex_mode = False
     effective_model = model or prev.get("model")
     try:
         chosen_model, content = _chat(env, effective_model, prompt)
         payload = _parse_model_payload(content)
         lean_src = payload["lean"]
-        uses_mathlib = bool(payload["uses_mathlib"]) or _detect_mathlib(lean_src)
+        uses_mathlib = _detect_mathlib(lean_src)
         notes = payload.get("notes") or ""
         citations = list(payload.get("citations") or [])
     except ValueError:
@@ -2830,74 +5072,90 @@ def _revise_with_feedback_impl(
         citations = _citations_from_lean(lean_src)
 
     attempts: list[dict[str, Any]] = list(prev.get("attempts") or [])
+    problem, informal = _problem_and_proof(workspace, run_record)
+    stopped = ""
     for round_i in range(max_repairs + 1):
+        uses_mathlib = _detect_mathlib(lean_src)
         check = _write_and_run(workspace, lean_src, uses_mathlib)
         sorry_n = _count_sorry(lean_src)
         status = _status_from_check(check, sorry_n, mode="check")
         attempts.append(
-            {
-                "round": len(attempts),
-                "uses_mathlib": uses_mathlib,
-                "sorry_count": sorry_n,
-                "action": "revise",
-                "check": {
-                    k: check[k]
-                    for k in (
-                        "ok",
-                        "status",
-                        "exit_code",
-                        "duration_s",
-                        "command",
-                        "toolchain",
-                        "sandbox",
-                        "source_sha256",
-                        "checker_profile",
-                        "release_id",
-                        "toolchain_tree_sha256",
-                        "mathlib_tree_sha256",
-                    )
-                    if k in check
-                },
-                "stderr_tail": (check.get("stderr") or "")[-2000:],
-                "stdout_tail": (check.get("stdout") or "")[-1000:],
-            }
+            _attempt_record(
+                round_i=len(attempts),
+                action="revise",
+                lean_src=lean_src,
+                uses_mathlib=uses_mathlib,
+                check=check,
+            )
         )
         if status in {"verified", "incomplete", "toolchain_missing"}:
             break
         if round_i >= max_repairs:
             break
-        err_blob = ((check.get("stderr") or "") + "\n" + (check.get("stdout") or ""))[-6000:]
-        repair_prompt = REPAIR_PROMPT.replace("{lean}", lean_src[:40000]).replace(
-            "{errors}", err_blob
+        repair_prompt = _fill_repair_prompt(
+            task=(
+                "The human-requested revision FAILED to compile. Fix the errors "
+                "while keeping the requested change. The request was: "
+                + feedback[:1500]
+            ),
+            problem=problem,
+            history="\n".join(
+                f"- round {a.get('round')}: {a.get('action')} → "
+                f"{(a.get('check') or {}).get('status') or 'failed'}"
+                for a in attempts[-6:]
+            ),
+            lean=lean_src,
+            errors=_error_digest(check, lean_src),
+            proof=informal,
         )
-        if codex_mode:
-            codex_result = _codex_subscription_interaction(
-                workspace=workspace,
-                user=user,
-                run_record=run_record,
-                prompt=repair_prompt,
-                lean_source=lean_src,
-                edit=True,
+        try:
+            if codex_mode:
+                codex_result = _codex_subscription_interaction(
+                    workspace=workspace,
+                    user=user,
+                    run_record=run_record,
+                    prompt=repair_prompt,
+                    lean_source=lean_src,
+                    edit=True,
+                )
+                lean_src = str(codex_result["lean"])
+                notes = str(codex_result["answer"] or notes)
+                citations = _citations_from_lean(lean_src)
+            else:
+                chosen_model, repair_content = _chat(env, chosen_model, repair_prompt)
+                repaired = _parse_model_payload(repair_content)
+                lean_src = repaired["lean"]
+                if repaired.get("notes"):
+                    notes = repaired["notes"]
+                if repaired.get("citations"):
+                    citations = list(repaired["citations"])
+        except Exception as exc:  # noqa: BLE001 - keep the checked revision
+            stopped = str(exc).strip() or exc.__class__.__name__
+            attempts.append(
+                {
+                    "round": len(attempts),
+                    "uses_mathlib": uses_mathlib,
+                    "sorry_count": sorry_n,
+                    "action": "revise-repair",
+                    "check": {"ok": False, "status": "error"},
+                    "stderr_tail": f"repair round failed: {stopped}"[-2000:],
+                    "stdout_tail": "",
+                }
             )
-            lean_src = str(codex_result["lean"])
-            uses_mathlib = _detect_mathlib(lean_src)
-            notes = str(codex_result["answer"] or notes)
-            citations = _citations_from_lean(lean_src)
-        else:
-            chosen_model, repair_content = _chat(env, chosen_model, repair_prompt)
-            repaired = _parse_model_payload(repair_content)
-            lean_src = repaired["lean"]
-            uses_mathlib = bool(repaired["uses_mathlib"]) or uses_mathlib
-            if repaired.get("notes"):
-                notes = repaired["notes"]
-            if repaired.get("citations"):
-                citations = list(repaired["citations"])
+            break
+    uses_mathlib = _detect_mathlib(lean_src)
+    if stopped:
+        notes = f"{notes} Repair stopped early: {stopped[:300]}".strip()
 
     audit_result: dict[str, Any] | None = None
-    if status == "verified":
-        problem, informal = _problem_and_proof(workspace, run_record)
+    if status in {"verified", "incomplete"}:
+        guest = bool((user or {}).get("guest") or (run_record or {}).get("guest"))
         audit_result = _audit_faithfulness(
-            env, model or chosen_model, problem=problem, proof=informal, lean=lean_src
+            env,
+            _audit_model(env, model or chosen_model, guest=guest),
+            problem=problem,
+            proof=informal,
+            lean=lean_src,
         )
         status = _apply_fidelity(status, _fidelity_flags(lean_src), audit_result)
     if not notes:
@@ -2940,7 +5198,7 @@ def revise_with_feedback(
     """Serialize a run's interventions and guarantee visible failure feedback."""
     if (user or {}).get("guest") or (run_record or {}).get("guest"):
         model = "kimi-k3"
-        max_repairs = max(0, min(int(max_repairs), 1))
+        max_repairs = max(0, min(int(max_repairs), GUEST_REVISE_MAX_REPAIRS))
     lock = _intervention_lock(workspace)
     if not lock.acquire(blocking=False):
         raise ValueError("Another Lean intervention is already running for this proof")
@@ -2974,242 +5232,877 @@ def revise_with_feedback(
         lock.release()
 
 
-@_serialized_formal_operation("generate")
-@usage_ledger.attributed("lean")
-def generate(
+_CHECK_FIELDS = (
+    "ok",
+    "status",
+    "exit_code",
+    "duration_s",
+    "command",
+    "toolchain",
+    "sandbox",
+    "source_sha256",
+    "checker_profile",
+    "release_id",
+    "toolchain_tree_sha256",
+    "mathlib_tree_sha256",
+)
+_DIAG_HEADER_RE = re.compile(
+    r"^(?:[^\n]*?):(?P<line>\d+):(?P<col>\d+):\s*(?P<sev>error|warning|info)\b:?\s?(?P<msg>.*)$"
+)
+_OUTCOME_RE = re.compile(
+    r"ProvingConsole\s+outcome\s*:\s*(Solved|Counterexample|Known/Open Status|Partial Progress)",
+    re.I,
+)
+_STATUS_RANK = {"verified": 3, "incomplete": 2, "failed": 1}
+
+
+def _attempt_record(
     *,
-    workspace: Path,
-    run_record: dict[str, Any] | None,
-    user: dict[str, Any] | None,
-    model: str | None = None,
-    max_repairs: int = 2,
-    audit: bool = True,
-    guidance: str | None = None,
+    round_i: int,
+    action: str,
+    lean_src: str,
+    uses_mathlib: bool,
+    check: dict[str, Any],
 ) -> dict[str, Any]:
-    """Translate the run's proof into Lean and attempt to verify it.
+    """One bounded, UI-safe attempt row (the shape monitor_summary reads).
 
-    A clean compile is not the end of it: with ``audit`` set, a second pass asks
-    whether the Lean statement really is the problem's claim, and one
-    statement-repair round follows when it isn't. Proving the wrong theorem
-    convincingly is the failure mode this guards against.
+    ``check.status`` is the broker's own word ("verified" whenever Lean exited
+    0, sorry or not); ``result_status`` is what this round established
+    (``verified`` / ``incomplete`` / ``compiled`` / ``failed`` / ...), which is
+    what history views display.
     """
-    from agent_monitor.settings import resolved_user_env
+    sorry_n = _count_sorry(lean_src)
+    if check.get("ok") and not sorry_n and check.get("reports_sorry"):
+        sorry_n = 1
+    record: dict[str, Any] = {
+        "round": round_i,
+        "uses_mathlib": uses_mathlib,
+        "sorry_count": sorry_n,
+        "action": action,
+        "result_status": _status_from_check(
+            check, sorry_n, mode="compile" if action == "compile" else "check"
+        ),
+        "check": {k: check[k] for k in _CHECK_FIELDS if k in check},
+        "stderr_tail": (check.get("stderr") or "")[-2000:],
+        "stdout_tail": (check.get("stdout") or "")[-1000:],
+    }
+    probe = check.get("axioms")
+    if isinstance(probe, dict):
+        record["check"]["axioms"] = {
+            key: probe.get(key)
+            for key in ("ok", "decl", "axioms", "unexpected", "error")
+        }
+    if check.get("reports_sorry"):
+        record["check"]["reports_sorry"] = True
+    return record
 
-    if (user or {}).get("guest") or (run_record or {}).get("guest"):
-        model = "kimi-k3"
-        max_repairs = max(0, min(int(max_repairs), 1))
 
-    problem = (
-        _read_optional_workspace_text(
-            workspace,
-            "problem.txt",
-            limit=MAX_WORKSPACE_PROBLEM_BYTES,
+def _diagnostics(output: str) -> list[dict[str, Any]]:
+    """Parse Lean's ``file:line:col: severity: message`` blocks, in order."""
+    diagnostics: list[dict[str, Any]] = []
+    current: dict[str, Any] | None = None
+    for raw in str(output or "").splitlines():
+        match = _DIAG_HEADER_RE.match(raw)
+        if match:
+            current = {
+                "line": int(match.group("line")),
+                "col": int(match.group("col")),
+                "severity": match.group("sev"),
+                "message": match.group("msg").strip(),
+            }
+            diagnostics.append(current)
+        elif current is not None and len(current["message"]) < 4000:
+            current["message"] = (current["message"] + "\n" + raw).strip("\n")
+    return diagnostics
+
+
+def _numbered_source(source: str, *, limit: int = 60000) -> str:
+    lines = (source or "").splitlines()
+    width = max(3, len(str(len(lines))))
+    text = "\n".join(f"{i:>{width}} | {line}" for i, line in enumerate(lines, 1))
+    if len(text) > limit:
+        text = text[:limit] + "\n… (source truncated)"
+    return text
+
+
+def _error_digest(
+    check: dict[str, Any], source: str, *, limit: int = REPAIR_ERROR_LIMIT
+) -> str:
+    """The FIRST errors (root causes) with their source lines, not the tail."""
+    stdout = str(check.get("stdout") or "")
+    stderr = str(check.get("stderr") or "")
+    diagnostics = _diagnostics(stdout + "\n" + stderr)
+    errors = [d for d in diagnostics if d["severity"] == "error"]
+    lines = (source or "").splitlines()
+    parts: list[str] = []
+    for index, diagnostic in enumerate(errors[:limit], 1):
+        number = diagnostic["line"]
+        context = []
+        for ln in range(max(1, number - 1), min(len(lines), number + 1) + 1):
+            marker = ">>" if ln == number else "  "
+            context.append(f"{marker}{ln:>4} | {lines[ln - 1]}")
+        parts.append(
+            f"[{index}] error at line {number}, column {diagnostic['col']}:\n"
+            + diagnostic["message"][:1800]
+            + ("\n" + "\n".join(context) if context else "")
         )
-        or ""
+    if len(errors) > limit:
+        parts.append(
+            f"… {len(errors) - limit} further error(s) omitted; they are often "
+            "consequences of the ones above."
+        )
+    # Non-positional checker text: broker/timeout/soundness-probe messages.
+    extra = "\n".join(
+        line
+        for line in stderr.splitlines()
+        if line.strip() and not _DIAG_HEADER_RE.match(line)
     ).strip()
+    if extra:
+        parts.append("Checker messages:\n" + extra[:2000])
+    if not errors and not extra:
+        raw = (stdout + "\n" + stderr).strip()
+        parts.append(raw[:4000] or "(the checker reported no diagnostics)")
+    return "\n\n".join(parts)
 
-    source, proof = _proof_source(workspace, run_record)
-    if not proof:
-        raise ValueError("No proof text yet — wait for the run to produce proof.md")
 
-    env = _llm_environment(user, run_record)
-    prompt = TRANSLATE_PROMPT.replace("{problem}", problem[:6000]).replace(
-        "{proof}", proof[:50000]
-    )
-    if guidance:
-        prompt += "\n\n" + str(guidance)[:16000]
-    chosen_model, content = _chat(env, model, prompt)
-    payload = _parse_model_payload(content)
+def _sorry_goal_probe_source(source: str) -> str | None:
+    """Mark tactic-position ``sorry`` with ``trace_state`` to reveal goals.
 
-    attempts: list[dict[str, Any]] = []
-    lean_src = payload["lean"]
-    uses_mathlib = bool(payload["uses_mathlib"])
-    notes = payload.get("notes") or ""
-    title = payload.get("title") or ""
-    citations = list(payload.get("citations") or [])
-    status = "failed"
+    Only unambiguous tactic positions are instrumented (``by sorry`` and a
+    ``sorry`` tactic line inside a proof); term-mode ``:= sorry`` is left
+    alone. Each marker carries its source line so goals map back exactly.
+    """
+    raw_lines = (source or "").splitlines()
+    exe_lines = _lean_executable_text(source).splitlines()
+    marked = 0
+    out = list(raw_lines)
+    previous = ""
+    for index, exe in enumerate(exe_lines):
+        match = re.search(r"\bby\s+(sorry)\b", exe)
+        position = match.start(1) if match else -1
+        if position < 0:
+            bare = re.match(r"^(\s*(?:[·.]\s*)?)(sorry)\s*$", exe)
+            if bare and previous and not previous.rstrip().endswith(":="):
+                position = bare.start(2)
+        if position >= 0 and index < len(out):
+            line = out[index]
+            out[index] = (
+                line[:position]
+                + f'trace "AMGOAL {index + 1}"; trace_state; sorry'
+                + line[position + len("sorry") :]
+            )
+            marked += 1
+        if exe.strip():
+            previous = exe
+    return "\n".join(out) + "\n" if marked else None
 
-    for round_i in range(max_repairs + 1):
-        check = _write_and_run(workspace, lean_src, uses_mathlib)
-        sorry_n = _count_sorry(lean_src)
-        status = _status_from_check(check, sorry_n, mode="check")
-        attempts.append(
+
+def _sorry_goals(source: str, *, uses_mathlib: bool) -> str:
+    """Best-effort goal states at each tactic ``sorry`` (one broker check)."""
+    probe = _sorry_goal_probe_source(source)
+    if not probe:
+        return ""
+    try:
+        with _LEAN_CHECK_SLOTS:
+            result = lean_broker.check_source(
+                probe, uses_mathlib=uses_mathlib, timeout=_lean_check_timeout()
+            )
+    except lean_broker.LeanBrokerError:
+        return ""
+    if result.get("source_sha256") != hashlib.sha256(probe.encode("utf-8")).hexdigest():
+        return ""
+    goals: list[tuple[int, list[str]]] = []
+    current: list[str] | None = None
+    for raw in str(result.get("stdout") or "").splitlines():
+        marker = re.match(r"^AMGOAL (\d+)\s*$", raw.strip())
+        if marker:
+            current = []
+            goals.append((int(marker.group(1)), current))
+            continue
+        if current is None:
+            continue
+        if _DIAG_HEADER_RE.match(raw):
+            current = None
+            continue
+        if sum(len(item) for item in current) < 1500:
+            current.append(raw)
+    rendered = [
+        f"line {line}:\n" + "\n".join(body).strip()
+        for line, body in goals[:8]
+        if "".join(body).strip()
+    ]
+    return "\n\n".join(rendered)
+
+
+def _informal_outcome(proof: str) -> str:
+    match = _OUTCOME_RE.search(proof or "")
+    return match.group(1).lower() if match else ""
+
+
+def _blueprint_text(guidance: str | None) -> str:
+    text = str(guidance or "").strip()
+    return text[:16000] if text else "(none — derive the structure from the informal proof)"
+
+
+class _FormalSession:
+    """State for one statement-first ``generate`` run.
+
+    Every model call and compile is recorded as an attempt. A round that
+    raises is recorded and ends the loop, and the best checked candidate so
+    far is persisted, so a late provider error never discards earlier work.
+    """
+
+    def __init__(
+        self,
+        *,
+        workspace: Path,
+        env: dict[str, str],
+        model: str | None,
+        problem: str,
+        proof: str,
+        guidance: str | None,
+        guest: bool,
+        max_repairs: int,
+        audit: bool,
+    ) -> None:
+        self.workspace = workspace
+        self.env = env
+        self.model: Any = model
+        self.author_model: Any = model
+        self.problem = problem
+        self.proof = proof
+        self.blueprint = _blueprint_text(guidance)
+        self.guest = guest
+        self.max_repairs = max(0, int(max_repairs))
+        self.audit_enabled = bool(audit)
+        self.requested_model = model
+        self.consecutive_failures = 0
+        self.statement_repairs = GUEST_STATEMENT_REPAIRS if guest else STATEMENT_REPAIRS
+        self.open_target = _informal_outcome(proof) in {
+            "known/open status",
+            "partial progress",
+        }
+        self._last_author: Any = model
+        self.lean = ""
+        self.uses_mathlib = False
+        self.status = "failed"
+        self.check: dict[str, Any] = {}
+        self.notes = ""
+        self.title = ""
+        self.citations: list[dict[str, str]] = []
+        self.main_decl = "main"
+        self.lock: dict[str, Any] | None = None
+        self.lock_message = ""
+        self.statement_audit: dict[str, Any] | None = None
+        self.attempts: list[dict[str, Any]] = []
+        self.best: dict[str, Any] | None = None
+        self.stop_reason = ""
+        # Lean-computed statement fingerprints by source hash (see lock_statement).
+        self._fingerprints: dict[str, dict[str, Any]] = {}
+        self.checker_reached = False
+        self.broker_lost = False
+
+    # ── model and checker plumbing ──
+    def _author(self, prompt: str) -> str:
+        used, content = _chat(self.env, self.model, prompt)
+        self.model = used
+        self._last_author = used
+        return content
+
+    def _adopt(self, payload: dict[str, Any]) -> None:
+        self.lean = _normalize_lean_imports(payload["lean"])
+        self.author_model = getattr(self, "_last_author", self.model)
+        if payload.get("notes"):
+            self.notes = str(payload["notes"])
+        if payload.get("title"):
+            self.title = str(payload["title"])
+        if payload.get("citations"):
+            self.citations = list(payload["citations"])
+        declared = str(payload.get("main_decl") or "").strip()
+        if declared and self.lock is None and _probe_target(self.lean, declared):
+            names = {
+                d["name"] for d in _qualified_declarations(self.lean)
+            } | {d["qualified"] for d in _qualified_declarations(self.lean)}
+            if declared in names:
+                self.main_decl = declared
+
+    def _compile(self, action: str) -> str:
+        self.uses_mathlib = _detect_mathlib(self.lean)
+        try:
+            check = _write_and_run(
+                self.workspace,
+                self.lean,
+                self.uses_mathlib,
+                main_decl=self.main_decl,
+            )
+        except (OSError, ValueError) as exc:
+            check = {
+                "ok": False,
+                "status": "failed",
+                "exit_code": None,
+                "stdout": "",
+                "stderr": f"Could not install Proof.lean for checking: {exc}",
+                "duration_s": 0.0,
+            }
+        self.check = check
+        self.status = _status_from_check(check, _count_sorry(self.lean), mode="check")
+        if self.status != "toolchain_missing":
+            self.checker_reached = True
+        self.attempts.append(
+            _attempt_record(
+                round_i=len(self.attempts),
+                action=action,
+                lean_src=self.lean,
+                uses_mathlib=self.uses_mathlib,
+                check=check,
+            )
+        )
+        self._consider_best()
+        return self.status
+
+    def _consider_best(self) -> None:
+        rank = _STATUS_RANK.get(self.status)
+        if rank is None or _lock_violation(self.lock, self.lean):
+            return
+        errors = sum(
+            1
+            for d in _diagnostics(
+                str(self.check.get("stdout") or "") + "\n" + str(self.check.get("stderr") or "")
+            )
+            if d["severity"] == "error"
+        )
+        key = (rank, -_count_sorry(self.lean), -errors, len(self.attempts))
+        if self.status in {"incomplete", "verified"}:
+            # Every compiling candidate is checked (one broker call per round,
+            # bounded by the repair budget), so later rounds never build on a
+            # drifted file, whether or not it would have become the best.
+            drift = self._statement_drift(self.lean)
+            if drift:
+                # The text lock held but Lean elaborates a different statement
+                # (e.g. an instance or definition hidden where the text screen
+                # could not see it). Never eligible; continue from the best.
+                self._reject_candidate(drift)
+                return
+        if self.best is not None and key < self.best["key"]:
+            return
+        self.best = {
+            "key": key,
+            "lean": self.lean,
+            "check": self.check,
+            "status": self.status,
+            "uses_mathlib": self.uses_mathlib,
+            "author": self.author_model,
+            "notes": self.notes,
+        }
+
+    def _record_event(self, action: str, message: str, *, status: str) -> None:
+        self.attempts.append(
             {
-                "round": round_i,
-                "uses_mathlib": uses_mathlib,
-                "sorry_count": sorry_n,
-                "action": "verify",
-                "check": {
-                    k: check[k]
-                    for k in (
-                        "ok",
-                        "status",
-                        "exit_code",
-                        "duration_s",
-                        "command",
-                        "toolchain",
-                        "sandbox",
-                        "source_sha256",
-                        "checker_profile",
-                        "release_id",
-                        "toolchain_tree_sha256",
-                        "mathlib_tree_sha256",
-                    )
-                    if k in check
-                },
-                "stderr_tail": (check.get("stderr") or "")[-2000:],
-                "stdout_tail": (check.get("stdout") or "")[-1000:],
+                "round": len(self.attempts),
+                "uses_mathlib": self.uses_mathlib,
+                "sorry_count": _count_sorry(self.lean),
+                "action": action,
+                "check": {"ok": False, "status": status},
+                "stderr_tail": message[-2000:],
+                "stdout_tail": "",
             }
         )
 
-        if status in {"verified", "incomplete", "toolchain_missing"}:
-            break
-        if round_i >= max_repairs:
-            status = "failed"
-            break
-        err_blob = ((check.get("stderr") or "") + "\n" + (check.get("stdout") or ""))[-6000:]
-        repair_prompt = REPAIR_PROMPT.replace("{lean}", lean_src[:40000]).replace(
-            "{errors}", err_blob
+    def _auditor(self) -> Any:
+        return _audit_model(
+            self.env, self.requested_model or self.model, guest=self.guest
         )
-        chosen_model, repair_content = _chat(env, chosen_model, repair_prompt)
-        repaired = _parse_model_payload(repair_content)
-        lean_src = repaired["lean"]
-        uses_mathlib = bool(repaired["uses_mathlib"]) or uses_mathlib
-        if repaired.get("notes"):
-            notes = repaired["notes"]
-        if repaired.get("citations"):
-            citations = list(repaired["citations"])
 
-    audit_result: dict[str, Any] | None = None
-    if audit and status in {"verified", "incomplete"}:
-        audit_result = _audit_faithfulness(
-            env, model or chosen_model, problem=problem, proof=proof, lean=lean_src
+    def _guarded(self, action: str, step) -> bool:
+        """Run one model round; an exception is recorded, never fatal to the run.
+
+        A single failed round (provider hiccup, unparseable or truncated
+        reply) costs that round only; two consecutive failures stop the loop.
+        Either way the best checked candidate so far is what gets persisted.
+        """
+        try:
+            step()
+        except Exception as exc:  # noqa: BLE001 - partial progress must persist
+            reason = str(exc).strip() or exc.__class__.__name__
+            self._record_event(action, f"{action} round failed: {reason}", status="error")
+            self.consecutive_failures += 1
+            if self.consecutive_failures >= 2:
+                self.stop_reason = f"{action} round failed: {reason[:300]}"
+            return False
+        self.consecutive_failures = 0
+        return True
+
+    def _candidate_ok(self, payload: dict[str, Any], action: str) -> bool:
+        violation = _lock_violation(self.lock, _normalize_lean_imports(payload["lean"]))
+        if not violation:
+            self.lock_message = ""
+            return True
+        self.lock_message = violation
+        self._record_event(
+            "lock-violation",
+            f"{action} reply rejected without compiling: {violation}.",
+            status="rejected",
         )
-        needs_fix = _fidelity_severity(_fidelity_flags(lean_src), audit_result) == "major"
-        if needs_fix and status == "verified":
-            fixed = _repair_statement(
-                env,
-                chosen_model,
-                problem=problem,
-                lean=lean_src,
-                audit=audit_result,
-                flags=_fidelity_flags(lean_src),
+        return False
+
+    # ── phases ──
+    def statement_phase(self) -> None:
+        prompt = _fill_template(
+            TRANSLATE_PROMPT,
+            problem=self.problem[:6000] or "(not recorded)",
+            blueprint=self.blueprint,
+            proof=self.proof[:40000],
+        )
+        content = self._author(prompt)
+        try:
+            payload = _parse_model_payload(content)
+        except ValueError as exc:
+            # One retry: the most common cause is a truncated or unfenced reply.
+            content = self._author(
+                prompt
+                + "\n\nYOUR PREVIOUS REPLY COULD NOT BE PARSED ("
+                + str(exc)[:200]
+                + "). Reply again with the ```lean block and the ```json block."
             )
-            if fixed:
-                lean_src = fixed["lean"]
-                uses_mathlib = bool(fixed["uses_mathlib"]) or uses_mathlib
-                if fixed.get("notes"):
-                    notes = fixed["notes"]
-                if fixed.get("citations"):
-                    citations = list(fixed["citations"])
-                check = _write_and_run(workspace, lean_src, uses_mathlib)
-                sorry_n = _count_sorry(lean_src)
-                status = _status_from_check(check, sorry_n, mode="check")
-                attempts.append(
-                    {
-                        "round": len(attempts),
-                        "uses_mathlib": uses_mathlib,
-                        "sorry_count": sorry_n,
-                        "action": "statement-fix",
-                        "check": {
-                            k: check[k]
-                            for k in (
-                                "ok",
-                                "status",
-                                "exit_code",
-                                "duration_s",
-                                "command",
-                                "toolchain",
-                                "sandbox",
-                                "source_sha256",
-                                "checker_profile",
-                                "release_id",
-                                "toolchain_tree_sha256",
-                                "mathlib_tree_sha256",
-                            )
-                            if k in check
-                        },
-                        "stderr_tail": (check.get("stderr") or "")[-2000:],
-                        "stdout_tail": (check.get("stdout") or "")[-1000:],
-                    }
-                )
-                if status == "failed" and max_repairs > 0:
-                    err_blob = (
-                        (check.get("stderr") or "") + "\n" + (check.get("stdout") or "")
-                    )[-6000:]
-                    repair_prompt = REPAIR_PROMPT.replace("{lean}", lean_src[:40000]).replace(
-                        "{errors}", err_blob
-                    )
-                    chosen_model, repair_content = _chat(env, chosen_model, repair_prompt)
-                    repaired = _parse_model_payload(repair_content)
-                    lean_src = repaired["lean"]
-                    uses_mathlib = bool(repaired["uses_mathlib"]) or uses_mathlib
-                    if repaired.get("notes"):
-                        notes = repaired["notes"]
-                    if repaired.get("citations"):
-                        citations = list(repaired["citations"])
-                    check = _write_and_run(workspace, lean_src, uses_mathlib)
-                    sorry_n = _count_sorry(lean_src)
-                    status = _status_from_check(check, sorry_n, mode="check")
-                    attempts.append(
-                        {
-                            "round": len(attempts),
-                            "uses_mathlib": uses_mathlib,
-                            "sorry_count": sorry_n,
-                            "action": "statement-repair",
-                            "check": {
-                                k: check[k]
-                                for k in (
-                                    "ok",
-                                    "status",
-                                    "exit_code",
-                                    "duration_s",
-                                    "command",
-                                    "toolchain",
-                                    "sandbox",
-                                    "source_sha256",
-                                    "checker_profile",
-                                    "release_id",
-                                    "toolchain_tree_sha256",
-                                    "mathlib_tree_sha256",
-                                )
-                                if k in check
-                            },
-                            "stderr_tail": (check.get("stderr") or "")[-2000:],
-                            "stdout_tail": (check.get("stdout") or "")[-1000:],
-                        }
-                    )
-                if status in {"verified", "incomplete"}:
-                    audit_result = _audit_faithfulness(
-                        env,
-                        model or chosen_model,
-                        problem=problem,
-                        proof=proof,
-                        lean=lean_src,
-                    )
-        status = _apply_fidelity(status, _fidelity_flags(lean_src), audit_result)
+            payload = _parse_model_payload(content)
+        self._adopt(payload)
+        self._compile("statement")
+        for _ in range(self.statement_repairs):
+            if self.status != "failed" or self.stop_reason:
+                break
+            self._guarded("statement-repair", lambda: self._repair("statement"))
 
-    if not notes:
-        notes = _check_summary(lean_src, attempts[-1].get("check") or {}, status)
-    fid_note = _fidelity_summary(_fidelity_flags(lean_src), audit_result)
-    if fid_note:
-        notes = f"{notes} {fid_note}".strip()
-    prev_chat = list((load_cached(workspace) or {}).get("chat") or [])
-    return _persist(
-        workspace,
-        lean_src=lean_src,
-        status=status,
-        uses_mathlib=uses_mathlib,
-        attempts=attempts,
-        notes=notes,
-        title=title,
-        model=chosen_model,
-        source=source,
-        action="verify",
-        chat=prev_chat,
-        citations=citations,
-        audit=audit_result,
-        authoritative_check=check,
+    def _statement_flags(self) -> list[dict[str, Any]]:
+        return _fidelity_flags(
+            self.lean, problem=self.problem, main_decl=self.main_decl
+        )
+
+    def statement_audit_phase(self) -> None:
+        if not self.audit_enabled or self.status not in {"incomplete", "verified"}:
+            return
+        audit = self._audit()
+        flags = self._statement_flags()
+        fixes = 0
+        while (
+            _statement_fix_wanted(flags, audit)
+            and fixes < STATEMENT_FIX_ROUNDS
+            and not self.stop_reason
+        ):
+            fixes += 1
+            before = _fidelity_severity(flags, audit)
+            saved = (
+                self.lean, self.check, self.status, self.uses_mathlib,
+                self.author_model, self.notes, self.citations, self.main_decl,
+            )
+            saved_review = (audit, flags, self.statement_audit)
+            fixed: dict[str, Any] | None = None
+
+            def fix() -> None:
+                nonlocal fixed
+                fixed = _repair_statement(
+                    self.env,
+                    self.model,
+                    problem=self.problem,
+                    lean=self.lean,
+                    audit=audit,
+                    flags=flags,
+                    proof=self.proof,
+                )
+
+            if not self._guarded("statement-fix", fix) or not fixed:
+                break
+            assert fixed is not None
+            self._last_author = fixed.get("model") or self.model
+            self._adopt(fixed)
+            self._compile("statement-fix")
+            if self.status == "failed":
+                self._guarded(
+                    "statement-repair", lambda: self._repair("statement")
+                )
+            if self.status in {"incomplete", "verified"}:
+                audit = self._audit()
+                flags = self._statement_flags()
+                if before != "major" and _fidelity_severity(flags, audit) == "major":
+                    # A fix prompted only by a minor flag must not trade an
+                    # audited statement for one the audit rejects.
+                    self._record_event(
+                        "statement-fix",
+                        "statement fix rejected: the audit found the rewritten "
+                        "statement less faithful than the original.",
+                        status="rejected",
+                    )
+                    audit, flags, self.statement_audit = saved_review
+                    (
+                        self.lean, self.check, self.status, self.uses_mathlib,
+                        self.author_model, self.notes, self.citations, self.main_decl,
+                    ) = saved
+                    try:
+                        self._restore_current()
+                    except (OSError, ValueError) as exc:
+                        self.stop_reason = f"could not restore the skeleton: {exc}"
+                    break
+            else:
+                # An uncompilable "fix" cannot be proved; keep the compiling
+                # skeleton and its honest (unfaithful) audit instead.
+                (
+                    self.lean, self.check, self.status, self.uses_mathlib,
+                    self.author_model, self.notes, self.citations, self.main_decl,
+                ) = saved
+                try:
+                    self._restore_current()
+                except (OSError, ValueError) as exc:
+                    self.stop_reason = f"could not restore the skeleton: {exc}"
+                break
+
+    def _audit(self) -> dict[str, Any]:
+        try:
+            audit = _audit_faithfulness(
+                self.env,
+                self._auditor(),
+                problem=self.problem,
+                proof=self.proof,
+                lean=self.lean,
+            )
+        except Exception as exc:  # noqa: BLE001 - an audit outage must not lose the skeleton
+            reason = str(exc).strip() or exc.__class__.__name__
+            self._record_event(
+                "statement-audit", f"statement audit failed: {reason}", status="error"
+            )
+            audit = {"ok": False, "error": reason[:300]}
+        audit["scope"] = "statement"
+        self.statement_audit = audit
+        return audit
+
+    def _fingerprint(self, lean: str) -> dict[str, Any]:
+        """Lean-computed fingerprint of the locked main theorem's statement."""
+        if not self.lock:
+            return {"ok": False, "error": "no statement lock"}
+        key = hashlib.sha256(lean.encode("utf-8")).hexdigest()
+        cached = self._fingerprints.get(key)
+        if cached is None:
+            try:
+                cached = _statement_fingerprint(
+                    lean,
+                    uses_mathlib=_detect_mathlib(lean),
+                    main_decl=str(self.lock["main_decl"]),
+                )
+            except Exception as exc:  # noqa: BLE001 - unconfirmed, never a match
+                cached = {"ok": False, "error": str(exc)[:300]}
+            self._fingerprints[key] = cached
+        return cached
+
+    def _statement_drift(self, lean: str) -> str:
+        """Why Lean says ``lean`` changed the locked statement ("" if not shown)."""
+        expected = (self.lock or {}).get("fingerprint")
+        if not expected:
+            return ""
+        current = self._fingerprint(lean)
+        if not current.get("ok"):
+            # Fail closed: the locked statement had a Lean fingerprint, so a
+            # candidate Lean cannot fingerprint (it stops elaboration, hides
+            # the theorem, or the probe did not complete) is never eligible.
+            return (
+                f"Lean could not confirm that `{self.main_decl}` still states the "
+                "locked, audited statement ("
+                + (str(current.get("error") or "fingerprint unavailable")[:200])
+                + ")"
+            )
+        if current.get("fingerprint") != expected:
+            return (
+                f"Lean elaborates the statement of `{self.main_decl}` differently "
+                "from the locked, audited statement (a definition, instance, "
+                "notation, option or scope it depends on changed)"
+            )
+        return ""
+
+    def _statement_confirmed(self, lean: str) -> bool:
+        """Lean confirms ``lean`` states exactly the locked, audited statement."""
+        expected = (self.lock or {}).get("fingerprint")
+        if not expected:
+            return False
+        current = self._fingerprint(lean)
+        return bool(current.get("ok") and current.get("fingerprint") == expected)
+
+    def _reject_candidate(self, reason: str) -> None:
+        self.lock_message = reason
+        self._record_event(
+            "lock-violation",
+            f"compiled candidate rejected: {reason}.",
+            status="rejected",
+        )
+        best = self.best
+        if best is None:
+            return
+        self.lean = best["lean"]
+        self.check = best["check"]
+        self.status = best["status"]
+        self.uses_mathlib = best["uses_mathlib"]
+        self.author_model = best["author"]
+        try:
+            self._restore_current()
+        except (OSError, ValueError) as exc:
+            self.stop_reason = f"could not restore the locked candidate: {exc}"
+
+    def lock_statement(self) -> None:
+        if self.status in {"incomplete", "verified"}:
+            target = _probe_target(self.lean, self.main_decl)
+            self.lock = _statement_lock(self.lean, target) if target else None
+            if self.lock:
+                self.main_decl = str(self.lock["main_decl"])
+                # Lean's own view of the audited statement: later candidates
+                # must elaborate to exactly this (text layout aside).
+                fingerprint = self._fingerprint(self.lean)
+                self.lock["fingerprint"] = (
+                    fingerprint.get("fingerprint") if fingerprint.get("ok") else None
+                )
+                if not fingerprint.get("ok"):
+                    self.lock["fingerprint_error"] = str(fingerprint.get("error") or "")[:300]
+                # Earlier statement drafts (possibly unfaithful, even if they
+                # happened to compile without sorry) are no longer eligible
+                # as the final artifact; only lock-respecting candidates are.
+                self.best = None
+                self._consider_best()
+
+    def prove(self) -> None:
+        prompt = _fill_template(
+            PROVE_PROMPT,
+            main_decl=self.main_decl,
+            problem=self.problem[:6000] or "(not recorded)",
+            blueprint=self.blueprint,
+            proof=self.proof[:40000],
+            lean=self.lean[:40000],
+        )
+        payload = _parse_model_payload(self._author(prompt))
+        if self._candidate_ok(payload, "prove"):
+            self._adopt(payload)
+            self._compile("prove")
+
+    def _repair(self, kind: str) -> None:
+        if kind == "statement":
+            task = (
+                "This is the PHASE-1 STATEMENT skeleton and it failed to compile. "
+                "Fix only what the diagnostics require so it compiles with `sorry` "
+                "proofs. Do not start proving, and keep the meaning of every statement."
+            )
+        elif kind == "sorry":
+            count = max(1, _count_sorry(self.lean))
+            task = (
+                f"The file compiles but still has {count} `sorry`. Replace them "
+                "with complete proofs (the goals are listed below) while keeping "
+                "everything that already compiles. Close as many as you can."
+            )
+        else:
+            task = (
+                "The file FAILED to compile. Fix the errors listed under "
+                "DIAGNOSTICS (the first one is usually the root cause)."
+            )
+        if self.lock:
+            lock_rule = (
+                f"LOCK: the statement of `{self.main_decl}` and every non-theorem "
+                f"command above it are locked; a reply that changes them is rejected "
+                "unseen. Only theorem/lemma declarations may change above it."
+            )
+            if self.lock_message:
+                lock_rule += (
+                    f"\nYOUR PREVIOUS REPLY WAS REJECTED because {self.lock_message}. "
+                    "Restore this locked statement exactly:\n```lean\n"
+                    + str(self.lock.get("signature") or "")
+                    + "\n```"
+                )
+        else:
+            lock_rule = ""
+        goals = ""
+        if kind == "sorry":
+            goals = _sorry_goals(self.lean, uses_mathlib=_detect_mathlib(self.lean))
+        errors = (
+            _error_digest(self.check, self.lean)
+            if kind != "sorry"
+            else "(the file compiles; see GOALS for what remains)"
+        )
+        prompt = _fill_repair_prompt(
+            task=task,
+            lock_rule=lock_rule,
+            problem=self.problem,
+            history=self.history(),
+            lean=self.lean,
+            errors=errors,
+            goals=goals,
+            blueprint=self.blueprint,
+            proof=self.proof,
+        )
+        payload = _parse_model_payload(self._author(prompt))
+        action = {
+            "statement": "statement-repair",
+            "sorry": "sorry-repair",
+        }.get(kind, "repair")
+        if self._candidate_ok(payload, action):
+            self._adopt(payload)
+            self._compile(action)
+
+    def history(self) -> str:
+        rows: list[str] = []
+        for attempt in self.attempts[-10:]:
+            check = attempt.get("check") or {}
+            status = str(check.get("status") or "")
+            if check.get("ok"):
+                status = "incomplete" if attempt.get("sorry_count") else "verified"
+            detail = ""
+            if attempt.get("sorry_count") and check.get("ok"):
+                detail = f", {attempt['sorry_count']} sorry left"
+            elif not check.get("ok"):
+                first = next(
+                    (
+                        d
+                        for d in _diagnostics(
+                            str(attempt.get("stdout_tail") or "")
+                            + "\n"
+                            + str(attempt.get("stderr_tail") or "")
+                        )
+                        if d["severity"] == "error"
+                    ),
+                    None,
+                )
+                if first:
+                    detail = (
+                        f", first error line {first['line']}: "
+                        + first["message"].splitlines()[0][:160]
+                    )
+                elif attempt.get("stderr_tail"):
+                    detail = ", " + str(attempt["stderr_tail"]).strip().splitlines()[-1][:160]
+            rows.append(f"- round {attempt.get('round')}: {attempt.get('action')} → {status or 'failed'}{detail}")
+        return "\n".join(rows) or "(first attempt)"
+
+    def run_repairs(self) -> None:
+        repairs_left = self.max_repairs
+        open_rounds = 0
+        while (
+            repairs_left > 0
+            and self.status not in {"verified", "toolchain_missing"}
+            and not self.stop_reason
+        ):
+            kind = "errors" if self.status == "failed" else "sorry"
+            if kind == "sorry" and self.open_target:
+                # The informal artifact itself leaves the target open: spend
+                # at most one round on helpers rather than the whole budget.
+                open_rounds += 1
+                if open_rounds > 1:
+                    break
+            repairs_left -= 1
+            if not self._guarded(kind + "-repair", lambda: self._repair(kind)):
+                continue
+            if (
+                self.lock is None
+                and self.audit_enabled
+                and self.statement_audit is None
+                and self.status in {"incomplete", "verified"}
+            ):
+                # The skeleton never compiled; audit and lock the first
+                # compiling statement before spending more proof effort.
+                self._guarded("statement-audit", self._audit)
+                self.lock_statement()
+
+    def _restore_current(self) -> None:
+        """Reinstall ``self.lean`` bytes (already checked) without recompiling."""
+        workspace = Path(self.workspace).resolve()
+        with _formal_io_lock(workspace):
+            ldir = lean_dir(workspace)
+            if ldir.is_symlink():
+                raise ValueError("Refusing to write through symbolic-link lean directory")
+            _write_scaffold(ldir, uses_mathlib=self.uses_mathlib)
+            _write_lean_source(ldir, self.lean)
+
+    def select_best(self) -> None:
+        best = self.best
+        if best is None:
+            return
+        if self.status == "toolchain_missing":
+            # The broker went away mid-run: the unchecked latest draft must not
+            # replace the best candidate that was checked before the outage.
+            self.broker_lost = True
+        else:
+            current_rank = _STATUS_RANK.get(self.status, 0)
+            if best["lean"] == self.lean and best["status"] == self.status:
+                return
+            if best["key"][0] < current_rank:
+                return
+        self.lean = best["lean"]
+        self.check = best["check"]
+        self.status = best["status"]
+        self.uses_mathlib = best["uses_mathlib"]
+        self.author_model = best["author"]
+        if best.get("notes"):
+            self.notes = best["notes"]
+        try:
+            self._restore_current()
+        except (OSError, ValueError) as exc:
+            self.stop_reason = (self.stop_reason + f" Could not restore the best candidate: {exc}").strip()
+
+    def final_audit(self) -> dict[str, Any] | None:
+        if not self.audit_enabled or self.status not in {"verified", "incomplete"}:
+            return None
+        statement_audit = self.statement_audit or {}
+        if (
+            statement_audit.get("ok")
+            and self.lock
+            and not _lock_violation(self.lock, self.lean)
+            and self._statement_confirmed(self.lean)
+        ):
+            # Reuse the statement audit only when BOTH the text lock holds and
+            # Lean confirms the proved file elaborates exactly the audited
+            # statement (same term, same local definitions and instances). The
+            # kernel and the axioms probe certify the proof itself.
+            return {
+                **statement_audit,
+                "scope": "statement",
+                "statement_lock": self.lock.get("sha256"),
+                "statement_fingerprint": self.lock.get("fingerprint"),
+            }
+        audit = _audit_faithfulness(
+            self.env,
+            self._auditor(),
+            problem=self.problem,
+            proof=self.proof,
+            lean=self.lean,
+        )
+        audit["scope"] = "final"
+        return audit
+
+
+def _fill_template(template: str, **values: str) -> str:
+    """Single-pass placeholder fill.
+
+    Chained ``str.replace`` would re-expand a placeholder that happens to
+    occur inside inserted problem, proof or Lean text; a single regex pass
+    substitutes only the template's own placeholders.
+    """
+    pattern = re.compile(r"\{(" + "|".join(re.escape(key) for key in values) + r")\}")
+    return pattern.sub(lambda match: str(values[match.group(1)]), template)
+
+
+def _fill_repair_prompt(
+    *,
+    task: str,
+    problem: str,
+    history: str,
+    lean: str,
+    errors: str,
+    proof: str,
+    goals: str = "",
+    blueprint: str = "",
+    lock_rule: str = "",
+) -> str:
+    """REPAIR_PROMPT with full context: problem, line numbers, first errors."""
+    return _fill_template(
+        REPAIR_PROMPT,
+        task=task,
+        lock_rule=lock_rule,
+        problem=(problem or "(not recorded)")[:6000],
+        history=history or "(first attempt)",
+        numbered=_numbered_source((lean or "")[:40000]),
+        errors=errors or "(none)",
+        goals=goals or "(none reported)",
+        blueprint=(blueprint or "(none)")[:8000],
+        proof=(proof or "(not available)")[:12000],
     )
 
 
@@ -3221,9 +6114,12 @@ def _repair_statement(
     lean: str,
     audit: dict[str, Any] | None,
     flags: list[dict[str, Any]],
+    proof: str = "",
 ) -> dict[str, Any] | None:
-    """One round of "the statement is wrong, restate and reprove"."""
+    """One round of "the statement is wrong, restate it"."""
     findings: list[str] = []
+    if audit and audit.get("back_translation"):
+        findings.append(f"What the Lean statement says: {audit['back_translation']}")
     if audit and audit.get("verdict"):
         findings.append(f"Verdict: {audit['verdict']}")
     findings += [f"- {i}" for i in (audit or {}).get("issues") or []]
@@ -3232,21 +6128,228 @@ def _repair_statement(
     findings += [
         f"- {f['message']}" + (f" (line {', '.join(map(str, f['lines']))})" if f.get("lines") else "")
         for f in flags
-        if f.get("severity") == "major"
+        if f.get("severity") == "major" or f.get("id") in STATEMENT_FIX_FLAGS
     ]
     if not findings:
         return None
-    prompt = (
-        STATEMENT_FIX_PROMPT.replace("{problem}", (problem or "(not recorded)")[:6000])
-        .replace("{audit}", "\n".join(findings)[:4000])
-        .replace("{lean}", lean[:40000])
+    prompt = _fill_template(
+        STATEMENT_FIX_PROMPT,
+        problem=(problem or "(not recorded)")[:6000],
+        audit="\n".join(findings)[:4000],
+        proof=(proof or "(not available)")[:12000],
+        lean=lean[:40000],
     )
     try:
-        _, content = _chat(env, model, prompt)
-        return _parse_model_payload(content)
+        used, content = _chat(env, model, prompt)
+        payload = _parse_model_payload(content)
     except ValueError:
         # The statement stays as-is; the audit findings still reach the UI.
         return None
+    payload["model"] = used
+    return payload
+
+
+@_serialized_formal_operation("generate")
+@usage_ledger.attributed("lean")
+def generate(
+    *,
+    workspace: Path,
+    run_record: dict[str, Any] | None,
+    user: dict[str, Any] | None,
+    model: str | None = None,
+    max_repairs: int = AUTO_MAX_REPAIRS,
+    audit: bool = True,
+    guidance: str | None = None,
+    problem_override: str | None = None,
+    proof_override: str | None = None,
+    prove: bool = True,
+    targets: list[str] | None = None,
+    source_label: str | None = None,
+) -> dict[str, Any]:
+    """Translate the run's proof into Lean statement-first and verify it.
+
+    The statement is drafted, compiled, audited by an independent cold
+    reviewer and locked before proof effort is spent; proof rounds cannot
+    change it. ``max_repairs`` bounds the proof-phase repair rounds (compile
+    errors and sorry elimination alike); statement repairs and one statement
+    fix have their own small bounds. See the module docstring.
+
+    ``problem_override`` / ``proof_override`` replace ``problem.txt`` and the
+    run's proof (an Analyze run formalizes selected statements of someone
+    else's manuscript).  ``prove=False`` stops after the statement phase, its
+    audit and the lock: no proof round and no repair round run, and the result
+    says "Statements compiled · proofs not attempted" (``scope:
+    "statements"``), never an incomplete proof.
+    """
+    guest = bool((user or {}).get("guest") or (run_record or {}).get("guest"))
+    if guest:
+        model = "kimi-k3"
+        max_repairs = max(0, min(int(max_repairs), GUEST_MAX_REPAIRS))
+
+    if problem_override is not None:
+        problem = str(problem_override).strip()
+    else:
+        problem = (
+            _read_optional_workspace_text(
+                workspace,
+                "problem.txt",
+                limit=MAX_WORKSPACE_PROBLEM_BYTES,
+            )
+            or ""
+        ).strip()
+
+    if proof_override is not None:
+        source, proof = (source_label or "selected statements"), str(proof_override).strip()
+        if not proof:
+            raise ValueError("No statements were selected to formalize")
+    else:
+        source, proof = _proof_source(workspace, run_record)
+        if not proof:
+            raise ValueError("No proof text yet — wait for the run to produce proof.md")
+
+    env = _llm_environment(user, run_record)
+    session = _FormalSession(
+        workspace=workspace,
+        env=env,
+        model=model,
+        problem=problem,
+        proof=proof,
+        guidance=guidance,
+        guest=guest,
+        max_repairs=max_repairs,
+        audit=audit,
+    )
+    # The first call has nothing to preserve yet; its failure propagates.
+    session.statement_phase()
+    if session.status != "toolchain_missing":
+        session.statement_audit_phase()
+        session.lock_statement()
+        if prove:
+            if session.status == "incomplete" and not session.stop_reason:
+                session._guarded("prove", session.prove)
+            session.run_repairs()
+        session.select_best()
+
+    status = session.status
+    audit_result: dict[str, Any] | None = None
+    if status == "toolchain_missing":
+        if session.checker_reached:
+            summary = (
+                "The Lean checker broker became unavailable during the run, so the "
+                "latest draft below was not checked, and no earlier attempt compiled."
+            )
+        else:
+            summary = (
+                "The Lean checker broker is unavailable on this server, so nothing was "
+                "compiled. The drafted statement below (proofs still `sorry`) has not "
+                "been checked; no repair or audit calls were spent on the outage."
+            )
+    else:
+        try:
+            audit_result = session.final_audit()
+        except Exception as exc:  # noqa: BLE001 - keep the checked result
+            audit_result = {"ok": False, "error": str(exc)[:300]}
+        status = _apply_fidelity(status, session._statement_flags(), audit_result)
+        summary = _check_summary(session.lean, session.check, status)
+        if not prove:
+            label = _statements_only_fields(status, session, targets)["status_label"]
+            summary = _statements_only_notes(status, label, session.lean or "", summary)
+        if session.broker_lost:
+            summary += (
+                " The Lean checker became unavailable during the run; the best "
+                "candidate checked before the outage is shown."
+            )
+        scope = (audit_result or {}).get("scope")
+        if session.lock and not _lock_violation(session.lock, session.lean):
+            if scope == "statement":
+                summary += (
+                    f" The statement of `{session.main_decl}` was audited before the "
+                    "proof phase, and Lean confirmed the final file states exactly "
+                    "that statement."
+                )
+            elif scope == "final":
+                summary += (
+                    f" The statement of `{session.main_decl}` was audited before the "
+                    "proof phase; the final file was audited again because Lean could "
+                    "not confirm it states exactly the audited statement."
+                )
+    notes = summary
+    if session.notes:
+        notes = f"{notes} Model notes: {session.notes}".strip()
+    if session.stop_reason:
+        notes = f"{notes} Stopped early: {session.stop_reason}".strip()
+    fid_note = _fidelity_summary(session._statement_flags(), audit_result)
+    if fid_note:
+        notes = f"{notes} {fid_note}".strip()
+    prev_chat = list((load_cached(workspace) or {}).get("chat") or [])
+    extra: dict[str, Any] = {
+        "statement_lock": session.lock,
+        "main_decl": session.main_decl,
+    }
+    if session.statement_audit is not None:
+        extra["statement_audit"] = session.statement_audit
+    if not prove:
+        extra.update(_statements_only_fields(status, session, targets))
+    return _persist(
+        workspace,
+        lean_src=session.lean,
+        status=status,
+        uses_mathlib=_detect_mathlib(session.lean),
+        attempts=session.attempts,
+        notes=notes,
+        title=session.title,
+        model=session.author_model,
+        source=source,
+        action="verify",
+        chat=prev_chat,
+        citations=session.citations,
+        audit=audit_result,
+        authoritative_check=session.check,
+        extra=extra,
+    )
+
+
+STATEMENTS_ONLY_LABEL = "Statements compiled · proofs not attempted"
+# Lean results whose statements typecheck (proofs `sorry` by design).
+_STATEMENTS_COMPILED = frozenset({"incomplete", "verified", "compiled"})
+
+
+def _statements_only_notes(status: str, label: str, lean_src: str, notes: str) -> str:
+    """The notes of a statement-only result: never "N sorry remain" as if a
+    proof had been attempted."""
+    if status in _STATEMENTS_COMPILED or status == "unfaithful":
+        detail = (
+            "Lean typechecks the stated results; every proof is `sorry` by design "
+            "(this formalization states the selected results only)."
+            if _count_sorry(lean_src)
+            else "Lean typechecks the stated results."
+        )
+        return f"{label}. {detail}"
+    return f"{label}. {notes}".strip()
+
+
+def _statements_only_fields(
+    status: str, session: "_FormalSession | None", targets: list[str] | None
+) -> dict[str, Any]:
+    """How a statement-only result describes itself (never as incomplete)."""
+    if status in _STATEMENTS_COMPILED:
+        label = STATEMENTS_ONLY_LABEL
+    elif status == "unfaithful":
+        label = "Statements compiled · statement fidelity flagged · proofs not attempted"
+    elif status == "toolchain_missing":
+        label = "Statements not compiled (Lean checker unavailable) · proofs not attempted"
+    else:
+        label = "Statements did not compile · proofs not attempted"
+    return {
+        "scope": "statements",
+        "proofs_attempted": False,
+        "status_label": label,
+        "targets": [str(item)[:80] for item in (targets or [])][:40],
+        "toolchain_note": (
+            "Lean 4.14 / Mathlib (Dec 2024) on this server; upstream Lean, if any, "
+            "is linked and not re-checked by this server."
+        ),
+    }
 
 
 @_serialized_formal_operation("audit")
@@ -3268,12 +6371,19 @@ def audit_current(
     prev = load_cached(workspace) or {}
     problem, informal = _problem_and_proof(workspace, run_record)
     env = _llm_environment(user, run_record)
+    guest = bool((user or {}).get("guest") or (run_record or {}).get("guest"))
     audit = _audit_faithfulness(
-        env, model or prev.get("model"), problem=problem, proof=informal, lean=lean_src
+        env,
+        _audit_model(env, model or prev.get("model"), guest=guest),
+        problem=problem,
+        proof=informal,
+        lean=lean_src,
     )
     if not audit.get("ok"):
         raise ValueError(audit.get("error") or "audit failed")
-    flags = _fidelity_flags(lean_src)
+    flags = _fidelity_flags(
+        lean_src, problem=problem, main_decl=prev.get("main_decl") or None
+    )
     status = str(prev.get("status") or "none")
     attempts = list(prev.get("attempts") or [])
     check: dict[str, Any] | None = None
@@ -3781,6 +6891,14 @@ def _harness_env(
         path = tools.get(tool)
         if path:
             prefixes.append(str(Path(path).parent))
+    # The harness's own advisory `./check.sh` needs the user's elan shims;
+    # the server unit's PATH usually omits ~/.elan/bin.
+    prefixes.extend(_harness_lean_bin_dirs())
+    # Subscription routes may run with a private account HOME; the shims must
+    # still use the server's toolchains rather than install new ones there.
+    from agent_monitor.subprocess_env import server_elan_home
+
+    env["ELAN_HOME"] = server_elan_home()
     seen: set[str] = set()
     ordered = [p for p in prefixes if p and not (p in seen or seen.add(p))]
     if ordered:
@@ -3991,6 +7109,7 @@ def _start_harness_reserved(
     lean_src = (lean if lean is not None else read_source(workspace)) or ""
     uses_mathlib = _detect_mathlib(lean_src)
     _write_scaffold(ldir, uses_mathlib=uses_mathlib)
+    _write_harness_checker(ldir)
     _reset_harness_log(ldir)
     if lean_src.strip():
         target.write_text(lean_src.rstrip() + "\n", encoding="utf-8")
@@ -4302,9 +7421,11 @@ def _harness_fidelity_audit(
     from agent_monitor.jobs import _route_from_record
 
     if _route_from_record(run_record) != "codex_subscription":
+        env = _llm_environment(user, run_record)
+        guest = bool((user or {}).get("guest") or (run_record or {}).get("guest"))
         return _audit_faithfulness(
-            _llm_environment(user, run_record),
-            model,
+            env,
+            _audit_model(env, model, guest=guest),
             problem=problem,
             proof=proof,
             lean=lean,
@@ -4325,32 +7446,10 @@ def _harness_fidelity_audit(
             edit=False,
         )
         used = str(result.get("model") or model or "Codex subscription")
-        data = _extract_json(str(result.get("answer") or ""))
+        data = _extract_json_object(str(result.get("answer") or ""))
     except (ValueError, json.JSONDecodeError, KeyError, TypeError) as exc:
         return {"ok": False, "error": str(exc)[:300]}
-    if not isinstance(data, dict):
-        return {"ok": False, "error": "auditor returned a non-object"}
-    issues = [
-        str(item)[:400]
-        for item in (data.get("issues") or [])
-        if str(item).strip()
-    ][:10]
-    severity = str(data.get("severity") or "").strip().lower()
-    faithful = bool(data.get("faithful"))
-    if severity not in {"ok", "minor", "major"}:
-        severity = "ok" if faithful else "major"
-    if severity == "major":
-        faithful = False
-    return {
-        "ok": True,
-        "faithful": faithful,
-        "severity": severity,
-        "verdict": str(data.get("verdict") or "")[:600],
-        "issues": issues,
-        "main_decl": str(data.get("main_decl") or "")[:80],
-        "statement_suggestion": str(data.get("statement_suggestion") or "")[:600],
-        "model": used,
-    }
+    return _parse_audit_payload(data, used)
 
 
 

@@ -1,8 +1,22 @@
 """Deterministic, provenance-honest graphs emitted by proof engines.
 
 This module deliberately does not invoke a model.  ``math_harness`` exposes its
-content-addressed fact DAG; every other engine exposes only the agents/edges in
-the run record and is labelled as an execution trace, not proof logic.
+content-addressed fact DAG ("Facts") and its exploring graph ("Explore"); every
+other engine exposes only the agents/edges in the run record and is labelled as
+an execution trace, not proof logic.
+
+Two runner generations are recognized, both fail-closed:
+
+* receipt schema 1 (``agent-monitor-math-harness-response-adapter@1``): the
+  historical single-critic adapter with exactly one target fact;
+* receipt schema 2 (``agent-monitor-math-harness-cgm@2``): the CGM pipeline
+  (strategist, workers, per-lemma independent verifier, repair, curator) with a
+  multi-lemma fact DAG and a CGM exploring graph whose memory files are bound
+  by hash in the receipt.  Attestation additionally requires ``proof.md`` to
+  equal ``agent_monitor.cgm.render_verified_closure`` of the target closure.
+
+Model-verifier acceptance is never a Lean certificate: every artifact carries
+``certificate: false`` and ``lean_verified: false``.
 """
 from __future__ import annotations
 
@@ -18,6 +32,9 @@ import stat
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Mapping, Sequence
+
+from agent_monitor.cgm import closure as _cgm_closure
+from agent_monitor.cgm import schema as _cgm_schema
 
 
 SCHEMA_VERSION = 1
@@ -47,9 +64,13 @@ MAX_EXTERNAL_REF_SEQUENCE = 32
 MAX_EXTERNAL_REF_DEPTH = 4
 MAX_EXTERNAL_REF_STRING = 2000
 MAX_SECTION_CANDIDATES = 64
-MAX_WORKFLOW_FILE_BYTES = 256_000
+MAX_WORKFLOW_FILE_BYTES = 1_000_000
 MAX_WORKFLOW_ROWS = 256
 MATH_HARNESS_AUTHOR = "math_harness_model_critic"
+CGM_AUTHOR = _cgm_schema.AUTHOR
+# Engines whose runs may carry a math_harness project.  ``kimi`` is included
+# for the CGM delegation path; it is only consulted when a receipt exists.
+CGM_GRAPH_ENGINES = frozenset({MATH_HARNESS_ENGINE, "kimi"})
 
 _FACT_ID_RE = re.compile(r"^[0-9a-f]{16}$")
 _FACT_FILENAME_RE = re.compile(r"^([0-9a-f]{16})\.md$")
@@ -122,6 +143,46 @@ class _Fact:
 def _bounded_text(value: object, limit: int) -> str:
     text = str(value or "").strip()
     return text if len(text) <= limit else text[: limit - 1].rstrip() + "…"
+
+
+def _bounded_math_label(value: object, limit: int) -> str:
+    """Like ``_bounded_text`` for a one-line title, but never cut inside math.
+
+    A cut inside ``$…$`` / ``$$…$$`` / ``\\(…\\)`` / ``\\[…\\]`` leaves an
+    unmatched delimiter that renders raw (``$n…``); the title then ends
+    before that span instead.
+    """
+    text = str(value or "").strip()
+    if len(text) <= limit:
+        return text
+    cut = text[: limit - 1]
+    space = cut.rfind(" ")
+    if space > limit * 0.6:
+        cut = cut[:space]
+    opened: tuple[int, str] | None = None
+    index = 0
+    while index < len(cut):
+        char = cut[index]
+        if char == "\\":
+            following = cut[index + 1 : index + 2]
+            if opened is None and following in {"(", "["}:
+                opened = (index, ")" if following == "(" else "]")
+            elif opened is not None and following == opened[1]:
+                opened = None
+            index += 2
+            continue
+        if char == "$":
+            token = "$$" if cut[index + 1 : index + 2] == "$" else "$"
+            if opened is None:
+                opened = (index, token)
+            elif opened[1] == token:
+                opened = None
+            index += len(token)
+            continue
+        index += 1
+    if opened is not None:
+        cut = cut[: opened[0]]
+    return cut.rstrip(" ,;:") + "…"
 
 
 def _bounded_positive_int(value: object, default: int) -> int:
@@ -539,10 +600,19 @@ def _receipt_response_only_contract(
     }:
         return None
     transport = receipt.get("transport")
+    if transport == _cgm_schema.HYBRID_TRANSPORT and (
+        receipt.get("schema_version") != _cgm_schema.HYBRID_RECEIPT_SCHEMA_VERSION
+        or _hybrid_routes(receipt) is None
+    ):
+        # A Max contract is only as good as the per-route contracts it binds.
+        return None
     expected_version = {
-        "codex_exec": 4,
+        # Version 4 Codex receipts predate the tool-free model catalog (their
+        # "no tools" claim was not true for every model); never attest them.
+        "codex_exec": 5,
         "claude_code": 1,
         "api_chat": 1,
+        _cgm_schema.HYBRID_TRANSPORT: _cgm_schema.HYBRID_CONTRACT["isolation_version"],
     }.get(transport)
     version = contract.get("isolation_version")
     if (
@@ -556,6 +626,51 @@ def _receipt_response_only_contract(
         "transport": transport,
         "isolation_version": expected_version,
     }
+
+
+_HYBRID_ROUTE_FIELDS = frozenset(
+    {"families", "provider", "model", "transport", "isolation_version", "effort"}
+)
+# Max: (provider, transport, isolation version, call families) per side.
+_HYBRID_SIDES = {
+    "advisor": (
+        "claude_subscription",
+        "claude_code",
+        1,
+        sorted(_cgm_schema.ADVISOR_CALL_FAMILIES),
+    ),
+    "worker": (
+        "codex_subscription",
+        "codex_exec",
+        5,
+        sorted(_cgm_schema.WORKER_CALL_FAMILIES),
+    ),
+}
+
+
+def _hybrid_routes(receipt: Mapping[str, Any]) -> dict[str, dict[str, Any]] | None:
+    """The validated Max route table of a schema-4 receipt, else ``None``."""
+    workflow = receipt.get("workflow")
+    routes = workflow.get("routes") if isinstance(workflow, dict) else None
+    if not isinstance(routes, dict) or set(routes) != set(_HYBRID_SIDES):
+        return None
+    for side, (provider, transport, version, families) in _HYBRID_SIDES.items():
+        route = routes[side]
+        if (
+            not isinstance(route, dict)
+            or set(route) != _HYBRID_ROUTE_FIELDS
+            or route["provider"] != provider
+            or route["transport"] != transport
+            or route["isolation_version"] != version
+            or isinstance(route["isolation_version"], bool)
+            or route["families"] != families
+            or not isinstance(route["model"], str)
+            or not route["model"].strip()
+            or len(route["model"]) > 240
+            or route["effort"] not in _cgm_schema.HYBRID_EFFORTS
+        ):
+            return None
+    return routes
 
 
 def _runner_problem_bytes(payload: bytes | None) -> bytes | None:
@@ -735,7 +850,439 @@ def _empty_math_harness_graph() -> dict[str, Any]:
     }
 
 
-def _math_harness_graph(workspace: Path) -> dict[str, Any]:
+_CGM_RECEIPT_FIELDS = frozenset(
+    {
+        "schema_version", "engine", "source", "source_sha256",
+        "prompt_pack_sha256", "prompt_pack_version", "semantics", "verifier",
+        "verdict", "certificate", "lean_verified", "problem_id",
+        "problem_sha256", "task_sha256", "proof_sha256", "proof_rendering",
+        "provider", "model", "requested_model", "transport", "target_fact_id",
+        "target_sha256", "facts", "memory", "selected_worker",
+        "selected_attempt", "verdicts", "workflow", "calls", "binding_sha256",
+    }
+)
+_CGM_WORKFLOW_FIELDS = frozenset(
+    {
+        "pipeline", "verification_policy", "stages", "calls", "retries",
+        "budgets", "rows", "degraded", "tools_enabled", "response_only_contract",
+    }
+)
+_CGM_BUDGET_FIELDS = frozenset(
+    {
+        "max_calls", "max_workers", "max_repairs", "max_verify_candidates",
+        "max_lemmas", "max_seconds", "guest",
+    }
+)
+# Schema 3 (concurrent writer) adds the canonical call order and the resolved
+# concurrency; schema 2 (sequential phase-1 writer) keeps its exact shape.
+_CGM_WORKFLOW_FIELDS_BY_VERSION = {
+    2: _CGM_WORKFLOW_FIELDS,
+    3: _CGM_WORKFLOW_FIELDS | {"call_order"},
+    # Schema 4 (Max) adds the route table that binds call families to routes.
+    4: _CGM_WORKFLOW_FIELDS | {"call_order", "routes"},
+}
+_CGM_BUDGET_FIELDS_BY_VERSION = {
+    2: _CGM_BUDGET_FIELDS,
+    3: _CGM_BUDGET_FIELDS | {"concurrency"},
+    4: _CGM_BUDGET_FIELDS | {"concurrency"},
+}
+_CGM_CALL_FIELDS = frozenset(
+    {"stage", "provider", "model", "usage", "response_sha256", "effort"}
+)
+
+
+def _plain_int(value: object, *, minimum: int = 0, maximum: int = 1_000_000_000) -> bool:
+    return (
+        isinstance(value, int)
+        and not isinstance(value, bool)
+        and minimum <= value <= maximum
+    )
+
+
+def _short_text(value: object, limit: int = 240) -> bool:
+    return isinstance(value, str) and bool(value.strip()) and len(value) <= limit
+
+
+def _cgm_receipt(payload: bytes | None) -> dict[str, Any] | None:
+    """Parse and statically validate a CGM (schema 2 or 3) receipt; ``None``
+    if invalid."""
+    if payload is None:
+        return None
+    try:
+        receipt = json.loads(_decode(payload, "engine_receipt.json"))
+    except (json.JSONDecodeError, RecursionError, EngineGraphError):
+        return None
+    if not isinstance(receipt, dict) or set(receipt) != _CGM_RECEIPT_FIELDS:
+        return None
+    try:
+        return receipt if _cgm_receipt_is_valid(receipt) else None
+    except (TypeError, ValueError, KeyError, AttributeError):
+        return None
+
+
+def _cgm_receipt_is_valid(receipt: dict[str, Any]) -> bool:
+    version = receipt["schema_version"]
+    if (
+        not _plain_int(version)
+        or version not in _cgm_schema.CGM_RECEIPT_SCHEMA_VERSIONS
+    ):
+        return False
+    if not (
+        receipt["engine"] == MATH_HARNESS_ENGINE
+        and receipt["source"] == _cgm_schema.PIPELINE_SOURCE
+        and receipt["semantics"] == _cgm_schema.SEMANTICS
+        and receipt["verifier"] == _cgm_schema.VERIFIER_LABEL
+        and receipt["certificate"] is False
+        and receipt["lean_verified"] is False
+        and all(
+            _is_sha256(receipt[name])
+            for name in (
+                "source_sha256", "prompt_pack_sha256", "problem_sha256",
+                "task_sha256", "proof_sha256", "binding_sha256",
+            )
+        )
+        and all(
+            _short_text(receipt[name])
+            for name in (
+                "prompt_pack_version", "problem_id", "provider", "model",
+                "requested_model", "transport",
+            )
+        )
+        and _plain_int(receipt["selected_worker"], minimum=1, maximum=16)
+        and _plain_int(receipt["selected_attempt"], minimum=1, maximum=64)
+    ):
+        return False
+    verdict = receipt["verdict"]
+    target = receipt["target_fact_id"]
+    if verdict == "accepted":
+        if (
+            not isinstance(target, str)
+            or _FACT_ID_RE.fullmatch(target) is None
+            or not _is_sha256(receipt["target_sha256"])
+            or receipt["proof_rendering"] != _cgm_schema.PROOF_RENDERING_VERIFIED
+        ):
+            return False
+    elif verdict == "unattested":
+        if (
+            target is not None
+            or receipt["target_sha256"] is not None
+            or receipt["proof_rendering"] != _cgm_schema.PROOF_RENDERING_UNVERIFIED
+        ):
+            return False
+    else:
+        return False
+
+    facts = receipt["facts"]
+    if not isinstance(facts, list) or len(facts) > MAX_NODES:
+        return False
+    seen: set[str] = set()
+    targets = []
+    for item in facts:
+        if (
+            not isinstance(item, dict)
+            or set(item) != {"fact_id", "label", "bytes", "sha256", "is_target"}
+            or not isinstance(item["fact_id"], str)
+            or _FACT_ID_RE.fullmatch(item["fact_id"]) is None
+            or item["fact_id"] in seen
+            or not _short_text(item["label"], 32)
+            or not _plain_int(item["bytes"], minimum=1, maximum=MAX_FACT_BYTES)
+            or not _is_sha256(item["sha256"])
+            or not isinstance(item["is_target"], bool)
+        ):
+            return False
+        seen.add(item["fact_id"])
+        if item["is_target"]:
+            targets.append(item["fact_id"])
+    if targets != ([target] if verdict == "accepted" else []):
+        return False
+
+    memory = receipt["memory"]
+    if (
+        not isinstance(memory, dict)
+        or not set(_cgm_schema.REQUIRED_MEMORY_FILES).issubset(memory)
+        or not set(memory).issubset(_cgm_schema.MEMORY_FILES)
+        or not all(_is_sha256(value) for value in memory.values())
+    ):
+        return False
+
+    verdicts = receipt["verdicts"]
+    if not isinstance(verdicts, list) or len(verdicts) > MAX_WORKFLOW_ROWS:
+        return False
+    for item in verdicts:
+        if (
+            not isinstance(item, dict)
+            or set(item) != {"call", "attempt", "label", "verdict", "response_sha256"}
+            or _cgm_schema.call_family(item["call"]) != "verify"
+            or not _plain_int(item["attempt"], minimum=1, maximum=64)
+            or not _short_text(item["label"], 32)
+            or item["verdict"] not in {"correct", "wrong", "error"}
+            or not (item["response_sha256"] is None or _is_sha256(item["response_sha256"]))
+        ):
+            return False
+
+    workflow = receipt["workflow"]
+    if (
+        not isinstance(workflow, dict)
+        or set(workflow) != _CGM_WORKFLOW_FIELDS_BY_VERSION[version]
+    ):
+        return False
+    if (
+        workflow["pipeline"] != _cgm_schema.PIPELINE_NAME
+        or not isinstance(workflow["verification_policy"], str)
+        or workflow["verification_policy"]
+        not in _cgm_schema.ACCEPTED_VERIFICATION_POLICIES[version]
+        or workflow["tools_enabled"] is not False
+        or _receipt_response_only_contract(receipt) is None
+    ):
+        return False
+    if version >= 3 and workflow["call_order"] != _cgm_schema.CALL_ORDER:
+        return False
+    stages = workflow["stages"]
+    if (
+        not isinstance(stages, list)
+        or stages[:2] != ["scaffold", "work"]
+        or stages[-1:] != ["finalize"]
+        or [stage for stage in _cgm_schema.STAGE_ORDER if stage in stages] != stages
+    ):
+        return False
+    budgets = workflow["budgets"]
+    if (
+        not isinstance(budgets, dict)
+        or set(budgets) != _CGM_BUDGET_FIELDS_BY_VERSION[version]
+        or not isinstance(budgets["guest"], bool)
+        or not _plain_int(budgets["max_calls"], minimum=4, maximum=64)
+        or not _plain_int(budgets["max_workers"], minimum=1, maximum=3)
+        or not _plain_int(budgets["max_repairs"], minimum=0, maximum=4)
+        or not _plain_int(budgets["max_verify_candidates"], minimum=1, maximum=3)
+        or not _plain_int(budgets["max_lemmas"], minimum=1, maximum=16)
+        or not _plain_int(budgets["max_seconds"], minimum=1, maximum=86_400)
+    ):
+        return False
+    calls = receipt["calls"]
+    if not isinstance(calls, list) or not calls or len(calls) > budgets["max_calls"]:
+        return False
+    counts = {family: 0 for family in _cgm_schema.CALL_FAMILIES}
+    for call in calls:
+        if (
+            not isinstance(call, dict)
+            or set(call) != _CGM_CALL_FIELDS
+            or not isinstance(call["usage"], dict)
+            or not all(
+                isinstance(key, str) and _plain_int(value)
+                for key, value in call["usage"].items()
+            )
+            or not (call["response_sha256"] is None or _is_sha256(call["response_sha256"]))
+            or not _short_text(call["provider"])
+            or not _short_text(call["model"])
+            or call["effort"] not in {None, "low", "high", "max"}
+        ):
+            return False
+        family = _cgm_schema.call_family(call["stage"])
+        if family is None:
+            return False
+        counts[family] += 1
+    expected_counts = {**counts, "total": len(calls)}
+    if workflow["calls"] != expected_counts or counts["strategist"] < 1 or counts["worker"] < 1:
+        return False
+    if version == _cgm_schema.HYBRID_RECEIPT_SCHEMA_VERSION:
+        # Max: the receipt speaks for the advisor, and every call came from the
+        # route its family belongs to.
+        routes = _hybrid_routes(receipt)
+        if (
+            routes is None
+            or receipt["transport"] != _cgm_schema.HYBRID_TRANSPORT
+            or receipt["provider"] != routes["advisor"]["provider"]
+        ):
+            return False
+        for call in calls:
+            family = _cgm_schema.call_family(call["stage"])
+            side = "worker" if family in _cgm_schema.WORKER_CALL_FAMILIES else "advisor"
+            if call["provider"] != routes[side]["provider"]:
+                return False
+    elif receipt["transport"] == _cgm_schema.HYBRID_TRANSPORT:
+        return False
+    retries = workflow["retries"]
+    if (
+        not isinstance(retries, dict)
+        or set(retries) != {"format", "empty"}
+        or not all(_plain_int(value, maximum=64) for value in retries.values())
+    ):
+        return False
+    rows = workflow["rows"]
+    if (
+        not isinstance(rows, dict)
+        or set(rows) != set(memory)
+        or not all(_plain_int(value, maximum=MAX_WORKFLOW_ROWS) for value in rows.values())
+    ):
+        return False
+    degraded = workflow["degraded"]
+    if not isinstance(degraded, list) or not all(_short_text(item, 80) for item in degraded):
+        return False
+    if version >= 3 and not _cgm_v3_calls_are_canonical(receipt):
+        return False
+    return receipt["binding_sha256"] == _cgm_schema.receipt_binding_digest(receipt)
+
+
+def _cgm_v3_calls_are_canonical(receipt: dict[str, Any]) -> bool:
+    """Schema-3 checks that bind calls, verdicts, retries and concurrency.
+
+    Calls are in canonical turn order (so the receipt cannot depend on
+    completion order), the retry counts are exactly those the call stages
+    imply, verdicts appear in verifier-call order and each names a verifier
+    turn whose last answered call is the verdict's reply, and the recorded
+    concurrency is within bounds (the guest ceiling for guest runs).
+    """
+    workflow = receipt["workflow"]
+    budgets = workflow["budgets"]
+    concurrency_ceiling = (
+        _cgm_schema.GUEST_MAX_CONCURRENCY
+        if budgets["guest"]
+        else _cgm_schema.MAX_CONCURRENCY
+    )
+    if not _plain_int(budgets["concurrency"], minimum=1, maximum=concurrency_ceiling):
+        return False
+    calls = receipt["calls"]
+    stages = [call["stage"] for call in calls]
+    if (
+        not _cgm_schema.canonical_call_order(stages)
+        or workflow["retries"] != _cgm_schema.retry_counts(stages)
+    ):
+        return False
+    # The reply a verdict was taken from: the last answered call of its turn.
+    last_answer: dict[str, str | None] = {}
+    for call in calls:
+        turn = _cgm_schema.call_turn(call["stage"])
+        assert turn is not None
+        if turn[0] != "verify":
+            continue
+        base = f"verify-{turn[1]}"
+        if call["response_sha256"] is not None or base not in last_answer:
+            last_answer[base] = call["response_sha256"] or last_answer.get(base)
+    previous = 0
+    for item in receipt["verdicts"]:
+        turn = _cgm_schema.call_turn(item["call"])
+        if (
+            turn is None
+            or turn[2] != 0
+            or turn[1] <= previous
+            or item["call"] not in last_answer
+            or last_answer[item["call"]] != item["response_sha256"]
+        ):
+            return False
+        previous = turn[1]
+    return True
+
+
+def _receipt_provenance_v2(
+    receipt: dict[str, Any] | None,
+    *,
+    targets: tuple[str, ...],
+    target_payload: bytes | None,
+    facts: Mapping[str, _Fact],
+    fact_payloads: Mapping[str, bytes],
+    problem_artifact: bytes | None,
+    proof_payload: bytes | None,
+) -> dict[str, object]:
+    """Attest a CGM generation; fail closed on any mismatch."""
+    invalid: dict[str, object] = {"attestation": "unattested", "receipt_status": "invalid"}
+    if receipt is None:
+        return invalid
+    problem = _runner_problem_bytes(problem_artifact)
+    listed = {item["fact_id"]: item for item in receipt["facts"]}
+    bound = (
+        problem is not None
+        and proof_payload is not None
+        and hashlib.sha256(problem).hexdigest() == receipt["problem_sha256"]
+        and hashlib.sha256(proof_payload).hexdigest() == receipt["proof_sha256"]
+        and set(listed) == set(facts)
+        and all(
+            len(fact_payloads[fact_id]) == listed[fact_id]["bytes"]
+            and hashlib.sha256(fact_payloads[fact_id]).hexdigest()
+            == listed[fact_id]["sha256"]
+            and facts[fact_id].problem_id == receipt["problem_id"]
+            for fact_id in facts
+        )
+    )
+    if not bound:
+        return invalid
+    common: dict[str, object] = {
+        "verifier": _bounded_text(receipt["verifier"], 120),
+        "verifier_model": _bounded_text(receipt["model"], 120),
+        "pipeline": "cgm",
+        "prompt_pack_sha256": receipt["prompt_pack_sha256"],
+        "response_only_transport": receipt["workflow"]["response_only_contract"]["transport"],
+        "response_only_isolation_version": receipt["workflow"]["response_only_contract"][
+            "isolation_version"
+        ],
+    }
+    if receipt["verdict"] == "unattested":
+        if targets or target_payload is not None:
+            return invalid
+        return {"attestation": "unattested", "receipt_status": "verifier-partial", **common}
+    target_id = receipt["target_fact_id"]
+    if (
+        targets != (target_id,)
+        or target_id not in facts
+        or target_payload != f"{target_id}\n".encode("ascii")
+        or hashlib.sha256(target_payload).hexdigest() != receipt["target_sha256"]
+    ):
+        return invalid
+    assert problem is not None and proof_payload is not None
+    try:
+        closure = _cgm_closure.predecessor_closure(
+            {fact_id: {"predecessors": fact.predecessors} for fact_id, fact in facts.items()},
+            target_id,
+        )
+        rendered = _cgm_closure.render_verified_closure(
+            [_fact_mapping(fact) for fact in facts.values()], target_id
+        )
+    except _cgm_closure.ClosureError:
+        return invalid
+    if (
+        closure != set(facts)
+        or _SPACE_RE.sub(" ", problem.decode("utf-8")).strip()
+        != _SPACE_RE.sub(" ", facts[target_id].statement).strip()
+        or proof_payload != rendered.encode("utf-8")
+    ):
+        return invalid
+    return {"attestation": "harness-gate-receipt", "receipt_status": "verifier-correct", **common}
+
+
+def _fact_mapping(fact: _Fact) -> dict[str, Any]:
+    return {
+        "fact_id": fact.fact_id,
+        "statement": fact.statement,
+        "proof": fact.proof,
+        "predecessors": list(fact.predecessors),
+    }
+
+
+def _receipt_schema_version(payload: bytes | None) -> int | None:
+    if payload is None:
+        return None
+    try:
+        value = json.loads(payload.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError, RecursionError):
+        return None
+    version = value.get("schema_version") if isinstance(value, dict) else None
+    return version if _plain_int(version, minimum=1, maximum=64) else None
+
+
+@dataclass
+class _FactProject:
+    facts: dict[str, _Fact]
+    fact_payloads: dict[str, bytes]
+    targets: tuple[str, ...]
+    order: list[str]
+    depths: dict[str, int]
+    problem_ids: set[str]
+    source_parts: list[tuple[str, bytes]]
+    provenance: dict[str, object]
+    receipt: dict[str, Any] | None
+
+
+def _read_fact_project(workspace: Path) -> _FactProject | None:
+    """Read and validate ``math_harness/project`` facts; ``None`` when absent."""
     root_flags = os.O_RDONLY | os.O_CLOEXEC | getattr(os, "O_DIRECTORY", 0)
     root_flags |= getattr(os, "O_NOFOLLOW", 0)
     try:
@@ -748,17 +1295,17 @@ def _math_harness_graph(workspace: Path) -> dict[str, Any]:
         for index, part in enumerate(MATH_HARNESS_PROJECT_PARTS):
             child = _open_directory(parent_fd, part, missing_ok=index == 0)
             if child is None:
-                return _empty_math_harness_graph()
+                return None
             opened.append(child)
             parent_fd = child
         project_fd = parent_fd
         fact_graph_fd = _open_directory(project_fd, "fact_graph", missing_ok=True)
         if fact_graph_fd is None:
-            return _empty_math_harness_graph()
+            return None
         opened.append(fact_graph_fd)
         facts_fd = _open_directory(fact_graph_fd, "facts", missing_ok=True)
         if facts_fd is None:
-            return _empty_math_harness_graph()
+            return None
         opened.append(facts_fd)
 
         fact_names: list[str] = []
@@ -803,6 +1350,7 @@ def _math_harness_graph(workspace: Path) -> dict[str, Any]:
         target_payload = _read_regular_file(
             project_fd, "TARGET.md", limit=MAX_TARGET_BYTES, missing_ok=True
         )
+
         def optional_bound_file(parent: int, name: str, limit: int) -> bytes | None:
             try:
                 return _read_regular_file(
@@ -835,88 +1383,183 @@ def _math_harness_graph(workspace: Path) -> dict[str, Any]:
         if len(problem_ids) > 1:
             raise EngineGraphError("fact graph mixes multiple problem ids")
 
-        target_set = set(targets)
-        nodes: list[dict[str, Any]] = []
-        edges: list[dict[str, str]] = []
-        for fact_id in order:
-            fact = facts[fact_id]
-            proof_excerpt = _bounded_text(fact.proof, MAX_PROOF_EXCERPT)
-            nodes.append(
-                {
-                    "id": fact_id,
-                    "kind": "conclusion" if fact_id in target_set else "lemma",
-                    "label": _bounded_text(_SPACE_RE.sub(" ", fact.statement), 120),
-                    "statement": _bounded_text(fact.statement, MAX_STATEMENT_LENGTH),
-                    "citations": list(fact.citations),
-                    "meta": {
-                        "author": _bounded_text(fact.author, 240),
-                        "problem_id": _bounded_text(fact.problem_id, 240),
-                        "depth": depths[fact_id],
-                        "is_target": fact_id in target_set,
-                        "proof_excerpt": proof_excerpt,
-                        "proof_truncated": len(fact.proof.strip()) > MAX_PROOF_EXCERPT,
-                        "intuition": _bounded_text(fact.intuition, MAX_INTUITION_LENGTH),
-                    },
-                }
+        receipt: dict[str, Any] | None = None
+        if _receipt_schema_version(receipt_payload) in _cgm_schema.CGM_RECEIPT_SCHEMA_VERSIONS:
+            receipt = _cgm_receipt(receipt_payload)
+            provenance = _receipt_provenance_v2(
+                receipt,
+                targets=targets,
+                target_payload=target_payload,
+                facts=facts,
+                fact_payloads=fact_payloads,
+                problem_artifact=problem_artifact,
+                proof_payload=proof_payload,
             )
-            for pred in sorted(fact.predecessors):
-                edges.append(
-                    {"from": pred, "to": fact_id, "label": "fact dependency"}
-                )
-        if len(edges) > MAX_EDGES:
-            raise EngineGraphError("fact graph exceeds its edge limit")
-
-        receipt = _receipt_provenance(
-            receipt_payload,
-            targets=targets,
-            target_payload=target_payload,
+            if provenance.get("receipt_status") == "invalid":
+                receipt = None
+        else:
+            provenance = _receipt_provenance(
+                receipt_payload,
+                targets=targets,
+                target_payload=target_payload,
+                facts=facts,
+                fact_payloads=fact_payloads,
+                problem_artifact=problem_artifact,
+                proof_payload=proof_payload,
+            )
+        return _FactProject(
             facts=facts,
             fact_payloads=fact_payloads,
-            problem_artifact=problem_artifact,
-            proof_payload=proof_payload,
+            targets=targets,
+            order=order,
+            depths=depths,
+            problem_ids=problem_ids,
+            source_parts=source_parts,
+            provenance=provenance,
+            receipt=receipt,
         )
-        problem_label = next(iter(problem_ids), "")
-        artifact = {
-            "schema_version": SCHEMA_VERSION,
-            "artifact_kind": "engine-graph",
-            "status": "complete" if targets else ("partial" if nodes else "none"),
-            "kind": "engine",
-            "model": "deterministic-adapter",
-            "source": "math_harness/project/fact_graph",
-            "source_sha256": _source_hash(source_parts),
-            "graph_role": "fact-dependency",
-            "selection": {
-                "target_source": "TARGET.md" if targets else "unset",
-                "target_ids": list(targets),
-                "complete_closure": bool(targets),
-            },
-            "provenance": {
-                "engine": MATH_HARNESS_ENGINE,
-                "producer": "math-harness",
-                "adapter": "math-harness-fact-graph@1",
-                "semantics": "fact-predecessor",
-                **receipt,
-                "certificate": False,
-                "proof_logic": True,
-                "lean_verified": False,
-                "acyclic": True,
-                "all_predecessors_known": True,
-                "truncated": False,
-            },
-            "graph": {
-                "title": (
-                    f"Math Harness facts · {problem_label}"
-                    if problem_label
-                    else "Math Harness fact graph"
-                ),
-                "nodes": nodes,
-                "edges": edges,
-            },
-        }
-        return _validate_artifact(artifact)
     finally:
         for fd in reversed(opened):
             os.close(fd)
+
+
+def _math_harness_graph(workspace: Path) -> dict[str, Any]:
+    project = _read_fact_project(workspace)
+    if project is None:
+        return _empty_math_harness_graph()
+    facts, targets = project.facts, project.targets
+    target_set = set(targets)
+    attested = project.provenance.get("attestation") == "harness-gate-receipt"
+    labels = (
+        {item["fact_id"]: item["label"] for item in project.receipt["facts"]}
+        if project.receipt is not None
+        else {}
+    )
+    nodes: list[dict[str, Any]] = []
+    edges: list[dict[str, str]] = []
+    for fact_id in project.order:
+        fact = facts[fact_id]
+        proof_excerpt = _bounded_text(fact.proof, MAX_PROOF_EXCERPT)
+        meta: dict[str, Any] = {
+            "author": _bounded_text(fact.author, 240),
+            "problem_id": _bounded_text(fact.problem_id, 240),
+            "depth": project.depths[fact_id],
+            "is_target": fact_id in target_set,
+            "proof_excerpt": proof_excerpt,
+            "proof_truncated": len(fact.proof.strip()) > MAX_PROOF_EXCERPT,
+            "intuition": _bounded_text(fact.intuition, MAX_INTUITION_LENGTH),
+            # Accepted by the runner's (model) verifier/critic gate, as bound
+            # by a valid receipt; never a formal certificate.
+            "verifier_accepted": attested or project.receipt is not None,
+        }
+        if fact_id in labels:
+            meta["label"] = _bounded_text(labels[fact_id], 32)
+        nodes.append(
+            {
+                "id": fact_id,
+                "kind": "conclusion" if fact_id in target_set else "lemma",
+                "label": _bounded_math_label(_SPACE_RE.sub(" ", fact.statement), 120),
+                "statement": _bounded_text(fact.statement, MAX_STATEMENT_LENGTH),
+                "citations": list(fact.citations),
+                "meta": meta,
+            }
+        )
+        for pred in sorted(fact.predecessors):
+            edges.append(
+                {"from": pred, "to": fact_id, "label": "fact dependency"}
+            )
+    if len(edges) > MAX_EDGES:
+        raise EngineGraphError("fact graph exceeds its edge limit")
+
+    problem_label = next(iter(project.problem_ids), "")
+    artifact = {
+        "schema_version": SCHEMA_VERSION,
+        "artifact_kind": "engine-graph",
+        "status": "complete" if targets else ("partial" if nodes else "none"),
+        "kind": "engine",
+        "model": "deterministic-adapter",
+        "source": "math_harness/project/fact_graph",
+        "source_sha256": _source_hash(project.source_parts),
+        "graph_role": "fact-dependency",
+        "selection": {
+            "target_source": "TARGET.md" if targets else "unset",
+            "target_ids": list(targets),
+            "complete_closure": bool(targets),
+        },
+        "provenance": {
+            "engine": MATH_HARNESS_ENGINE,
+            "producer": "math-harness",
+            "adapter": "math-harness-fact-graph@1",
+            "semantics": "fact-predecessor",
+            **project.provenance,
+            "certificate": False,
+            "proof_logic": True,
+            "lean_verified": False,
+            "acyclic": True,
+            "all_predecessors_known": True,
+            "truncated": False,
+        },
+        "graph": {
+            "title": (
+                f"Math Harness facts · {problem_label}"
+                if problem_label
+                else "Math Harness fact graph"
+            ),
+            "nodes": nodes,
+            "edges": edges,
+        },
+    }
+    return _validate_artifact(artifact)
+
+
+def load_fact_dag(workspace: Path) -> list[dict[str, Any]] | None:
+    """Return the run's math_harness fact DAG in topological order.
+
+    Each item is ``{"fact_id", "statement", "proof", "predecessors":
+    [fact_id, ...], "is_target": bool, "attested": bool}`` with the full
+    statement and proof text as stored in the CGM fact file (predecessor
+    order as written).  ``attested`` is true only when the whole graph carries
+    a valid ``harness-gate-receipt`` attestation (a model-verifier acceptance,
+    never a Lean certificate).  Returns ``None`` when the run has no readable
+    math_harness fact graph: no project, no facts, or artifacts that fail the
+    fail-closed validation (unsafe paths, content-id mismatch, cycles, unknown
+    predecessors).  Never invokes a model and never writes.
+    """
+    try:
+        project = _read_fact_project(Path(workspace))
+    except EngineGraphError:
+        return None
+    if project is None or not project.facts:
+        return None
+    attested = project.provenance.get("attestation") == "harness-gate-receipt"
+    target_set = set(project.targets)
+    return [
+        {
+            "fact_id": fact_id,
+            "statement": project.facts[fact_id].statement,
+            "proof": project.facts[fact_id].proof,
+            "predecessors": list(project.facts[fact_id].predecessors),
+            "is_target": fact_id in target_set,
+            "attested": attested,
+        }
+        for fact_id in project.order
+    ]
+
+
+def render_fact_closure(
+    facts: Sequence[Mapping[str, Any]], target_id: str
+) -> str:
+    """Pure deterministic rendering of a target's verified closure.
+
+    ``facts`` may be ``load_fact_dag`` items (or any mappings with
+    ``fact_id``, ``statement``, ``proof`` and ``predecessors``).  This is the
+    exact rendering the CGM runner publishes as ``proof.md`` and that
+    attestation recomputes.  Raises ``EngineGraphError`` for a malformed DAG.
+    """
+    try:
+        return _cgm_closure.render_verified_closure(facts, target_id)
+    except _cgm_closure.ClosureError as exc:
+        raise EngineGraphError(str(exc)) from exc
 
 
 def _execution_graph(run_record: Mapping[str, Any] | None) -> dict[str, Any]:
@@ -1081,10 +1724,11 @@ def _read_workflow_sources(
             return None
         opened.append(memory_fd)
         names: set[str] = set()
+        allowed = set(_WORKFLOW_FILES) | set(_cgm_schema.MEMORY_FILES)
         try:
             with os.scandir(memory_fd) as entries:
                 for entry_count, entry in enumerate(entries, start=1):
-                    if entry_count > len(_WORKFLOW_FILES):
+                    if entry_count > len(allowed):
                         raise EngineGraphError(
                             "workflow memory has unexpected directory entries"
                         )
@@ -1093,13 +1737,12 @@ def _read_workflow_sources(
             raise
         except OSError as exc:
             raise EngineGraphError("could not enumerate workflow memory safely") from exc
-        expected = set(_WORKFLOW_FILES)
         if not names:
             return None
-        if names != expected:
+        if not names.issubset(allowed):
             raise EngineGraphError("workflow memory file set is incomplete or unexpected")
         payloads: dict[str, bytes] = {}
-        for name in _WORKFLOW_FILES:
+        for name in sorted(names):
             payload = _read_regular_file(
                 memory_fd, name, limit=MAX_WORKFLOW_FILE_BYTES
             )
@@ -1122,7 +1765,11 @@ def _workflow_jsonl(payload: bytes, name: str) -> list[dict[str, Any]]:
     if payload and not payload.endswith(b"\n"):
         raise EngineGraphError(f"workflow JSONL is not newline terminated: {name}")
     text_payload = _decode(payload, name)
-    lines = text_payload.splitlines()
+    # JSONL rows end at "\n" only.  str.splitlines would also break inside a
+    # JSON string at U+0085/U+2028/U+2029 (which json.dumps leaves raw).
+    lines = text_payload.split("\n")
+    if lines and lines[-1] == "":
+        lines.pop()
     if len(lines) > MAX_WORKFLOW_ROWS:
         raise EngineGraphError(f"workflow JSONL exceeds its row limit: {name}")
     rows: list[dict[str, Any]] = []
@@ -1548,6 +2195,16 @@ def _math_harness_workflow_graph(
     if sources is None:
         return None
     memory_payloads, receipt_payload, problem_payload, proof_payload = sources
+    if _receipt_schema_version(receipt_payload) in _cgm_schema.CGM_RECEIPT_SCHEMA_VERSIONS:
+        return _cgm_workflow_graph(
+            memory_payloads,
+            receipt_payload=receipt_payload,
+            problem_payload=problem_payload,
+            proof_payload=proof_payload,
+            fact_graph=fact_graph,
+        )
+    if set(memory_payloads) != set(_WORKFLOW_FILES):
+        raise EngineGraphError("workflow memory file set is incomplete or unexpected")
     receipt = _workflow_receipt(
         receipt_payload,
         problem_payload=problem_payload,
@@ -1825,11 +2482,588 @@ def _math_harness_workflow_graph(
     return _validate_artifact(artifact)
 
 
+# ---------------------------------------------------------------------------
+# CGM exploring graph (receipt schema 2)
+# ---------------------------------------------------------------------------
+
+# CGM kinds are projected onto the shared node kinds; the real kind is kept in
+# ``meta.workflow_kind``.
+_CGM_NODE_KIND = {
+    "goal": "claim",
+    "plan": "step",
+    "proof_attempt": "step",
+    "verification": "claim",
+    "conclusion": "claim",
+    "example": "case",
+    "counterexample": "contradiction",
+    "dead_end": "contradiction",
+    "obstacle": "assumption",
+}
+_CGM_AND_GROUP_RE = re.compile(r"^plan-[1-9][0-9]?$")
+_CGM_EMITTED_EDGE_TYPES = frozenset(_cgm_schema.EDGE_TYPES) - {"supersedes", "prioritizes"}
+_VERIFICATION_STATUS = {"correct": "supported", "wrong": "challenged", "error": "open"}
+
+
+def _parse_cgm_entries(
+    payload: bytes, *, name: str, kind: str
+) -> list[dict[str, Any]]:
+    rows = _workflow_jsonl(payload, name)
+    allowed_status = _cgm_schema.ENTRY_STATUSES[kind]
+    for ordinal, row in enumerate(rows, start=1):
+        if set(row) != _cgm_schema.ENTRY_FIELDS:
+            raise EngineGraphError(f"unsupported workflow entry schema in {name}")
+        entry_id = _workflow_text(row.get("id"), field="entry id", limit=16)
+        claim = _workflow_text(row.get("claim"), field="claim", limit=4000)
+        timestamp = _workflow_timestamp(row.get("timestamp_utc"))
+        if (
+            _FACT_ID_RE.fullmatch(entry_id) is None
+            or entry_id
+            != _cgm_schema.entry_id(kind, claim, CGM_AUTHOR, timestamp, ordinal)
+        ):
+            raise EngineGraphError(f"invalid workflow entry id in {name}")
+        if row.get("author") != CGM_AUTHOR or row.get("kind") != kind:
+            raise EngineGraphError(f"invalid workflow entry ownership in {name}")
+        _workflow_text(row.get("evidence"), field="evidence", limit=120_000)
+        if row.get("verifiable") is not _cgm_schema.GLOBAL_KINDS[kind]:
+            raise EngineGraphError(f"invalid workflow verifiable flag in {name}")
+        if row.get("status") not in allowed_status:
+            raise EngineGraphError(f"invalid workflow status in {name}")
+        fact_id = row.get("fact_id")
+        if fact_id is not None and (
+            not isinstance(fact_id, str) or _FACT_ID_RE.fullmatch(fact_id) is None
+        ):
+            raise EngineGraphError(f"invalid workflow fact reference in {name}")
+        links = row.get("links")
+        if not isinstance(links, dict) or set(links) != {"subgoal", "predecessors"}:
+            raise EngineGraphError(f"invalid workflow links in {name}")
+        subgoal = links.get("subgoal")
+        if not isinstance(subgoal, str) or _cgm_schema.GOAL_ID_RE.fullmatch(subgoal) is None:
+            raise EngineGraphError(f"invalid workflow subgoal in {name}")
+        predecessors = links.get("predecessors")
+        if (
+            not isinstance(predecessors, list)
+            or len(predecessors) > 1
+            or any(
+                not isinstance(item, str) or _FACT_ID_RE.fullmatch(item) is None
+                for item in predecessors
+            )
+        ):
+            raise EngineGraphError(f"invalid workflow predecessor links in {name}")
+        if row.get("glossary") != {}:
+            raise EngineGraphError(f"unexpected workflow glossary in {name}")
+    return rows
+
+
+def _cgm_workflow_graph(
+    memory_payloads: Mapping[str, bytes],
+    *,
+    receipt_payload: bytes,
+    problem_payload: bytes,
+    proof_payload: bytes,
+    fact_graph: Mapping[str, Any],
+) -> dict[str, Any]:
+    receipt = _cgm_receipt(receipt_payload)
+    if receipt is None:
+        raise EngineGraphError("invalid workflow ownership receipt")
+    problem = _runner_problem_bytes(problem_payload)
+    if (
+        problem is None
+        or hashlib.sha256(problem).hexdigest() != receipt["problem_sha256"]
+        or hashlib.sha256(proof_payload).hexdigest() != receipt["proof_sha256"]
+    ):
+        raise EngineGraphError("workflow receipt does not bind problem/proof artifacts")
+    if set(memory_payloads) != set(receipt["memory"]):
+        raise EngineGraphError("workflow memory file set is incomplete or unexpected")
+    for name, payload in memory_payloads.items():
+        if hashlib.sha256(payload).hexdigest() != receipt["memory"][name]:
+            raise EngineGraphError("workflow memory does not match its receipt")
+
+    accepted = receipt["verdict"] == "accepted"
+    target_id = receipt["target_fact_id"]
+    fact_nodes = {
+        node["id"]: node
+        for node in fact_graph.get("graph", {}).get("nodes", [])
+        if isinstance(node, dict) and isinstance(node.get("id"), str)
+    }
+    fact_ids = set(fact_nodes)
+    if fact_ids != {item["fact_id"] for item in receipt["facts"]}:
+        raise EngineGraphError("workflow receipt does not bind the fact graph")
+    if accepted and (
+        fact_graph.get("provenance", {}).get("attestation") != "harness-gate-receipt"
+        or fact_graph.get("selection", {}).get("target_ids") != [target_id]
+    ):
+        raise EngineGraphError("accepted workflow does not match its fact receipt")
+
+    entries: dict[str, list[dict[str, Any]]] = {}
+    for name in _cgm_schema.ENTRY_FILES:
+        if name in memory_payloads:
+            entries[name[: -len(".jsonl")]] = _parse_cgm_entries(
+                memory_payloads[name], name=name, kind=name[: -len(".jsonl")]
+            )
+    edge_rows = _workflow_jsonl(memory_payloads["edges.jsonl"], "edges.jsonl")
+    annotation_rows = _workflow_jsonl(
+        memory_payloads["annotations.jsonl"], "annotations.jsonl"
+    )
+    rows_expected = receipt["workflow"]["rows"]
+    counts = {f"{kind}.jsonl": len(rows) for kind, rows in entries.items()}
+    counts["edges.jsonl"] = len(edge_rows)
+    counts["annotations.jsonl"] = len(annotation_rows)
+    if counts != rows_expected:
+        raise EngineGraphError("workflow receipt row counts do not match memory")
+
+    all_rows = [row for rows in entries.values() for row in rows]
+    timestamps = {
+        row.get("timestamp_utc") for row in [*all_rows, *edge_rows, *annotation_rows]
+    }
+    if len(timestamps) != 1:
+        raise EngineGraphError("workflow entries do not share one timestamp")
+    timestamp = _workflow_timestamp(next(iter(timestamps)))
+    kind_of: dict[str, str] = {}
+    for row in all_rows:
+        if row["id"] in kind_of or row["id"] in fact_ids:
+            raise EngineGraphError("duplicate workflow entry id")
+        kind_of[row["id"]] = row["kind"]
+    plans = entries.get("plan", [])
+    attempts = entries.get("proof_attempt", [])
+    verifications = entries.get("verification", [])
+    if not 1 <= len(plans) <= 3 or not attempts:
+        raise EngineGraphError("unexpected workflow row count")
+    attempt_ids = [row["id"] for row in attempts]
+    for row in all_rows:
+        if row["links"]["subgoal"] != "goal:root":
+            raise EngineGraphError("invalid workflow subgoal link")
+    for position, row in enumerate(attempts):
+        previous = set(attempt_ids[:position])
+        if any(pred not in previous for pred in row["links"]["predecessors"]):
+            raise EngineGraphError("invalid proof-attempt lineage")
+        verified = row["status"] == "verified"
+        if verified != (accepted and row["fact_id"] == target_id) or (
+            not verified and row["fact_id"] is not None
+        ):
+            raise EngineGraphError("proof attempt state does not match the receipt")
+    if accepted and sum(row["status"] == "verified" for row in attempts) != 1:
+        raise EngineGraphError("accepted workflow must have one verified attempt")
+    if len(verifications) != len(receipt["verdicts"]):
+        raise EngineGraphError("verification memory does not match receipt verdicts")
+    for row, verdict in zip(verifications, receipt["verdicts"]):
+        predecessors = row["links"]["predecessors"]
+        if (
+            len(predecessors) != 1
+            or predecessors[0] not in attempt_ids
+            or row["status"] != _VERIFICATION_STATUS[verdict["verdict"]]
+            or (row["fact_id"] is not None and (
+                row["fact_id"] not in fact_ids or verdict["verdict"] != "correct"
+            ))
+        ):
+            raise EngineGraphError("invalid verification memory row")
+    for kind, rows in entries.items():
+        if kind in {"plan", "proof_attempt", "verification"}:
+            continue
+        for row in rows:
+            if row["fact_id"] is not None or any(
+                pred not in attempt_ids for pred in row["links"]["predecessors"]
+            ):
+                raise EngineGraphError(f"invalid {kind} memory row")
+    for row in plans:
+        if row["fact_id"] is not None or row["links"]["predecessors"]:
+            raise EngineGraphError("invalid plan memory row")
+
+    # Goal nodes are symbolic: goal:root plus every decomposition target.
+    goal_ids: list[str] = ["goal:root"]
+    for row in edge_rows:
+        if (
+            isinstance(row, dict)
+            and row.get("type") == "decomposes-into"
+            and isinstance(row.get("dst"), str)
+            and _cgm_schema.GOAL_ID_RE.fullmatch(row["dst"])
+            and row["dst"] not in goal_ids
+        ):
+            goal_ids.append(row["dst"])
+    for goal in goal_ids:
+        kind_of[goal] = "goal"
+    for fact_id in fact_ids:
+        kind_of[fact_id] = "fact"
+    if len(kind_of) > MAX_NODES:
+        raise EngineGraphError("workflow graph exceeds its node limit")
+
+    edges: list[dict[str, str]] = []
+    seen_edges: set[tuple[str, str, str]] = set()
+    goal_meta: dict[str, dict[str, Any]] = {}
+    plan_meta: dict[str, dict[str, Any]] = {}
+    promoted: dict[str, int] = {}
+    for ordinal, row in enumerate(edge_rows, start=1):
+        if set(row) != _cgm_schema.EDGE_FIELDS:
+            raise EngineGraphError("unsupported workflow edge schema")
+        source = _workflow_text(row.get("src"), field="edge source", limit=MAX_ID_LENGTH)
+        target = _workflow_text(row.get("dst"), field="edge target", limit=MAX_ID_LENGTH)
+        edge_type = _workflow_text(row.get("type"), field="edge type", limit=32)
+        technique = row.get("technique")
+        and_group = row.get("and_group")
+        if (
+            row.get("author") != CGM_AUTHOR
+            or row.get("timestamp_utc") != timestamp
+            or edge_type not in _CGM_EMITTED_EDGE_TYPES
+            or source not in kind_of
+            or target not in kind_of
+            or source == target
+            or row.get("id")
+            != _cgm_schema.edge_id(source, target, edge_type, CGM_AUTHOR, timestamp, ordinal)
+        ):
+            raise EngineGraphError("invalid workflow edge")
+        if edge_type == "decomposes-into":
+            if (
+                technique not in _cgm_schema.TECHNIQUES
+                or not isinstance(and_group, str)
+                or _CGM_AND_GROUP_RE.fullmatch(and_group) is None
+            ):
+                raise EngineGraphError("invalid workflow decomposition edge")
+        elif technique is not None or and_group is not None:
+            raise EngineGraphError("invalid workflow edge")
+        src_kind, dst_kind = kind_of[source], kind_of[target]
+        root = "goal:root"
+        valid_shape = {
+            "addresses": src_kind in {"plan", "proof_attempt"} and dst_kind == "goal",
+            "decomposes-into": src_kind == "plan" and dst_kind == "goal" and target != root,
+            "alternative-of": src_kind == "plan" and dst_kind == "plan",
+            "refines": src_kind in {"plan", "proof_attempt"} and dst_kind == "proof_attempt",
+            "depends-on": src_kind == "goal" and dst_kind == "goal"
+            and root not in {source, target},
+            "reduces-to": source == root and dst_kind == "goal",
+            "equivalent-to": source == root and dst_kind == "goal",
+            "generalizes": target == root and src_kind == "goal",
+            "supports": (
+                src_kind in {"conclusion", "example"} and dst_kind in {"plan", "goal"}
+            )
+            or (src_kind == "fact" and dst_kind == "goal"),
+            "blocks": src_kind in {"dead_end", "obstacle"} and dst_kind in {"plan", "goal"},
+            "refutes": src_kind == "counterexample" and dst_kind in {"plan", "goal"},
+            "promoted-to": src_kind == "proof_attempt" and dst_kind == "fact",
+        }.get(edge_type, False)
+        if not valid_shape:
+            raise EngineGraphError("invalid workflow edge type/endpoints")
+        rationale = _workflow_text(row.get("rationale"), field="edge rationale", limit=4000)
+        key = (source, target, edge_type)
+        if key in seen_edges:
+            raise EngineGraphError("duplicate workflow edge")
+        seen_edges.add(key)
+        edges.append({"from": source, "to": target, "label": edge_type})
+        if edge_type == "decomposes-into":
+            goal_meta[target] = {
+                "and_group": and_group,
+                "technique": technique,
+                "plan": source,
+                "rationale": rationale,
+            }
+            shape = {"technique": technique, "and_group": and_group}
+            if plan_meta.setdefault(source, shape) != shape:
+                raise EngineGraphError("inconsistent workflow decomposition edges")
+        if edge_type == "promoted-to":
+            promoted[target] = promoted.get(target, 0) + 1
+    if any(promoted.get(fact_id, 0) != 1 for fact_id in fact_ids):
+        raise EngineGraphError("every fact needs exactly one promoted-to edge")
+    # The strategist's technique opens every plan row; a decomposition's CGM
+    # technique tag must be derived from it (goal transformations tag "plain").
+    plan_technique: dict[str, str] = {}
+    for row in plans:
+        match = _cgm_schema.PLAN_TECHNIQUE_RE.match(row["evidence"])
+        if match is None:
+            raise EngineGraphError("invalid workflow plan technique")
+        technique = match.group("technique")
+        tag = technique if technique in _cgm_schema.TECHNIQUES else "plain"
+        info = plan_meta.get(row["id"])
+        if info is not None and info["technique"] != tag:
+            raise EngineGraphError("workflow decomposition technique does not match its plan")
+        plan_technique[row["id"]] = technique
+    root_supported = any(
+        edge["label"] == "supports"
+        and edge["to"] == "goal:root"
+        and kind_of[edge["from"]] == "fact"
+        for edge in edges
+    )
+    if root_supported != accepted or (
+        accepted and ("goal:root" not in {e["to"] for e in edges if e["from"] == target_id})
+    ):
+        raise EngineGraphError("workflow root support does not match the receipt")
+
+    annotations: dict[str, dict[str, Any]] = {}
+    annotatable = set(goal_ids) | {row["id"] for row in plans}
+    for row in annotation_rows:
+        if set(row) != _cgm_schema.ANNOTATION_FIELDS:
+            raise EngineGraphError("invalid workflow annotation schema")
+        node_id = row.get("node_id")
+        score = row.get("score")
+        evidence = row.get("evidence_considered")
+        if (
+            node_id not in annotatable
+            or node_id in annotations
+            or row.get("author") != CGM_AUTHOR
+            or row.get("timestamp_utc") != timestamp
+            or row.get("id") != _cgm_schema.annotation_id(str(node_id), CGM_AUTHOR, timestamp)
+            or row.get("status") not in _cgm_schema.ANNOTATION_STATUSES
+            or not (
+                score is None
+                or (
+                    isinstance(score, (int, float))
+                    and not isinstance(score, bool)
+                    and math.isfinite(score)
+                    and 0.0 <= float(score) <= 1.0
+                )
+            )
+            or not isinstance(evidence, list)
+            or len(evidence) > 64
+            or any(item not in kind_of for item in evidence)
+        ):
+            raise EngineGraphError("invalid workflow annotation")
+        comment = _workflow_text(row.get("comment"), field="annotation comment", limit=4000)
+        status = row["status"]
+        if (status == "closed" and score != 1.0) or (status == "dead" and score != 0.0):
+            raise EngineGraphError("invalid workflow annotation score")
+        annotations[str(node_id)] = {
+            "id": row["id"],
+            "status": status,
+            "score": score,
+            "comment": _bounded_text(comment, 1000),
+            "evidence_considered": list(evidence),
+        }
+    if set(annotations) != annotatable:
+        raise EngineGraphError("workflow annotations do not cover the frontier")
+    if (annotations["goal:root"]["status"] == "closed") != accepted:
+        raise EngineGraphError("workflow root annotation does not match the receipt")
+    # Closure is mechanical (curator.md): a subgoal closes only through a
+    # supporting fact, and a plan only through the verified attempt it refined
+    # into.  A model-authored "closed" anywhere else fails closed.
+    fact_supported = {
+        edge["to"]
+        for edge in edges
+        if edge["label"] == "supports" and kind_of[edge["from"]] == "fact"
+    }
+    refined_from: dict[str, str] = {
+        edge["to"]: edge["from"] for edge in edges if edge["label"] == "refines"
+    }
+    closing_plans: set[str] = set()
+    for row in attempts:
+        if row["status"] != "verified":
+            continue
+        node = row["id"]
+        for _ in range(len(attempts) + 1):
+            parent = refined_from.get(node)
+            if parent is None:
+                break
+            if kind_of.get(parent) == "plan":
+                closing_plans.add(parent)
+                break
+            node = parent
+    for node_id, note in annotations.items():
+        if node_id == "goal:root":
+            continue
+        closed = note["status"] == "closed"
+        expected = (
+            node_id in closing_plans
+            if kind_of[node_id] == "plan"
+            else node_id in fact_supported
+        )
+        if closed != expected:
+            raise EngineGraphError("workflow annotation closure is not mechanical")
+
+    # View-only edges connect verifier traces to the attempts they judged and
+    # to the facts they admitted.
+    for row in verifications:
+        edges.append(
+            {
+                "from": row["links"]["predecessors"][0],
+                "to": row["id"],
+                "label": "verifier-input",
+            }
+        )
+        if row["fact_id"] is not None:
+            edges.append({"from": row["id"], "to": row["fact_id"], "label": "verifier-accepted"})
+    if len(edges) > MAX_EDGES:
+        raise EngineGraphError("workflow graph exceeds its edge limit")
+    _assert_workflow_acyclic(set(kind_of), edges)
+
+    def annotated(node_id: str, base: Mapping[str, Any]) -> dict[str, Any]:
+        note = annotations.get(node_id)
+        meta = dict(base)
+        if note is not None:
+            meta.update(
+                {
+                    "status": note["status"],
+                    "score": note["score"],
+                    "comment": note["comment"],
+                    "annotation": note,
+                }
+            )
+        return meta
+
+    nodes: list[dict[str, Any]] = [
+        {
+            "id": "goal:root",
+            "kind": _CGM_NODE_KIND["goal"],
+            "label": "Root problem",
+            "statement": _bounded_text(problem.decode("utf-8"), MAX_STATEMENT_LENGTH),
+            "citations": [],
+            "meta": annotated(
+                "goal:root",
+                {"workflow_kind": "goal", "timestamp_utc": timestamp},
+            ),
+        }
+    ]
+    for goal in goal_ids[1:]:
+        info = goal_meta[goal]
+        rationale = str(info["rationale"])
+        nodes.append(
+            {
+                "id": goal,
+                "kind": _CGM_NODE_KIND["goal"],
+                "label": _bounded_text(rationale.split(":", 1)[0] or goal, 120),
+                "statement": _bounded_text(rationale, MAX_STATEMENT_LENGTH),
+                "citations": [],
+                "meta": annotated(
+                    goal,
+                    {
+                        "workflow_kind": "goal",
+                        "technique": info["technique"],
+                        "and_group": info["and_group"],
+                        "plan": info["plan"],
+                        "timestamp_utc": timestamp,
+                    },
+                ),
+            }
+        )
+    verdict_by_row = {
+        row["id"]: verdict for row, verdict in zip(verifications, receipt["verdicts"])
+    }
+    call_seq = 1
+    for kind in ("plan", "proof_attempt", "verification", *_cgm_schema.FINDING_KINDS):
+        for row in entries.get(kind, []):
+            call_seq += 1
+            evidence = row["evidence"]
+            meta: dict[str, Any] = {
+                "workflow_kind": row["kind"],
+                "author": row["author"],
+                "timestamp_utc": row["timestamp_utc"],
+                "status": row["status"],
+                "entry_status": row["status"],
+                "verifiable": row["verifiable"],
+                "fact_id": row["fact_id"],
+                "subgoal": row["links"]["subgoal"],
+                "predecessors": list(row["links"]["predecessors"]),
+                "evidence_truncated": len(evidence.strip()) > MAX_STATEMENT_LENGTH,
+                "call_seq": call_seq,
+            }
+            if row["kind"] == "plan":
+                info = plan_meta.get(row["id"], {})
+                meta.update(
+                    {
+                        "technique": plan_technique[row["id"]],
+                        "decomposition_technique": info.get("technique"),
+                        "and_group": info.get("and_group"),
+                    }
+                )
+            if row["kind"] == "verification":
+                verdict = verdict_by_row[row["id"]]
+                meta.update({"verdict": verdict["verdict"], "lemma": verdict["label"]})
+            nodes.append(
+                {
+                    "id": row["id"],
+                    "kind": _CGM_NODE_KIND[row["kind"]],
+                    "label": _bounded_text(row["claim"], 120),
+                    "statement": _bounded_text(evidence, MAX_STATEMENT_LENGTH),
+                    "citations": [],
+                    "meta": annotated(row["id"], meta),
+                }
+            )
+    attested = fact_graph.get("provenance", {}).get("attestation") == "harness-gate-receipt"
+    for node_id in sorted(fact_nodes):
+        fact_node = fact_nodes[node_id]
+        fact_meta = dict(fact_node.get("meta") or {})
+        fact_meta.update({"workflow_kind": "fact", "receipt_attested": attested})
+        nodes.append(
+            {
+                "id": node_id,
+                "kind": fact_node["kind"],
+                "label": fact_node["label"],
+                "statement": fact_node["statement"],
+                "citations": list(fact_node["citations"]),
+                "meta": fact_meta,
+            }
+        )
+
+    source_parts = [
+        (
+            "fact_graph.source_sha256",
+            str(fact_graph.get("source_sha256") or "").encode("ascii"),
+        ),
+        ("PROBLEM.md", problem_payload),
+        ("proof.md", proof_payload),
+        ("engine_receipt.json", receipt_payload),
+    ]
+    source_parts.extend(
+        (f"global_memory/{name}", memory_payloads[name]) for name in sorted(memory_payloads)
+    )
+    contract = receipt["workflow"]["response_only_contract"]
+    artifact = {
+        "schema_version": SCHEMA_VERSION,
+        "artifact_kind": "engine-graph",
+        "status": "complete" if accepted else "partial",
+        "kind": "engine",
+        "model": "deterministic-adapter",
+        "source": "math_harness/project/global_memory",
+        "source_sha256": _source_hash(source_parts),
+        "graph_role": "workflow",
+        "selection": {
+            "target_source": "workflow-goal",
+            "target_ids": ["goal:root"],
+            "complete_closure": False,
+        },
+        "provenance": {
+            "engine": MATH_HARNESS_ENGINE,
+            "producer": "math-harness",
+            "adapter": "cgm-exploring-graph@1",
+            "semantics": "exploration-workflow",
+            "attestation": "unattested",
+            "receipt_status": "runner-receipt-valid",
+            "pipeline": "cgm",
+            "verifier_verdict": receipt["verdict"],
+            "memory_receipt_bound": True,
+            "prompt_pack_sha256": receipt["prompt_pack_sha256"],
+            "response_only_transport": contract["transport"],
+            "response_only_isolation_version": contract["isolation_version"],
+            "fact_receipt_status": fact_graph.get("provenance", {}).get(
+                "receipt_status", "missing"
+            ),
+            "certificate": False,
+            "proof_logic": False,
+            "lean_verified": False,
+            "acyclic": True,
+            "all_predecessors_known": True,
+            "truncated": any(
+                node.get("meta", {}).get("evidence_truncated") is True for node in nodes
+            ),
+        },
+        "graph": {
+            "title": "Math Harness exploration graph (CGM)",
+            "nodes": nodes,
+            "edges": edges,
+        },
+    }
+    return _validate_artifact(artifact)
+
+
 def _normalize_view(view: object) -> str:
     normalized = str(view or "facts").strip().lower()
     if normalized not in {"facts", "workflow", "auto"}:
         raise EngineGraphError("unsupported engine graph view")
     return normalized
+
+
+def _has_project_receipt(workspace: Path) -> bool:
+    """Whether a delegating engine's workspace holds a math_harness receipt."""
+    try:
+        info = (workspace / "math_harness" / "project" / "engine_receipt.json").lstat()
+    except OSError:
+        return False
+    return stat.S_ISREG(info.st_mode)
 
 
 def build(
@@ -1841,7 +3075,9 @@ def build(
     """Build the current graph from owned workspace/run artifacts, offline."""
     selected_view = _normalize_view(view)
     engine = str((run_record or {}).get("engine") or "").strip().lower()
-    if engine == MATH_HARNESS_ENGINE:
+    if engine in CGM_GRAPH_ENGINES and (
+        engine == MATH_HARNESS_ENGINE or _has_project_receipt(Path(workspace))
+    ):
         facts = _math_harness_graph(Path(workspace))
         if selected_view in {"workflow", "auto"}:
             workflow = _math_harness_workflow_graph(Path(workspace), facts)

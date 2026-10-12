@@ -221,7 +221,7 @@ onBeforeUnmount(() => { disposed=true;controller?.abort();observer?.disconnect()
       </div>
     </section>
     <div class="bridge-caption"><span>READING THIS MAP</span><p>Circles are informal statements and proofs; squares are Lean declarations. Cross-links connect the two sides. Colors group projects. Enable “Show dependencies” to explore informal references and proof links within the left side; arrows follow the source’s direction. Formal-to-formal dependencies are not included in this dataset. Entries without a resolved counterpart remain visible. Unresolved references appear as hollow squares and dashed lines when enabled. <a :href="withBase('/dag-sources#informal-formal-bridge')">Data, coverage & provenance ↗</a></p></div>
-    <footer class="bridge-bottom"><p>One idea, two ways to explore it.</p><a :href="withBase('/open-problems')">Find the next open problem ↗</a></footer>
+    <footer class="bridge-bottom"><p>One idea, two ways to explore it.</p><a :href="withBase('/problems?category=open')">Find the next open problem ↗</a></footer>
   </main>
 </template>
 <style scoped src="./bipartiteAtlas.css"></style>

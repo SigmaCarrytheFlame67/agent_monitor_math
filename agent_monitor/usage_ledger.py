@@ -71,92 +71,120 @@ def _connect() -> Iterator[sqlite3.Connection]:
         conn.close()
 
 
+_SCHEMA = """
+CREATE TABLE IF NOT EXISTS runs_index (
+    run_id TEXT PRIMARY KEY,
+    owner_id INTEGER,
+    owner_email TEXT,
+    owner_name TEXT,
+    guest INTEGER NOT NULL DEFAULT 0,
+    engine TEXT,
+    model TEXT,
+    billing TEXT,
+    status TEXT,
+    problem_preview TEXT,
+    agent_count INTEGER NOT NULL DEFAULT 0,
+    continuations INTEGER NOT NULL DEFAULT 0,
+    created_at TEXT,
+    updated_at TEXT,
+    finished_at TEXT,
+    error TEXT,
+    deleted_at TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_runs_owner ON runs_index(owner_id);
+CREATE INDEX IF NOT EXISTS idx_runs_created ON runs_index(created_at);
+CREATE INDEX IF NOT EXISTS idx_runs_engine ON runs_index(engine);
+CREATE INDEX IF NOT EXISTS idx_runs_status ON runs_index(status);
+
+-- High-water mark of cumulative run totals already booked.
+CREATE TABLE IF NOT EXISTS usage_marks (
+    run_id TEXT NOT NULL,
+    stage TEXT NOT NULL,
+    input_tokens REAL NOT NULL DEFAULT 0,
+    output_tokens REAL NOT NULL DEFAULT 0,
+    cached_input_tokens REAL NOT NULL DEFAULT 0,
+    reasoning_tokens REAL NOT NULL DEFAULT 0,
+    cost_usd REAL NOT NULL DEFAULT 0,
+    latency_s REAL NOT NULL DEFAULT 0,
+    PRIMARY KEY (run_id, stage)
+);
+
+-- Daily usage per run and stage; never deleted with runs.
+CREATE TABLE IF NOT EXISTS usage_daily (
+    day TEXT NOT NULL,
+    run_id TEXT NOT NULL,
+    stage TEXT NOT NULL,
+    model TEXT NOT NULL DEFAULT '',
+    owner_id INTEGER,
+    guest INTEGER NOT NULL DEFAULT 0,
+    engine TEXT,
+    billing TEXT,
+    calls INTEGER NOT NULL DEFAULT 0,
+    input_tokens REAL NOT NULL DEFAULT 0,
+    output_tokens REAL NOT NULL DEFAULT 0,
+    cached_input_tokens REAL NOT NULL DEFAULT 0,
+    reasoning_tokens REAL NOT NULL DEFAULT 0,
+    cost_usd REAL NOT NULL DEFAULT 0,
+    latency_s REAL NOT NULL DEFAULT 0,
+    PRIMARY KEY (day, run_id, stage, model)
+);
+CREATE INDEX IF NOT EXISTS idx_usage_day ON usage_daily(day);
+CREATE INDEX IF NOT EXISTS idx_usage_owner ON usage_daily(owner_id, day);
+CREATE INDEX IF NOT EXISTS idx_usage_engine ON usage_daily(engine, day);
+
+CREATE TABLE IF NOT EXISTS usage_calls (
+    call_key TEXT PRIMARY KEY,
+    run_id TEXT,
+    stage TEXT,
+    recorded_at TEXT
+);
+
+CREATE TABLE IF NOT EXISTS ledger_meta (key TEXT PRIMARY KEY, value TEXT);
+"""
+# First open of a fresh ledger can race other threads or processes: switching
+# a new file to WAL needs an exclusive lock and SQLite reports "database is
+# locked" immediately instead of waiting on the busy timeout. Retry briefly.
+_INIT_RETRY_DELAYS = (0.05, 0.1, 0.2, 0.4, 0.8, 1.5, 2.5)
+
+
+def _is_lock_contention(exc: sqlite3.OperationalError) -> bool:
+    message = str(exc).lower()
+    return "locked" in message or "busy" in message
+
+
+def _initialize(path: Path) -> None:
+    """Create the schema once per process, tolerating concurrent first opens."""
+    for attempt, delay in enumerate((*_INIT_RETRY_DELAYS, None)):
+        conn = sqlite3.connect(path, timeout=10)
+        try:
+            conn.execute("PRAGMA journal_mode=WAL")
+            conn.executescript(_SCHEMA)
+            return
+        except sqlite3.OperationalError as exc:
+            if delay is None or not _is_lock_contention(exc):
+                raise
+            logger.debug("usage ledger initialization contended (attempt %d)", attempt + 1)
+        finally:
+            conn.close()
+        time.sleep(delay)
+
+
 def _open() -> sqlite3.Connection:
     path = DB_PATH
     path.parent.mkdir(parents=True, exist_ok=True)
     # Usage rows include account emails; never inherit a permissive umask.
     path.touch(mode=0o600, exist_ok=True)
-    conn = sqlite3.connect(path, timeout=10)
-    conn.row_factory = sqlite3.Row
-    conn.execute("PRAGMA journal_mode=WAL")
     key = str(path)
     if key not in _INITIALIZED:
         with _INIT_LOCK:
             if key not in _INITIALIZED:
                 path.chmod(0o600)
-                conn.executescript(
-                    """
-                    CREATE TABLE IF NOT EXISTS runs_index (
-                        run_id TEXT PRIMARY KEY,
-                        owner_id INTEGER,
-                        owner_email TEXT,
-                        owner_name TEXT,
-                        guest INTEGER NOT NULL DEFAULT 0,
-                        engine TEXT,
-                        model TEXT,
-                        billing TEXT,
-                        status TEXT,
-                        problem_preview TEXT,
-                        agent_count INTEGER NOT NULL DEFAULT 0,
-                        continuations INTEGER NOT NULL DEFAULT 0,
-                        created_at TEXT,
-                        updated_at TEXT,
-                        finished_at TEXT,
-                        error TEXT,
-                        deleted_at TEXT
-                    );
-                    CREATE INDEX IF NOT EXISTS idx_runs_owner ON runs_index(owner_id);
-                    CREATE INDEX IF NOT EXISTS idx_runs_created ON runs_index(created_at);
-                    CREATE INDEX IF NOT EXISTS idx_runs_engine ON runs_index(engine);
-                    CREATE INDEX IF NOT EXISTS idx_runs_status ON runs_index(status);
-
-                    -- High-water mark of cumulative run totals already booked.
-                    CREATE TABLE IF NOT EXISTS usage_marks (
-                        run_id TEXT NOT NULL,
-                        stage TEXT NOT NULL,
-                        input_tokens REAL NOT NULL DEFAULT 0,
-                        output_tokens REAL NOT NULL DEFAULT 0,
-                        cached_input_tokens REAL NOT NULL DEFAULT 0,
-                        reasoning_tokens REAL NOT NULL DEFAULT 0,
-                        cost_usd REAL NOT NULL DEFAULT 0,
-                        latency_s REAL NOT NULL DEFAULT 0,
-                        PRIMARY KEY (run_id, stage)
-                    );
-
-                    -- Daily usage per run and stage; never deleted with runs.
-                    CREATE TABLE IF NOT EXISTS usage_daily (
-                        day TEXT NOT NULL,
-                        run_id TEXT NOT NULL,
-                        stage TEXT NOT NULL,
-                        model TEXT NOT NULL DEFAULT '',
-                        owner_id INTEGER,
-                        guest INTEGER NOT NULL DEFAULT 0,
-                        engine TEXT,
-                        billing TEXT,
-                        calls INTEGER NOT NULL DEFAULT 0,
-                        input_tokens REAL NOT NULL DEFAULT 0,
-                        output_tokens REAL NOT NULL DEFAULT 0,
-                        cached_input_tokens REAL NOT NULL DEFAULT 0,
-                        reasoning_tokens REAL NOT NULL DEFAULT 0,
-                        cost_usd REAL NOT NULL DEFAULT 0,
-                        latency_s REAL NOT NULL DEFAULT 0,
-                        PRIMARY KEY (day, run_id, stage, model)
-                    );
-                    CREATE INDEX IF NOT EXISTS idx_usage_day ON usage_daily(day);
-                    CREATE INDEX IF NOT EXISTS idx_usage_owner ON usage_daily(owner_id, day);
-                    CREATE INDEX IF NOT EXISTS idx_usage_engine ON usage_daily(engine, day);
-
-                    CREATE TABLE IF NOT EXISTS usage_calls (
-                        call_key TEXT PRIMARY KEY,
-                        run_id TEXT,
-                        stage TEXT,
-                        recorded_at TEXT
-                    );
-
-                    CREATE TABLE IF NOT EXISTS ledger_meta (key TEXT PRIMARY KEY, value TEXT);
-                    """
-                )
+                _initialize(path)
                 _INITIALIZED.add(key)
+    # WAL is a persistent property of the database file once initialized;
+    # ordinary handles only need the busy timeout.
+    conn = sqlite3.connect(path, timeout=10)
+    conn.row_factory = sqlite3.Row
     return conn
 
 
@@ -167,7 +195,10 @@ def billing_class(run: dict[str, Any]) -> str:
     route = str(run.get("auth_route") or "").strip().lower()
     if not route:
         route = str((run.get("live") or {}).get("auth_mode") or "").strip().lower()
-    if route in {"codex_subscription", "chatgpt_subscription", "claude_subscription"}:
+    if route in {
+        "codex_subscription", "chatgpt_subscription", "claude_subscription",
+        "dual_subscription",  # Ansatz CGM Max: Claude Code and Codex together
+    }:
         return "subscription"
     if route == "api_key":
         return "api"
@@ -437,6 +468,8 @@ def cli_usage(usage: dict[str, Any] | None, *, input_includes_cache: bool) -> di
         "input_tokens": _num(usage.get("input_tokens")) + extra,
         "output_tokens": _num(usage.get("output_tokens")),
         "cached_input_tokens": cache_read,
+        # Not a ledger metric; only lets record_usage price writes correctly.
+        "cache_write_tokens": cache_write,
         "reasoning_tokens": _num(usage.get("reasoning_tokens")),
     }
 
@@ -462,11 +495,13 @@ def record_usage(
             from agent_monitor.jobs import _estimate_cost
 
             cached = int(usage.get("cached_input_tokens") or 0)
+            written = int(usage.get("cache_write_tokens") or 0)
             cost_usd = _estimate_cost(
                 model,
-                input_tokens=max(0, int(usage.get("input_tokens") or 0) - cached),
+                input_tokens=max(0, int(usage.get("input_tokens") or 0) - cached - written),
                 output_tokens=int(usage.get("output_tokens") or 0),
                 cache_read=cached,
+                cache_write=written,
             )
         except Exception:  # noqa: BLE001
             cost_usd = None

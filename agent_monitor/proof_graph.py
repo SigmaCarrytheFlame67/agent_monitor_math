@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 import math
 import os
 import re
@@ -20,6 +21,8 @@ from pathlib import Path
 from typing import Any, Mapping
 
 from agent_monitor import usage_ledger
+
+logger = logging.getLogger(__name__)
 
 GRAPH_FILENAME = "proof_graph.json"
 LEAN_GRAPH_FILENAME = "lean_proof_graph.json"
@@ -65,8 +68,11 @@ _KINDS = {
 }
 
 # Kept as a module constant so it can be tuned/replaced easily (the user may
-# supply their own prompt template later).
-GRAPH_PROMPT = """You are a mathematical proof analyst. Read the PROBLEM and the PROOF below, then extract the logical structure of the proof as a directed acyclic graph (DAG).
+# supply their own prompt template later).  It follows the CGM fact
+# discipline: every node is a self-contained mathematical statement, exactly
+# one conclusion, named results cited, dependencies acyclic.  A run with a
+# verified CGM fact graph never uses it (see ``graph_from_facts``).
+GRAPH_PROMPT = """You are a mathematical proof analyst. Read the PROBLEM and the PROOF below and record the proof as a fact graph in the CGM style: a directed acyclic graph (DAG) whose nodes are self-contained mathematical statements and whose edges say which earlier statements each one depends on.
 
 Respond with STRICT JSON only — no markdown fences, no commentary. Schema:
 {
@@ -86,13 +92,12 @@ Respond with STRICT JSON only — no markdown fences, no commentary. Schema:
 }
 
 Rules:
-- 6 to 20 nodes. Each node is ONE meaningful logical unit, not a paragraph dump.
-- Edges point from a premise/ingredient to the statement it supports (assumptions at the top, conclusion at the bottom).
-- Include every assumption or known fact the proof actually uses.
-- Exactly one node with kind "conclusion".
-- For proofs by contradiction, include the negated-assumption node (kind "assumption") and the contradiction node (kind "contradiction").
-- The graph must be acyclic; every node must be reachable from some root or reach the conclusion.
-- "citations" is required on every node: copy the markers the proof itself uses where present, name the theorem when the proof invokes a classical result, and use "self-derived" for steps the proof establishes on its own. Never invent a source.
+- 6 to 20 nodes. Each node is ONE fact: a statement a reader could verify on its own from the statements of its incoming edges, not a paragraph dump or a narrative step such as "now we compute".
+- Statements are self-contained: restate every variable, hypothesis and quantifier they need (no "this", "the above", or "by the previous step"). Keep the proof's own notation.
+- Exactly one node with kind "conclusion"; its statement is the claim the proof establishes, stated exactly as proved (never stronger than the proof supports). If the proof leaves a gap, keep the gap visible as a "claim" node rather than silently closing it.
+- Edges point from a premise to the statement that uses it (assumptions at the top, the conclusion at the bottom). Every node must reach the conclusion. The graph must be acyclic.
+- Include every hypothesis, definition and known fact the proof actually uses. For proofs by contradiction, include the negated-assumption node (kind "assumption") and the contradiction node (kind "contradiction"); for case splits, one "case" node per case.
+- "citations" is required on every node: copy the citation markers the proof uses where present, name the classical result when the proof invokes one (e.g. "Cauchy–Schwarz inequality", "Euclid's lemma"), and use "self-derived" for statements the proof establishes itself. Never invent a source.
 
 PROBLEM:
 {problem}
@@ -101,7 +106,7 @@ PROOF:
 {proof}
 """
 
-LEAN_GRAPH_PROMPT = """You are a Lean 4 proof analyst. Read the PROBLEM and the Lean 4 SOURCE below, then extract the logical structure of the *formal* proof as a directed acyclic graph (DAG).
+LEAN_GRAPH_PROMPT = """You are a Lean 4 proof analyst. Read the PROBLEM and the Lean 4 SOURCE below (Lean 4.14 + Mathlib), then extract the logical structure of the *formal* proof as a directed acyclic graph (DAG).
 
 Respond with STRICT JSON only — no markdown fences, no commentary. Schema:
 {
@@ -122,15 +127,19 @@ Respond with STRICT JSON only — no markdown fences, no commentary. Schema:
 }
 
 Rules — this graph is for *Lean code*, not natural language:
-- `label` MUST be a Lean identifier (declaration name, hypothesis name, or `have` binder). Never a English title.
+- Only describe what is in the SOURCE. Never invent a declaration, hypothesis or
+  lemma that does not occur there, and never repair or complete the proof.
+- `label` MUST be a Lean identifier (declaration name, hypothesis name, or `have` binder). Never an English title.
 - `statement` MUST be Lean syntax copied/abbreviated from the source, e.g.
   `theorem main : ∀ x ∈ closure Ω, ∀ t > 0, u x t ≤ M` or `have h : u x t ≤ M + ε * t := by …`
   Do NOT rewrite into English sentences. Do NOT use LaTeX prose.
 - Prefer the type after `:` (proposition/type) for theorems/lemmas; for `have`/`obtain` include the binder and type.
-- Nodes: top-level decls + important `have`/`obtain` steps that carry the argument. Skip imports and trivial `let`.
+- Nodes: every top-level declaration, plus the `have`/`obtain` steps that carry the argument
+  inside long proofs. Skip imports and trivial `let`.
+- Mark each remaining `sorry` as its own node with lean_kind "sorry" and an edge to the step it leaves open.
 - Map kinds: axiom/opaque/variable → assumption; def/abbrev → definition; lemma → lemma; supporting theorem → claim; main theorem → conclusion; local have → step.
-- Edges use Lean-ish labels (`uses`, `applies`, `exact`, `rw`) from premise → dependent.
-- Exactly one `conclusion`. 4–24 nodes. Acyclic.
+- Edges go premise → dependent and must reflect actual use in the source (a name appearing in a proof or statement).
+- Exactly one `conclusion`. 3–24 nodes. Acyclic.
 
 PROBLEM:
 {problem}
@@ -375,6 +384,37 @@ def _api_error(body: Any) -> str:
     return str(body)
 
 
+def _echoes_provider_errors(base: str) -> bool:
+    """Whether a provider error body from ``base`` may be shown to the caller.
+
+    Public HTTPS endpoints and the attested sponsored loopback broker
+    (``http://<loopback>:<port>/internal/v1``) may be quoted; any other
+    plain-HTTP, loopback, private, link-local or single-label host could be an
+    internal service reached through a stored custom base URL.
+    """
+    import ipaddress
+    from urllib.parse import urlsplit
+
+    parsed = urlsplit(str(base or "").strip())
+    host = (parsed.hostname or "").strip().lower()
+    try:
+        port = parsed.port
+    except ValueError:
+        return False
+    if not host or parsed.username or parsed.password:
+        return False
+    loopback = host in {"localhost", "127.0.0.1", "::1"}
+    if loopback and parsed.scheme == "http" and port:
+        return parsed.path.rstrip("/") == "/internal/v1" and not parsed.query
+    if parsed.scheme != "https" or loopback or "." not in host.strip("."):
+        return False
+    try:
+        address = ipaddress.ip_address(host)
+    except ValueError:
+        return not host.endswith((".local", ".internal", ".localhost"))
+    return address.is_global
+
+
 def _openai_response_text(body: dict[str, Any]) -> str:
     direct = body.get("output_text")
     if isinstance(direct, str) and direct.strip():
@@ -414,7 +454,16 @@ def _call_llm(
     *,
     timeout: int = 240,
 ) -> tuple[str, str, str]:
-    """Call OpenAI, Anthropic, Gemini, or an OpenAI-compatible provider natively."""
+    """Call OpenAI, Anthropic, Gemini, or an OpenAI-compatible provider natively.
+
+    A server-sponsored Kimi call (guest or member) waits
+    ``kimi_k3.SPONSORED_TIMEOUT_SECONDS`` whatever ``timeout`` says, since the
+    broker answers within it; it sends that budget as ``X-Ansatze-Timeout``
+    and retries only a failure that certainly never reached processing
+    (``kimi_k3.sponsored_request``), never an ambiguous timeout, 5xx or empty
+    reply.  Every 2xx reply's usage is booked, including an empty completion
+    a user-key retry replaced.
+    """
     from agent_monitor.settings import _http_json
 
     if env.get("AGENT_MONITOR_GUEST_DERIVED") == "1":
@@ -473,22 +522,81 @@ def _call_llm(
             "messages": [{"role": "user", "content": prompt}],
         }
 
-    def request() -> tuple[int, object]:
-        return _http_json(
+    from agent_monitor import kimi_k3
+
+    # (getattr: a console that loaded an older kimi_k3 before this module was
+    # updated keeps the previous handling until it restarts.)
+    is_sponsored = getattr(kimi_k3, "is_sponsored", None)
+    sponsored = provider == "kimi" and is_sponsored is not None and is_sponsored(env)
+    if sponsored:
+        # The broker answers within this budget (its gateway deadline plus
+        # 15 s); a shorter client wait would abandon healthy slow replies.
+        timeout = kimi_k3.SPONSORED_TIMEOUT_SECONDS
+    billing = (
+        "sponsored"
+        if provider == "kimi" and env.get("AGENT_MONITOR_GUEST_DERIVED") == "1"
+        else None
+    )
+
+    def request(seconds: float | None = None) -> tuple[int, object]:
+        limit = timeout if seconds is None else seconds
+        call_headers = headers
+        if sponsored:
+            call_headers = {
+                **headers,
+                kimi_k3.TIMEOUT_HEADER: kimi_k3.timeout_header_value(limit),
+            }
+        code, body = _http_json(
             url,
             method="POST",
-            headers=headers,
+            headers=call_headers,
             payload=payload,
-            timeout=timeout,
+            timeout=limit,
         )
+        if 200 <= code < 300 and isinstance(body, dict):
+            # Every 2xx reply was billed, including an empty completion that
+            # a retry below replaces: book each one, not only the last.
+            usage_ledger.record_usage(
+                model=str(body.get("model") or chosen),
+                usage=usage_ledger.http_usage(provider, body),
+                billing=billing,
+            )
+        return code, body
 
-    if provider == "kimi":
-        from agent_monitor import kimi_k3
-
-        code, body = kimi_k3.request_with_retry(request)
+    if sponsored:
+        # Sponsored calls are admitted and billed per logical call: only a
+        # failure that never reached processing is retried; an ambiguous
+        # timeout, 5xx or empty reply is never replayed.
+        code, body, failure = kimi_k3.sponsored_request(request, timeout=timeout)
+        message = kimi_k3.failure_message(failure) if failure is not None else ""
+        if message:
+            # Built from typed status fields only, never the reply body; an
+            # untyped reply (older broker) is reported as before.
+            raise ValueError(message)
+    elif provider == "kimi":
+        # An empty completion usually means reasoning used up the output
+        # budget; retry it with less reasoning rather than identically.
+        # (getattr: a long-running process may still hold an older kimi_k3.)
+        lower_effort = getattr(kimi_k3, "lower_effort_after_empty", None)
+        if lower_effort is None:
+            code, body = kimi_k3.request_with_retry(request)
+        else:
+            code, body = kimi_k3.request_with_retry(
+                request,
+                before_retry=lambda failed_code, failed_body: lower_effort(
+                    payload, failed_code, failed_body
+                ),
+            )
     else:
         code, body = request()
     if code != 200 or not isinstance(body, dict):
+        if not _echoes_provider_errors(base):
+            # SSRF guard: a private, loopback or plain-HTTP endpoint could be
+            # an internal service; report only the status, never its body.
+            raise ValueError(
+                f"{provider.title()} model call failed for {chosen} (HTTP {code}); "
+                "the response of this non-public endpoint is not shown"
+            )
         detail = str(_api_error(body) or "unknown error")
         if key:
             detail = detail.replace(key, "[redacted]")
@@ -496,13 +604,6 @@ def _call_llm(
             f"{provider.title()} model call failed for {chosen} (HTTP {code}): "
             f"{detail[-1600:]}"
         )
-    from agent_monitor import usage_ledger
-
-    usage_ledger.record_usage(
-        model=str(body.get("model") or chosen),
-        usage=usage_ledger.http_usage(provider, body),
-        billing="sponsored" if provider == "kimi" and env.get("AGENT_MONITOR_GUEST_DERIVED") == "1" else None,
-    )
     try:
         if provider == "openai":
             content = _openai_response_text(body)
@@ -531,7 +632,23 @@ def _call_llm(
             f"{provider.title()} returned an unexpected response shape for {chosen}"
         ) from exc
     if not content.strip():
-        raise ValueError(f"{provider.title()} returned an empty response for {chosen}")
+        detail = ""
+        if provider == "kimi":
+            from agent_monitor import kimi_k3
+
+            # finish_reason and token counts only: never prompt or key text.
+            summarize = getattr(kimi_k3, "empty_completion_summary", None)
+            detail = summarize(body) if summarize is not None else ""
+            logger.warning(
+                "Kimi returned an empty completion for %s (%s; last reasoning_effort=%s)",
+                chosen,
+                detail,
+                payload.get("reasoning_effort"),
+            )
+        raise ValueError(
+            f"{provider.title()} returned an empty response for {chosen}"
+            + (f" ({detail})" if detail else "")
+        )
     return ObservedModel(chosen, body.get("model")), content, provider
 
 _AMBIGUOUS_LATEX_ESCAPE = re.compile(
@@ -604,10 +721,13 @@ def _repair_latex_json_escapes(blob: str) -> str:
 
 def _extract_json(text: str) -> dict[str, Any]:
     text = text.strip()
-    # Strip a ```json fence if the model added one anyway
-    m = re.search(r"```(?:json)?\s*(.*?)```", text, re.S)
-    if m:
-        text = m.group(1).strip()
+    # Strip a ```json (or bare) fence if the model added one anyway. A fence
+    # tagged with another language (```lean inside a Formal DAG statement,
+    # ```latex in an informal one) is part of a JSON string, not the payload.
+    for m in re.finditer(r"```([A-Za-z0-9_+-]*)(.*?)```", text, re.S):
+        if m.group(1).lower() in {"", "json"} and "{" in m.group(2):
+            text = m.group(2).strip()
+            break
     start, end = text.find("{"), text.rfind("}")
     if start < 0 or end <= start:
         raise ValueError("model response contained no JSON object")
@@ -726,15 +846,18 @@ def _run_claude_prompt(
 ) -> tuple[str, str]:
     from agent_monitor.jobs import _configure_auth_route
     from agent_monitor.runners.claude_backend import ClaudeBackendError, claude_exec
-    from agent_monitor.settings import resolved_user_env
+    from agent_monitor.settings import restrict_account_base_urls, resolved_user_env
 
     from agent_monitor.subprocess_env import child_process_env
 
     env = child_process_env(
-        extra={
-            **{key: value for key, value in (source_env or {}).items() if value},
-            **{k: v for k, v in (resolved_user_env(user) or {}).items() if v},
-        }
+        extra=restrict_account_base_urls(
+            {
+                **{key: value for key, value in (source_env or {}).items() if value},
+                **{k: v for k, v in (resolved_user_env(user) or {}).items() if v},
+            },
+            user,
+        )
     )
     env = _configure_auth_route(
         env,
@@ -830,7 +953,7 @@ def _run_codex_prompt(
 ) -> str:
     """One-shot answer billed only to the caller's connected Codex account."""
     from agent_monitor.jobs import _configure_auth_route
-    from agent_monitor.settings import resolved_user_env
+    from agent_monitor.settings import restrict_account_base_urls, resolved_user_env
 
     session_owner = (user or {}).get("id")
     if owner_id is not None and session_owner is not None:
@@ -840,10 +963,13 @@ def _run_codex_prompt(
     from agent_monitor.subprocess_env import child_process_env
 
     env = child_process_env(
-        extra={
-            **{key: value for key, value in (source_env or {}).items() if value},
-            **{k: v for k, v in (resolved_user_env(user) or {}).items() if v},
-        }
+        extra=restrict_account_base_urls(
+            {
+                **{key: value for key, value in (source_env or {}).items() if value},
+                **{k: v for k, v in (resolved_user_env(user) or {}).items() if v},
+            },
+            user,
+        )
     )
     env = _configure_auth_route(
         env,
@@ -868,7 +994,7 @@ def _sanitize_cached_graph(raw: Any) -> dict[str, Any]:
         for key in (
             "matched_declarations", "proof_edges", "statement_edges",
             "omitted_proof_edges", "omitted_statement_edges",
-            "dependency_truncated_count",
+            "dependency_truncated_count", "sorry_dependent_declarations",
         ):
             value = provenance.get(key, 0)
             clean[key] = (
@@ -973,7 +1099,7 @@ def graph_from_lean(
     text parser, and metadata can never change Lean verification status.
     """
     from agent_monitor import lean_kg
-    from agent_monitor.lean_verify import _decls_with_docs
+    from agent_monitor.lean_verify import _decls_with_docs, _lean_executable_text
 
     if len((lean or "").encode()) > MAX_SOURCE_BYTES:
         raise ValueError("Lean source exceeds the Formal DAG limit")
@@ -983,6 +1109,10 @@ def graph_from_lean(
     if not decls:
         return {"title": "Lean proof", "nodes": [], "edges": []}
     lines = (lean or "").splitlines()
+    # Comments and strings blanked, line for line: a name that only appears in
+    # a comment (the next declaration's `Cites:` doc line, a `-- by foo`
+    # remark) is not a use.
+    code_lines = _lean_executable_text(lean or "").splitlines()
     kind_map = {
         "axiom": "assumption",
         "opaque": "assumption",
@@ -1017,7 +1147,14 @@ def graph_from_lean(
         used_ids.add(nid)
         start = max(0, int(d.get("line") or 1) - 1)
         end = decls[i + 1]["line"] - 1 if i + 1 < len(decls) else len(lines)
+        # The slice up to the next declaration also holds that declaration's
+        # doc comment; end at the last line with code instead.
+        while end > start + 1 and not (
+            code_lines[end - 1] if end - 1 < len(code_lines) else ""
+        ).strip():
+            end -= 1
         body = "\n".join(lines[start:end]).strip()
+        code_body = "\n".join(code_lines[start:end])
         lean_kind = str(d.get("kind") or "def")
         statement = _lean_sig(body) or f"{lean_kind} {raw_name}"
         cites = []
@@ -1036,7 +1173,7 @@ def graph_from_lean(
                 "label": raw_name,
                 "statement": statement,
                 "citations": cites,
-                "_body": body,
+                "_body": code_body,
             }
         )
 
@@ -1070,6 +1207,7 @@ def graph_from_lean(
     kg_declarations = (
         kg_snapshot.get("declarations") or [] if kg_ok else []
     )
+    sorry_dependent: set[str] = set()
     for item in kg_declarations:
         if not isinstance(item, dict) or not item.get("matched"):
             continue
@@ -1078,6 +1216,13 @@ def graph_from_lean(
         if target and qualified:
             compiler_targets.add(target)
             qualified_to_node[qualified] = target
+            if item.get("uses_sorry") is True:
+                sorry_dependent.add(target)
+    for node in nodes:
+        if node["id"] in sorry_dependent:
+            # Compiler evidence: this declaration (or something it uses)
+            # still depends on `sorry`; it is structure, not a proof.
+            node["citations"] = ["depends on sorry (unproved)", *node["citations"]]
     for item in kg_declarations:
         if not isinstance(item, dict) or not item.get("matched"):
             continue
@@ -1176,6 +1321,7 @@ def graph_from_lean(
             "dependency_truncated_count": int(
                 kg_snapshot.get("dependency_truncated_count") or 0
             ),
+            "sorry_dependent_declarations": len(sorry_dependent),
         }
     return graph
 
@@ -1234,6 +1380,207 @@ def graph_from_text(text: str) -> dict[str, Any]:
     return _sanitize({"title": nodes[-1]["label"], "nodes": nodes, "edges": edges})
 
 
+FACT_GRAPH_MODEL = "cgm-fact-graph"
+FACT_GRAPH_ATTESTED_BASIS = "model-verifier accepted (not a Lean certificate)"
+FACT_GRAPH_UNATTESTED_BASIS = "unattested CGM facts (no valid verifier receipt)"
+
+
+def _load_fact_dag(workspace: Path) -> list[dict[str, Any]] | None:
+    """The run's validated CGM fact DAG (``engine_graph.load_fact_dag``)."""
+    try:
+        from agent_monitor import engine_graph
+
+        loader = getattr(engine_graph, "load_fact_dag", None)
+        facts = loader(Path(workspace)) if callable(loader) else None
+    except Exception:  # noqa: BLE001 - an unreadable fact graph means "none"
+        return None
+    if not isinstance(facts, list) or not facts:
+        return None
+    return facts
+
+
+def _facts_digest(facts: list[dict[str, Any]]) -> str:
+    canonical = [
+        {
+            "fact_id": str(fact.get("fact_id") or ""),
+            "statement": str(fact.get("statement") or ""),
+            "predecessors": [str(p) for p in fact.get("predecessors") or []],
+            "is_target": bool(fact.get("is_target")),
+            "attested": bool(fact.get("attested")),
+        }
+        for fact in facts
+        if isinstance(fact, Mapping)
+    ]
+    return hashlib.sha256(
+        json.dumps(canonical, ensure_ascii=False, sort_keys=True).encode()
+    ).hexdigest()
+
+
+def graph_from_facts(facts: list[dict[str, Any]]) -> dict[str, Any]:
+    """Informal DAG built deterministically from a CGM fact DAG (no model).
+
+    One node per fact (the target is the ``conclusion``, every other fact a
+    ``lemma``), node id = fact id (so Lean's ``Informal: <fact_id>`` doc lines
+    and the coverage cross-linker line up), statements verbatim within the
+    sanitizer bounds, and one ``uses`` edge per predecessor.  Acceptance is a
+    model verifier's, never a Lean certificate.
+    """
+    if not isinstance(facts, list) or not facts:
+        raise ValueError("fact graph is empty")
+    if len(facts) > MAX_GRAPH_NODES:
+        raise ValueError("fact graph exceeds the proof graph node limit")
+    targets = [fact for fact in facts if isinstance(fact, Mapping) and fact.get("is_target")]
+    if len(targets) != 1:
+        # A verifier-partial run has lemmas but no proved target; its facts
+        # do not form an informal proof with one conclusion.
+        raise ValueError("fact graph has no single target conclusion")
+    nodes: list[dict[str, Any]] = []
+    edges: list[dict[str, Any]] = []
+    lemma_index = 0
+    for fact in facts:
+        if not isinstance(fact, Mapping):
+            raise ValueError("fact graph item is not an object")
+        fact_id = str(fact.get("fact_id") or "").strip()
+        if not fact_id or len(fact_id) > MAX_GRAPH_ID_LENGTH:
+            raise ValueError("fact graph item has an invalid id")
+        is_target = bool(fact.get("is_target"))
+        if is_target:
+            label = "Target theorem"
+        else:
+            lemma_index += 1
+            label = f"Lemma {lemma_index}"
+        citations = [f"cgm fact {fact_id}"[:120]]
+        citations.append(
+            FACT_GRAPH_ATTESTED_BASIS
+            if fact.get("attested") is True
+            else "unattested fact"
+        )
+        nodes.append(
+            {
+                "id": fact_id,
+                "kind": "conclusion" if is_target else "lemma",
+                "label": label,
+                "statement": str(fact.get("statement") or "").strip(),
+                "citations": citations,
+            }
+        )
+        for predecessor in dict.fromkeys(
+            str(item) for item in fact.get("predecessors") or []
+        ):
+            edges.append({"from": predecessor, "to": fact_id, "label": "uses"})
+    title = " ".join(str(targets[0].get("statement") or "").split())[:200]
+    graph = _sanitize({"title": title, "nodes": nodes, "edges": edges})
+    if len(graph["edges"]) != len(edges):
+        # The fact DAG was validated upstream; a dropped edge means an unknown
+        # predecessor or a cycle, so refuse rather than publish a wrong DAG.
+        raise ValueError("fact graph edges do not form a DAG over its facts")
+    return graph
+
+
+def fact_graph_basis(result: Mapping[str, Any] | None) -> str:
+    """Human label for what a ``cgm-fact-graph`` result rests on."""
+    if isinstance(result, Mapping) and result.get("attested") is True:
+        return FACT_GRAPH_ATTESTED_BASIS
+    return FACT_GRAPH_UNATTESTED_BASIS
+
+
+def fact_graph_result(workspace: Path) -> dict[str, Any] | None:
+    """Cache-ready informal DAG result from the run's CGM facts, or ``None``.
+
+    ``None`` also when the facts have no single target conclusion (a
+    verifier-partial run); callers then fall back to the model-derived DAG.
+    ``attested`` is true only for a valid ``harness-gate-receipt``.
+    """
+    facts = _load_fact_dag(workspace)
+    if not facts:
+        return None
+    try:
+        graph = graph_from_facts(facts)
+    except ValueError:
+        return None
+    attested = all(fact.get("attested") is True for fact in facts)
+    result = {
+        "generated_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+        "model": FACT_GRAPH_MODEL,
+        "source": "math_harness fact graph",
+        "source_sha256": _facts_digest(facts),
+        "kind": "informal",
+        "status": "derived",
+        "derivation": "deterministic",
+        "attested": attested,
+        "certificate": False,
+        "graph": graph,
+    }
+    result["basis"] = fact_graph_basis(result)
+    return result
+
+
+def _is_analysis_record(run_record: Mapping[str, Any] | None) -> bool:
+    """An Analyze run: its informal DAG is the analysis graph's projection.
+
+    Decided by the run record, never by workspace files (a proof agent could
+    write an ``analysis/`` folder into its own workspace).
+    """
+    record = run_record or {}
+    return str(record.get("run_kind") or "") == "analyze" or str(record.get("engine") or "") == "analyze"
+
+
+def analysis_projection(workspace: Path) -> dict[str, Any] | None:
+    """The deterministic ``proof_graph.json`` envelope of an Analyze run, from
+    ``analysis/analysis_graph.json`` (``None`` before it is published); kept
+    in the cache only when it changed.  Never calls a model."""
+    from agent_monitor.analyze import graph as analysis_graph
+
+    graph = analysis_graph.load(workspace)
+    if graph is None:
+        return None
+    result = analysis_graph.to_proof_graph(graph)
+    cached = load_cached(workspace, kind="informal")
+    if (
+        cached
+        and cached.get("model") == result.get("model")
+        and cached.get("source_sha256") == result.get("source_sha256")
+    ):
+        return cached
+    try:
+        _write_cached(workspace, GRAPH_FILENAME, result)
+    except (OSError, ValueError):
+        pass
+    return result
+
+
+def load_or_build_informal(
+    workspace: Path, run_record: Mapping[str, Any] | None = None
+) -> dict[str, Any] | None:
+    """Cached informal DAG, built deterministically from CGM facts if absent.
+
+    Read paths never replace a model-derived DAG: Lean ``Informal: <node>``
+    coverage links point at its node ids, so only an explicit refresh
+    (``generate``) or the automatic pipeline switches such a run to the fact
+    graph.  A missing cache, or an earlier fact graph whose facts changed, is
+    (re)built and persisted.  Never calls a model.  An Analyze run's informal
+    DAG is always the projection of its analysis graph.
+    """
+    if _is_analysis_record(run_record):
+        return analysis_projection(workspace) or load_cached(workspace, kind="informal")
+    cached = load_cached(workspace, kind="informal")
+    if cached and cached.get("model") != FACT_GRAPH_MODEL:
+        return cached
+    facts = _load_fact_dag(workspace)
+    if not facts:
+        return cached
+    if cached and cached.get("source_sha256") == _facts_digest(facts):
+        return cached
+    result = fact_graph_result(workspace)
+    if result is None:
+        return cached
+    try:
+        _write_cached(workspace, GRAPH_FILENAME, result)
+    except (OSError, ValueError):
+        pass
+    return result
+
+
 def _compiler_snapshot_for_verified_source(
     workspace: Path, lean: str
 ) -> dict[str, Any] | None:
@@ -1241,12 +1588,18 @@ def _compiler_snapshot_for_verified_source(
     from agent_monitor import lean_kg, lean_verify
 
     checked = lean_verify.load_cached(workspace) or {}
-    if str(checked.get("status") or "") not in {"verified", "unfaithful"}:
+    status = str(checked.get("status") or "")
+    if status not in {"verified", "unfaithful", "incomplete"}:
         return None
     recorded = str(checked.get("lean") or "")
     if lean not in {recorded, recorded.rstrip() + "\n"}:
         return None
-    if str(checked.get("verified_source_sha256") or "") != hashlib.sha256(
+    # An incomplete file that compiled is bound by `checked_source_sha256`;
+    # its compiler facts mark sorry-dependent declarations.
+    bound_field = (
+        "checked_source_sha256" if status == "incomplete" else "verified_source_sha256"
+    )
+    if str(checked.get(bound_field) or "") != hashlib.sha256(
         lean.encode()
     ).hexdigest():
         return None
@@ -1347,6 +1700,63 @@ def load_or_parse_formal(workspace: Path) -> dict[str, Any] | None:
     }
 
 
+def _deterministic_formal_result(
+    workspace: Path, lean: str
+) -> dict[str, Any] | None:
+    """Prefer an exact or deterministic Formal DAG over an LLM re-extraction.
+
+    Primary graph: the declaration-level structure of Proof.lean. When the
+    kernel-checked compiler snapshot is available its exact dependencies
+    become the primary edges (relabelled so the structural Formal view keeps
+    showing them) and the provenance-bearing graph stays in
+    ``compiler_graph`` for the Compiler-facts view. Without compiler data the
+    text parse is used only when it is informative (at least three
+    declarations and two dependency edges); otherwise return ``None`` so the
+    caller asks a model to expose the steps inside a long proof.
+    """
+    from agent_monitor import lean_kg
+
+    try:
+        snapshot = _compiler_snapshot_for_verified_source(workspace, lean)
+    except (OSError, ValueError):
+        snapshot = None
+    try:
+        structural = graph_from_lean(lean)
+        compiler_graph = graph_from_lean(lean, kg_snapshot=snapshot) if snapshot else None
+    except ValueError:
+        return None
+    if not structural.get("nodes"):
+        return None
+    compiler_ok = bool(compiler_graph and compiler_graph.get("provenance"))
+    if compiler_ok:
+        primary = dict(structural)
+        primary["edges"] = [
+            {
+                "from": edge["from"],
+                "to": edge["to"],
+                "label": "uses" if edge.get("label") == "proof uses" else "statement uses",
+            }
+            for edge in compiler_graph.get("edges") or []
+            if isinstance(edge, dict)
+        ]
+    elif len(structural.get("nodes") or []) >= 3 and len(structural.get("edges") or []) >= 2:
+        primary = structural
+    else:
+        return None
+    result: dict[str, Any] = {
+        "generated_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+        "model": "lean-parse",
+        "source": "Proof.lean",
+        "source_sha256": hashlib.sha256(lean.strip().encode()).hexdigest(),
+        "kind": "formal",
+        "graph": _sanitize(primary),
+        "knowledge_graph": lean_kg.snapshot_summary(snapshot),
+    }
+    if compiler_ok:
+        result["compiler_graph"] = compiler_graph
+    return result
+
+
 @usage_ledger.attributed("dag")
 def generate(
     *,
@@ -1379,7 +1789,26 @@ def generate(
         structural_source = lean
         prompt = LEAN_GRAPH_PROMPT.replace("{problem}", problem[:6000]).replace("{lean}", lean[:60000])
         out_name = LEAN_GRAPH_FILENAME
+        deterministic = _deterministic_formal_result(workspace, lean)
+        if deterministic is not None:
+            # The declaration-level graph is exact (compiler dependencies) or
+            # at least deterministic; no model re-extraction is needed.
+            _write_cached(workspace, out_name, deterministic)
+            return deterministic
     else:
+        if _is_analysis_record(run_record):
+            # Regenerate guard: an analysis's DAG is its manuscript structure.
+            # GRAPH_PROMPT never re-reads the report (or a model reply) as a proof.
+            projection = analysis_projection(workspace)
+            if projection is None:
+                raise ValueError("The analysis has not published its graph yet")
+            return projection
+        fact_result = fact_graph_result(workspace)
+        if fact_result is not None:
+            # A verified CGM fact DAG *is* the informal structure; derive it
+            # deterministically instead of asking a model to re-extract it.
+            _write_cached(workspace, GRAPH_FILENAME, fact_result)
+            return fact_result
         source, proof = _proof_source(workspace, run_record)
         if not proof:
             raise ValueError("No proof text yet — wait for the run to produce proof.md")
@@ -1395,7 +1824,10 @@ def generate(
         model = "kimi-k3"
         allow_codex_fallback = False
     else:
-        env = resolved_user_env(user)
+        from agent_monitor.settings import restrict_account_base_urls
+
+        # A non-admin account never chooses where derived calls are sent.
+        env = restrict_account_base_urls(dict(resolved_user_env(user) or {}), user)
     if (
         not is_guest
         and str((run_record or {}).get("credential_source") or "").strip()
@@ -1410,7 +1842,8 @@ def generate(
                 engine="formal",
                 client_id=owner_id,
                 cache_key=cache_key,
-                minimum_ttl_seconds=600,
+                # Outlasts a sponsored call's 630 s (kimi_k3.SPONSORED_TIMEOUT_SECONDS).
+                minimum_ttl_seconds=1_500,
             )
         )
     from agent_monitor.run_tuning import from_record as apply_recorded_tuning

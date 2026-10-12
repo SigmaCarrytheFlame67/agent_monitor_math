@@ -125,6 +125,101 @@ class KimiRetryTests(unittest.TestCase):
         self.assertEqual(request.call_count, 3)
 
 
+_KIMI_EMPTY_LENGTH = {
+    "choices": [{"message": {"content": ""}, "finish_reason": "length"}],
+    "usage": {
+        "prompt_tokens": 9000,
+        "completion_tokens": 8192,
+        "completion_tokens_details": {"reasoning_tokens": 8192},
+    },
+}
+
+
+class KimiEmptyCompletionTests(unittest.TestCase):
+    """Live 2026-09-27: every Lean prove/repair call came back empty."""
+
+    def test_each_retry_after_an_empty_completion_lowers_reasoning_effort(self) -> None:
+        payload = {"reasoning_effort": "max"}
+        seen: list[str] = []
+        replies = iter([(200, _KIMI_EMPTY_LENGTH), (200, _KIMI_EMPTY_LENGTH), (200, _KIMI_OK)])
+
+        def request() -> tuple[int, object]:
+            seen.append(payload["reasoning_effort"])
+            return next(replies)
+
+        code, body = kimi_k3.request_with_retry(
+            request,
+            sleep=lambda _: None,
+            before_retry=lambda c, b: kimi_k3.lower_effort_after_empty(payload, c, b),
+        )
+        self.assertEqual((code, body), (200, _KIMI_OK))
+        self.assertEqual(seen, ["max", "high", "low"])
+
+    def test_transient_errors_do_not_lower_effort(self) -> None:
+        payload = {"reasoning_effort": "max"}
+        self.assertFalse(kimi_k3.lower_effort_after_empty(payload, 503, {"error": "busy"}))
+        self.assertFalse(kimi_k3.lower_effort_after_empty(payload, 200, _KIMI_OK))
+        self.assertEqual(payload["reasoning_effort"], "max")
+        low = {"reasoning_effort": "low"}
+        self.assertFalse(kimi_k3.lower_effort_after_empty(low, 200, _KIMI_EMPTY_LENGTH))
+
+    def test_empty_completion_summary_is_content_free(self) -> None:
+        summary = kimi_k3.empty_completion_summary(_KIMI_EMPTY_LENGTH)
+        self.assertEqual(
+            summary, "finish_reason=length, output_tokens=8192, reasoning_tokens=8192"
+        )
+        self.assertEqual(kimi_k3.empty_completion_summary("oops"), "no JSON body")
+
+    def test_proof_graph_steps_effort_down_and_reports_finish_reason(self) -> None:
+        sent: list[str] = []
+
+        def fake_http(url, *, method, headers, payload, timeout):
+            sent.append(payload["reasoning_effort"])
+            return 200, _KIMI_EMPTY_LENGTH
+
+        with (
+            patch("agent_monitor.settings._http_json", side_effect=fake_http),
+            patch("agent_monitor.kimi_k3.time.sleep"),
+            self.assertLogs("agent_monitor.proof_graph", level="WARNING") as logs,
+        ):
+            with self.assertRaises(ValueError) as raised:
+                proof_graph._call_llm(
+                    {
+                        "KIMI_API_KEY": "test-only-key",
+                        "KIMI_API_BASE": "https://kimi.invalid/v1",
+                    },
+                    "kimi-k3",
+                    "problem",
+                )
+        self.assertEqual(sent, ["max", "high", "low"])
+        message = str(raised.exception)
+        self.assertIn("empty response for kimi-k3", message)
+        self.assertIn("finish_reason=length", message)
+        self.assertNotIn("test-only-key", message)
+        self.assertIn("finish_reason=length", "\n".join(logs.output))
+        self.assertNotIn("test-only-key", "\n".join(logs.output))
+
+    def test_api_backend_empty_error_names_the_finish_reason(self) -> None:
+        with (
+            patch.dict(
+                os.environ,
+                {
+                    "KIMI_API_KEY": "test-only-key",
+                    "KIMI_API_BASE": "https://kimi.invalid/v1",
+                    "AGENT_MONITOR_SPONSORED_KIMI": "1",
+                },
+                clear=True,
+            ),
+            patch("agent_monitor.settings._http_json", return_value=(200, _KIMI_EMPTY_LENGTH)),
+            patch("agent_monitor.kimi_k3.time.sleep"),
+        ):
+            with self.assertRaisesRegex(
+                api_backend.APIBackendError,
+                r"empty response for kimi-k3 \(finish_reason=length",
+            ):
+                api_backend.api_chat("system", "problem", model="kimi-k3")
+
+
 class KimiRoutingTests(unittest.TestCase):
     def test_formal_question_never_falls_back_from_explicit_kimi_to_codex(self) -> None:
         with (

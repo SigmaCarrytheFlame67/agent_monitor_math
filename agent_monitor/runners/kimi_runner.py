@@ -1,115 +1,285 @@
 #!/usr/bin/env python3
-"""Bounded Kimi proof harness: three remote calls, no executable model tools."""
+"""Tool-free Kimi K3 engine: the Ansatz CGM pipeline on a fixed Kimi route.
+
+The ``kimi`` engine is the guest-safe entry point to the Math Agent Harness
+CGM pipeline (``math_harness_runner.run_pipeline``): strategist, independent
+workers, one cold model verifier per lemma, bounded repair and a curator, all
+as plain chat-completion calls.  The route is pinned to
+``Route("api", "kimi-k3", "api_chat")``; account subscriptions, command
+overrides and user-selected endpoints never change it.
+
+No-tools guarantees (unchanged from the former draft/critique/refine runner):
+
+* no model-visible tools, function calls, shell commands or local agents; the
+  trusted wrapper alone parses replies and writes artifacts in the workspace;
+* the endpoint is never derived from the prompt or from a user-settable base
+  URL.  Sponsored runs must use the attested loopback broker
+  (``http://127.0.0.1:<port>/internal/v1``); own-key runs use the operator's
+  ``AGENT_MONITOR_KIMI_BASE_URL`` (default ``kimi_k3.DEFAULT_BASE_URL``);
+* ambient proxies are ignored and provider error text is key-redacted.
+
+Model-verifier acceptance is never a Lean certificate.
+
+Usage: ``kimi_runner.py "<prompt>"`` from a run workspace that contains the
+canonical ``problem.txt``.  Emits Codex-shaped JSONL events on stdout.  Exit
+status: 0 when the pipeline published its artifacts (accepted or not), 2 for a
+missing prompt, key or attested endpoint, 143 when a stop request (SIGTERM)
+ended the run before publication (nothing is published), and 1 for any other
+failure.
+"""
 from __future__ import annotations
 
 import os
+import signal
+import stat
 import sys
 from pathlib import Path
 from urllib.parse import urlsplit
 
 if __package__:
-    from ..proof_markdown import normalize_proof_markdown
-    from .plain_runner import emit, emit_item
+    from .plain_runner import emit_item
 else:
     repository_root = Path(__file__).resolve().parents[2]
     if str(repository_root) not in sys.path:
         sys.path.insert(0, str(repository_root))
-    from agent_monitor.proof_markdown import normalize_proof_markdown
-    from agent_monitor.runners.plain_runner import emit, emit_item
+    from agent_monitor.runners.plain_runner import emit_item
+
+
+MODEL_ID = "kimi-k3"
+OPERATOR_BASE_VAR = "AGENT_MONITOR_KIMI_BASE_URL"
+_LOOPBACK_HOSTS = frozenset({"127.0.0.1", "::1", "localhost"})
+# Account routes, alternate providers and ambient proxies must never select a
+# different transport for this engine.
+_DORMANT_ENV_NAMES = (
+    "AGENT_MONITOR_CODEX_SUBSCRIPTION",
+    "AGENT_MONITOR_CLAUDE_SUBSCRIPTION",
+    "KIMI_BASE_URL",
+    "HTTP_PROXY",
+    "HTTPS_PROXY",
+    "ALL_PROXY",
+    "http_proxy",
+    "https_proxy",
+    "all_proxy",
+)
+
+
+def sponsored_base(raw: str) -> str | None:
+    """Return the attested sponsored loopback base, or ``None``."""
+    value = str(raw or "").strip().rstrip("/")
+    parsed = urlsplit(value)
+    try:
+        port = parsed.port
+    except ValueError:
+        return None
+    if (
+        parsed.scheme != "http"
+        or parsed.hostname not in _LOOPBACK_HOSTS
+        or not port
+        or parsed.path != "/internal/v1"
+        or parsed.username
+        or parsed.password
+        or parsed.query
+        or parsed.fragment
+    ):
+        return None
+    return value
+
+
+def operator_base(raw: str | None) -> str:
+    """The operator-only endpoint for own-key runs (HTTPS, no credentials)."""
+    from agent_monitor import kimi_k3
+
+    value = str(raw or "").strip().rstrip("/")
+    if not value:
+        return kimi_k3.DEFAULT_BASE_URL
+    parsed = urlsplit(value)
+    try:
+        parsed.port
+    except ValueError:
+        return kimi_k3.DEFAULT_BASE_URL
+    if (
+        parsed.scheme != "https"
+        or not parsed.hostname
+        or parsed.username
+        or parsed.password
+        or parsed.query
+        or parsed.fragment
+    ):
+        return kimi_k3.DEFAULT_BASE_URL
+    return value
+
+
+class ProblemFileError(ValueError):
+    """The canonical problem statement cannot be used; the text is user-safe."""
+
+
+def _read_problem(root: Path, limit: int) -> str | None:
+    """Read the canonical ``problem.txt`` without following links."""
+    flags = os.O_RDONLY | os.O_CLOEXEC | getattr(os, "O_NOFOLLOW", 0)
+    try:
+        fd = os.open(root / "problem.txt", flags)
+    except FileNotFoundError:
+        return None
+    except OSError as exc:
+        raise ProblemFileError("problem.txt cannot be opened") from exc
+    try:
+        state = os.fstat(fd)
+        if not stat.S_ISREG(state.st_mode):
+            raise ProblemFileError("problem.txt is not a regular file")
+        if state.st_size > limit:
+            raise ProblemFileError(
+                f"the problem statement is {state.st_size:,} bytes; the Ansatz "
+                f"CGM pipeline accepts at most {limit:,} bytes of UTF-8 text"
+            )
+        payload = os.read(fd, limit + 1)
+    finally:
+        os.close(fd)
+    if len(payload) > limit:
+        raise ProblemFileError(
+            f"the problem statement exceeds {limit:,} bytes of UTF-8 text"
+        )
+    try:
+        return payload.decode("utf-8").strip()
+    except UnicodeDecodeError as exc:
+        raise ProblemFileError("problem.txt is not UTF-8 text") from exc
+
+
+def _redact(text: str, *secrets: str) -> str:
+    value = " ".join(str(text or "").split())
+    for secret in secrets:
+        if secret:
+            value = value.replace(secret, "[redacted]")
+    return value[-600:]
+
+
+def _failure_message(exc: BaseException) -> str:
+    """What happened and what to do, when a sponsored Kimi provider failure
+    ended the run (``kimi_k3.failure_message``); "" otherwise.
+
+    The message speaks for the whole run, so it says that no tokens were used
+    only when no call of the run can have been processed (``exc.billed``).
+    Built from the failure's typed status fields only, so it never carries a
+    prompt, a reply, a key or the endpoint.
+    """
+    from agent_monitor import kimi_k3
+
+    failure = getattr(exc, "failure", None)
+    if not isinstance(failure, kimi_k3.CallFailure):
+        return ""
+    return kimi_k3.failure_message(failure, billed=getattr(exc, "billed", True) is not False)
 
 
 def main() -> int:
+    """Run one CGM proof on the pinned Kimi route (see the module docstring).
+
+    ``run_pipeline`` is called directly from this thread, never from a helper
+    thread: it intercepts SIGTERM (the console's Stop) only when it runs on the
+    process main thread, which is where ``__main__`` calls this function.
+    """
     prompt = sys.argv[1] if len(sys.argv) > 1 else ""
     if not prompt.strip():
         emit_item({"type": "error", "message": "Enter a problem to prove"})
         return 2
-    from openai import OpenAI
-    import httpx
-
-    key = os.environ.get("KIMI_API_KEY", "")
+    key = str(os.environ.get("KIMI_API_KEY") or "").strip()
     if not key:
         emit_item({"type": "error", "message": "Add a Kimi API key in Settings"})
         return 2
-    # Neither endpoint nor headers are derived from the prompt. Do not follow
-    # redirects, expose tools, import generated code, or invoke local agents.
-    base_url = "https://api.moonshot.ai/v1"
+
     if os.environ.get("AGENT_MONITOR_SPONSORED_KIMI") == "1":
-        base_url = os.environ.get("KIMI_API_BASE", "")
-        parsed = urlsplit(base_url)
-        if (parsed.scheme != "http" or parsed.hostname not in {"127.0.0.1", "::1", "localhost"}
-                or not parsed.port or parsed.path != "/internal/v1"
-                or parsed.username or parsed.password or parsed.query or parsed.fragment):
-            emit_item({"type": "error", "message": "Sponsored Kimi endpoint attestation failed"})
-            return 2
-    client = OpenAI(api_key=key, base_url=base_url,
-                    timeout=180.0, max_retries=0,
-                    http_client=httpx.Client(follow_redirects=False, trust_env=False))
-    model = "kimi-k3"
-    try:
-        output_limit = int(os.environ.get("AGENT_MONITOR_PLAIN_MAX_OUTPUT_TOKENS", "4096"))
-    except ValueError:
-        output_limit = 4096
-    output_limit = max(256, min(output_limit, 8192))
-    effort = os.environ.get("KIMI_REASONING_EFFORT", "low").strip().lower()
-    if effort not in {"low", "high", "max"}:
-        effort = "low"
-    system = (
-        "You are a careful mathematician. Write in English and Markdown with LaTeX math. "
-        "Distinguish complete proofs, conditional arguments, and remaining gaps. "
-        "Never claim an open problem is solved without a complete justified proof. "
-        "You have no tools. Return the stage's mathematical Markdown directly, "
-        "starting with a level-one heading, without enclosing it in a code fence. "
-        "The application automatically saves the response. Do not request shell "
-        "commands or file access, discuss filesystem permissions, or tell the reader "
-        "to save or copy the text. "
-        "Cite only real references you know and state uncertainty where needed."
-    )
-    draft = critique = ""
-    stages = ("Draft", "Critique", "Refine")
-    try:
-        for stage in stages:
-            if stage == "Draft":
-                task = f"Develop a proof or clearly identify what remains open.\n\n{prompt}"
-            elif stage == "Critique":
-                task = f"Audit the proposed argument. Identify gaps, counterexamples, and unsupported steps.\n\nPROBLEM:\n{prompt}\n\nDRAFT:\n{draft}"
-            else:
-                task = f"Write the final proof with explicit caveats for unresolved gaps. Incorporate the critique.\n\nPROBLEM:\n{prompt}\n\nDRAFT:\n{draft}\n\nCRITIQUE:\n{critique}"
-            emit({"type": "turn.started"})
-            emit_item({"type": "agent_message", "text": f"{stage} · Kimi K3"})
-            response = client.chat.completions.create(
-                model=model,
-                messages=[{"role": "system", "content": system}, {"role": "user", "content": task}],
-                max_tokens=output_limit,
-                reasoning_effort=effort,
+        base = sponsored_base(os.environ.get("KIMI_API_BASE", ""))
+        if base is None:
+            emit_item(
+                {"type": "error", "message": "Sponsored Kimi endpoint attestation failed"}
             )
-            text = normalize_proof_markdown(response.choices[0].message.content or "")
-            if not text.strip():
-                raise ValueError("Kimi returned an empty response")
-            if response.choices[0].finish_reason == "length":
-                text += "\n\n> This stage reached its output limit. The argument may be incomplete.\n"
-            emit_item({"type": "agent_message", "text": text})
-            usage = response.usage
-            emit({"type": "turn.completed", "usage": {
-                "input_tokens": getattr(usage, "prompt_tokens", 0) or 0,
-                "output_tokens": getattr(usage, "completion_tokens", 0) or 0,
-            }})
-            if stage == "Draft":
-                draft = text
-                Path("draft.md").write_text(text, encoding="utf-8")
-            elif stage == "Critique":
-                critique = text
-                Path("critique.md").write_text(text, encoding="utf-8")
-            else:
-                Path("proof.md").write_text(text, encoding="utf-8")
-        emit_item({"type": "file_change", "changes": [{"path": "proof.md"}]})
-        return 0
-    except Exception as exc:
-        # SDK exception text can contain echoed request data. Keep the public
-        # trace useful without writing credentials or provider payloads.
-        emit_item({"type": "error", "message": f"Kimi could not finish this proof ({type(exc).__name__}). Check your key and try again."})
+            return 2
+    else:
+        # KIMI_API_BASE is user-settable; only the operator variable counts.
+        base = operator_base(os.environ.get(OPERATOR_BASE_VAR))
+
+    for name in _DORMANT_ENV_NAMES:
+        os.environ.pop(name, None)
+    os.environ["KIMI_API_BASE"] = base
+    os.environ["NO_PROXY"] = os.environ["no_proxy"] = "*"
+
+    from agent_monitor.runners import math_harness_runner as harness
+
+    try:
+        root = Path.cwd().resolve(strict=True)
+        problem = _read_problem(root, harness.MAX_PROBLEM_BYTES)
+        if problem is None:
+            problem = prompt.strip()
+        route = harness.Route("api", MODEL_ID, "api_chat")
+        budgets = harness.Budgets.from_env(os.environ)
+        # Called on this (the main) thread so run_pipeline's SIGTERM handler
+        # applies: a stop abandons in-flight calls and publishes nothing.
+        result = harness.run_pipeline(
+            root, problem, route, budgets=budgets, task=prompt
+        )
+    except ProblemFileError as exc:
+        emit_item(
+            {
+                "type": "error",
+                "message": f"Kimi could not start this proof: {exc}",
+                "terminal": True,
+            }
+        )
         return 1
-    finally:
-        client.close()
+    except harness.RunCancelled:
+        # RunCancelled is a MathHarnessError, so it must be caught first.
+        emit_item(
+            {
+                "type": "error",
+                "message": "Kimi run stopped before publication; nothing was published",
+                "terminal": True,
+            }
+        )
+        return 128 + int(signal.SIGTERM)
+    except harness.MathHarnessError as exc:
+        emit_item(
+            {
+                "type": "error",
+                "message": "Kimi could not finish this proof: "
+                + (_failure_message(exc) or _redact(str(exc), key, base)),
+                "terminal": True,
+            }
+        )
+        return 1
+    except (OSError, UnicodeError, ValueError) as exc:
+        emit_item(
+            {
+                "type": "error",
+                "message": f"Kimi could not finish this proof ({type(exc).__name__})",
+                "terminal": True,
+            }
+        )
+        return 1
+
+    emit_item(
+        {
+            "type": "file_change",
+            "changes": [{"path": path} for path in result.get("written") or []],
+        }
+    )
+    facts = len(result.get("fact_ids") or [])
+    status = (
+        f"accepted by the independent model verifier ({facts} fact"
+        f"{'s' if facts != 1 else ''}; not a Lean certificate)"
+        if result.get("accepted")
+        else "not verifier-accepted (unattested candidate)"
+    )
+    observed = result.get("observed_model")
+    emit_item(
+        {
+            "type": "agent_message",
+            "text": (
+                f"Ansatz CGM · Kimi K3 completed · {status}\n\n"
+                f"{str(result.get('proof_text') or '')[:6000]}"
+            ),
+            "model": observed,
+            "model_source": "response" if observed else None,
+        }
+    )
+    return 0
 
 
 if __name__ == "__main__":

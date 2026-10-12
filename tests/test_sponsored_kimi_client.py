@@ -3,12 +3,18 @@ from __future__ import annotations
 from concurrent.futures import ThreadPoolExecutor
 import os
 import tempfile
+import threading
 import time
 import unittest
 from pathlib import Path
 from unittest.mock import patch
 
 from agent_monitor import jobs, sponsored_kimi_client
+from agent_monitor.public_kimi_server import (
+    PublicKimiApplication,
+    PublicKimiHTTPServer,
+    PublicLimits,
+)
 
 
 class SponsoredKimiClientTests(unittest.TestCase):
@@ -254,6 +260,130 @@ class SponsoredKimiClientTests(unittest.TestCase):
             ],
         )
 
+
+    def test_health_exposes_the_brokers_passive_degraded_flag(self) -> None:
+        broker = {
+            "AGENT_MONITOR_SPONSORED_KIMI": "1",
+            "AGENT_MONITOR_SPONSORED_KIMI_URL": "http://127.0.0.1:4610",
+        }
+        upstream = {"recent_calls": 4, "recent_failures": 3, "last_success_age_s": None}
+        for answer, degraded in (
+            ({"ok": True, "service": "public-kimi", "upstream": {**upstream, "degraded": True}}, True),
+            ({"ok": True, "service": "public-kimi", "upstream": {**upstream, "degraded": False}}, False),
+            # An older broker without the upstream section stays quiet.
+            ({"ok": True, "service": "public-kimi"}, False),
+            ({"ok": True, "service": "public-kimi", "upstream": {"degraded": "yes"}}, False),
+            ({"ok": False, "service": "public-kimi", "upstream": {"degraded": True}}, False),
+        ):
+            with (
+                self.subTest(answer=answer),
+                patch.dict(os.environ, broker, clear=False),
+                patch.object(sponsored_kimi_client, "_health_cache", (0.0, "", False)),
+                patch.object(sponsored_kimi_client, "_health_degraded", ("", False)),
+                patch.object(sponsored_kimi_client, "_request", return_value=(answer, "")) as request,
+            ):
+                self.assertEqual(sponsored_kimi_client.available(), answer["ok"])
+                self.assertIs(sponsored_kimi_client.upstream_degraded(), degraded)
+                # One cached /healthz answer serves both questions.
+                self.assertEqual(request.call_count, 1)
+
+        with (
+            patch.dict(os.environ, broker, clear=False),
+            patch.object(sponsored_kimi_client, "_health_cache", (0.0, "", False)),
+            patch.object(sponsored_kimi_client, "_health_degraded", ("", True)),
+            patch.object(
+                sponsored_kimi_client,
+                "_request",
+                side_effect=sponsored_kimi_client.SponsoredKimiError("down"),
+            ),
+        ):
+            self.assertFalse(sponsored_kimi_client.upstream_degraded())
+
+    def test_degraded_notice_marks_the_engines_the_broker_serves(self) -> None:
+        engines = [
+            {"id": "kimi", "available": True},
+            {"id": "plain", "available": True},
+            {"id": "hermes", "available": True},
+        ]
+        with patch.object(sponsored_kimi_client, "upstream_degraded", return_value=True):
+            marked = sponsored_kimi_client.with_degraded_notice(engines)
+        self.assertEqual(marked[0]["notice"], sponsored_kimi_client.DEGRADED_NOTICE)
+        self.assertEqual(marked[1]["notice"], sponsored_kimi_client.DEGRADED_NOTICE)
+        self.assertNotIn("notice", marked[2])  # never on the sponsored route
+        self.assertNotIn("notice", engines[0])  # the registry's list is not changed
+        with patch.object(sponsored_kimi_client, "upstream_degraded", return_value=False):
+            self.assertIs(sponsored_kimi_client.with_degraded_notice(engines), engines)
+
+    def test_degraded_notice_skips_accounts_whose_kimi_runs_use_their_own_key(self) -> None:
+        engines = [{"id": "kimi", "available": True}, {"id": "plain", "available": True}]
+        user = {"id": 7, "guest": False}
+        for env, noticed in (
+            ({"KIMI_API_KEY": "sk-own-kimi-key-123456"}, False),
+            ({"KIMI_API_KEY": "  "}, True),
+            ({"OPENAI_API_KEY": "sk-other-provider-1234"}, True),
+        ):
+            with (
+                self.subTest(env=sorted(env)),
+                patch.object(sponsored_kimi_client, "upstream_degraded", return_value=True),
+                patch("agent_monitor.settings.resolved_user_env", return_value=env) as resolved,
+            ):
+                marked = sponsored_kimi_client.with_degraded_notice(engines, user)
+            self.assertEqual(
+                [engine.get("notice") is not None for engine in marked], [noticed, noticed]
+            )
+            resolved.assert_called_once_with(user)
+        # A healthy broker never looks the account up at all.
+        with (
+            patch.object(sponsored_kimi_client, "upstream_degraded", return_value=False),
+            patch("agent_monitor.settings.resolved_user_env") as resolved,
+        ):
+            self.assertIs(sponsored_kimi_client.with_degraded_notice(engines, user), engines)
+        resolved.assert_not_called()
+
+    def test_upstream_degraded_never_probes_a_disabled_broker(self) -> None:
+        with (
+            patch.dict(os.environ, {}, clear=True),
+            patch.object(sponsored_kimi_client, "_request") as request,
+        ):
+            self.assertFalse(sponsored_kimi_client.upstream_degraded())
+        request.assert_not_called()
+
+    def test_typed_broker_errors_surface_their_message(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            app = PublicKimiApplication(
+                jobs=None,
+                data_dir=Path(tmp),
+                redactions=(),
+                limits=PublicLimits(sponsor_token_starts_per_hour=1),
+                engine_catalog=lambda: [],
+            )
+            server = PublicKimiHTTPServer(("127.0.0.1", 0), app, "")
+            worker = threading.Thread(target=server.serve_forever, daemon=True)
+            worker.start()
+            try:
+                with patch.dict(
+                    os.environ,
+                    {
+                        "AGENT_MONITOR_SPONSORED_KIMI_URL": f"http://127.0.0.1:{server.server_address[1]}",
+                        "NO_PROXY": "*",
+                    },
+                    clear=False,
+                ):
+                    sponsored_kimi_client.issue_credentials(
+                        engine="plain", client_id=31, cache_key="first"
+                    )
+                    with self.assertRaises(sponsored_kimi_client.SponsoredKimiError) as raised:
+                        sponsored_kimi_client.issue_credentials(
+                            engine="plain", client_id=31, cache_key="second"
+                        )
+            finally:
+                server.shutdown()
+                server.server_close()
+                worker.join(timeout=5)
+        self.assertEqual(
+            str(raised.exception),
+            "Sponsored Kimi request failed: Sponsored Kimi session quota reached",
+        )
 
     def test_projection_copies_proof_without_any_provider_credential(self) -> None:
         payload = {

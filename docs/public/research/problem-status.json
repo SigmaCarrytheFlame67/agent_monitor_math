@@ -1,0 +1,24 @@
+{
+  "schema_version": 1,
+  "catalogue_sha256": "9151f5a1cd99e044a6af562a7d6e65b7c666cb75676d828d9f1c9da6c7bfe6b7",
+  "generated_at": "2026-10-11T05:25:33Z",
+  "last_checked_at": null,
+  "last_successful_refresh_at": null,
+  "refresh_interval_minutes": 360,
+  "sources": [],
+  "entries": {},
+  "signals": {},
+  "recent_changes": [],
+  "category_counts": {
+    "solved": 828,
+    "ai-proposed": 148,
+    "partial": 46,
+    "open": 2062
+  },
+  "model": {
+    "name": "kimi-k3",
+    "calls_today": 0,
+    "daily_cap": 0
+  },
+  "source_errors": []
+}

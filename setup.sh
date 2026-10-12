@@ -8,9 +8,51 @@ say() { printf '\n\033[1;36m▸ %s\033[0m\n' "$*"; }
 warn() { printf '\033[1;33m! %s\033[0m\n' "$*"; }
 
 # ── 1. Main virtualenv (console + Math Harness + Hermes + Monitor) ──────────
-PY=${PYTHON:-python3}
+# pyproject.toml requires Python >=3.11,<3.14. Ubuntu 26.04 ships 3.14 as
+# python3, so fall back to python3.13, then to a uv-managed 3.13. An explicit
+# PYTHON=/path/to/python always wins.
+py_supported() {
+  "$1" -c 'import sys; sys.exit(0 if (3, 11) <= sys.version_info[:2] < (3, 14) else 1)' 2>/dev/null
+}
+pick_python() {
+  if [ -n "${PYTHON:-}" ]; then
+    printf '%s\n' "$PYTHON"; return 0
+  fi
+  local cand
+  # Prefer uv's own path for an installed 3.13 (…/cpython-3.13-<platform>/bin).
+  # The ~/.local/bin/python3.13 shim would give the venv `home = ~/.local/bin`,
+  # which deploy/ansatze/install.sh rejects (ansatze-kimi.service bind-mounts
+  # exactly the uv interpreter directory).
+  if command -v uv >/dev/null; then
+    cand=$(uv python find 3.13 2>/dev/null || true)
+    if [ -n "$cand" ] && py_supported "$cand"; then
+      printf '%s\n' "$cand"; return 0
+    fi
+  fi
+  for cand in python3 python3.13 python3.12 python3.11; do
+    if command -v "$cand" >/dev/null && py_supported "$cand"; then
+      command -v "$cand"; return 0
+    fi
+  done
+  if command -v uv >/dev/null; then
+    uv python find 3.13 2>/dev/null && return 0
+    warn "Installing a uv-managed Python 3.13 (system python3 is $(python3 -V 2>&1))" >&2
+    uv python install 3.13 >&2 && uv python find 3.13 && return 0
+  fi
+  return 1
+}
+if ! PY=$(pick_python); then
+  echo "No Python 3.11-3.13 found. Install uv (https://docs.astral.sh/uv/) or set PYTHON=/path/to/python3.13." >&2
+  exit 1
+fi
 if ! command -v "$PY" >/dev/null; then
-  echo "python3 not found. Install Python 3.11+ first." >&2; exit 1
+  echo "PYTHON=$PY is not an executable." >&2; exit 1
+fi
+if ! py_supported "$PY"; then
+  warn "$PY is $($PY -V 2>&1); pyproject.toml requires >=3.11,<3.14 and pip will refuse it."
+fi
+if [ -d .venv ] && ! py_supported ./.venv/bin/python; then
+  warn ".venv uses $(./.venv/bin/python -V 2>&1); remove .venv to recreate it with $($PY -V 2>&1)."
 fi
 say "Creating main venv (.venv) with $($PY -V)"
 [ -d .venv ] || "$PY" -m venv .venv
@@ -22,7 +64,7 @@ say "Main venv ready"
 
 # ── 2. IMProof engine venv (needs Python >= 3.12) ───────────────────────────
 IMPROOF_PY=""
-for cand in python3.13 python3.12 python3; do
+for cand in "$PY" python3.13 python3.12 python3; do
   if command -v "$cand" >/dev/null; then
     if "$cand" -c 'import sys; sys.exit(0 if sys.version_info >= (3,12) else 1)'; then
       IMPROOF_PY="$cand"; break
@@ -77,7 +119,7 @@ else
   say "OpenClaw CLI already installed"
 fi
 
-# ── 2d. Official DeepSeek Harness + Danus sources ────────────────────────────
+# ── 2d. Official DeepSeek Harness sources ────────────────────────────
 if [ ! -d engines/deepseek-harness/.git ]; then
   say "Cloning official DeepSeek Harness"
   git clone --depth 1 https://github.com/deepseek-ai/deepseek-harness.git engines/deepseek-harness \
@@ -90,15 +132,6 @@ if ! command -v dsh >/dev/null && command -v npm >/dev/null; then
   PATH="$HOME/.local/node24/bin:$PATH" npm install -g --prefix "$HOME/.npm-global" @deepseek-ai/dsh \
     || warn "dsh install failed — npx will retry on the first API run"
 fi
-
-if [ ! -d engines/danus/.git ]; then
-  say "Cloning Danus Codex branch (source only)"
-  git clone --depth 1 --branch codex --single-branch https://github.com/frenzymath/Danus.git engines/danus \
-    || warn "Danus clone failed"
-else
-  say "Danus source already present"
-fi
-warn "Danus is not auto-initialized: its workers bypass approvals and sandboxing. Use an isolated host and explicitly configure DANUS_CMD."
 
 # ── 3. .env ──────────────────────────────────────────────────────────────────
 if [ ! -f .env ]; then

@@ -1,0 +1,28 @@
+FirstProofBench Problem 7 (combinatorial topology)
+
+Let G = ⟨a_1, . . . , a_r⟩ be a free group. A word on the letters L = {a_1, a_1^{−1}, . . . , a_r, a_r^{−1}} is called
+reducible if it equals 1 ∈ G. A word is called quasi-reduced if it does not contain three consecutive
+letters ℓℓ^{−1}ℓ for any ℓ ∈ L.
+
+Fix a reducible quasi-reduced word w = w_1 · · · w_{2n} (with w_i ∈ L). A matching M consists of n
+intervals, each properly embedded in R × R_+, satisfying:
+
+- any two intervals intersect transversally, and there are no triple points;
+- ∂M = {1, . . . , 2n} × 0 ⊂ R × 0 ⊂ R × R_+;
+- for each component R of R × R_+ \ M, and for each component A of M ∩ ∂(closure of R), ∂A consists of
+  some two points (i, 0) and (j, 0) with w_i = w_j^{−1}.
+
+A k-crossing matching is a matching where the total number of self-intersections is k.
+
+Let F_w be the following CW complex whose k-cells correspond to isotopy classes of k-crossing
+matchings. Given a k-crossing matching M with crossing set X(M), the associated k-cell is
+C(M) := Π_{c∈X(M)} I_c, where I_c is an interval whose endpoints correspond to the two ways of locally
+resolving M near c. The attaching maps are as follows: on a facet of the form
+
+    a × Π_{d∈X(M)\{c}} I_d,    c ∈ X(M), a ∈ ∂I_c,
+
+let M_a be the (k − 1)-crossing matching obtained by resolving M at c according to a. Then the
+(k − 1)-cell associated to M_a is C(M_a) = Π_{d∈X(M_a)} I_d = Π_{d∈X(M)\{c}} I_d, and the above facet maps
+to this (k − 1)-cell canonically.
+
+Problem. Is F_w contractible?

@@ -24,7 +24,7 @@ import time
 import urllib.request
 from contextlib import closing
 from datetime import datetime, timedelta, timezone
-from email.mime.text import MIMEText
+from email.message import EmailMessage
 from pathlib import Path
 from typing import Any
 from urllib.parse import urlsplit, urlunsplit
@@ -47,16 +47,24 @@ _USER_ENV_CIPHERTEXT_PREFIX = "enc:v1:"
 _USER_ENV_LEGACY_CIPHERTEXT_PREFIX = "enc:v0:"
 _DATA_KEY_CREDENTIAL = "agent_monitor_data_key"
 
-# A fresh account starts on the included Kimi route. These values belong to
-# the account so an explicit user choice can replace them later without
-# changing server-wide defaults.
+# A fresh account starts on the included Kimi route and the tool-free Ansatz
+# CGM engine. These values belong to the account so an explicit user choice
+# can replace them later without changing server-wide defaults.
 _NEW_USER_DEFAULTS = {
     "AGENT_MONITOR_ACCOUNT_RUNTIME": "api",
     "AGENT_MONITOR_USE_CODEX": "0",
     "AGENT_MONITOR_USE_CLAUDE": "0",
     "AGENT_MONITOR_MODEL": "kimi-k3",
-    "AGENT_MONITOR_ENGINE": "plain",
+    "AGENT_MONITOR_ENGINE": "kimi",
 }
+# Public, non-secret values a key-less registration may have seeded in
+# plaintext (current and historical defaults). ``create-admin`` runs without
+# the root-only data key, so a console that already migrated its database must
+# accept exactly these rows and re-encrypt them instead of failing closed.
+_PLAINTEXT_SEED_VALUES: dict[str, frozenset[str]] = {
+    key: frozenset({value}) for key, value in _NEW_USER_DEFAULTS.items()
+}
+_PLAINTEXT_SEED_VALUES["AGENT_MONITOR_ENGINE"] = frozenset({"kimi", "plain"})
 
 
 class UserEnvDecryptionError(RuntimeError):
@@ -83,6 +91,87 @@ def _registration_override() -> bool | None:
 def registration_open() -> bool:
     """Whether an operator explicitly enabled HTTP self-registration."""
     return _registration_override() is True
+
+
+# ── Registration eligibility and email verification ──────────────────────────
+# AGENT_MONITOR_REGISTRATION_EMAIL_SUFFIXES (e.g. ".edu") limits which addresses
+# may create accounts over HTTP; AGENT_MONITOR_REQUIRE_EMAIL_VERIFICATION=1 makes
+# a new account confirm its address before it can sign in. Both default off.
+
+EMAIL_VERIFICATION_TTL = timedelta(hours=24)
+
+
+class EmailVerificationRequired(PermissionError):
+    """The password was right, but the account's address is not verified yet."""
+
+    def __init__(self, email: str, message: str):
+        super().__init__(message)
+        self.email = email
+
+
+class EmailDeliveryUnavailable(RuntimeError):
+    """Sign-up needs a verification email, but outgoing mail is not configured."""
+
+
+def registration_email_suffixes() -> tuple[str, ...]:
+    """Domain suffixes new accounts must use, such as (".edu",); empty allows any."""
+    suffixes = []
+    for part in os.environ.get("AGENT_MONITOR_REGISTRATION_EMAIL_SUFFIXES", "").split(","):
+        value = part.strip().lower().lstrip("@")
+        if value:
+            suffixes.append(value if value.startswith(".") else "." + value)
+    return tuple(dict.fromkeys(suffixes))
+
+
+def email_allowed_for_registration(email: str) -> bool:
+    suffixes = registration_email_suffixes()
+    if not suffixes:
+        return True
+    domain = (email or "").strip().lower().rsplit("@", 1)[-1]
+    return any(("." + domain).endswith(suffix) for suffix in suffixes)
+
+
+def registration_email_rule() -> str:
+    """The sign-up restriction as one user-facing sentence."""
+    suffixes = registration_email_suffixes()
+    if len(suffixes) == 1:
+        return f"Sign-up is limited to {suffixes[0]} email addresses."
+    return "Sign-up is limited to email addresses ending in " + " or ".join(suffixes) + "."
+
+
+def email_verification_required() -> bool:
+    raw = os.environ.get("AGENT_MONITOR_REQUIRE_EMAIL_VERIFICATION", "")
+    return raw.strip().lower() in {"1", "true", "yes", "on"}
+
+
+def email_delivery_configured() -> bool:
+    """Whether outgoing mail for reset and verification links is configured."""
+    try:
+        port = int(os.environ.get("SMTP_PORT", "587"))
+    except (TypeError, ValueError):
+        return False
+    return bool(
+        (os.environ.get("SMTP_SERVER") or "").strip()
+        and (os.environ.get("SMTP_USERNAME") or "").strip()
+        and (os.environ.get("SMTP_PASSWORD") or "")
+        and 1 <= port <= 65535
+    )
+
+
+def _check_verified(row: sqlite3.Row) -> None:
+    """Refuse a sign-in by an unverified account while verification is required."""
+    if not email_verification_required():
+        return
+    if row["is_admin"] or row["is_guest"] or row["email_verified_at"]:
+        return
+    email = str(row["email"])
+    if not email_allowed_for_registration(email):
+        raise PermissionError(
+            registration_email_rule() + " This account cannot be verified; sign up again with an eligible address."
+        )
+    raise EmailVerificationRequired(
+        email, f"Confirm your email address to finish signing up. We sent a link to {email}."
+    )
 
 
 def _now() -> str:
@@ -124,6 +213,27 @@ def _migrate_user_roles(conn: sqlite3.Connection) -> None:
     conn.execute("UPDATE users SET is_admin=0 WHERE is_guest=1 AND is_admin!=0")
 
 
+def _migrate_email_verification(conn: sqlite3.Connection) -> None:
+    """Add verification state; accounts that predate it count as verified."""
+    columns = {
+        str(row["name"])
+        for row in conn.execute("PRAGMA table_info(users)").fetchall()
+    }
+    if "email_verified_at" not in columns:
+        conn.execute("ALTER TABLE users ADD COLUMN email_verified_at TEXT")
+        conn.execute(
+            "UPDATE users SET email_verified_at=COALESCE(created_at, ?) WHERE is_guest=0",
+            (_now(),),
+        )
+    conn.execute(
+        "CREATE TABLE IF NOT EXISTS email_verifications ("
+        " token_hash TEXT PRIMARY KEY,"
+        " user_id INTEGER NOT NULL,"
+        " expires_at TEXT NOT NULL,"
+        " FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE)"
+    )
+
+
 def _conn() -> sqlite3.Connection:
     global _INITIALIZED
     DB_PATH.parent.mkdir(parents=True, exist_ok=True)
@@ -151,7 +261,8 @@ def _conn() -> sqlite3.Connection:
                     picture TEXT,
                     is_admin INTEGER DEFAULT 0,
                     is_guest INTEGER NOT NULL DEFAULT 0,
-                    created_at TEXT
+                    created_at TEXT,
+                    email_verified_at TEXT
                 );
                 CREATE TABLE IF NOT EXISTS sessions (
                     token_hash TEXT PRIMARY KEY,
@@ -185,6 +296,7 @@ def _conn() -> sqlite3.Connection:
                 # The role index must be created after upgrading an existing
                 # users table, which does not yet have the is_guest column.
                 _migrate_user_roles(conn)
+                _migrate_email_verification(conn)
                 conn.execute(
                     "CREATE INDEX IF NOT EXISTS idx_users_is_guest ON users(is_guest)"
                 )
@@ -270,6 +382,24 @@ def _user_dict(row: sqlite3.Row | None) -> dict[str, Any] | None:
     }
 
 
+def is_operator_account(user_id: int | None) -> bool:
+    """Whether ``user_id`` is a registered administrator (never a guest).
+
+    Fails closed: an unknown id or an unreadable account database is not an
+    operator.
+    """
+    if user_id is None:
+        return False
+    try:
+        with closing(_conn()) as conn:
+            row = conn.execute(
+                "SELECT is_admin, is_guest FROM users WHERE id=?", (int(user_id),)
+            ).fetchone()
+    except Exception:  # noqa: BLE001 - fail closed
+        return False
+    return bool(row is not None and row["is_admin"] and not row["is_guest"])
+
+
 def _registered_user_exists(conn: sqlite3.Connection) -> bool:
     """Return whether a password or federated account already exists."""
     return (
@@ -297,8 +427,14 @@ def register(
         raise ValueError("Please enter a valid email address")
     if email.endswith("@public.local"):
         raise ValueError("Please enter a non-reserved email address")
+    if require_open and not email_allowed_for_registration(email):
+        raise ValueError(registration_email_rule())
     if len(password or "") < 8:
         raise ValueError("Password must be at least 8 characters")
+    if require_open and email_verification_required() and not email_delivery_configured():
+        raise EmailDeliveryUnavailable(
+            "Sign-up needs email verification, which is not set up on this site yet. Please try again later."
+        )
     salt = secrets.token_bytes(16)
     pw_hash = _hash_password(password, salt)
     with closing(_conn()) as conn, conn:
@@ -310,8 +446,8 @@ def register(
         try:
             cur = conn.execute(
                 "INSERT INTO users"
-                " (email, name, password_hash, salt, is_admin, is_guest, created_at)"
-                " VALUES (?,?,?,?,?,?,?)",
+                " (email, name, password_hash, salt, is_admin, is_guest, created_at, email_verified_at)"
+                " VALUES (?,?,?,?,?,?,?,?)",
                 (
                     email,
                     (name or "").strip() or None,
@@ -320,6 +456,8 @@ def register(
                     int(is_admin),
                     0,
                     _now(),
+                    # HTTP sign-ups start unverified; operator-created accounts do not.
+                    None if require_open else _now(),
                 ),
             )
         except sqlite3.IntegrityError:
@@ -363,6 +501,7 @@ def login(email: str, password: str) -> dict[str, Any]:
     email = (email or "").strip().lower()
     with closing(_conn()) as conn, conn:
         row = _authenticated_user(conn, email, password)
+    _check_verified(row)
     return _user_dict(row)  # type: ignore[return-value]
 
 
@@ -375,6 +514,7 @@ def login_and_create_session(email: str, password: str) -> tuple[dict[str, Any],
         # sessions; one that begins later verifies only the new password.
         conn.execute("BEGIN IMMEDIATE")
         row = _authenticated_user(conn, email, password)
+        _check_verified(row)
         token = _insert_session(conn, int(row["id"]))
     account = _user_dict(row)
     assert account is not None
@@ -415,6 +555,14 @@ def user_for_token(token: str | None) -> dict[str, Any] | None:
                 conn.execute(
                     "DELETE FROM users WHERE id=? AND is_guest=1", (user_id,)
                 )
+            row = None
+        if (
+            row is not None
+            and email_verification_required()
+            and not row["is_admin"]
+            and not row["is_guest"]
+            and not row["email_verified_at"]
+        ):
             row = None
     return _user_dict(row)
 
@@ -722,11 +870,48 @@ def _migrate_user_env_encryption(conn: sqlite3.Connection) -> int:
     return changed
 
 
+def _is_plaintext_seed(key: str, value: str) -> bool:
+    """A key-less registration's public default, safe to accept and rewrap."""
+    return (
+        bool(value)
+        and not value.startswith(
+            (_USER_ENV_CIPHERTEXT_PREFIX, _USER_ENV_LEGACY_CIPHERTEXT_PREFIX, "gAAAA")
+        )
+        and value in _PLAINTEXT_SEED_VALUES.get(key, frozenset())
+    )
+
+
 def get_user_env(user_id: int) -> dict[str, str]:
-    """Retrieve user API keys from SQLite and decrypt them in memory."""
+    """Retrieve user API keys from SQLite and decrypt them in memory.
+
+    Plaintext rows are otherwise refused once a data key exists. The single
+    exception is an exact public registration default seeded without the key
+    (``agent-monitor create-admin`` runs without the root-only credential):
+    it is returned and re-encrypted in place, so a running console never
+    raises ``UserEnvDecryptionError`` for such an account.
+    """
     with closing(_conn()) as conn, conn:
         rows = conn.execute("SELECT key, value FROM user_env WHERE user_id=?", (user_id,)).fetchall()
-    return {r["key"]: _decrypt_val(r["value"] or "") for r in rows}
+        out: dict[str, str] = {}
+        rewrap: list[tuple[str, str]] = []
+        seeds = [
+            row for row in rows if _is_plaintext_seed(str(row["key"]), str(row["value"] or ""))
+        ]
+        keyed = bool(seeds) and _dedicated_fernet() is not None
+        for row in rows:
+            key = str(row["key"])
+            stored = str(row["value"] or "")
+            if keyed and _is_plaintext_seed(key, stored):
+                out[key] = stored
+                rewrap.append((key, stored))
+                continue
+            out[key] = _decrypt_val(stored)
+        for key, value in rewrap:
+            conn.execute(
+                "UPDATE user_env SET value=? WHERE user_id=? AND key=? AND value=?",
+                (_encrypt_val(value), user_id, key, value),
+            )
+    return out
 
 
 def set_user_env(user_id: int, updates: dict[str, str], clear: list[str] | None = None) -> None:
@@ -798,25 +983,31 @@ def login_with_google(
         if row is None:
             row = conn.execute("SELECT * FROM users WHERE email=?", (email,)).fetchone()
             if row is not None:
+                # Google has verified this address, so it also verifies the account.
                 conn.execute(
-                    "UPDATE users SET google_sub=?, picture=COALESCE(?, picture) WHERE id=?",
-                    (sub, picture, row["id"]),
+                    "UPDATE users SET google_sub=?, picture=COALESCE(?, picture),"
+                    " email_verified_at=COALESCE(email_verified_at, ?) WHERE id=?",
+                    (sub, picture, _now(), row["id"]),
                 )
             else:
                 if require_open_for_new and _registration_override() is not True:
                     raise PermissionError("Account registration is currently closed")
+                if require_open_for_new and not email_allowed_for_registration(email):
+                    raise PermissionError(registration_email_rule())
                 is_admin = not _registered_user_exists(conn)
                 cur = conn.execute(
                     "INSERT INTO users"
-                    " (email, name, google_sub, picture, is_admin, is_guest, created_at)"
-                    " VALUES (?,?,?,?,?,?,?)",
-                    (email, name, sub, picture, int(is_admin), 0, _now()),
+                    " (email, name, google_sub, picture, is_admin, is_guest, created_at, email_verified_at)"
+                    " VALUES (?,?,?,?,?,?,?,?)",
+                    (email, name, sub, picture, int(is_admin), 0, _now(), _now()),
                 )
                 _seed_new_user_defaults(conn, int(cur.lastrowid))
         else:
             conn.execute(
-                "UPDATE users SET name=COALESCE(?, name), picture=COALESCE(?, picture) WHERE id=?",
-                (name, picture, row["id"]),
+                "UPDATE users SET name=COALESCE(?, name), picture=COALESCE(?, picture),"
+                " email_verified_at=CASE WHEN email=? THEN COALESCE(email_verified_at, ?)"
+                " ELSE email_verified_at END WHERE id=?",
+                (name, picture, email, _now(), row["id"]),
             )
         row = conn.execute(
             "SELECT * FROM users WHERE google_sub=? OR email=?", (sub, email)
@@ -931,11 +1122,22 @@ def handle_forgot_password(email: str, base_app_url: str | None = None) -> str |
 
 
 def _send_reset_email(to_email: str, reset_link: str) -> bool:
-    """Send a reset email with authenticated, certificate-verified STARTTLS."""
-    msg = MIMEText(f"Click the link to reset your password. This link expires in 1 hour.\n\n{reset_link}")
-    msg["Subject"] = "Password Reset Request"
+    return _send_email(
+        to_email,
+        "Password Reset Request",
+        "Click the link to reset your password. This link expires in 1 hour.\n\n"
+        f"{reset_link}\n\nIf you did not ask to reset your password, you can ignore this email.",
+        purpose="password reset",
+    )
+
+
+def _send_email(to_email: str, subject: str, body: str, *, purpose: str) -> bool:
+    """Send one email with authenticated, certificate-verified STARTTLS."""
+    msg = EmailMessage()
+    msg["Subject"] = subject
     msg["From"] = os.environ.get("SMTP_FROM_EMAIL", "noreply@example.com")
     msg["To"] = to_email
+    msg.set_content(body)
 
     server = (os.environ.get("SMTP_SERVER") or "").strip()
     user = (os.environ.get("SMTP_USERNAME") or "").strip()
@@ -943,11 +1145,11 @@ def _send_reset_email(to_email: str, reset_link: str) -> bool:
     try:
         port = int(os.environ.get("SMTP_PORT", "587"))
     except (TypeError, ValueError):
-        logger.error("[AUTH] SMTP_PORT is invalid; password reset email not sent")
+        logger.error("[AUTH] SMTP_PORT is invalid; %s email not sent", purpose)
         return False
 
     if not server or not (1 <= port <= 65535) or not user or not password:
-        logger.warning("[AUTH] SMTP is not fully configured; password reset email not sent")
+        logger.warning("[AUTH] SMTP is not fully configured; %s email not sent", purpose)
         return False
 
     try:
@@ -958,15 +1160,130 @@ def _send_reset_email(to_email: str, reset_link: str) -> bool:
             smtp.ehlo()
             smtp.login(user, password)
             smtp.send_message(msg)
-        logger.info("[AUTH] Password reset email accepted by SMTP for %s", to_email)
+        logger.info("[AUTH] %s email accepted by SMTP for %s", purpose.capitalize(), to_email)
         return True
     except Exception as exc:  # noqa: BLE001
         logger.error(
-            "[AUTH] Password reset email delivery failed for %s (%s)",
+            "[AUTH] %s email delivery failed for %s (%s)",
+            purpose.capitalize(),
             to_email,
             type(exc).__name__,
         )
         return False
+
+
+# ── Email verification links ─────────────────────────────────────────────────
+
+def email_verification_pending(user_id: int) -> bool:
+    """Whether this account still has to confirm its address."""
+    with closing(_conn()) as conn:
+        row = conn.execute(
+            "SELECT is_admin, is_guest, email_verified_at FROM users WHERE id=?", (int(user_id),)
+        ).fetchone()
+    return bool(row is not None and not row["is_admin"] and not row["is_guest"] and not row["email_verified_at"])
+
+
+def send_email_verification(email: str, base_app_url: str | None = None) -> str | None:
+    """Email a fresh verification link to an unverified account.
+
+    Returns the raw token when an email was accepted, otherwise None (unknown,
+    verified or guest account, no application URL, or delivery failure).
+    """
+    email = (email or "").strip().lower()
+    if base_app_url:
+        base_app_url = _validated_reset_base(base_app_url)
+    else:
+        base_app_url = _validated_reset_base(
+            os.environ.get("AGENT_MONITOR_APP_URL", ""),
+            os.environ.get("AGENT_MONITOR_BASE_PATH", ""),
+        )
+    if not base_app_url:
+        logger.error("[AUTH] No valid application URL; verification email not sent")
+        return None
+    with closing(_conn()) as conn:
+        row = conn.execute(
+            "SELECT id, is_guest, email_verified_at FROM users WHERE email=?", (email,)
+        ).fetchone()
+    if row is None or row["is_guest"] or row["email_verified_at"]:
+        return None
+    raw_token = secrets.token_urlsafe(32)
+    token_hash = hashlib.sha256(raw_token.encode("utf-8")).hexdigest()
+    expires_at = datetime.now(timezone.utc) + EMAIL_VERIFICATION_TTL
+    with closing(_conn()) as conn, conn:
+        conn.execute("DELETE FROM email_verifications WHERE user_id=?", (row["id"],))
+        conn.execute(
+            "INSERT INTO email_verifications (token_hash, user_id, expires_at) VALUES (?, ?, ?)",
+            (token_hash, row["id"], expires_at.isoformat()),
+        )
+    link = f"{base_app_url}/verify-email?token={raw_token}"
+    body = (
+        "Welcome to Ansätze.\n\n"
+        "Confirm that this is your email address to finish creating your account:\n\n"
+        f"{link}\n\n"
+        "The link expires in 24 hours. If you did not sign up for Ansätze, you can ignore this email."
+    )
+    if not _send_email(email, "Confirm your email address for Ansätze", body, purpose="verification"):
+        with closing(_conn()) as conn, conn:
+            conn.execute("DELETE FROM email_verifications WHERE token_hash=?", (token_hash,))
+        return None
+    return raw_token
+
+
+def verify_email(raw_token: str) -> dict[str, Any]:
+    """Consume a verification link and mark its account verified."""
+    if not raw_token:
+        raise ValueError("This confirmation link is invalid or has already been used.")
+    token_hash = hashlib.sha256(raw_token.encode("utf-8")).hexdigest()
+    error = None
+    # Raise only after the transaction commits, so an expired link is deleted.
+    with closing(_conn()) as conn, conn:
+        conn.execute("BEGIN IMMEDIATE")
+        row = conn.execute(
+            "SELECT ev.user_id, ev.expires_at, u.email FROM email_verifications ev"
+            " JOIN users u ON u.id=ev.user_id WHERE ev.token_hash=?",
+            (token_hash,),
+        ).fetchone()
+        if row is None:
+            error = (
+                "This confirmation link is invalid or has already been used."
+                " If you already confirmed your address, sign in."
+            )
+        else:
+            expires_at = _reset_expiry(row["expires_at"])
+            if expires_at is None or datetime.now(timezone.utc) >= expires_at:
+                conn.execute("DELETE FROM email_verifications WHERE token_hash=?", (token_hash,))
+                error = "This confirmation link has expired. Enter your email to get a new one."
+            else:
+                conn.execute(
+                    "UPDATE users SET email_verified_at=COALESCE(email_verified_at, ?) WHERE id=?",
+                    (_now(), row["user_id"]),
+                )
+                conn.execute("DELETE FROM email_verifications WHERE user_id=?", (row["user_id"],))
+    if error:
+        raise ValueError(error)
+    return {"ok": True, "email": row["email"]}
+
+
+def set_password(email: str, new_password: str) -> dict[str, Any]:
+    """Operator path: set an account's password and sign it out everywhere."""
+    email = (email or "").strip().lower()
+    if len(new_password or "") < 8:
+        raise ValueError("Password must be at least 8 characters")
+    salt = secrets.token_bytes(16)
+    pw_hash = _hash_password(new_password, salt)
+    with closing(_conn()) as conn, conn:
+        conn.execute("BEGIN IMMEDIATE")
+        row = conn.execute(
+            "SELECT * FROM users WHERE email=? AND is_guest=0", (email,)
+        ).fetchone()
+        if row is None:
+            raise ValueError(f"No account uses {email}")
+        conn.execute(
+            "UPDATE users SET password_hash=?, salt=? WHERE id=?", (pw_hash, salt, row["id"])
+        )
+        conn.execute("DELETE FROM password_resets WHERE user_id=?", (row["id"],))
+        conn.execute("DELETE FROM sessions WHERE user_id=?", (row["id"],))
+    return _user_dict(row)  # type: ignore[return-value]
 
 
 def handle_reset_password(raw_token: str, new_password: str) -> bool:
@@ -997,8 +1314,9 @@ def handle_reset_password(raw_token: str, new_password: str) -> bool:
         new_password_hash = _hash_password(new_password, new_salt)
 
         conn.execute(
-            "UPDATE users SET password_hash=?, salt=? WHERE id=?",
-            (new_password_hash, new_salt, row["user_id"]),
+            "UPDATE users SET password_hash=?, salt=?,"
+            " email_verified_at=COALESCE(email_verified_at, ?) WHERE id=?",
+            (new_password_hash, new_salt, _now(), row["user_id"]),
         )
         conn.execute("DELETE FROM password_resets WHERE user_id=?", (row["user_id"],))
         conn.execute("DELETE FROM sessions WHERE user_id=?", (row["user_id"],))

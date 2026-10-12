@@ -1,0 +1,7 @@
+interface:
+  display_name: "Reduce Problem"
+  short_description: "Reduce goal P to simpler Q with a proved bridge Q => P"
+  default_prompt: "Use $reduce-problem to reduce the current goal to a simpler, more standard goal, prove the bridge implication as a verified fact, and justify why the reduced goal is genuinely easier."
+
+policy:
+  allow_implicit_invocation: true

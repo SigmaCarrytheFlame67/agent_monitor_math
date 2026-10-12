@@ -1,0 +1,12 @@
+FirstProofBench Problem 8 (matroids and tropical geometry)
+
+Let M be a matroid, and let Trop(M) be the corresponding tropical linear space, i.e. the closure
+of the Bergman fan of M in tropical projective space. The relative Dressian of M is
+
+    Dr(M) := {tropical linear subspaces of Trop(M)},
+
+which is partially ordered by inclusion of tropical linear spaces. Suppose M admits an order-
+reversing involution F ↦ F^⊥ on the lattice of flats L(M). Note that there is a natural inclusion
+L(M)^op ⊂ Dr(M) given by F ↦ Trop(M/F ⊕ U_{0,F}).
+
+Problem. Is there an order-reversing involution Φ on Dr(M) that extends the involution F ↦ F^⊥?

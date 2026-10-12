@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
-  "as_of": "2026-09-16",
-  "editorial_note": "Original short statements and selected literature; claims retain their reported status. A missing claim record does not assert that no attempted proofs exist.",
+  "as_of": "2026-10-11",
+  "editorial_note": "Original short statements and selected literature; claims retain their reported status. A missing claim record does not assert that no attempted proofs exist. Status fields (category, source status, dates) are derived by scripts/build_problem_catalogue.py from the source fact files; this file supplies content, reviewed evidence for the few entries without a deterministic source of record, retained entries and merged duplicates.",
   "sources": [
     {
       "id": "smale",
@@ -9,7 +9,7 @@
       "url": "https://www.fim.uni-passau.de/fileadmin/dokumente/fakultaeten/fim/lehrstuhl/muller/SmaleProblems1998.pdf",
       "attribution": "Steve Smale; partial-result authors credited on individual records",
       "license": "Original editorial summaries and bibliographic references",
-      "revision": "1998 list; selected status sources through 2026",
+      "revision": "1998 list of 18 problems; status reviewed October 2026",
       "abbreviation": "SP"
     },
     {
@@ -18,7 +18,7 @@
       "url": "https://doi.org/10.1090/S0002-9904-1902-00923-3",
       "attribution": "David Hilbert; later extensions and partial results credited individually",
       "license": "Original editorial summaries and bibliographic references",
-      "revision": "Selected 1900 problems and clearly labelled extensions; status sources through 2025",
+      "revision": "Hilbert's 1900 list (23 problems) and two labelled open extensions; status reviewed October 2026",
       "abbreviation": "HP"
     },
     {
@@ -28,7 +28,7 @@
       "url": "https://doi.org/10.1023/A:1009873805276",
       "attribution": "Srinivasa Ramanujan; Brocard, Lehmer and later researchers credited on each problem",
       "license": "Original editorial summaries and bibliographic references",
-      "revision": "Selected source and status reviews through 2026-09-16"
+      "revision": "Selected source and status reviews through 2026-10-11"
     }
   ],
   "problems": [
@@ -650,10 +650,7 @@
         }
       ],
       "proof_claims": [],
-      "details_as_of": "2026-09-16",
-      "status_as_of": "2026-09-16",
-      "source_status": "Listed as unsolved by the Clay Mathematics Institute",
-      "source_revision": "Official CMI problem page checked 2026-09-16"
+      "details_as_of": "2026-09-16"
     },
     "clay-hodge-conjecture": {
       "statement": {
@@ -680,16 +677,9 @@
         }
       ],
       "proof_claims": [],
-      "details_as_of": "2026-09-16",
-      "status_as_of": "2026-09-16",
-      "source_status": "Listed as unsolved by the Clay Mathematics Institute",
-      "source_revision": "Official CMI problem page checked 2026-09-16"
+      "details_as_of": "2026-09-16"
     },
     "clay-navier-stokes-equation": {
-      "status": "resolution-announced",
-      "status_as_of": "2026-09-16",
-      "source_status": "Resolution announced; Clay prize process pending",
-      "source_revision": "Official Clay and author announcements checked September 2026",
       "statement": {
         "text": "For the three-dimensional incompressible equations $\\partial_tu+(u\\cdot\\nabla)u=\\nu\\Delta u-\\nabla p+f$, $\\nabla\\cdot u=0$, with viscosity $\\nu>0$, establish one of Fefferman’s alternatives: global smoothness for all admissible unforced initial data on $\\mathbb{R}^3$ or the three-torus, or an admissible smooth-forced example for which global smoothness fails. The source specifies the decay, periodicity and energy hypotheses.",
         "kind": "editorial",
@@ -731,7 +721,69 @@
         }
       ],
       "detail_note": "The force and the exact Clay alternative matter. An announced smooth-forced breakdown should not be silently restated as an unforced breakdown theorem. Check the linked announcements for updates.",
-      "details_as_of": "2026-09-16"
+      "details_as_of": "2026-09-16",
+      "category": "ai-proposed",
+      "category_rule": "A2",
+      "status_headline": "Resolution announced by OpenAI in September 2026 (finite-time breakdown with smooth forcing, Fefferman's alternatives C and D). Clay's evaluation is pending, and the fidelity of the Lean formalization is disputed.",
+      "badges": [
+        "disputed",
+        "lean-pending"
+      ],
+      "status_evidence": [
+        {
+          "kind": "claim",
+          "actor": "ai",
+          "claimant": "OpenAI",
+          "ai_systems": [
+            "internal OpenAI model"
+          ],
+          "scope": "full",
+          "outcome": "construction",
+          "date": "2026-09-08",
+          "date_precision": "day",
+          "title": "Finite-time breakdown with smooth forcing: manuscript and Lean source (openai/NavierStokesAndEuler)",
+          "url": "https://github.com/openai/NavierStokesAndEuler",
+          "venue": "GitHub repository, Apache-2.0",
+          "acceptance": "announced",
+          "note": "Claims Fefferman's alternatives (C) and (D), which use smooth forcing; global regularity for unforced data is not claimed."
+        },
+        {
+          "kind": "other",
+          "actor": "maintainer",
+          "claimant": "Clay Mathematics Institute",
+          "scope": "full",
+          "outcome": "other",
+          "date": "2026-09-11",
+          "date_precision": "day",
+          "title": "Clay Mathematics Institute: Navier–Stokes announcement",
+          "url": "https://www.claymath.org/news/navier-stokes-announcement/",
+          "acceptance": "announced",
+          "note": "Clay says the problem has apparently been settled and that its evaluation is pending; its Millennium page still lists Navier–Stokes as active."
+        },
+        {
+          "kind": "formalization",
+          "actor": "maintainer",
+          "claimant": "google-deepmind/formal-conjectures",
+          "scope": "full",
+          "outcome": "construction",
+          "title": "formal-conjectures: breakdown statements marked research solved, with a link to the Lean proof",
+          "url": "https://github.com/google-deepmind/formal-conjectures/blob/d352839cee8a6265ae40bd51e009634c24600fc5/FormalConjectures/Millennium/NavierStokes.lean",
+          "acceptance": "lean-checked-unreviewed",
+          "note": "The file attributes the proof to an internal OpenAI model (September 2026). Not re-checked by this server."
+        },
+        {
+          "kind": "other",
+          "actor": "human",
+          "scope": "full",
+          "outcome": "other",
+          "date": "2026-10-06",
+          "date_precision": "day",
+          "title": "Navier-Stokes lost in translation: Why Lean verification of AI autoformalisation does not guarantee correct natural language proofs",
+          "url": "https://arxiv.org/abs/2610.08144",
+          "acceptance": "preprint",
+          "note": "Argues that Lean verification of the autoformalised statements does not by itself guarantee a correct natural-language proof."
+        }
+      ]
     },
     "clay-p-vs-np": {
       "statement": {
@@ -758,10 +810,77 @@
         }
       ],
       "proof_claims": [],
-      "details_as_of": "2026-09-16",
-      "status_as_of": "2026-09-16",
-      "source_status": "Listed as unsolved by the Clay Mathematics Institute",
-      "source_revision": "Official CMI problem page checked 2026-09-16"
+      "details_as_of": "2026-09-16"
+    },
+    "clay-poincare-conjecture": {
+      "statement": {
+        "kind": "editorial",
+        "text": "Is every simply connected, closed three-dimensional manifold homeomorphic to the three-sphere $S^3$?",
+        "sources": [
+          {
+            "label": "Clay Mathematics Institute · Poincaré conjecture",
+            "url": "https://www.claymath.org/millennium/poincare-conjecture/"
+          }
+        ]
+      },
+      "partial_results": [],
+      "proof_claims": [],
+      "detail_note": "Perelman's proof completes Hamilton's Ricci-flow programme and also proves Thurston's geometrization conjecture. The Clay Mathematics Institute awarded the Millennium Prize in March 2010; Perelman declined it.",
+      "details_as_of": "2026-10-11",
+      "status_evidence": [
+        {
+          "kind": "accepted-result",
+          "actor": "human",
+          "claimant": "Grigori Perelman",
+          "scope": "full",
+          "outcome": "proof",
+          "date": "2002-11",
+          "date_precision": "month",
+          "title": "The entropy formula for the Ricci flow and its geometric applications",
+          "url": "https://arxiv.org/abs/math/0211159",
+          "venue": "arXiv preprint",
+          "acceptance": "broadly-accepted"
+        },
+        {
+          "kind": "accepted-result",
+          "actor": "human",
+          "claimant": "Grigori Perelman",
+          "scope": "full",
+          "outcome": "proof",
+          "date": "2003-03",
+          "date_precision": "month",
+          "title": "Ricci flow with surgery on three-manifolds",
+          "url": "https://arxiv.org/abs/math/0303109",
+          "venue": "arXiv preprint",
+          "acceptance": "broadly-accepted"
+        },
+        {
+          "kind": "accepted-result",
+          "actor": "human",
+          "claimant": "Grigori Perelman",
+          "scope": "full",
+          "outcome": "proof",
+          "date": "2003-07",
+          "date_precision": "month",
+          "title": "Finite extinction time for the solutions to the Ricci flow on certain three-manifolds",
+          "url": "https://arxiv.org/abs/math/0307245",
+          "venue": "arXiv preprint",
+          "acceptance": "broadly-accepted"
+        },
+        {
+          "kind": "source-marker",
+          "actor": "maintainer",
+          "claimant": "Clay Mathematics Institute",
+          "scope": "full",
+          "outcome": "proof",
+          "date": "2010-03",
+          "date_precision": "month",
+          "title": "Clay Mathematics Institute · Poincaré conjecture (Millennium Prize awarded 2010)",
+          "url": "https://www.claymath.org/millennium/poincare-conjecture/",
+          "acceptance": "accepted-by-maintainer",
+          "note": "The prize was awarded to Grigori Perelman, who declined it."
+        }
+      ]
     },
     "clay-riemann-hypothesis": {
       "statement": {
@@ -788,10 +907,7 @@
         }
       ],
       "proof_claims": [],
-      "details_as_of": "2026-09-16",
-      "status_as_of": "2026-09-16",
-      "source_status": "Listed as unsolved by the Clay Mathematics Institute",
-      "source_revision": "Official CMI problem page checked 2026-09-16"
+      "details_as_of": "2026-09-16"
     },
     "clay-yang-mills-the-maths-gap": {
       "statement": {
@@ -818,10 +934,7 @@
         }
       ],
       "proof_claims": [],
-      "details_as_of": "2026-09-16",
-      "status_as_of": "2026-09-16",
-      "source_status": "Listed as unsolved by the Clay Mathematics Institute",
-      "source_revision": "Official CMI problem page checked 2026-09-16"
+      "details_as_of": "2026-09-16"
     },
     "erdos-0003": {
       "title": "Erdős #3 · divergent reciprocal sums and arithmetic progressions",
@@ -836,7 +949,7 @@
           },
           {
             "label": "Formal Conjectures · statement of Erdős #3",
-            "url": "https://github.com/google-deepmind/formal-conjectures/blob/main/FormalConjectures/ErdosProblems/3.lean"
+            "url": "https://github.com/google-deepmind/formal-conjectures/blob/d352839cee8a6265ae40bd51e009634c24600fc5/FormalConjectures/ErdosProblems/3.lean"
           }
         ]
       },
@@ -856,14 +969,30 @@
       "proof_claims": [],
       "details_as_of": "2026-09-16"
     },
+    "erdos-1162": {
+      "related": [
+        {
+          "id": "erdos-1163",
+          "relation": "related"
+        }
+      ]
+    },
+    "erdos-1163": {
+      "related": [
+        {
+          "id": "erdos-1162",
+          "relation": "related"
+        }
+      ]
+    },
     "kourovka-01-003": {
       "statement": {
         "kind": "editorial",
         "text": "Let $G$ be a torsion-free group: no element other than its identity has finite order. Must $\\alpha\\beta\\ne0$ hold whenever $\\alpha$ and $\\beta$ are nonzero elements of the integral group ring $\\mathbb{Z}[G]$? Elements of $\\mathbb{Z}[G]$ are finite integer linear combinations of group elements, multiplied using the group law.",
         "sources": [
           {
-            "label": "Kourovka Notebook, 21st edition, September 2026",
-            "url": "https://kourovkanotebookorg.wordpress.com/wp-content/uploads/2026/09/21tkt.pdf"
+            "label": "Kourovka Notebook No. 21, problem 1.3 (arXiv:1401.0300v48, October 2026), page 5",
+            "url": "https://arxiv.org/pdf/1401.0300v48#page=5"
           }
         ]
       },
@@ -906,9 +1035,7 @@
       "title": "Kourovka 1.3 · Zero divisors in integral group rings",
       "summary": "Can two nonzero elements of an integral group ring multiply to zero when the group is torsion-free?",
       "detail_note": "Listed in the first Kourovka issue (1965), submitted as a well-known problem by L. A. Bokut’. This is the integral-coefficient form of the zero-divisor conjecture.",
-      "details_as_of": "2026-09-16",
-      "status_as_of": "2026-09-16",
-      "source_status": "Listed as unresolved in the September 2026 Kourovka Notebook"
+      "details_as_of": "2026-09-16"
     },
     "kourovka-12-020": {
       "statement": {
@@ -916,8 +1043,8 @@
         "text": "Let $F$ be the group of increasing piecewise-linear homeomorphisms of $[0,1]$ with finitely many breakpoints, all dyadic rationals, and slopes that are integer powers of $2$. Is $F$ amenable? Equivalently, for every finite $S\\subset F$ and $\\varepsilon>0$, is there a nonempty finite $A\\subset F$ with $|SA|<(1+\\varepsilon)|A|$?",
         "sources": [
           {
-            "label": "Kourovka Notebook, 21st edition, September 2026",
-            "url": "https://kourovkanotebookorg.wordpress.com/wp-content/uploads/2026/09/21tkt.pdf"
+            "label": "Kourovka Notebook No. 21, problem 12.20 (arXiv:1401.0300v48, October 2026), page 61",
+            "url": "https://arxiv.org/pdf/1401.0300v48#page=61"
           },
           {
             "label": "Cannon–Floyd–Parry, Introductory notes on Richard Thompson’s groups (1996), §1",
@@ -951,8 +1078,8 @@
               "url": "https://arxiv.org/pdf/1605.09133v2"
             },
             {
-              "label": "Kourovka Notebook, 21st edition, September 2026",
-              "url": "https://kourovkanotebookorg.wordpress.com/wp-content/uploads/2026/09/21tkt.pdf"
+              "label": "Kourovka Notebook No. 21, comment to problem 15.42 (arXiv:1401.0300v48), page 91",
+              "url": "https://arxiv.org/pdf/1401.0300v48#page=91"
             }
           ]
         }
@@ -972,10 +1099,29 @@
       ],
       "title": "Kourovka 12.20 · Is Thompson’s group F amenable?",
       "summary": "Does Thompson’s group F satisfy the Følner criterion for amenability?",
-      "detail_note": "Recorded by R. I. Grigorchuk as a well-known problem. The September 2026 notebook retains it among unresolved questions.",
-      "details_as_of": "2026-09-16",
-      "status_as_of": "2026-09-16",
-      "source_status": "Listed as unresolved in the September 2026 Kourovka Notebook"
+      "detail_note": "Recorded by R. I. Grigorchuk as a well-known problem.",
+      "details_as_of": "2026-09-16"
+    }
+  },
+  "retained": {
+    "kourovka-20-003": {
+      "source": "kourovka",
+      "number": "20.3",
+      "title": "Kourovka problem 20.3",
+      "source_url": "https://arxiv.org/pdf/1401.0300v46#page=146",
+      "source_locator": "Kourovka 20.3, No. 21 (arXiv:1401.0300v46, September 2026), page 146",
+      "topics": [
+        "group theory"
+      ],
+      "source_status": "Listed in the September 2026 edition (arXiv:1401.0300v46); absent from the October 2026 edition (arXiv:1401.0300v48)",
+      "status_headline": "Not in the October 2026 edition, which gives no comment; the preface says numbers go missing when problems are withdrawn at the authors' request. Kept open pending confirmation."
+    }
+  },
+  "merged": {
+    "kourovka-21-093": {
+      "into": "erdos-0274",
+      "relation": "same",
+      "note": "Kourovka 21.93 and Erdős #274 both state the Herzog–Schönheim conjecture."
     }
   }
 }

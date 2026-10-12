@@ -211,6 +211,7 @@ console.log(JSON.stringify(cases));
             """
 let leanEngines=[];
 let runId='run-a';
+let CURRENT_USER={id:7,guest:false};
 const leanEngineByRun=new Map();
 const select={value:'',_html:'',set innerHTML(v){this._html=v;},get innerHTML(){return this._html;}};
 function $(id){return id==='lean-engine'?select:null;}
@@ -231,13 +232,20 @@ const firstB=select.value;
 runId='run-a'; fillLeanEngines(engines,'codex');
 const restoredA=select.value;
 runId='run-c'; fillLeanEngines([{id:'codex',label:'Codex',available:false}], 'codex');
-console.log(JSON.stringify({firstA,firstB,restoredA,closed:select.value,html:select.innerHTML}));
+const closed=select.value, html=select.innerHTML;
+CURRENT_USER={id:8,guest:true}; runId='run-g';
+fillLeanEngines(engines,'codex');
+console.log(JSON.stringify({firstA,firstB,restoredA,closed,html,guest:select.value,guestEngines:leanEngines.length,guestMapped:leanEngineByRun.has('run-g')}));
 """
         )
         self.assertEqual(output["firstA"], "codex")
         self.assertEqual(output["firstB"], "codex")
         self.assertEqual(output["restoredA"], "openclaw")
         self.assertEqual(output["closed"], "")
+        # Guests never get a coding-agent Harness, even when one is offered.
+        self.assertEqual(output["guest"], "")
+        self.assertEqual(output["guestEngines"], 0)
+        self.assertFalse(output["guestMapped"])
 
     def test_pipeline_visual_status_uses_proof_outcome_not_lifecycle(self) -> None:
         source = _js_function("pipelineStageVisualStatus")
@@ -278,6 +286,7 @@ const elements={
   'lean-progress-detail':{textContent:''}
 };
 let badge='',meta='';
+let CURRENT_USER={id:7,guest:false};
 function $(id){return elements[id]||null;}
 function setLeanBadge(value){badge=value;}
 function leanStatus(value){meta=value;}
@@ -291,7 +300,10 @@ run({status:'done',detail:'Lean failed',result:{status:'failed'}});
 const failed={badge,meta,title:elements['lean-progress-title'].textContent,detail:elements['lean-progress-detail'].textContent};
 run({status:'error',detail:'node exited 127'});
 const startup={badge,meta,title:elements['lean-progress-title'].textContent,detail:elements['lean-progress-detail'].textContent};
-console.log(JSON.stringify({incomplete,failed,startup}));
+CURRENT_USER={id:8,guest:true};
+run({status:'error',detail:'node exited 127'});
+const guestStartup={badge,title:elements['lean-progress-title'].textContent,detail:elements['lean-progress-detail'].textContent};
+console.log(JSON.stringify({incomplete,failed,startup,guestStartup}));
 """
         )
         self.assertEqual(output["incomplete"]["badge"], "incomplete")
@@ -301,6 +313,12 @@ console.log(JSON.stringify({incomplete,failed,startup}));
         self.assertEqual(output["startup"]["title"], "Formal translation failed")
         self.assertIn("No Proof.lean was produced", output["startup"]["detail"])
         self.assertIn("Retry Verify", output["startup"]["detail"])
+        self.assertIn("choose an available Harness", output["startup"]["detail"])
+        # Guests have no Harness, so their copy must not offer one.
+        self.assertEqual(output["guestStartup"]["badge"], "failed")
+        self.assertEqual(output["guestStartup"]["title"], "Formal translation failed")
+        self.assertIn("Retry Verify", output["guestStartup"]["detail"])
+        self.assertNotIn("Harness", output["guestStartup"]["detail"])
 
     def test_run_switch_resets_old_pipeline_and_formal_dag_is_disclaimed(self) -> None:
         self.assertIn("lastSandboxRun=null;\n  leanRefreshSeq++", HTML)

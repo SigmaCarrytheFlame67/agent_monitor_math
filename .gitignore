@@ -1,19 +1,22 @@
-# Runtime / generated
-data/runs/*
-data/cache/*
-data/logs/*
-data/hermes/*
-data/users.db*
-data/calls.jsonl
-data/codex_home/
-data/claude_home/
-data/library/*
+# Local runtime state: only documentation and directory placeholders are source.
+/data/*
+!/data/README.md
+!/data/runs/
+!/data/cache/
+!/data/logs/
+!/data/hermes/
+!/data/library/
+/data/runs/*
+/data/cache/*
+/data/logs/*
+/data/hermes/*
+/data/library/*
+!/data/runs/.gitkeep
+!/data/cache/.gitkeep
+!/data/logs/.gitkeep
+!/data/hermes/.gitkeep
+!/data/library/.gitkeep
 logs/
-!data/runs/.gitkeep
-!data/cache/.gitkeep
-!data/logs/.gitkeep
-!data/hermes/.gitkeep
-!data/library/.gitkeep
 
 # Python
 __pycache__/
@@ -89,3 +92,16 @@ engines/deepseek-harness/
 
 # VitePress build snapshots
 /docs/.vitepress/.dist-*/
+
+# Local secrets for the sponsored Kimi broker (never commit)
+.secrets/
+
+# Source-only repository: local research archives and historical run outputs.
+/reports/
+/problems/batch2/
+/dns-records.csv
+/*.zip
+/*.tex
+/cgm-framework/results/
+/cgm-framework/experiments/*/results/
+/cgm-framework/SHA256SUMS

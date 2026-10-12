@@ -7,7 +7,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from agent_monitor import console_server, lean_verify
+from agent_monitor import console_server, lean_verify, settings
 
 
 CLAUDE_MODEL = "claude-haiku-4-5"
@@ -56,10 +56,14 @@ class ClaudeFormalHitlRouteTests(unittest.TestCase):
 
         self.assertEqual(selected, CLAUDE_MODEL)
         self.assertEqual(answer, "The induction step is faithful.")
+        # The non-admin account's stored settings reach route configuration
+        # unchanged, except that Kimi is pinned to the operator's endpoint
+        # (settings.restrict_account_base_urls, the derived-call SSRF guard).
         configure.assert_called_once_with(
             {
                 "AGENT_MONITOR_ACCOUNT_RUNTIME": "api",
                 "OPENAI_API_KEY": "must-not-be-used",
+                "KIMI_API_BASE": settings.operator_kimi_base_url(),
             },
             route="claude_subscription",
             user_id=7,

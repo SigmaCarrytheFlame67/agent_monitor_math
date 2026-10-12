@@ -417,8 +417,39 @@ class ClaudeCodeRuntimeTests(unittest.TestCase):
         for event in projected:
             parser.feed(json.dumps(event) + "\n")
         self.assertEqual(parser.final_message(), "Completed the proof.")
-        self.assertEqual(parser.usage["input_tokens"], 11)
+        # Codex semantics: input counts cache reads (3) and writes (2) too.
+        self.assertEqual(parser.usage["input_tokens"], 16)
+        self.assertEqual(parser.usage["cache_read_tokens"], 3)
+        self.assertEqual(parser.total_input_tokens(), 16)
         self.assertEqual(parser.usage["output_tokens"], 7)
+
+    def test_native_claude_totals_include_cache_reads_and_writes(self) -> None:
+        parser = CLIEventParser("claude")
+        for event in _events():
+            parser.feed(json.dumps(event) + "\n")
+        # Claude's input_tokens (11) excludes cache reads (3) and writes (2).
+        self.assertFalse(parser.input_includes_cache)
+        self.assertEqual(parser.usage["input_tokens"], 11)
+        self.assertEqual(parser.total_input_tokens(), 16)
+        node = parser.agent_nodes("claude-test", prompt="prove")[0]
+        self.assertEqual(node["total_input_tokens"], 11)
+
+    def test_codex_node_input_is_not_double_counted_with_its_cached_subset(self) -> None:
+        parser = CLIEventParser("codex")
+        for event in (
+            {"type": "item.completed", "item": {"type": "agent_message", "text": "done"}},
+            {
+                "type": "turn.completed",
+                "usage": {"input_tokens": 24763, "cached_input_tokens": 24448, "output_tokens": 122},
+            },
+        ):
+            parser.feed(json.dumps(event) + "\n")
+        self.assertTrue(parser.input_includes_cache)
+        self.assertEqual(parser.total_input_tokens(), 24763)
+        node = parser.agent_nodes("codex-test", prompt="prove")[0]
+        self.assertEqual(node["input_tokens"], 24763)
+        self.assertEqual(node["cache_read_tokens"], 24448)
+        self.assertEqual(node["total_input_tokens"], 24763)
 
 
 if __name__ == "__main__":

@@ -1,0 +1,7 @@
+interface:
+  display_name: "Apply Compactness"
+  short_description: "Get the target object as a limit of controlled approximants"
+  default_prompt: "Use $apply-compactness to build approximate objects, prove n-independent uniform bounds, extract a convergent subsequence by a named compactness theorem, and justify passing every hypothesis and target property to the limit."
+
+policy:
+  allow_implicit_invocation: true

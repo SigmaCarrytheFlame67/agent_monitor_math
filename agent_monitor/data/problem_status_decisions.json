@@ -1,0 +1,412 @@
+{
+  "schema_version": 1,
+  "note": "Operator decisions written by scripts/review_problem_status.py. They override research and automatic categories; each records who, when, why and the evidence.",
+  "decisions": {
+    "erdos-0365": {
+      "category": "partial",
+      "category_rule": "P2",
+      "status_headline": "Part (i) is answered: Golomb's pair 12167 = 23³ and 12168 = 2³·3²·13² (1970). The counting question (ii) is open.",
+      "evidence_urls": [],
+      "evidence": [
+        {
+          "kind": "source-marker",
+          "actor": "maintainer",
+          "scope": "part",
+          "outcome": "counterexample",
+          "date": "2026-10",
+          "date_precision": "month",
+          "title": "formal-conjectures marks erdos_365.parts.i solved (Golomb's pair) and parts.ii open",
+          "url": "https://github.com/google-deepmind/formal-conjectures/blob/4c40439d9be65b242e9196fb7848be02a9a4481d/FormalConjectures/ErdosProblems/365.lean",
+          "acceptance": "accepted-by-maintainer"
+        }
+      ],
+      "badges_add": [],
+      "badges_remove": [],
+      "decided_by": "Claude (AI) for the site operator; not yet signed off by a person",
+      "decided_at": "2026-10-11",
+      "note": "The database lists the problem as open; formal-conjectures marks part (i) solved and part (ii) open. An explicitly stated part has an accepted answer, so partial."
+    },
+    "erdos-0522": {
+      "category": "solved",
+      "category_rule": "S2",
+      "status_headline": "Proved: forum proofs by Chojecki and by Kwon–Zou (Apr 2026) and independent kernel-checked Lean proofs by Kawada and Kitamura (Sep 2026), which formal-conjectures accepts. The Erdős database keeps it 'open (Lean)' until a human digests the Lean proof.",
+      "evidence_urls": [],
+      "evidence": [
+        {
+          "kind": "formalization",
+          "actor": "maintainer",
+          "claimant": "google-deepmind/formal-conjectures maintainers",
+          "scope": "full",
+          "outcome": "proof",
+          "date": "2026-10",
+          "date_precision": "month",
+          "title": "formal-conjectures marks Erdős #522 research solved, linking three kernel-checked Lean proofs",
+          "url": "https://github.com/google-deepmind/formal-conjectures/blob/4c40439d9be65b242e9196fb7848be02a9a4481d/FormalConjectures/ErdosProblems/522.lean",
+          "acceptance": "accepted-by-maintainer"
+        }
+      ],
+      "badges_add": [],
+      "badges_remove": [],
+      "decided_by": "Claude (AI) for the site operator; not yet signed off by a person",
+      "decided_at": "2026-10-11",
+      "note": "Research and its verifier found S2. The formal-conjectures acceptance was recorded as a statement (outcome other), which cannot support solved; this decision records it as the accepted formal proof it is, as for #424, #521 and #973."
+    },
+    "erdos-0836": {
+      "category": "ai-proposed",
+      "category_rule": "A2",
+      "status_headline": "Part (i) answered no (Alon). For part (ii), GPT-5.5 Pro claims a proof (reported by L. Price, Apr 2026), and a separate Codex-assisted Lean formalization (Sep 2026, PR closed) proves that two edges meet in at least r/3 vertices; both unreviewed.",
+      "evidence_urls": [
+        "https://github.com/TheJustinSunPrize/awards/pull/95",
+        "https://www.erdosproblems.com/forum/thread/836"
+      ],
+      "evidence": [],
+      "badges_add": [],
+      "badges_remove": [],
+      "decided_by": "Claude (AI) for the site operator; not yet signed off by a person",
+      "decided_at": "2026-10-11",
+      "note": "Each part that is not already answered has an AI-produced claimed answer (unreviewed); together with the accepted parts the whole problem is claimed. No single claim covers every part, so the builder needs this decision. The database still lists it as open."
+    },
+    "erdos-0883": {
+      "category": "ai-proposed",
+      "category_rule": "A2",
+      "status_headline": "Part (ii) solved (Sárközy 1999). AI-produced claims (Della Pietra, GPT-5.6 Sol; Y. Pan, all n, Lean) assert part (i); unreviewed.",
+      "evidence_urls": [
+        "https://www.erdosproblems.com/forum/thread/883/proof-claims"
+      ],
+      "evidence": [],
+      "badges_add": [],
+      "badges_remove": [],
+      "decided_by": "Claude (AI) for the site operator; not yet signed off by a person",
+      "decided_at": "2026-10-11",
+      "note": "Each part that is not already answered has an AI-produced claimed answer (unreviewed); together with the accepted parts the whole problem is claimed. No single claim covers every part, so the builder needs this decision. The database still lists it as open."
+    },
+    "erdos-0978": {
+      "category": "ai-proposed",
+      "category_rule": "A2",
+      "status_headline": "Partly solved (Hooley; Browning for k >= 9). OpenAI's openai/math release (Oct 2026) claims the rest, incl. infinitely many squarefree n^4+2, with Lean; unreviewed.",
+      "evidence_urls": [
+        "https://github.com/openai/math/tree/fd4aeeb2ee4fc729c18d98444fed42fd0529eeeb/preprints/Squarefree-values-of-quartics-and-power-free-values-of-polynomials-September-24-2026"
+      ],
+      "evidence": [],
+      "badges_add": [],
+      "badges_remove": [],
+      "decided_by": "Claude (AI) for the site operator; not yet signed off by a person",
+      "decided_at": "2026-10-11",
+      "note": "Each part that is not already answered has an AI-produced claimed answer (unreviewed); together with the accepted parts the whole problem is claimed. No single claim covers every part, so the builder needs this decision. The database still lists it as open."
+    },
+    "erdos-1038": {
+      "category": "ai-proposed",
+      "category_rule": "A2",
+      "status_headline": "Still listed as open in the database (sup = 2√2 settled). Proofs claiming inf = 1.83443… (S. Wang, found by GPT-5.6 Sol, with Lean; C. Budala, GPT-5.6 Sol; Darvas–Peng–Tao, GPT-5.5 Pro-assisted; Jul–Aug 2026) are unreviewed.",
+      "evidence_urls": [
+        "https://github.com/ShouqiaoW/erdos/blob/main/1038/paper.pdf",
+        "https://www.erdosproblems.com/forum/thread/1038/proof-claims"
+      ],
+      "evidence": [],
+      "badges_add": [],
+      "badges_remove": [],
+      "decided_by": "Claude (AI) for the site operator; not yet signed off by a person",
+      "decided_at": "2026-10-11",
+      "note": "Each part that is not already answered has an AI-produced claimed answer (unreviewed); together with the accepted parts the whole problem is claimed. No single claim covers every part, so the builder needs this decision. The database still lists it as open."
+    },
+    "erdos-1054": {
+      "category": "ai-proposed",
+      "category_rule": "A2",
+      "status_headline": "Still listed as open per the database. Tao's bound rules out f(n)=o(n), even almost always; Principia Math (an AI harness, Jun-Jul 2026) claims limsup f(n)/n = infinity with a Lean proof; unreviewed.",
+      "evidence_urls": [
+        "https://github.com/antoshashakov/Principia-Math-Solutions/tree/c9910942522fbd3a07c034ac57947f56df6f0f6d/erdos1054",
+        "https://www.erdosproblems.com/forum/thread/1054"
+      ],
+      "evidence": [],
+      "badges_add": [],
+      "badges_remove": [],
+      "decided_by": "Claude (AI) for the site operator; not yet signed off by a person",
+      "decided_at": "2026-10-11",
+      "note": "Each part that is not already answered has an AI-produced claimed answer (unreviewed); together with the accepted parts the whole problem is claimed. No single claim covers every part, so the builder needs this decision. The database still lists it as open."
+    },
+    "erdos-1106": {
+      "category": "partial",
+      "category_rule": "P2",
+      "status_headline": "Part (i) holds (Schinzel–Wirsing, 1987); question (ii) remains open.",
+      "evidence_urls": [],
+      "evidence": [
+        {
+          "kind": "source-marker",
+          "actor": "maintainer",
+          "scope": "part",
+          "outcome": "proof",
+          "date": "2026-09-30",
+          "date_precision": "day",
+          "title": "formal-conjectures marks erdos_1106.parts.i true (Schinzel–Wirsing 1987)",
+          "url": "https://github.com/google-deepmind/formal-conjectures/blob/da878b6b63ca0439443d754c41a226a1f816bee6/FormalConjectures/ErdosProblems/1106.lean",
+          "acceptance": "accepted-by-maintainer"
+        }
+      ],
+      "badges_add": [],
+      "badges_remove": [],
+      "decided_by": "Claude (AI) for the site operator; not yet signed off by a person",
+      "decided_at": "2026-10-11",
+      "note": "The database lists the problem as open and records that (i) holds; formal-conjectures marks part (i) true (commit da878b6, 30 Sep 2026). An explicitly stated part has an accepted answer, so partial."
+    },
+    "hilbert-01": {
+      "category": "open",
+      "category_rule": "O",
+      "status_headline": "Gödel (1938) and Cohen (1963) showed the continuum hypothesis is independent of ZFC; there is no consensus that independence answers Hilbert's question. The well-ordering question is answered yes in ZFC by Zermelo's theorem (1904).",
+      "evidence_urls": [],
+      "evidence": [],
+      "badges_add": [
+        "ambiguous-statement"
+      ],
+      "badges_remove": [],
+      "decided_by": "Claude (AI) for the site operator; not yet signed off by a person",
+      "decided_at": "2026-10-11",
+      "note": "Research marked it solved by independence. Wikipedia's Hilbert table lists it as partially resolved and says there is no consensus that independence is a solution, so it is shown as open with the independence results as evidence."
+    },
+    "hilbert-09": {
+      "category": "open",
+      "category_rule": "O",
+      "status_headline": "Artin's reciprocity law (1927) answers the abelian case; a general reciprocity law for non-abelian extensions remains open (Langlands program).",
+      "evidence_urls": [],
+      "evidence": [],
+      "badges_add": [
+        "ambiguous-statement"
+      ],
+      "badges_remove": [],
+      "decided_by": "Claude (AI) for the site operator; not yet signed off by a person",
+      "decided_at": "2026-10-11",
+      "note": "Research marked it solved under a literal reading. Wikipedia's Hilbert table lists it as unresolved, with Artin reciprocity as a partial result, so it is shown as open; the reading-dependence is marked as an ambiguous statement."
+    },
+    "hilbert-13": {
+      "category": "partial",
+      "category_rule": "P2",
+      "status_headline": "For continuous functions, Hilbert's expected impossibility is false (Kolmogorov 1956, Arnold 1957); the variant for algebraic functions remains open.",
+      "evidence_urls": [
+        "https://doi.org/10.1070/RM2004v059n01ABEH000698"
+      ],
+      "evidence": [],
+      "badges_add": [],
+      "badges_remove": [],
+      "decided_by": "Claude (AI) for the site operator; not yet signed off by a person",
+      "decided_at": "2026-10-11",
+      "note": "Standard formulations state two variants: continuous functions (answered by the Kolmogorov–Arnold theorem) and algebraic functions (open). One stated variant is answered, so partial, matching Wikipedia's 'partially resolved'."
+    },
+    "hilbert-18": {
+      "category": "solved",
+      "category_rule": "S2",
+      "status_headline": "All three parts are answered: space groups (Bieberbach 1911–12), an anisohedral tile (Reinhardt 1928) and the Kepler conjecture (Hales 2005; formal proof 2017).",
+      "evidence_urls": [],
+      "evidence": [
+        {
+          "kind": "accepted-result",
+          "actor": "human",
+          "claimant": "T. Hales et al.",
+          "scope": "full",
+          "outcome": "proof",
+          "date": "2017",
+          "date_precision": "year",
+          "title": "A formal proof of the Kepler conjecture (completes the last of the three parts)",
+          "url": "https://doi.org/10.1017/fmp.2017.1",
+          "acceptance": "refereed",
+          "note": "With Bieberbach (1911–12) for part (a) and Reinhardt (1928) for part (b), all three parts are answered."
+        }
+      ],
+      "badges_add": [],
+      "badges_remove": [],
+      "decided_by": "Claude (AI) for the site operator; not yet signed off by a person",
+      "decided_at": "2026-10-11",
+      "note": "Each part was answered by a different refereed result, so no single paper answers the whole problem; this decision records that together they do. The cited item completes the last part."
+    },
+    "solved-sendovs-conjecture-and-phelps-rodriguez-conjecture": {
+      "category": "solved",
+      "category_rule": "S2",
+      "status_headline": "Both conjectures are proved: Mazur's AI-produced, Lean-checked proof of Sendov (Aug 2026) was digested by Tao, whose argument proves the interior form and so Phelps–Rodriguez too; Tao formalized the whole argument in Lean. Not yet refereed.",
+      "evidence_urls": [],
+      "evidence": [
+        {
+          "acceptance": "broadly-accepted",
+          "actor": "ai-assisted",
+          "claimant": "Terence Tao",
+          "date": "2026-08-12",
+          "date_precision": "day",
+          "kind": "accepted-result",
+          "note": "Tao: the argument 'resolves both the Sendov conjecture and the Phelps–Rodriguez conjecture in full generality'; he formalized the whole argument in Lean.",
+          "outcome": "proof",
+          "scope": "full",
+          "title": "A digestion of the proof of Sendov's conjecture",
+          "url": "https://terrytao.wordpress.com/2026/08/12/a-digestion-of-the-proof-of-sendovs-conjecture/",
+          "venue": "What's New (blog)"
+        },
+        {
+          "kind": "other",
+          "actor": "human",
+          "claimant": "Senjian An",
+          "scope": "full",
+          "outcome": "proof",
+          "date": "2026-08-22",
+          "date_precision": "day",
+          "title": "A Scalar Optimization Proof of Sendov's Conjecture with Reduced Computer Assistance",
+          "url": "https://arxiv.org/abs/2609.04246",
+          "acceptance": "preprint",
+          "note": "Completes the Mazur–Tao scalar reduction with less computer assistance; builds on their argument, so not an independent proof."
+        }
+      ],
+      "badges_add": [],
+      "badges_remove": [],
+      "decided_by": "Claude (AI) for the site operator; not yet signed off by a person",
+      "decided_at": "2026-10-11",
+      "note": "Tao's digestion (12 Aug 2026) says the argument resolves both conjectures in full generality and formalizes it in Lean, so the Phelps–Rodriguez part rests on the same checks as Sendov's; the earlier partial decision assumed it had none. An (arXiv 2609.04246) completes the Mazur–Tao reduction and is not independent."
+    },
+    "wiki-arnold-givental-conjecture-and-arnold-conjecture": {
+      "category": "open",
+      "category_rule": "O",
+      "status_headline": "The homological Arnold conjecture is proved over ℚ (Fukaya–Ono, Liu–Tian, 1998–99). The strong forms and the Arnold–Givental conjecture have only unreviewed 2026 claims, including AI-produced counterexample claims.",
+      "evidence_urls": [],
+      "evidence": [],
+      "badges_add": [],
+      "badges_remove": [],
+      "decided_by": "Claude (AI) for the site operator; not yet signed off by a person",
+      "decided_at": "2026-10-11",
+      "note": "The verifier could not settle the research's partial reading (the accepted result is a weak form, not a stated part), so it is shown as open with the accepted results and claims in the evidence."
+    },
+    "wiki-for-any-given-integers-k-geq-1-b-geq-2": {
+      "category": "open",
+      "category_rule": "O",
+      "status_headline": "As worded it fails: Sierpiński and Riesel numbers and algebraic factorizations give only composites. The intended conjecture, which excludes such obstructions, is open.",
+      "evidence_urls": [],
+      "evidence": [],
+      "badges_add": [
+        "ambiguous-statement"
+      ],
+      "badges_remove": [],
+      "decided_by": "Claude (AI) for the site operator; not yet signed off by a person",
+      "decided_at": "2026-10-11",
+      "note": "Research marked it solved because the literal statement is false; the list intends the version that excludes covering-set and algebraic obstructions, which is open."
+    },
+    "wiki-fugledes-conjecture": {
+      "category": "open",
+      "category_rule": "O",
+      "status_headline": "Already false in dimensions 3 and higher. A July 2026 preprint (Zhang) disproves both directions in dimension 2 and experts cite it; dimension 1 remains open.",
+      "evidence_urls": [],
+      "evidence": [],
+      "badges_add": [
+        "human-claim"
+      ],
+      "badges_remove": [],
+      "decided_by": "Claude (AI) for the site operator; not yet signed off by a person",
+      "decided_at": "2026-10-11",
+      "note": "The dimension-2 disproof is an unrefereed preprint cited by one independent expert group, below the acceptance standard for partial, so the problem stays open with a claim badge."
+    },
+    "wiki-hardy-littlewood-zeta-function-conjectures": {
+      "category": "solved",
+      "category_rule": "S2",
+      "status_headline": "Both statements are theorems of Hardy and Littlewood: (1) is Theorem 4.41 of their Acta Math. 41 memoir (1916); (2) is proved in Math. Z. 10 (1921), later sharpened by Selberg (1942). Only better exponents remain open.",
+      "evidence_urls": [],
+      "evidence": [
+        {
+          "kind": "accepted-result",
+          "actor": "human",
+          "claimant": "G. H. Hardy, J. E. Littlewood",
+          "scope": "full",
+          "outcome": "proof",
+          "date": "1921-09",
+          "date_precision": "month",
+          "title": "The zeros of Riemann's zeta-function on the critical line (proves statement (2); with Theorem 4.41 of the 1916 Acta memoir, both statements are theorems)",
+          "url": "https://doi.org/10.1007/bf01211614",
+          "venue": "Math. Z. 10 (1921)",
+          "acceptance": "refereed"
+        },
+        {
+          "kind": "accepted-result",
+          "actor": "human",
+          "claimant": "G. H. Hardy, J. E. Littlewood",
+          "scope": "part",
+          "outcome": "proof",
+          "date": "1916",
+          "date_precision": "year",
+          "title": "Contributions to the theory of the Riemann zeta-function and the theory of the distribution of primes (Theorem 4.41 is statement (1))",
+          "url": "https://doi.org/10.1007/bf02422942",
+          "venue": "Acta Math. 41 (1916)",
+          "acceptance": "refereed",
+          "note": "Theorem 4.41: for every ε>0 and T>T0(ε) the segment from 1/2+Ti to 1/2+(T+T^{1/4+ε})i contains a zero of odd order. Open copy: zenodo.org/records/2294397."
+        }
+      ],
+      "badges_add": [],
+      "badges_remove": [],
+      "decided_by": "Claude (AI) for the site operator; not yet signed off by a person",
+      "decided_at": "2026-10-11",
+      "note": "Statement (1) is Theorem 4.41 of the 1916 Acta memoir (checked in the scanned paper) and (2) is proved in the 1921 Math. Z. paper, so both stated parts are refereed theorems. Wikipedia keeps the item for the optimal exponents (ambiguous-statement)."
+    },
+    "wiki-hartshornes-conjectures": {
+      "category": "partial",
+      "category_rule": "P2",
+      "status_headline": "Conjecture A fails in general for subvarieties of dimension ≥ 2 (Fulton–Lazarsfeld 1982); its curve case and Conjecture B remain open.",
+      "evidence_urls": [],
+      "evidence": [
+        {
+          "kind": "accepted-result",
+          "actor": "human",
+          "claimant": "W. Fulton, R. Lazarsfeld (as recorded by J. C. Ottem)",
+          "scope": "part",
+          "outcome": "counterexample",
+          "date": "1982",
+          "date_precision": "year",
+          "title": "Fulton–Lazarsfeld counterexample to Hartshorne's Conjecture A for subvarieties of dimension ≥ 2 (recorded in Ottem, On subvarieties with ample normal bundle)",
+          "url": "https://arxiv.org/abs/1309.2263v2",
+          "acceptance": "refereed",
+          "note": "Ottem: Conjecture A 'is false in general when dim Y ≥ 2' (Fulton–Lazarsfeld example over P^2); the curve case is open in general."
+        }
+      ],
+      "badges_add": [],
+      "badges_remove": [],
+      "decided_by": "Claude (AI) for the site operator; not yet signed off by a person",
+      "decided_at": "2026-10-11",
+      "note": "Two named conjectures under one item: A answered negatively in refereed work (recorded by Ottem, JEMS 2016), B open."
+    },
+    "wiki-kothe-conjecture": {
+      "category": "solved",
+      "category_rule": "S2",
+      "status_headline": "Answered negatively: GPT-6 Astra autonomously found a counterexample (Sept 2026), kernel-checked in Lean and written up with Böhmler and Marczinzik; Greenfeld–King–Vendramin gave a second, AI-assisted counterexample. Both are preprints.",
+      "evidence_urls": [],
+      "evidence": [
+        {
+          "acceptance": "broadly-accepted",
+          "actor": "ai-assisted",
+          "ai_systems": [
+            "GPT-6 Astra (OpenAI)"
+          ],
+          "claimant": "B. Greenfeld, G. King, L. Vendramin",
+          "date": "2026-09-14",
+          "date_precision": "day",
+          "kind": "accepted-result",
+          "note": "Independent second counterexample; the authors treat the first (found by GPT-6 Astra, written up with Böhmler and Marczinzik) as verified.",
+          "outcome": "counterexample",
+          "scope": "full",
+          "title": "The Köthe conjecture via point modules",
+          "url": "https://arxiv.org/abs/2609.15080v1",
+          "venue": "arXiv"
+        }
+      ],
+      "badges_add": [],
+      "badges_remove": [],
+      "decided_by": "Claude (AI) for the site operator; not yet signed off by a person",
+      "decided_at": "2026-10-11",
+      "note": "Both papers are preprints, but an independent expert counterexample that also treats the first as verified, plus a Lean check, meets the broad-acceptance standard used for other recent answers (cycle double cover, Petersen colouring). formal-conjectures still lists it open."
+    },
+    "wiki-vitushkins-conjecture": {
+      "category": "partial",
+      "category_rule": "P2",
+      "status_headline": "One implication is false (Mattila 1986; Jones–Murai 1988); the other holds for sets of σ-finite length (David; Tolsa) and is open in general.",
+      "evidence_urls": [
+        "https://doi.org/10.2140/pjm.1988.133.99",
+        "https://doi.org/10.2307/1971273"
+      ],
+      "evidence": [],
+      "badges_add": [],
+      "badges_remove": [],
+      "decided_by": "Claude (AI) for the site operator; not yet signed off by a person",
+      "decided_at": "2026-10-11",
+      "note": "The conjecture is an equivalence and one stated direction is refuted in refereed work, so partial. Refutations do not count toward partial in the builder, so this decision records it."
+    }
+  },
+  "rejected_signals": {}
+}

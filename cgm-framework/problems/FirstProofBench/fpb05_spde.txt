@@ -1,0 +1,27 @@
+FirstProofBench Problem 5 (stochastic PDE)
+
+Let u(x, t) be a real-valued solution to the following stochastic partial differential equation (SPDE):
+
+    ∂u/∂t (x, t) = (1/2) ∂²u/∂x² (x, t) + δ_0(u(x, t)) + Ẇ(x, t)   for t ≥ 0,
+    u(x, 0) = u_0(x) ∈ C_0([0, 1]),
+    u(0, t) = u(1, t) = 0   for all t ≥ 0,
+
+where C_0([0, 1]) := {f ∈ C([0, 1], R) : f(0) = f(1) = 0}, x ∈ [0, 1], t ≥ 0, δ_0 is the Dirac delta
+function at 0, Ẇ(x, t) is space-time white noise, and u_0 ∈ C_0([0, 1]) is the initial condition. We
+understand the probabilistically weak PDE mild solution of the equation in the sense described in
+Athreya, Butkovsky, Lê, and Mytnik, "Well-posedness of stochastic heat equation with distributional
+drift and skew stochastic heat equation" (2024) [ABLM24]. We assume that the existence, uniqueness,
+and approximation results of [ABLM24] extend to the SPDE on [0, 1] with Dirichlet boundary
+conditions, i.e. with the Dirichlet heat kernel and initial data u_0 ∈ C_0([0, 1]); in particular, that there
+exists a unique (in law) adapted mild solution on C([0, T], C_0([0, 1])).
+
+We further assume that if u^n is a solution to this SPDE with the drift G_{1/n} in place of δ_0, where
+G_{1/n}(x) := sqrt(n/(2π)) exp(−n x²/2) is the 1D heat kernel on R with variance 1/n, then for any t > 0 we
+have u^n(t) → u(t) weakly as n → ∞.
+
+Let P_t be the Markov semigroup associated with the solution u(t), i.e. for any bounded measurable
+f : C_0([0, 1]) → R,
+
+    P_t f(u_0) = E[ f(u(·, t)) | u(·, 0) = u_0(·) ],   u_0 ∈ C_0([0, 1]).
+
+Problem. Prove or disprove: P_t has at most one invariant probability measure μ on C_0([0, 1]).

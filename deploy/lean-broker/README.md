@@ -11,6 +11,9 @@ argument, filesystem path, environment, server timeout, or resource limit.
   4.14.0 executable directly.
 - `/run/agent-monitor-lean/mathlib.sock` always runs the exact provisioned Lake
   executable as `lake --dir <immutable-mirror> env <exact-lean> <private-source>`.
+  The broad `import Mathlib` is supported: it loads in about 6 seconds and
+  about 4.4 GiB RSS, so this profile's unit has `MemoryMax` 8 GiB (the core
+  profile keeps 2 GiB). Both profiles keep their fixed 60/90-second limits.
 
 The worker accepts one request and emits one length-prefixed JSON response.
 Lean stdout and stderr first go to bounded regular files in the worker's private
@@ -90,7 +93,7 @@ sudo deploy/lean-broker/install.sh \
   --activate
 ```
 
-Activation starts only the two sockets, performs core and narrow-Mathlib smoke
+Activation starts only the two sockets, performs core and Mathlib smoke
 checks, then stages the application `NoNewPrivileges` drop-in.  It deliberately
 does not restart `agent-monitor.service`; that remains a separate reviewed
 deployment step.

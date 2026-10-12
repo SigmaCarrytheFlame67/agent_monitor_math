@@ -1,0 +1,9 @@
+FirstProofBench Problem 10 (von Neumann algebras)
+
+Problem. Let Γ be a finite simplicial graph with |V(Γ)| ≥ 3, and let (M_v, φ_v) be a separable tracial
+von Neumann algebra for each v ∈ V . If Γ is irreducible (in the sense that there do not exist subgraphs
+Γ_1, Γ_2 such that V(Γ_1) ∪ V(Γ_2) = V(Γ) and (v, u) ∈ E(Γ) for all v ∈ V(Γ_1), u ∈ V(Γ_2)), and
+each M_v has a trace-zero unitary, then the graph product von Neumann algebra M is properly
+proximal.
+
+(Prove the above statement.)

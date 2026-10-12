@@ -539,10 +539,14 @@ def _build_pipeline_strip(compact_columns: list[dict], groups: dict[str, dict]) 
             key=lambda g: g.get("role") or "",
         )
         isolated_roles = col.get("isolated_roles") or []
+        listed_isolated_count = 0
+        listed_isolated_cost = 0.0
         for role in isolated_roles:
             gid = f"{sid}:{role}"
             if gid in groups and groups[gid] not in stage_groups:
                 stage_groups.append(groups[gid])
+                listed_isolated_count += int(groups[gid].get("count") or 0)
+                listed_isolated_cost += float(groups[gid].get("cost_usd") or 0)
         if not stage_groups and not col.get("isolated_count"):
             continue
         roles = []
@@ -554,8 +558,12 @@ def _build_pipeline_strip(compact_columns: list[dict], groups: dict[str, dict]) 
                 "cost_usd": round(float(g.get("cost_usd") or 0), 2),
                 "waste_count": g.get("waste_count", 0),
             })
-        total_agents = sum(r["count"] for r in roles) + int(col.get("isolated_count") or 0)
-        total_cost = round(sum(r["cost_usd"] for r in roles) + float(col.get("isolated_cost") or 0), 2)
+        # Isolated groups listed as roles above are already in `roles`; only
+        # isolated agents without a listed group are added on top.
+        unlisted_count = max(0, int(col.get("isolated_count") or 0) - listed_isolated_count)
+        unlisted_cost = max(0.0, float(col.get("isolated_cost") or 0) - listed_isolated_cost)
+        total_agents = sum(r["count"] for r in roles) + unlisted_count
+        total_cost = round(sum(r["cost_usd"] for r in roles) + unlisted_cost, 2)
         strip.append({
             "id": sid,
             "label": col.get("label") or f"Stage {sid}",
@@ -607,6 +615,22 @@ def _repeat_group_key(stage_name: str, role: str) -> str:
     return stage_name
 
 
+def _usage_known(a: dict) -> bool:
+    """Whether this agent node carries its own usage (tokens or a cost).
+
+    Stream-derived marker nodes (for example "Math Harness · stage"
+    reasoning items) make no model call of their own; response-only
+    transports report usage on the message node that made the call.
+    """
+    for key in ("input_tokens", "output_tokens", "total_input_tokens"):
+        try:
+            if int(a.get(key) or 0) > 0:
+                return True
+        except (TypeError, ValueError):
+            continue
+    return _agent_cost(a) > 0
+
+
 def _cost_tier(cost: float, share: float, rank_pct: float) -> str:
     """Rank agents into visual heat tiers."""
     if cost >= COST_TIER_CRITICAL_USD or share >= 2.5 or rank_pct <= 0.08:
@@ -650,7 +674,14 @@ def _annotate_cost_and_repeats(agents: list[dict], chains: dict[str, dict]) -> l
         mon = a.setdefault("monitor", {})
         share = float(mon.get("cost_share_pct") or 0)
         rank_pct = rank_map.get(id(a), 1.0)
-        mon["cost_tier"] = _cost_tier(cost, share, rank_pct)
+        if not _usage_known(a):
+            # A rank among zero-cost nodes is meaningless (mid-run every node
+            # is $0 and the first 8% would read "critical").
+            mon["cost_tier"] = "untracked"
+        elif cost <= 0:
+            mon["cost_tier"] = "low"
+        else:
+            mon["cost_tier"] = _cost_tier(cost, share, rank_pct)
 
         exact_n = exact_counts[stage]
         seq_by_stage[stage] += 1
@@ -1015,6 +1046,7 @@ def compute_run_analysis(
                 "flags": (a.get("monitor") or {}).get("flags") or [],
             }
             for a in agents
+            if _agent_cost(a) > 0
         ],
         key=lambda x: -x["cost_usd"],
     )[:10]
@@ -1151,12 +1183,19 @@ def compute_run_analysis(
         "stage_costs": stage_costs,
         "role_costs": role_costs,
         "top_expensive": top_expensive,
+        # Nodes that carry their own usage; the rest are stream markers or
+        # turns whose usage the transport reports only in the run totals.
+        "per_agent_usage": {
+            "tracked": sum(1 for a in agents if _usage_known(a)),
+            "agents": len(agents),
+        },
         "advisor_rounds": advisor_rounds,
         "verify_chains": verify_chains[:12],
         "repeat_groups": repeat_groups,
         "waste_groups": waste_groups,
         "visual_legend": {
             "cost_tiers": {
+                "untracked": "no usage of its own (stream marker, or usage only in run totals)",
                 "critical": "≥$10 or top 8% — dashed border",
                 "high": "≥$5 or top 18% — dashed border",
                 "medium": "≥0.8% of run cost",

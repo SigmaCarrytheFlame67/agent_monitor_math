@@ -42,8 +42,12 @@ def load_cached(workspace: Path) -> dict[str, Any] | None:
         for item in value.get("items") or []:
             if isinstance(item, dict) and item.get("status") == "verified":
                 item["status"] = "stale"
+            if isinstance(item, dict) and "statement_audited" in item:
+                item["statement_audited"] = False
         summary = dict(value.get("summary") or {})
         summary["verified"] = 0
+        if "statement_audited" in summary:
+            summary["statement_audited"] = 0
         value["summary"] = summary
     return value
 
@@ -226,8 +230,112 @@ def guidance_for_lean(graph: dict[str, Any] | None) -> str:
         "authoritative):\n"
         + json.dumps(compact, ensure_ascii=False)
         + "\nCover the relevant assumptions and conclusion without strengthening, "
-        "weakening, or replacing the theorem statement."
+        "weakening, or replacing the theorem statement. When a Lean lemma "
+        "formalizes a node, put a line `Informal: <node id>` in its doc comment; "
+        "give `main` the id of the conclusion node."
     )
+
+
+MAX_BLUEPRINT_FACTS = 40
+MAX_BLUEPRINT_CHARS = 16000
+
+
+def _topological_facts(facts: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Order facts so predecessors come first (stable; cycles keep input order)."""
+    by_id: dict[str, dict[str, Any]] = {}
+    for fact in facts:
+        if isinstance(fact, dict):
+            fact_id = str(fact.get("fact_id") or "").strip()
+            if fact_id and fact_id not in by_id:
+                by_id[fact_id] = fact
+    order: list[str] = []
+    state: dict[str, int] = {}
+
+    def visit(fact_id: str, depth: int = 0) -> None:
+        if state.get(fact_id) or depth > len(by_id):
+            return
+        state[fact_id] = 1
+        for predecessor in by_id[fact_id].get("predecessors") or []:
+            predecessor = str(predecessor)
+            if predecessor in by_id:
+                visit(predecessor, depth + 1)
+        state[fact_id] = 2
+        order.append(fact_id)
+
+    for fact_id in list(by_id):
+        visit(fact_id)
+    targets = [f for f in order if by_id[f].get("is_target")]
+    rest = [f for f in order if not by_id[f].get("is_target")]
+    return [by_id[f] for f in rest + targets]
+
+
+def guidance_from_facts(facts: list[dict[str, Any]] | None) -> str:
+    """Lemma blueprint from a critic-accepted fact DAG (CGM-style facts).
+
+    Each fact becomes one Lean lemma tagged ``Informal: <fact_id>``; the
+    target fact is ``main``. Facts are model-critic accepted, never
+    Lean-certified, and the original problem stays authoritative.
+    """
+    if not facts or not isinstance(facts, list):
+        return ""
+    ordered = _topological_facts(facts)
+    if not ordered:
+        return ""
+    lines = [
+        "INFORMAL FACT DAG BLUEPRINT (critic-accepted facts in dependency order; "
+        "advisory, not Lean-certified; the PROBLEM stays authoritative).",
+        "Formalize ONE Lean lemma per non-target fact, in this order, each with a "
+        "doc comment containing the line `Informal: <fact_id>`. The target fact is "
+        "the main theorem `main` (doc line `Informal: <target fact_id>`). A lemma's "
+        "proof may use the lemmas of its predecessors. Never strengthen, weaken or "
+        "replace the PROBLEM's claim to match a fact.",
+    ]
+    used = sum(len(line) for line in lines)
+    for index, fact in enumerate(ordered[:MAX_BLUEPRINT_FACTS], 1):
+        fact_id = str(fact.get("fact_id") or "")[:80]
+        predecessors = [str(p)[:80] for p in (fact.get("predecessors") or [])][:16]
+        entry = [
+            f"[{index}] fact_id: {fact_id}"
+            + ("  (TARGET → `main`)" if fact.get("is_target") else ""),
+            "    statement: " + " ".join(str(fact.get("statement") or "").split())[:1500],
+        ]
+        if predecessors:
+            entry.append("    uses: " + ", ".join(predecessors))
+        proof = " ".join(str(fact.get("proof") or "").split())
+        if proof:
+            entry.append("    proof sketch: " + proof[:900])
+        block = "\n".join(entry)
+        if used + len(block) > MAX_BLUEPRINT_CHARS:
+            lines.append(
+                f"… {len(ordered) - index + 1} further fact(s) omitted for length."
+            )
+            break
+        lines.append(block)
+        used += len(block)
+    return "\n".join(lines)
+
+
+_INFORMAL_LINE_RE = re.compile(r"(?im)^\s*informal\s*[:：]\s*(.+)$")
+
+
+def _informal_links(source: str) -> dict[str, set[str]]:
+    """Map Lean declaration names to the informal ids their docs claim."""
+    if not source:
+        return {}
+    from agent_monitor.lean_verify import _decls_with_docs
+
+    links: dict[str, set[str]] = {}
+    for decl in _decls_with_docs(source):
+        doc = str(decl.get("doc") or "")
+        ids: set[str] = set()
+        for match in _INFORMAL_LINE_RE.finditer(doc):
+            for part in re.split(r"[,;\s]+", match.group(1)):
+                part = part.strip().strip("`'\".")
+                if part:
+                    ids.add(part.lower())
+        if ids:
+            links.setdefault(str(decl.get("name") or ""), set()).update(ids)
+    return links
 
 
 def _source_revision(workspace: Path) -> str:
@@ -276,18 +384,54 @@ def build(workspace: Path, *, selected_harness: str = "") -> dict[str, Any]:
         trust_reason = "Fidelity audit did not confirm the original statement"
 
     partial_declarations = _partial_kernel_declarations(workspace, lean) if lean else set()
+    # The fidelity audit covers the main theorem's statement only; any other
+    # declaration counts as kernel-checked, never as a faithful formalization.
+    main_decl = (str(lean.get("main_decl") or "") if lean else "").strip() or "main"
+    main_short = main_decl.split(".")[-1]
+    audited_count = 0
     formal_conclusions = [n for n in formal_nodes if n.get("kind") == "conclusion"]
+    # Explicit links first: a Lean declaration whose doc says
+    # `Informal: <id>` formalizes that informal node / fact. Token overlap is
+    # only the fallback for undocumented declarations.
+    lean_source = str(lean.get("lean") or "") if lean else ""
+    if not lean_source:
+        try:
+            lean_source = (workspace / "lean" / "Proof.lean").read_text(encoding="utf-8")
+        except OSError:
+            lean_source = ""
+    declarations_by_informal: dict[str, list[str]] = {}
+    for declaration, ids in _informal_links(lean_source).items():
+        for informal_id in sorted(ids):
+            declarations_by_informal.setdefault(informal_id, []).append(declaration)
+    formal_by_label: dict[str, dict[str, Any]] = {}
+    for formal_node in formal_nodes:
+        label = str(formal_node.get("label") or "")
+        if label:
+            formal_by_label.setdefault(label, formal_node)
+            formal_by_label.setdefault(label.split(".")[-1], formal_node)
     items: list[dict[str, Any]] = []
     verified_count = 0
     for node in informal_nodes:
         node_id = str(node.get("id") or "")
         kind = str(node.get("kind") or "")
+        explicit: dict[str, Any] | None = None
+        for informal_id in (node_id, str(node.get("fact_id") or "")):
+            for declaration in declarations_by_informal.get(informal_id.strip().lower(), []):
+                explicit = formal_by_label.get(declaration) or formal_by_label.get(
+                    declaration.split(".")[-1]
+                )
+                if explicit is not None:
+                    break
+            if explicit is not None:
+                break
         candidates = formal_conclusions if kind == "conclusion" and formal_conclusions else formal_nodes
-        best: dict[str, Any] | None = None
-        score, common = 0.0, 0
+        if explicit is not None:
+            candidates = []
+        best: dict[str, Any] | None = explicit
+        score, common = (1.0, 1) if explicit is not None else (0.0, 0)
         label_score, label_common = 0.0, 0
-        strong_label_match = False
-        exact_signature_match = False
+        strong_label_match = explicit is not None
+        exact_signature_match = explicit is not None
         node_signature = _exact_indexed_value_signature(_node_text(node))
         best_rank = (-1, -1, -1.0, -1.0, -1, -1)
         for candidate in candidates:
@@ -352,8 +496,10 @@ def build(workspace: Path, *, selected_harness: str = "") -> dict[str, Any]:
                 exact_signature_match = candidate_exact_signature
 
         # A faithful verified main theorem certifies the informal conclusion.
-        mapped_conclusion = kind == "conclusion" and bool(formal_conclusions)
-        mapped_step = (
+        mapped_conclusion = (
+            explicit is None and kind == "conclusion" and bool(formal_conclusions)
+        )
+        mapped_step = explicit is not None or (
             kind not in {"assumption", "definition"}
             and best is not None
             and (
@@ -373,6 +519,16 @@ def build(workspace: Path, *, selected_harness: str = "") -> dict[str, Any]:
             verified_count += 1
         formal_ids = [str(best.get("id") or "")] if best and (mapped_conclusion or mapped_step) else []
         declarations = [str(best.get("label") or "")] if formal_ids else []
+        statement_audited = bool(
+            is_verified
+            and trusted
+            and (
+                mapped_conclusion
+                or (declaration and declaration.split(".")[-1] == main_short)
+            )
+        )
+        if statement_audited:
+            audited_count += 1
         items.append(
             {
                 "informal_id": node_id,
@@ -383,12 +539,31 @@ def build(workspace: Path, *, selected_harness: str = "") -> dict[str, Any]:
                 "formal_ids": formal_ids,
                 "lean_declarations": declarations,
                 "confidence": round(1.0 if mapped_conclusion else score, 3),
+                "match": "explicit" if explicit is not None else (
+                    "lexical" if formal_ids else "none"
+                ),
+                "statement_audited": statement_audited,
+                "evidence": (
+                    "kernel+statement-audit" if statement_audited
+                    else "kernel" if is_verified
+                    else "none"
+                ),
                 "reason": trust_reason if not is_verified else (
                     "Faithful Lean conclusion" if trusted and mapped_conclusion
                     else (
-                        "Mapped to an admission-independent kernel-checked Lean declaration"
-                        if partial_verified
-                        else "Mapped to a verified Lean declaration"
+                        f"Linked to `{main_decl}`, whose statement was audited as faithful"
+                        if statement_audited
+                        else "Explicitly linked (`Informal:` doc line) to a Lean declaration "
+                        "that compiled in the kernel-verified file; its statement was not "
+                        f"audited against this informal statement (only `{main_decl}` is)"
+                        if explicit is not None and not partial_verified
+                        else (
+                            "Mapped to an admission-independent kernel-checked Lean "
+                            "declaration; its statement was not audited"
+                            if partial_verified
+                            else "Mapped to a Lean declaration that compiled in the "
+                            "kernel-verified file; its statement was not audited"
+                        )
                     )
                 ),
             }
@@ -417,6 +592,7 @@ def build(workspace: Path, *, selected_harness: str = "") -> dict[str, Any]:
         ],
         "summary": {
             "verified": verified_count,
+            "statement_audited": audited_count,
             "total": len(informal_nodes),
             "linked": sum(1 for item in items if item["formal_ids"]),
         },

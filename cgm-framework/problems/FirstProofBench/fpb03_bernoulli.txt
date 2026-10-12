@@ -1,0 +1,6 @@
+FirstProofBench Problem 3 (discrete probability)
+
+Let w_1, . . . , w_m be non-negative real numbers such that Σ_{i=1}^m w_i = 1, and let v_1, . . . , v_m be i.i.d.
+Bernoulli(p) random variables. For which values of the probability p is it true that
+
+    Pr[ Σ_{i=1}^m w_i v_i ≥ p ] ≥ p ?

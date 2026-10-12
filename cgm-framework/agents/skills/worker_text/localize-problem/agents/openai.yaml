@@ -1,0 +1,7 @@
+interface:
+  display_name: "Localize Problem"
+  short_description: "Split into local problems plus a named local-to-global mechanism"
+  default_prompt: "Use $localize-problem to split the global goal into local problems at the right environment (scale, block, frequency, prime, patch), name the local-to-global reassembly mechanism up front, budget the losses, and verify pieces and reassembly as facts."
+
+policy:
+  allow_implicit_invocation: true

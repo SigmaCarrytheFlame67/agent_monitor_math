@@ -248,6 +248,8 @@ class ClaudeAccountRuntimeSettingsTests(unittest.TestCase):
         self.assertFalse(settings.codex_enabled(env=env))
         self.assertFalse(settings.claude_enabled(env=env))
 
+    # Subscription runtimes belong to the site administrator; a member's
+    # settings always report the API route (tests/test_member_accounts.py).
     def test_claude_runtime_exposes_only_account_aliases_for_claude(self) -> None:
         env = {"AGENT_MONITOR_ACCOUNT_RUNTIME": "claude"}
         with (
@@ -256,7 +258,7 @@ class ClaudeAccountRuntimeSettingsTests(unittest.TestCase):
             patch("agent_monitor.codex_login.available_models", return_value=["gpt-account"]),
             patch("agent_monitor.claude_login.account_login_ready", return_value=True),
         ):
-            result = settings.get_settings({"id": 7, "is_admin": False})
+            result = settings.get_settings({"id": 7, "is_admin": True})
         self.assertEqual(result["account_runtime"], "claude")
         self.assertTrue(result["claude_enabled"])
         self.assertFalse(result["codex_enabled"])
@@ -282,7 +284,7 @@ class ClaudeAccountRuntimeSettingsTests(unittest.TestCase):
                 return_value=True,
             ),
         ):
-            result = settings.get_settings({"id": 7, "is_admin": False})
+            result = settings.get_settings({"id": 7, "is_admin": True})
         self.assertEqual(result["account_runtime"], "claude")
         self.assertEqual(result["auth_mode"], "claude_subscription")
         self.assertFalse(result["runtime_ready"])
@@ -296,7 +298,7 @@ class ClaudeAccountRuntimeSettingsTests(unittest.TestCase):
             patch("agent_monitor.auth.set_user_env") as set_env,
             patch.object(settings, "get_settings", return_value={"account_runtime": "claude"}),
         ):
-            settings.save_settings({"account_runtime": "claude"}, user={"id": 9})
+            settings.save_settings({"account_runtime": "claude"}, user={"id": 9, "is_admin": True})
         set_env.assert_called_once_with(
             9,
             {

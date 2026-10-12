@@ -1,0 +1,10 @@
+#!/usr/bin/env bash
+# cgm-mcp — launches the cgm gateway MCP server (role=main by default) for
+# Claude Code (.mcp.json) or any MCP client. Sources env so CGM_AGENTS_ROOT
+# etc. are set.
+set -euo pipefail
+HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+. "$HERE/../scripts/env.sh" >/dev/null 2>&1
+export CGM_ROLE="${CGM_ROLE:-main}"
+export CGM_AUTHOR="${CGM_AUTHOR:-main_agent}"
+exec "$CGM_PY" -m cgm.gateway "$@"

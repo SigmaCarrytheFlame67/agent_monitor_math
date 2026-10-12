@@ -52,6 +52,8 @@ const SETTINGS={{
 }};
 const ENGINES={json.dumps([{'id': item, 'auth_modes': ['api_key']} for item in [*sponsored, 'hermes']])};
 let engine='plain';
+// A signed-in account: the guest-only preset fallback does not apply.
+let CURRENT_USER={{id:7,guest:false}}, GUEST_POLICY=null;
 function selectedAccountRuntime(){{return 'api';}}
 {_js_function('engineModelMode')}
 {_js_function('modelsForEngine')}

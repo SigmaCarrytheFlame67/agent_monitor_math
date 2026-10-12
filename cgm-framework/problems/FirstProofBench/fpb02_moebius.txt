@@ -1,0 +1,23 @@
+FirstProofBench Problem 2 (discrete geometry)
+
+Let Z denote the integers and let R denote the reals. Let Σ = R × [0, 1] and let ∂Σ = R × {0, 1}
+denote the boundary of Σ. For β > 0 define G_β : Σ → Σ by
+
+    G_β(x, y) = (x + β, 1 − y).
+
+Let G^k_β denote the k-fold composition of either G_β or its inverse G^{−1}_β, according as k > 0 or k < 0;
+when k = 0, G^k_β is the identity.
+
+A clean triangle is the convex hull of 3 non-collinear points in ∂Σ. A clean triangulation of Σ is
+a countable and locally finite collection of clean triangles, having pairwise disjoint interiors, whose
+union is Σ. The clean triangulation is G_β-invariant if the action of G_β preserves the triangulation.
+
+A squeeze map of a clean triangle τ is an affine map from τ into R^3 which decreases the length
+of the edge of τ that is contained in ∂Σ and increases the lengths of the other two edges.
+
+Call β > 0 realized if there is a continuous map f : Σ → R^3 with the following properties:
+
+1. f restricts to a squeeze map on each triangle of a G_β-invariant clean triangulation of Σ;
+2. f(p) = f(q) if and only if p = G^k_β(q) for some k ∈ Z (for all p, q ∈ Σ).
+
+Problem. Prove that √3 is the infimum of the set of realized numbers.

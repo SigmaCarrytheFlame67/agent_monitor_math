@@ -10,13 +10,18 @@ from __future__ import annotations
 
 import hashlib
 import html
+import http.client
 import ipaddress
 import json
+import logging
 import os
 import re
 import secrets
+import signal
 import socket
 import stat
+import sys
+import tempfile
 import threading
 import time
 from collections import defaultdict, deque
@@ -30,7 +35,19 @@ from urllib import request as urlrequest
 from urllib.parse import urlparse
 
 from agent_monitor import DATA_DIR, ROOT
-from agent_monitor.public_kimi_gateway import PublicKimiGateway
+from agent_monitor.public_kimi_gateway import (
+    CLIENT_GONE_ERRORS,
+    DEADLINE_HEADER,
+    LOOPBACK_OPENER,
+    DeadlineWatchdog,
+    PublicKimiGateway,
+    WatchedCall,
+    deadline_seconds,
+    error_body,
+    format_deadline,
+    open_watched,
+    response_incomplete,
+)
 
 
 MODEL_ID = "kimi-k3"
@@ -64,6 +81,29 @@ _CSP = (
     "connect-src 'self'; img-src 'self' data:; base-uri 'none'; "
     "form-action 'self'; frame-ancestors 'none'"
 )
+# The broker waits this much longer for the gateway than the gateway's own
+# total deadline, so the gateway always answers first with a typed result.
+_GATEWAY_WAIT_MARGIN_SECONDS = 15
+# Taken off a caller's X-Ansatze-Timeout at each hop, so every hop still has
+# time to relay the answer of the hop behind it.
+_DEADLINE_HOP_MARGIN_SECONDS = 5.0
+_ERROR_TYPES = {
+    400: "bad_request",
+    401: "unauthorized",
+    403: "forbidden",
+    404: "not_found",
+    408: "bad_request",
+    413: "bad_request",
+    415: "bad_request",
+    429: "sponsor_quota",
+    502: "gateway_unavailable",
+    503: "gateway_unavailable",
+    504: "gateway_timeout",
+}
+_RELAYED_TYPE_RE = re.compile(r"[a-z_]{1,40}")
+
+# Content-free lines only: never tokens, prompts, outputs, keys or bodies.
+logger = logging.getLogger("agent_monitor.public_kimi.broker")
 
 
 @dataclass(frozen=True)
@@ -78,18 +118,54 @@ class PublicLimits:
     artifact_ttl_hours: int = 24
     max_output_tokens: int = 8192
     job_timeout_seconds: int = 600
-    upstream_timeout_seconds: int = 225
-    gateway_calls_per_hour: int = 120
-    gateway_concurrent_calls: int = 4
+    # Total wall-clock budget of one model call at the credential gateway,
+    # queue wait included.  The broker waits _GATEWAY_WAIT_MARGIN_SECONDS
+    # longer, and sponsored clients (630 s) longer still, so each hop gets a
+    # typed answer from the one behind it instead of giving up first.
+    upstream_timeout_seconds: int = 600
+    # A full guest proof is a multi-stage pipeline: roughly 12-16 informal
+    # (strategist/worker/verifier/repair/curator) calls plus up to about 12
+    # Formal/Lean calls.  900 calls/hour therefore admits about 30 complete
+    # runs site-wide; the provider-side spend cap remains the real backstop.
+    gateway_calls_per_hour: int = 900
+    gateway_concurrent_calls: int = 8
+    # Each guest CGM run keeps up to two calls in flight, so a handful of
+    # concurrent runs can briefly fill every gateway slot.  A call that finds
+    # them busy waits for one (first come, first served) instead of failing
+    # with an immediate 429: at most this many seconds, carved out of its own
+    # upstream timeout, and only while fewer than ``gateway_queue_depth``
+    # calls are already waiting.  0 restores the immediate 429.
+    gateway_queue_seconds: int = 60
+    gateway_queue_depth: int = 32
     sponsor_request_bytes: int = 2 * 1024 * 1024
     sponsor_token_ttl_seconds: int = 7200
-    # One original-console user can legitimately select every advertised
-    # harness plus the shared Formal/Lean-DAG scope during a debugging hour.
-    # Keep the per-token and global gateway call caps as the cost boundary,
-    # while making the issuance limit internally consistent with that matrix.
-    sponsor_tokens_per_ip: int = 24
-    sponsor_token_starts_per_hour: int = 20
-    sponsor_calls_per_token: int = 80
+    # Tokens are issued per run and per scope (proof engine, Formal/Lean-DAG),
+    # so an active console account can need several each hour.  Keep the
+    # per-token and global gateway call caps as the cost boundary, while
+    # making the issuance limit internally consistent with that matrix.
+    sponsor_tokens_per_ip: int = 64
+    sponsor_token_starts_per_hour: int = 60
+    sponsor_calls_per_token: int = 200
+
+    @classmethod
+    def from_env(cls, environ: Mapping[str, str] | None = None) -> "PublicLimits":
+        """Build limits from ``PUBLIC_KIMI_*`` overrides with strict bounds.
+
+        Unset or empty variables keep the defaults above.  A value that is not
+        a plain decimal integer is a configuration error (the service refuses
+        to start rather than guess); integers outside the bounds are clamped,
+        so no environment value can raise a limit past its ceiling.
+        """
+        source = os.environ if environ is None else environ
+        overrides: dict[str, int] = {}
+        for variable, field, low, high in _LIMIT_ENVIRONMENT:
+            raw = str(source.get(variable) or "").strip()
+            if not raw:
+                continue
+            if not re.fullmatch(r"[0-9]{1,9}", raw):
+                raise RuntimeError(f"{variable} must be a positive integer")
+            overrides[field] = max(low, min(int(raw), high))
+        return cls(**overrides)
 
     def public(self) -> dict[str, int]:
         return {
@@ -104,12 +180,54 @@ class PublicLimits:
         }
 
 
+# Operator overrides: (environment variable, PublicLimits field, low, high).
+# The ceilings never exceed the credential gateway's own hard clamps
+# (public_kimi_gateway: 2000 calls/hour, 16 concurrent, 16384 output tokens,
+# a 120-second capacity wait, 128 waiting calls and a 900-second call budget).
+_LIMIT_ENVIRONMENT: tuple[tuple[str, str, int, int], ...] = (
+    ("PUBLIC_KIMI_GATEWAY_CALLS_PER_HOUR", "gateway_calls_per_hour", 1, 2000),
+    ("PUBLIC_KIMI_GATEWAY_CONCURRENCY", "gateway_concurrent_calls", 1, 16),
+    ("PUBLIC_KIMI_GATEWAY_QUEUE_SECONDS", "gateway_queue_seconds", 0, 120),
+    ("PUBLIC_KIMI_GATEWAY_QUEUE_DEPTH", "gateway_queue_depth", 0, 128),
+    ("PUBLIC_KIMI_MAX_OUTPUT_TOKENS", "max_output_tokens", 1024, 16384),
+    ("PUBLIC_KIMI_SPONSOR_CALLS_PER_TOKEN", "sponsor_calls_per_token", 1, 1000),
+    ("PUBLIC_KIMI_SPONSOR_STARTS_PER_HOUR", "sponsor_token_starts_per_hour", 1, 600),
+    ("PUBLIC_KIMI_SPONSOR_TOKENS_PER_CLIENT", "sponsor_tokens_per_ip", 1, 256),
+    ("PUBLIC_KIMI_RUNS_PER_HOUR", "requests_per_hour", 1, 120),
+    ("PUBLIC_KIMI_GLOBAL_RUNS_PER_HOUR", "global_requests_per_hour", 1, 1000),
+    ("PUBLIC_KIMI_ACTIVE_RUNS", "active_runs", 1, 4),
+    ("PUBLIC_KIMI_GLOBAL_ACTIVE_RUNS", "global_active_runs", 1, 16),
+    ("PUBLIC_KIMI_UPSTREAM_TIMEOUT_SECONDS", "upstream_timeout_seconds", 60, 900),
+)
+
+
+class _CallerLeft(Exception):
+    """The caller of a sponsored call hung up before it was answered."""
+
+
 class PublicAPIError(RuntimeError):
-    def __init__(self, status: int, message: str, *, retry_after: int = 0) -> None:
+    """An answer the broker gives itself.
+
+    On the internal model-call endpoints it becomes a typed error body:
+    ``error_type`` defaults by status, and ``forwarded`` is True only when the
+    call may already have reached the provider.
+    """
+
+    def __init__(
+        self,
+        status: int,
+        message: str,
+        *,
+        retry_after: int = 0,
+        error_type: str = "",
+        forwarded: bool = False,
+    ) -> None:
         super().__init__(message)
         self.status = status
         self.message = message
         self.retry_after = retry_after
+        self.error_type = error_type
+        self.forwarded = forwarded
 
 
 class SubmissionLimiter:
@@ -229,7 +347,10 @@ class SponsorSessionStore:
                 raise PublicAPIError(401, "Sponsored Kimi session expired")
             if charge and session.calls >= self.limits.sponsor_calls_per_token:
                 raise PublicAPIError(
-                    429, "Sponsored Kimi call quota reached", retry_after=60
+                    429,
+                    "Sponsored Kimi call quota reached",
+                    retry_after=60,
+                    error_type="sponsor_quota",
                 )
             if charge:
                 session.calls += 1
@@ -327,7 +448,17 @@ _SCRUB_ENV = {
 }
 
 
-def _install_worker_environment(data_dir: Path, *, token: str, base_url: str) -> Path:
+_RUNTIME_TEMP_PREFIX = ".public-kimi-runtime."
+_RUNTIME_TEMP_SUFFIX = ".tmp"
+
+
+def _install_worker_environment(
+    data_dir: Path,
+    *,
+    token: str,
+    base_url: str,
+    max_output_tokens: int = 8192,
+) -> Path:
     """Replace all provider/account state with a loopback-only Kimi route."""
     generated_secret_suffixes = ("_API_KEY", "_API_KEYS", "_AUTH_TOKEN")
     inherited = set(_SCRUB_ENV)
@@ -347,14 +478,35 @@ def _install_worker_environment(data_dir: Path, *, token: str, base_url: str) ->
         "AGENT_MONITOR_USE_CODEX=0\n"
         "AGENT_MONITOR_USE_CLAUDE=0\n"
     )
-    temporary = runtime.with_name(f".{runtime.name}.{os.getpid()}.tmp")
-    fd = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    # Under PrivatePIDs=yes the broker is always PID 1, so a PID-derived
+    # temporary name would be fixed and a copy left by a crash (or a failed
+    # write) would make every later start fail.  Clear leftovers from earlier
+    # starts, then use a fresh unique 0600 name for this one.
+    for pattern in (
+        f".{runtime.name}.*.tmp",  # earlier fixed, PID-based name
+        f"{_RUNTIME_TEMP_PREFIX}*{_RUNTIME_TEMP_SUFFIX}",
+    ):
+        for stale in data_dir.glob(pattern):
+            try:
+                if stale.is_file() and not stale.is_symlink():
+                    stale.unlink()
+            except OSError:
+                pass
+    fd, temporary_name = tempfile.mkstemp(
+        dir=data_dir, prefix=_RUNTIME_TEMP_PREFIX, suffix=_RUNTIME_TEMP_SUFFIX
+    )
+    temporary = Path(temporary_name)
     try:
-        os.write(fd, content.encode("utf-8"))
-        os.fsync(fd)
-    finally:
-        os.close(fd)
-    os.replace(temporary, runtime)
+        try:
+            os.fchmod(fd, 0o600)
+            os.write(fd, content.encode("utf-8"))
+            os.fsync(fd)
+        finally:
+            os.close(fd)
+        os.replace(temporary, runtime)
+    except BaseException:
+        temporary.unlink(missing_ok=True)
+        raise
     runtime.chmod(0o600)
     os.environ.update(
         {
@@ -369,7 +521,7 @@ def _install_worker_environment(data_dir: Path, *, token: str, base_url: str) ->
             "AGENT_MONITOR_PUBLIC_KIMI": "1",
             "AGENT_MONITOR_DISABLE_AUTO_PIPELINE": "1",
             "AGENT_MONITOR_CLI_TIMEOUT": "600",
-            "AGENT_MONITOR_API_MAX_TOKENS": "8192",
+            "AGENT_MONITOR_API_MAX_TOKENS": str(int(max_output_tokens)),
         }
     )
     return runtime
@@ -684,6 +836,99 @@ class PublicKimiApplication:
             self._last_expiry_check = now
 
 
+def gateway_wait_seconds(limits: PublicLimits, requested: object = None) -> float:
+    """How long the broker waits for the gateway on one sponsored call.
+
+    The gateway's own total deadline plus a margin, so the gateway answers
+    first.  A caller's ``X-Ansatze-Timeout`` (its remaining budget) shortens
+    the wait, leaving the caller time to read the answer, but never
+    lengthens it.
+    """
+    cap = float(limits.upstream_timeout_seconds + _GATEWAY_WAIT_MARGIN_SECONDS)
+    seconds = deadline_seconds(requested)
+    if seconds is None:
+        return cap
+    return max(1.0, min(cap, seconds - _DEADLINE_HOP_MARGIN_SECONDS))
+
+
+def _error_type(exc: PublicAPIError) -> str:
+    if exc.error_type:
+        return exc.error_type
+    fallback = "bad_request" if exc.status < 500 else "gateway_unavailable"
+    return _ERROR_TYPES.get(exc.status, fallback)
+
+
+def _relayed_error_type(status: int, body: bytes) -> str:
+    """The gateway's own error type, for the broker's log line only."""
+    if 200 <= status < 300:
+        return "ok"
+    try:
+        error = json.loads(body).get("error")
+    except (ValueError, AttributeError):
+        return "unknown"
+    kind = error.get("type") if isinstance(error, dict) else None
+    return kind if isinstance(kind, str) and _RELAYED_TYPE_RE.fullmatch(kind) else "unknown"
+
+
+@dataclass
+class _SponsoredCallLog:
+    """Content-free facts about one sponsored model call, logged as one line.
+
+    ``status`` 0 means no answer was sent (the caller had already left).
+    """
+
+    family: str
+    engine: str = "-"
+    status: int = 0
+    error_type: str = "internal_error"
+    response_bytes: int = 0
+    client_connected: bool = True
+    # How long the broker would wait for the gateway (gateway_wait_seconds).
+    wait_s: float | None = None
+
+    def line(self, elapsed: float) -> str:
+        wait = "-" if self.wait_s is None else format_deadline(self.wait_s)
+        return (
+            f"public-kimi broker call path={self.family} engine={self.engine} "
+            f"status={self.status or '-'} type={self.error_type} "
+            f"ms={max(0, int(round(elapsed * 1000)))} wait_s={wait} "
+            f"bytes={self.response_bytes} "
+            f"client={'connected' if self.client_connected else 'gone'}"
+        )
+
+
+def _gateway_failure(
+    call: WatchedCall, exc: BaseException | None, *, sent: bool
+) -> Exception:
+    """What a failed, or cut off, hop to the gateway means for the caller."""
+    call.finish()
+    if call.abandoned:
+        return _CallerLeft()
+    if not sent:
+        # Connecting or sending to the gateway failed: nothing was forwarded.
+        return PublicAPIError(502, "Sponsored Kimi gateway unavailable")
+    if call.expired or isinstance(exc, TimeoutError):
+        # The gateway may already be talking to the provider.
+        return PublicAPIError(504, "Sponsored Kimi gateway timed out", forwarded=True)
+    # The gateway took the call, but its answer never arrived in full.
+    return PublicAPIError(
+        502,
+        "Sponsored Kimi gateway unavailable",
+        error_type="gateway_connection_lost",
+        forwarded=True,
+    )
+
+
+def _stream_failure_type(call: WatchedCall, exc: BaseException | None) -> str:
+    """The log type of an event stream from the gateway that ended early."""
+    call.finish()
+    if call.abandoned:
+        return "client_gone"
+    if call.expired or isinstance(exc, TimeoutError):
+        return "gateway_timeout"
+    return "gateway_connection_lost"
+
+
 def _normalize_base_path(raw: str | None) -> str:
     value = str(raw or "").strip()
     if not value or value == "/":
@@ -708,14 +953,38 @@ class PublicKimiHTTPServer(ThreadingHTTPServer):
         *,
         gateway_base_url: str = "",
         gateway_token: str = "",
+        upstream_health: Callable[[], Mapping[str, Any]] | None = None,
     ) -> None:
         super().__init__(address, PublicKimiHandler)
         self.app = app
         self.base_path = base_path
         self.gateway_base_url = gateway_base_url.rstrip("/")
         self.gateway_token = gateway_token
+        self._upstream_health = upstream_health
+        # Ends each sponsored call's wait for the gateway at its deadline, or
+        # as soon as the caller hangs up (the gateway then stops it as well).
+        self.watchdog = DeadlineWatchdog()
         host, port = self.server_address
         self.base_url_for_sponsored = f"http://{host}:{port}/internal/v1"
+
+    def server_close(self) -> None:
+        super().server_close()
+        self.watchdog.close()
+
+    def upstream_health(self) -> dict[str, Any]:
+        """The gateway's passive view of the provider, for /healthz."""
+        quiet: dict[str, Any] = {
+            "recent_calls": 0,
+            "recent_failures": 0,
+            "last_success_age_s": None,
+            "degraded": False,
+        }
+        if self._upstream_health is None:
+            return quiet
+        try:
+            return {**quiet, **dict(self._upstream_health())}
+        except Exception:  # noqa: BLE001 - liveness must not depend on it
+            return quiet
 
 
 class PublicKimiHandler(BaseHTTPRequestHandler):
@@ -723,6 +992,15 @@ class PublicKimiHandler(BaseHTTPRequestHandler):
 
     def log_message(self, _format: str, *_args: Any) -> None:
         return
+
+    def handle_one_request(self) -> None:
+        try:
+            super().handle_one_request()
+        except CLIENT_GONE_ERRORS:
+            # The caller hung up before it was answered (for example its own
+            # timeout fired): nothing left to send, nothing worth a traceback.
+            self.close_connection = True
+            logger.info("public-kimi broker: client connection lost")
 
     @property
     def public_server(self) -> PublicKimiHTTPServer:
@@ -860,37 +1138,74 @@ class PublicKimiHandler(BaseHTTPRequestHandler):
         payload: Mapping[str, Any],
         *,
         retry: int = 0,
-    ) -> None:
+    ) -> bool:
+        """Write one internal JSON answer; False when the caller hung up."""
         body = json.dumps(payload, ensure_ascii=False, separators=(",", ":")).encode(
             "utf-8"
         )
-        self.send_response(status)
-        self.send_header("Content-Type", "application/json; charset=utf-8")
-        self.send_header("Content-Length", str(len(body)))
-        self.send_header("Cache-Control", "no-store")
-        self.send_header("X-Content-Type-Options", "nosniff")
-        if retry:
-            self.send_header("Retry-After", str(retry))
-        if self.close_connection:
-            self.send_header("Connection", "close")
-        self.end_headers()
-        self.wfile.write(body)
+        try:
+            self.send_response(status)
+            self.send_header("Content-Type", "application/json; charset=utf-8")
+            self.send_header("Content-Length", str(len(body)))
+            self.send_header("Cache-Control", "no-store")
+            self.send_header("X-Content-Type-Options", "nosniff")
+            if retry:
+                self.send_header("Retry-After", str(retry))
+            if self.close_connection:
+                self.send_header("Connection", "close")
+            self.end_headers()
+            self.wfile.write(body)
+        except CLIENT_GONE_ERRORS:
+            self.close_connection = True
+            return False
+        return True
 
-    def _internal_error(self, exc: PublicAPIError) -> None:
-        self._internal_json(
+    def _internal_error(self, exc: PublicAPIError) -> bool:
+        return self._internal_json(
             exc.status,
-            {"error": {"message": exc.message}},
+            error_body(
+                exc.message,
+                _error_type(exc),
+                forwarded=exc.forwarded,
+                retry_after=exc.retry_after or None,
+            ),
             retry=exc.retry_after,
         )
 
-    def _forward_sponsored_request(self, upstream_path: str) -> None:
+    def _sponsored_call(self, path: str) -> None:
+        """Relay one sponsored model call and log one content-free line."""
+        started = time.monotonic()
+        responses = path == "/internal/v1/responses"
+        log = _SponsoredCallLog(family="responses" if responses else "chat")
+        try:
+            self._forward_sponsored_request(
+                "/responses" if responses else "/chat/completions", log
+            )
+        except PublicAPIError as exc:
+            log.status, log.error_type = exc.status, _error_type(exc)
+            log.response_bytes = 0
+            log.client_connected = self._internal_error(exc)
+        except _CallerLeft:
+            # Nobody is left to answer.  Closing the hop told the gateway,
+            # which stops the provider call in turn.
+            self.close_connection = True
+            log.status, log.error_type, log.client_connected = 0, "client_gone", False
+        finally:
+            logger.info(log.line(time.monotonic() - started))
+
+    def _forward_sponsored_request(
+        self, upstream_path: str, log: _SponsoredCallLog
+    ) -> None:
         app = self.public_server.app
         engine = app.sponsor_sessions.authorize(self._bearer_token(), charge=True)
+        log.engine = engine
         if upstream_path == "/responses" and engine not in {"codex", "formal"}:
             raise PublicAPIError(403, "Responses transport requires a Codex or Formal token")
         payload = self._read_json(app.limits.sponsor_request_bytes)
         if not self.public_server.gateway_base_url or not self.public_server.gateway_token:
             raise PublicAPIError(503, "Sponsored Kimi gateway unavailable")
+        wait = gateway_wait_seconds(app.limits, self.headers.get(DEADLINE_HEADER))
+        log.wait_s = wait
         request = urlrequest.Request(
             self.public_server.gateway_base_url + upstream_path,
             data=json.dumps(
@@ -900,62 +1215,128 @@ class PublicKimiHandler(BaseHTTPRequestHandler):
                 "Authorization": "Bearer " + self.public_server.gateway_token,
                 "Content-Type": "application/json",
                 "Accept": str(self.headers.get("Accept") or "application/json"),
+                # The gateway's deadline ends before this wait does.
+                DEADLINE_HEADER: format_deadline(wait - _DEADLINE_HOP_MARGIN_SECONDS),
             },
             method="POST",
         )
+        # A total deadline for the hop; it also ends as soon as the caller
+        # hangs up.
+        call = WatchedCall(time.monotonic() + wait, caller=self.connection)
+        self.public_server.watchdog.watch(call)
         try:
-            upstream = urlrequest.urlopen(
-                request,
-                timeout=app.limits.upstream_timeout_seconds + 5,
-            )
+            self._exchange_with_gateway(request, call, log)
+        finally:
+            call.finish()
+
+    def _exchange_with_gateway(
+        self, request: urlrequest.Request, call: WatchedCall, log: _SponsoredCallLog
+    ) -> None:
+        try:
+            upstream = open_watched(LOOPBACK_OPENER, request, call)
         except urlerror.HTTPError as exc:
             upstream = exc
-        except (OSError, urlerror.URLError):
-            raise PublicAPIError(502, "Sponsored Kimi gateway unavailable") from None
+        except urlerror.URLError as exc:
+            # urllib wraps only failures to connect or send the request.
+            raise _gateway_failure(call, exc, sent=False) from None
+        except (OSError, http.client.HTTPException) as exc:
+            raise _gateway_failure(call, exc, sent=True) from None
         with upstream:
             status = int(getattr(upstream, "status", upstream.code))
             content_type = str(upstream.headers.get("Content-Type") or "application/json")
             streaming = "text/event-stream" in content_type.lower()
             if streaming:
+                self._relay_sponsored_stream(upstream, status, content_type, call, log)
+                return
+            try:
+                body = upstream.read(2 * 1024 * 1024 + 1)
+            except (OSError, http.client.HTTPException) as exc:
+                raise _gateway_failure(call, exc, sent=True) from None
+            if call.finish():
+                # Cut off while reading: the deadline, or the caller left.
+                raise _gateway_failure(call, None, sent=True)
+            if len(body) > 2 * 1024 * 1024:
+                raise PublicAPIError(
+                    502,
+                    "Sponsored Kimi response too large",
+                    error_type="response_too_large",
+                    forwarded=True,
+                )
+            if response_incomplete(upstream):
+                raise _gateway_failure(call, None, sent=True)
+            # The gateway's own typed errors pass through unchanged.
+            log.status = status
+            log.error_type = _relayed_error_type(status, body)
+            log.response_bytes = len(body)
+            retry_after = str(upstream.headers.get("Retry-After") or "").strip()
+            try:
                 self.send_response(status)
                 self.send_header("Content-Type", content_type)
+                self.send_header("Content-Length", str(len(body)))
                 self.send_header("Cache-Control", "no-store")
-                self.send_header("Connection", "close")
                 self.send_header("X-Content-Type-Options", "nosniff")
+                if retry_after.isdigit() and len(retry_after) <= 6:
+                    self.send_header("Retry-After", retry_after)
                 self.end_headers()
+                self.wfile.write(body)
+            except CLIENT_GONE_ERRORS:
                 self.close_connection = True
-                read = getattr(upstream, "read1", None)
-                if not callable(read):
-                    read = upstream.read
-                total = 0
-                while True:
-                    chunk = read(16 * 1024)
-                    if not chunk:
-                        return
-                    total += len(chunk)
-                    if total > 16 * 1024 * 1024:
-                        return
-                    self.wfile.write(chunk)
-                    self.wfile.flush()
-            body = upstream.read(2 * 1024 * 1024 + 1)
-            if len(body) > 2 * 1024 * 1024:
-                raise PublicAPIError(502, "Sponsored Kimi response too large")
+                log.client_connected = False
+
+    def _relay_sponsored_stream(
+        self,
+        upstream: Any,
+        status: int,
+        content_type: str,
+        call: WatchedCall,
+        log: _SponsoredCallLog,
+    ) -> None:
+        """Pass the gateway's event stream through; the gateway bounds its time."""
+        self.close_connection = True
+        log.status, log.error_type = status, "ok"
+        try:
             self.send_response(status)
             self.send_header("Content-Type", content_type)
-            self.send_header("Content-Length", str(len(body)))
             self.send_header("Cache-Control", "no-store")
+            self.send_header("Connection", "close")
             self.send_header("X-Content-Type-Options", "nosniff")
-            retry_after = str(upstream.headers.get("Retry-After") or "").strip()
-            if retry_after.isdigit() and len(retry_after) <= 6:
-                self.send_header("Retry-After", retry_after)
             self.end_headers()
-            self.wfile.write(body)
+        except CLIENT_GONE_ERRORS:
+            log.error_type, log.client_connected = "client_gone", False
+            return
+        read = getattr(upstream, "read1", None)
+        if not callable(read):
+            read = upstream.read
+        total = 0
+        while True:
+            try:
+                chunk = read(16 * 1024)
+            except (OSError, http.client.HTTPException) as exc:
+                log.error_type = _stream_failure_type(call, exc)
+                break
+            if not chunk:
+                if call.finish():
+                    log.error_type = _stream_failure_type(call, None)
+                break
+            total += len(chunk)
+            if total > 16 * 1024 * 1024:
+                log.error_type = "response_too_large"
+                break
+            try:
+                self.wfile.write(chunk)
+                self.wfile.flush()
+            except CLIENT_GONE_ERRORS:
+                log.error_type, log.client_connected = "client_gone", False
+                break
+            log.response_bytes = total
+        if log.error_type == "client_gone":
+            log.client_connected = False
 
     def do_GET(self) -> None:  # noqa: N802
         path = self._path()
         if path == "/internal/v1/models":
             if not self._loopback_peer():
-                self._internal_json(404, {"error": {"message": "Not found"}})
+                self._internal_json(404, error_body("Not found", "not_found"))
                 return
             try:
                 self.public_server.app.sponsor_sessions.authorize(
@@ -975,12 +1356,13 @@ class PublicKimiHandler(BaseHTTPRequestHandler):
             return
         token, new = self._session()
         if path == "/healthz":
-            self._json(
-                200,
-                {"ok": True, "service": "public-kimi"},
-                token=token,
-                new=new,
-            )
+            health: dict[str, Any] = {"ok": True, "service": "public-kimi"}
+            if self._loopback_peer() and not self.headers.get("X-Public-Client-IP"):
+                # Passive: what recent calls saw; /healthz never calls Kimi.
+                # Only local callers (the console, smoke.sh) see it, never a
+                # visitor through the public edge, which sets that header.
+                health["upstream"] = self.public_server.upstream_health()
+            self._json(200, health, token=token, new=new)
             return
         if path == "/":
             page = ROOT / "agent_monitor" / "web" / "public_kimi.html"
@@ -1042,7 +1424,7 @@ class PublicKimiHandler(BaseHTTPRequestHandler):
             "/internal/v1/responses",
         }:
             if not self._loopback_peer():
-                self._internal_json(404, {"error": {"message": "Not found"}})
+                self._internal_json(404, error_body("Not found", "not_found"))
                 return
             try:
                 if path == "/internal/sessions":
@@ -1065,11 +1447,7 @@ class PublicKimiHandler(BaseHTTPRequestHandler):
                         },
                     )
                 else:
-                    self._forward_sponsored_request(
-                        "/responses"
-                        if path == "/internal/v1/responses"
-                        else "/chat/completions"
-                    )
+                    self._sponsored_call(path)
             except PublicAPIError as exc:
                 self._internal_error(exc)
             return
@@ -1114,7 +1492,71 @@ class PublicKimiHandler(BaseHTTPRequestHandler):
     do_DELETE = do_OPTIONS
 
 
+def _install_shutdown_handlers(server: ThreadingHTTPServer) -> dict[int, Any]:
+    """Stop ``serve_forever`` cleanly on SIGTERM/SIGINT.
+
+    Under ``PrivatePIDs=yes`` the broker is PID 1 of its namespace, and the
+    kernel drops signals to a namespace init that has no handler, so without
+    this ``systemctl stop`` waits for the full stop timeout and SIGKILLs.
+    ``shutdown()`` blocks until the loop exits, so it runs on a helper thread.
+    Returns the previous handlers (only the main thread can install them).
+    """
+    if threading.current_thread() is not threading.main_thread():
+        return {}
+    requested = threading.Event()
+
+    def stop(_signum: int, _frame: Any) -> None:
+        if requested.is_set():
+            return
+        requested.set()
+        threading.Thread(
+            target=server.shutdown, name="public-kimi-shutdown", daemon=True
+        ).start()
+
+    previous: dict[int, Any] = {}
+    for signum in (signal.SIGTERM, signal.SIGINT):
+        previous[signum] = signal.signal(signum, stop)
+    return previous
+
+
+def gateway_options(limits: PublicLimits) -> dict[str, Any]:
+    """The credential gateway's limits for ``limits`` (see ``serve``)."""
+    return {
+        "max_output_tokens": limits.max_output_tokens,
+        "max_concurrency": limits.gateway_concurrent_calls,
+        "calls_per_hour": limits.gateway_calls_per_hour,
+        # Each call's total budget, queue wait included.  The broker waits
+        # _GATEWAY_WAIT_MARGIN_SECONDS longer for the gateway, and sponsored
+        # clients longer still (client > broker > gateway), so a slow provider
+        # ends in the gateway's typed 504 rather than in a hop that gave up
+        # while the provider kept working.
+        "upstream_timeout": limits.upstream_timeout_seconds,
+        "queue_seconds": limits.gateway_queue_seconds,
+        "queue_depth": limits.gateway_queue_depth,
+    }
+
+
+def _configure_call_log() -> None:
+    """Send the per-call lines (content-free by construction) to stderr."""
+    calls = logging.getLogger("agent_monitor.public_kimi")
+    if not calls.handlers:
+        handler = logging.StreamHandler(sys.stderr)
+        handler.setFormatter(logging.Formatter("%(message)s"))
+        calls.addHandler(handler)
+    calls.setLevel(logging.INFO)
+    # Only these lines: other modules' INFO logs stay off the journal.
+    calls.propagate = False
+
+
 def serve() -> None:
+    # stdout/stderr are journald sockets under systemd: write each line
+    # through instead of block-buffering it until the process exits.
+    for stream in (sys.stdout, sys.stderr):
+        try:
+            stream.reconfigure(line_buffering=True)
+        except (AttributeError, ValueError, OSError):
+            pass
+    _configure_call_log()
     configured_data = str(os.environ.get("PUBLIC_KIMI_DATA_DIR") or "").strip()
     agent_data = str(os.environ.get("AGENT_MONITOR_DATA_DIR") or "").strip()
     if not configured_data or Path(configured_data).resolve() != DATA_DIR or Path(agent_data).resolve() != DATA_DIR:
@@ -1127,22 +1569,21 @@ def serve() -> None:
     DATA_DIR.chmod(0o700)
     upstream_key, upstream_base = _upstream_credentials()
     local_token = secrets.token_urlsafe(48)
-    limits = PublicLimits()
+    limits = PublicLimits.from_env()
     gateway = PublicKimiGateway(
         upstream_base=upstream_base,
         upstream_api_key=upstream_key,
         local_token=local_token,
         reasoning_effort="high",
-        max_output_tokens=limits.max_output_tokens,
-        max_concurrency=limits.gateway_concurrent_calls,
-        calls_per_hour=limits.gateway_calls_per_hour,
-        # api_chat gives its HTTP client 240 seconds.  Return a bounded gateway
-        # failure first instead of leaving an upstream request running after
-        # the worker has already abandoned it.
-        upstream_timeout=limits.upstream_timeout_seconds,
+        **gateway_options(limits),
     )
     with gateway:
-        _install_worker_environment(DATA_DIR, token=local_token, base_url=gateway.base_url)
+        _install_worker_environment(
+            DATA_DIR,
+            token=local_token,
+            base_url=gateway.base_url,
+            max_output_tokens=limits.max_output_tokens,
+        )
         # Import only after the real key and systemd credential directory have
         # been removed from the process environment inherited by workers.
         from agent_monitor import jobs
@@ -1165,7 +1606,9 @@ def serve() -> None:
             base_path,
             gateway_base_url=gateway.base_url,
             gateway_token=local_token,
+            upstream_health=gateway.upstream_health,
         )
+        _install_shutdown_handlers(server)
         try:
             server.serve_forever(poll_interval=0.25)
         finally:
