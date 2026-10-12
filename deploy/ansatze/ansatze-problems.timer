@@ -1,0 +1,13 @@
+# Refresh the problem-status overlay every six hours (optional; see
+# ansatze-problems.service).
+[Unit]
+Description=Refresh the Ansätze problem-status overlay every six hours
+Documentation=file:/home/repo/agent_monitor_math/deploy/ansatze/README.md
+
+[Timer]
+OnCalendar=*-*-* 00/6:15:00
+RandomizedDelaySec=300
+Persistent=true
+
+[Install]
+WantedBy=timers.target

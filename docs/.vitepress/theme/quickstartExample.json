@@ -1,0 +1,460 @@
+{
+ "version": 1,
+ "type": "example",
+ "slug": "odd-sum",
+ "title": "The sum of two odd integers is even",
+ "captured": "2026-09-27",
+ "engine": "Ansatz CGM · Kimi K3",
+ "session": "Guest session on ansatze.ai",
+ "status": "Proof accepted by the model verifier · Lean 4 file kernel-checked",
+ "problem": "Prove that the sum of two odd integers is even.",
+ "notice": "A real guest run from 2026-09-27, copied unedited from its workspace. Lemmas were accepted by an independent model verifier, which is not a formal certificate; the Lean file was checked by Lean's kernel.",
+ "stats": {
+  "informal_seconds": 175,
+  "lean_seconds": 170,
+  "input_tokens": 21112,
+  "output_tokens": 10982,
+  "facts": 4,
+  "explore_nodes": 33,
+  "explore_edges": 51
+ },
+ "proof_intro": "This proof is the verified fact closure of the target theorem. Each lemma and the main theorem were accepted one at a time by an independent, response-only model verifier that saw only that statement, its proof, and the statements of the facts it cites. Model-verifier acceptance is not a Lean or other formal certificate.",
+ "lemmas": [
+  {
+   "id": "4fd6fa17f43b8308",
+   "label": "Lemma 1",
+   "short": "Odd: $x = 2k + 1$; even: $x = 2t$",
+   "uses": [],
+   "statement": "For every integer x ∈ Z: (a) x is odd if and only if there exists k ∈ Z such that x = 2k + 1; and (b) x is even if and only if there exists t ∈ Z such that x = 2t. Throughout this write-up, the notions are defined as follows: an integer x is odd iff there exists k ∈ Z with x = 2k + 1, and an integer x is even iff there exists t ∈ Z with x = 2t.",
+   "statement_tex": "For every integer $x \\in \\mathbb{Z}$: (a) $x$ is odd if and only if there exists $k \\in \\mathbb{Z}$ such that $x = 2k + 1$; and (b) $x$ is even if and only if there exists $t \\in \\mathbb{Z}$ such that $x = 2t$. Throughout this write-up, the notions are defined as follows: an integer $x$ is odd iff there exists $k \\in \\mathbb{Z}$ with $x = 2k + 1$, and an integer $x$ is even iff there exists $t \\in \\mathbb{Z}$ with $x = 2t$.",
+   "proof": "Assertion (a) is a biconditional identifying \"x is odd\" with \"there exists k ∈ Z such that x = 2k + 1\", which holds by the stated definition of oddness. Assertion (b) is a biconditional identifying \"x is even\" with \"there exists t ∈ Z such that x = 2t\", which holds by the stated definition of evenness. Both directions of each biconditional are therefore definitional unpackings, valid for every integer x. (If \"odd\" were instead defined as \"not divisible by 2\", assertion (a) would require the division algorithm for the forward direction; this write-up deliberately adopts the explicit parametrization as the definition, so no such result is invoked.) (self-derived)",
+   "proof_tex": "Assertion (a) is a biconditional identifying \"$x$ is odd\" with \"there exists $k \\in \\mathbb{Z}$ such that $x = 2k + 1$\", which holds by the stated definition of oddness. Assertion (b) is a biconditional identifying \"$x$ is even\" with \"there exists $t \\in \\mathbb{Z}$ such that $x = 2t$\", which holds by the stated definition of evenness. Both directions of each biconditional are therefore definitional unpackings, valid for every integer $x$. (If \"odd\" were instead defined as \"not divisible by 2\", assertion (a) would require the division algorithm for the forward direction; this write-up deliberately adopts the explicit parametrization as the definition, so no such result is invoked.) (self-derived)",
+   "verifier": {
+    "verdict": "correct",
+    "summary": "The statement defines odd and even precisely as the existential parametrizations $x = 2k + 1$ and $x = 2t$. Assertions (a) and (b) are therefore biconditionals of the form P iff P, i.e., definitional identities valid for every integer $x$."
+   },
+   "lean_decl": "odd_even_param"
+  },
+  {
+   "id": "62018a4d2785e13b",
+   "label": "Lemma 2",
+   "short": "$\\mathbb{Z}$ is closed under addition",
+   "uses": [],
+   "statement": "The integers are closed under addition: for all m ∈ Z and all n ∈ Z, m + n ∈ Z, and consequently m + n + 1 ∈ Z.",
+   "statement_tex": "The integers are closed under addition: for all $m \\in \\mathbb{Z}$ and all $n \\in \\mathbb{Z}$, $m + n \\in \\mathbb{Z}$, and consequently $m + n + 1 \\in \\mathbb{Z}$.",
+   "proof": "Z is closed under addition: it is a subring of R, in particular the sum of two integers is an integer. Given m, n ∈ Z, applying closure once gives m + n ∈ Z; since 1 ∈ Z, applying closure again to the pair (m + n, 1) gives m + n + 1 ∈ Z. (self-derived)",
+   "proof_tex": "$\\mathbb{Z}$ is closed under addition: it is a subring of $\\mathbb{R}$, in particular the sum of two integers is an integer. Given $m, n \\in \\mathbb{Z}$, applying closure once gives $m + n \\in \\mathbb{Z}$; since $1 \\in \\mathbb{Z}$, applying closure again to the pair $(m + n, 1)$ gives $m + n + 1 \\in \\mathbb{Z}$. (self-derived)",
+   "verifier": {
+    "verdict": "correct",
+    "summary": "The proof is elementary but valid: integer addition closure is taken from $\\mathbb{Z}$ being a subring/ring of $\\mathbb{R}$, applied to $m$ and $n$, and then to $m+n$ and 1 to conclude $m+n+1$ is an integer. No invalid citation or logical leap was found."
+   },
+   "lean_decl": "int_add_closure"
+  },
+  {
+   "id": "7375ef9adbaef834",
+   "label": "Lemma 3",
+   "short": "If $a$ and $b$ are odd, $a + b$ is even",
+   "uses": [
+    "Lemma 1",
+    "Lemma 2"
+   ],
+   "statement": "For all integers a ∈ Z and b ∈ Z, if a is odd and b is odd, then a + b is even, where an integer x is called odd iff there exists k ∈ Z with x = 2k + 1, and an integer y is called even iff there exists t ∈ Z with y = 2t.",
+   "statement_tex": "For all integers $a \\in \\mathbb{Z}$ and $b \\in \\mathbb{Z}$, if $a$ is odd and $b$ is odd, then $a + b$ is even, where an integer $x$ is called odd iff there exists $k \\in \\mathbb{Z}$ with $x = 2k + 1$, and an integer $y$ is called even iff there exists $t \\in \\mathbb{Z}$ with $y = 2t$.",
+   "proof": "Cited facts: L1 = fact 4fd6fa17f43b8308; L2 = fact 62018a4d2785e13b.\n\nLet a ∈ Z and b ∈ Z be arbitrary, and assume a is odd and b is odd. By L1(a) (\"x is odd iff there exists k ∈ Z with x = 2k + 1\") applied to x = a, there exists m ∈ Z with a = 2m + 1; applied to x = b, there exists n ∈ Z with b = 2n + 1. Then\na + b = (2m + 1) + (2n + 1) = 2m + 2n + 2 = 2(m + n + 1),\nusing associativity and commutativity of addition in Z, the distributive law 2(m + n + 1) = 2m + 2n + 2, and 1 + 1 = 2. Set t = m + n + 1. By L2 (\"for all m, n ∈ Z, m + n + 1 ∈ Z\") applied to these m, n, we have t ∈ Z. Hence there exists t ∈ Z with a + b = 2t, so by L1(b) (\"y is even iff there exists t ∈ Z with y = 2t\") applied to y = a + b, the integer a + b is even. Since a and b were arbitrary odd integers, the universal statement follows. (self-derived)",
+   "proof_tex": "Cited facts: L1 = fact 4fd6fa17f43b8308; L2 = fact 62018a4d2785e13b.\n\nLet $a \\in \\mathbb{Z}$ and $b \\in \\mathbb{Z}$ be arbitrary, and assume $a$ is odd and $b$ is odd. By L1(a) (\"$x$ is odd iff there exists $k \\in \\mathbb{Z}$ with $x = 2k + 1$\") applied to $x = a$, there exists $m \\in \\mathbb{Z}$ with $a = 2m + 1$; applied to $x = b$, there exists $n \\in \\mathbb{Z}$ with $b = 2n + 1$. Then\n$a + b = (2m + 1) + (2n + 1) = 2m + 2n + 2 = 2(m + n + 1)$,\nusing associativity and commutativity of addition in $\\mathbb{Z}$, the distributive law $2(m + n + 1) = 2m + 2n + 2$, and $1 + 1 = 2$. Set $t = m + n + 1$. By L2 (\"for all $m, n \\in \\mathbb{Z}$, $m + n + 1 \\in \\mathbb{Z}$\") applied to these $m$, $n$, we have $t \\in \\mathbb{Z}$. Hence there exists $t \\in \\mathbb{Z}$ with $a + b = 2t$, so by L1(b) (\"$y$ is even iff there exists $t \\in \\mathbb{Z}$ with $y = 2t$\") applied to $y = a + b$, the integer $a + b$ is even. Since $a$ and $b$ were arbitrary odd integers, the universal statement follows. (self-derived)",
+   "verifier": {
+    "verdict": "correct",
+    "summary": "The proof correctly establishes that the sum of two odd integers is even. It applies L1(a) to both $a$ and $b$ to obtain representations $a = 2m+1$ and $b = 2n+1$ with $m$, $n$ in $\\mathbb{Z}$, performs valid algebraic manipulation (associativity, commutativity, distributive law, and $1+1=2$ are standard ring/integer arithmetic facts explicitly invoked) to rewrite $a + b = 2(m+n+1)$, uses L2 exactly as stated to conclude $t = m+n+1$ is an integer, and applies L1(b) to conclude $a+b$ is even."
+   },
+   "lean_decl": "odd_add_odd_even"
+  },
+  {
+   "id": "7ac28a5a823dd9a4",
+   "label": "Target theorem",
+   "short": "The sum of two odd integers is even",
+   "uses": [
+    "Lemma 1",
+    "Lemma 2",
+    "Lemma 3"
+   ],
+   "statement": "Prove that the sum of two odd integers is even.",
+   "statement_tex": "Prove that the sum of two odd integers is even.",
+   "proof": "Cited facts: L1 = fact 4fd6fa17f43b8308; L2 = fact 62018a4d2785e13b; L3 = fact 7375ef9adbaef834.\n\nAdopt the definitions: an integer x is odd iff there exists k ∈ Z with x = 2k + 1; an integer y is even iff there exists t ∈ Z with y = 2t. By L1, these parametrizations coincide with the notions of odd and even used here. By L3 (\"for all a, b ∈ Z, if a and b are odd then a + b is even\", whose proof uses L1 to obtain the parametrizations of a and b and L2 to establish that the exhibited quotient m + n + 1 is an integer), the sum of any two odd integers is even. Therefore the sum of two odd integers is even. (self-derived)",
+   "proof_tex": "Cited facts: L1 = fact 4fd6fa17f43b8308; L2 = fact 62018a4d2785e13b; L3 = fact 7375ef9adbaef834.\n\nAdopt the definitions: an integer $x$ is odd iff there exists $k \\in \\mathbb{Z}$ with $x = 2k + 1$; an integer $y$ is even iff there exists $t \\in \\mathbb{Z}$ with $y = 2t$. By L1, these parametrizations coincide with the notions of odd and even used here. By L3 (\"for all $a, b \\in \\mathbb{Z}$, if $a$ and $b$ are odd then $a + b$ is even\", whose proof uses L1 to obtain the parametrizations of $a$ and $b$ and L2 to establish that the exhibited quotient $m + n + 1$ is an integer), the sum of any two odd integers is even. Therefore the sum of two odd integers is even. (self-derived)",
+   "verifier": {
+    "verdict": "correct",
+    "summary": "The statement is 'the sum of two odd integers is even', which is exactly the content of the listed predecessor L3 ('for all $a$, $b$ in $\\mathbb{Z}$, if $a$ is odd and $b$ is odd, then $a + b$ is even'). The proof opens by adopting definitions of odd and even that coincide with those used in L1 and L3 (parametrizations $x = 2k+1$ and $y = 2t$), which is consistent with the write-up's definitions."
+   },
+   "lean_decl": "main"
+  }
+ ],
+ "facts_graph": {
+  "basis": "model-verifier accepted (not a Lean certificate)",
+  "nodes": [
+   {
+    "id": "4fd6fa17f43b8308",
+    "label": "Lemma 1",
+    "kind": "lemma"
+   },
+   {
+    "id": "62018a4d2785e13b",
+    "label": "Lemma 2",
+    "kind": "lemma"
+   },
+   {
+    "id": "7375ef9adbaef834",
+    "label": "Lemma 3",
+    "kind": "lemma"
+   },
+   {
+    "id": "7ac28a5a823dd9a4",
+    "label": "Target theorem",
+    "kind": "conclusion"
+   }
+  ],
+  "edges": [
+   {
+    "from": "4fd6fa17f43b8308",
+    "to": "7375ef9adbaef834"
+   },
+   {
+    "from": "62018a4d2785e13b",
+    "to": "7375ef9adbaef834"
+   },
+   {
+    "from": "4fd6fa17f43b8308",
+    "to": "7ac28a5a823dd9a4"
+   },
+   {
+    "from": "62018a4d2785e13b",
+    "to": "7ac28a5a823dd9a4"
+   },
+   {
+    "from": "7375ef9adbaef834",
+    "to": "7ac28a5a823dd9a4"
+   }
+  ]
+ },
+ "explore": {
+  "counts": {
+   "goal": 9,
+   "plan": 2,
+   "proof_attempt": 2,
+   "verification": 4,
+   "obstacle": 4,
+   "conclusion": 8,
+   "fact": 4
+  },
+  "nodes": 33,
+  "edges": 51,
+  "plans": [
+   {
+    "label": "Plan 1",
+    "title": "parametric-definition",
+    "technique": "plain",
+    "approach": "Use the explicit odd-integer representation and exhibit an integer quotient for $(a+b)/2$.",
+    "status": "closed",
+    "score": 1.0,
+    "rule": "accepted-target",
+    "subgoals": [
+     {
+      "label": "S1",
+      "statement": "Prove the parity representation lemma: for every $x \\in \\mathbb{Z}$, $x$ is odd if and only if there exists $k \\in \\mathbb{Z}$ such that $x=2k+1$, and $y$ is even if and only if there exists $t \\in \\mathbb{Z}$ such that $y=2t$.",
+      "status": "closed",
+      "score": 1.0
+     },
+     {
+      "label": "S2",
+      "statement": "Given arbitrary odd $a,b \\in \\mathbb{Z}$, use S1 to choose $m,n \\in \\mathbb{Z}$ with $a=2m+1$ and $b=2n+1$.",
+      "status": "open",
+      "score": 0.6
+     },
+     {
+      "label": "S3",
+      "statement": "Compute $a+b=(2m+1)+(2n+1)=2(m+n+1)$, and prove $m+n+1 \\in \\mathbb{Z}$ using closure of $\\mathbb{Z}$ under addition.",
+      "status": "closed",
+      "score": 1.0
+     },
+     {
+      "label": "S4",
+      "statement": "Apply the evenness characterization from S1 with witness $t=m+n+1$ to conclude that $a+b$ is even; then discharge the arbitrary $a$,$b$ to obtain the exact universal statement.",
+      "status": "open",
+      "score": 0.6
+     }
+    ],
+    "attempt": {
+     "label": "Proof attempt 1 (worker 1)",
+     "result": "solved, accepted",
+     "status": "verified"
+    },
+    "verdicts": [
+     [
+      "L1",
+      "correct"
+     ],
+     [
+      "L2",
+      "correct"
+     ],
+     [
+      "L3",
+      "correct"
+     ],
+     [
+      "THEOREM",
+      "correct"
+     ]
+    ],
+    "facts": 4
+   },
+   {
+    "label": "Plan 2",
+    "title": "modular-reduction",
+    "technique": "reduction",
+    "approach": "Reduce the statement to addition in $\\mathbb{Z}/2\\mathbb{Z}$: odd means residue 1, even means residue 0, and $1+1=0$ modulo 2.",
+    "status": "dead",
+    "score": 0.0,
+    "rule": "dead-member",
+    "subgoals": [
+     {
+      "label": "S1",
+      "statement": "For every $x \\in \\mathbb{Z}$, prove that $x$ is odd exactly when $x \\equiv 1  \\pmod{2}$ and that $x$ is even exactly when $x \\equiv 0  \\pmod{2}$.",
+      "status": "dead",
+      "score": 0.0
+     },
+     {
+      "label": "S2",
+      "statement": "Prove that congruence modulo 2 respects addition: if $a \\equiv r  \\pmod{2}$ and $b \\equiv s  \\pmod{2}$, then $a+b \\equiv r+s  \\pmod{2}$.",
+      "status": "dead",
+      "score": 0.0
+     },
+     {
+      "label": "S3",
+      "statement": "For odd $a,b \\in \\mathbb{Z}$, use S1 to obtain $a \\equiv 1  \\pmod{2}$ and $b \\equiv 1  \\pmod{2}$, then use S2 to derive $a+b \\equiv 1+1 \\equiv 0  \\pmod{2}$.",
+      "status": "dead",
+      "score": 0.0
+     },
+     {
+      "label": "S4",
+      "statement": "Use S1 in the reverse direction to translate $a+b \\equiv 0  \\pmod{2}$ into the statement that $a+b$ is even, thereby proving the exact original claim for all odd integers $a$,$b$.",
+      "status": "dead",
+      "score": 0.0
+     }
+    ],
+    "attempt": {
+     "label": "Proof attempt 2 (worker 2)",
+     "result": "solved, unverified",
+     "status": "unverified"
+    },
+    "verdicts": [],
+    "facts": 0
+   }
+  ],
+  "obstacles": [
+   "The quantification is over all integers, including negative integers; any witness parametrization must permit arbitrary…",
+   "If odd is defined as 'not divisible by 2' rather than as 2k+1, the representation lemma requires the division algorithm…",
+   "Do not use terminology such as 'same parity' or appeal to a broader parity table unless those facts are first derived;…",
+   "External citations are unnecessary for this elementary argument: tag algebraic and definitional steps as self-derived,…"
+  ]
+ },
+ "lean": {
+  "status": "verified",
+  "file": "/examples/odd-sum/Proof.lean",
+  "lines": 56,
+  "source_sha256": "4680f93e4060abd7f344f28bfb0da13107df4243a4326ee6f1992937908fc060",
+  "toolchain": "Lean 4.14.0 + Mathlib",
+  "checker": "Isolated Lean checker (sandboxed broker)",
+  "sorry": 0,
+  "axioms": [
+   "propext"
+  ],
+  "main_decl": "main",
+  "signature": "theorem main (a b : ℤ) (ha : Odd a) (hb : Odd b) : Even (a + b)",
+  "audit": {
+   "faithful": true,
+   "verdict": "The file states exactly that for arbitrary integers a, b over ℤ, Odd a and Odd b imply Even (a + b), which is precisely the problem's claim.",
+   "back_translation": "For all integers a and b (quantified over ℤ), if a is odd (Odd a, i.e. ∃ k : ℤ, a = 2k + 1) and b is odd, then a + b is even (Even (a + b), i.e. ∃ t : ℤ, a + b = 2t)."
+  },
+  "checks": [
+   {
+    "action": "statement",
+    "status": "verified",
+    "sorry": 4,
+    "seconds": 7.2
+   },
+   {
+    "action": "prove",
+    "status": "verified",
+    "sorry": 0,
+    "seconds": 29.9
+   }
+  ],
+  "coverage": {
+   "verified": 4,
+   "total": 4,
+   "linked": 4,
+   "links": [
+    {
+     "informal": "Lemma 1",
+     "lean": "odd_even_param"
+    },
+    {
+     "informal": "Lemma 2",
+     "lean": "int_add_closure"
+    },
+    {
+     "informal": "Lemma 3",
+     "lean": "odd_add_odd_even"
+    },
+    {
+     "informal": "Target theorem",
+     "lean": "main"
+    }
+   ]
+  }
+ },
+ "proof": "# Proof\n\nThis proof is the verified fact closure of the target theorem. Each lemma and the main theorem were accepted one at a time by an independent, response-only model verifier that saw only that statement, its proof, and the statements of the facts it cites. Model-verifier acceptance is not a Lean or other formal certificate.\n\n## Lemma 1 · fact 4fd6fa17f43b8308\n\n**Uses:** none.\n\n**Statement.**\n\nFor every integer x ∈ Z: (a) x is odd if and only if there exists k ∈ Z such that x = 2k + 1; and (b) x is even if and only if there exists t ∈ Z such that x = 2t. Throughout this write-up, the notions are defined as follows: an integer x is odd iff there exists k ∈ Z with x = 2k + 1, and an integer x is even iff there exists t ∈ Z with x = 2t.\n\n**Proof.**\n\nAssertion (a) is a biconditional identifying \"x is odd\" with \"there exists k ∈ Z such that x = 2k + 1\", which holds by the stated definition of oddness. Assertion (b) is a biconditional identifying \"x is even\" with \"there exists t ∈ Z such that x = 2t\", which holds by the stated definition of evenness. Both directions of each biconditional are therefore definitional unpackings, valid for every integer x. (If \"odd\" were instead defined as \"not divisible by 2\", assertion (a) would require the division algorithm for the forward direction; this write-up deliberately adopts the explicit parametrization as the definition, so no such result is invoked.) (self-derived)\n\n## Lemma 2 · fact 62018a4d2785e13b\n\n**Uses:** none.\n\n**Statement.**\n\nThe integers are closed under addition: for all m ∈ Z and all n ∈ Z, m + n ∈ Z, and consequently m + n + 1 ∈ Z.\n\n**Proof.**\n\nZ is closed under addition: it is a subring of R, in particular the sum of two integers is an integer. Given m, n ∈ Z, applying closure once gives m + n ∈ Z; since 1 ∈ Z, applying closure again to the pair (m + n, 1) gives m + n + 1 ∈ Z. (self-derived)\n\n## Lemma 3 · fact 7375ef9adbaef834\n\n**Uses:** Lemma 1 (fact 4fd6fa17f43b8308), Lemma 2 (fact 62018a4d2785e13b).\n\n**Statement.**\n\nFor all integers a ∈ Z and b ∈ Z, if a is odd and b is odd, then a + b is even, where an integer x is called odd iff there exists k ∈ Z with x = 2k + 1, and an integer y is called even iff there exists t ∈ Z with y = 2t.\n\n**Proof.**\n\nCited facts: L1 = fact 4fd6fa17f43b8308; L2 = fact 62018a4d2785e13b.\n\nLet a ∈ Z and b ∈ Z be arbitrary, and assume a is odd and b is odd. By L1(a) (\"x is odd iff there exists k ∈ Z with x = 2k + 1\") applied to x = a, there exists m ∈ Z with a = 2m + 1; applied to x = b, there exists n ∈ Z with b = 2n + 1. Then\na + b = (2m + 1) + (2n + 1) = 2m + 2n + 2 = 2(m + n + 1),\nusing associativity and commutativity of addition in Z, the distributive law 2(m + n + 1) = 2m + 2n + 2, and 1 + 1 = 2. Set t = m + n + 1. By L2 (\"for all m, n ∈ Z, m + n + 1 ∈ Z\") applied to these m, n, we have t ∈ Z. Hence there exists t ∈ Z with a + b = 2t, so by L1(b) (\"y is even iff there exists t ∈ Z with y = 2t\") applied to y = a + b, the integer a + b is even. Since a and b were arbitrary odd integers, the universal statement follows. (self-derived)\n\n## Main theorem · fact 7ac28a5a823dd9a4\n\n**Uses:** Lemma 1 (fact 4fd6fa17f43b8308), Lemma 2 (fact 62018a4d2785e13b), Lemma 3 (fact 7375ef9adbaef834).\n\n**Statement.**\n\nProve that the sum of two odd integers is even.\n\n**Proof.**\n\nCited facts: L1 = fact 4fd6fa17f43b8308; L2 = fact 62018a4d2785e13b; L3 = fact 7375ef9adbaef834.\n\nAdopt the definitions: an integer x is odd iff there exists k ∈ Z with x = 2k + 1; an integer y is even iff there exists t ∈ Z with y = 2t. By L1, these parametrizations coincide with the notions of odd and even used here. By L3 (\"for all a, b ∈ Z, if a and b are odd then a + b is even\", whose proof uses L1 to obtain the parametrizations of a and b and L2 to establish that the exhibited quotient m + n + 1 is an integer), the sum of any two odd integers is even. Therefore the sum of two odd integers is even. (self-derived)\n",
+ "lean_source": "import Mathlib\n\n/- Sum of two odd integers is even: statement skeleton. -/\n\n/-- For every integer x: (a) x is odd iff there exists k ∈ ℤ with x = 2k + 1,\nand (b) x is even iff there exists t ∈ ℤ with x = 2t. These are the exact\nparametrizations adopted throughout the write-up, and in Mathlib they coincide\nwith the definitions of `Odd` and `Even` on `ℤ`.\nInformal: 4fd6fa17f43b8308\nCites: self-derived — definitional unpacking of `Odd` and `Even` on `ℤ` -/\nlemma odd_even_param (x : ℤ) :\n    (Odd x ↔ ∃ k : ℤ, x = 2 * k + 1) ∧ (Even x ↔ ∃ t : ℤ, x = 2 * t) := by\n  constructor\n  · constructor\n    · rintro ⟨k, rfl⟩\n      exact ⟨k, rfl⟩\n    · rintro ⟨k, rfl⟩\n      exact ⟨k, rfl⟩\n  · constructor\n    · rintro ⟨t, rfl⟩\n      exact ⟨t, by ring⟩\n    · rintro ⟨t, rfl⟩\n      exact ⟨t, by ring⟩\n\n/-- The integers are closed under addition: for all m, n ∈ ℤ, m + n is an\ninteger, and consequently m + n + 1 is an integer.\nInformal: 62018a4d2785e13b\nCites: self-derived — `ℤ` is a ring, hence closed under addition -/\nlemma int_add_closure (m n : ℤ) :\n    (∃ s : ℤ, s = m + n) ∧ (∃ t : ℤ, t = m + n + 1) := by\n  exact ⟨⟨m + n, rfl⟩, ⟨m + n + 1, rfl⟩⟩\n\n/-- For all integers a, b ∈ ℤ, if a is odd and b is odd then a + b is even,\nwhere odd means ∃ k, x = 2k + 1 and even means ∃ t, y = 2t.\nInformal: 7375ef9adbaef834\nCites: self-derived — expansion a + b = (2m + 1) + (2n + 1) = 2(m + n + 1);\n`odd_even_param` — provides the parametrizations;\n`int_add_closure` — witnesses m + n + 1 ∈ ℤ -/\nlemma odd_add_odd_even (a b : ℤ) (ha : Odd a) (hb : Odd b) : Even (a + b) := by\n  -- Parametrize a and b via the odd characterization from `odd_even_param`.\n  obtain ⟨m, hm⟩ := (odd_even_param a).1.mp ha\n  obtain ⟨n, hn⟩ := (odd_even_param b).1.mp hb\n  -- By `int_add_closure`, t = m + n + 1 is an integer; it is the witness.\n  obtain ⟨t, ht⟩ := (int_add_closure m n).2\n  rw [hm, hn]\n  -- Exhibit q = t with a + b = 2q, as in `odd_even_param` (b).\n  exact (odd_even_param ((2 * m + 1) + (2 * n + 1))).2.mpr ⟨t, by rw [ht]; ring⟩\n\n/-- The sum of two odd integers is even.\nInformal: 7ac28a5a823dd9a4\nCites: self-derived — two odd integers sum to an even integer;\n`odd_even_param` — odd iff ∃ k, x = 2k + 1 and even iff ∃ t, y = 2t;\n`int_add_closure` — closure of ℤ under addition;\n`odd_add_odd_even` — the odd + odd = even lemma -/\ntheorem main (a b : ℤ) (ha : Odd a) (hb : Odd b) : Even (a + b) := by\n  exact odd_add_odd_even a b ha hb\n",
+ "verification": {
+  "version": "Lean 4.14.0 + Mathlib, sandboxed kernel check",
+  "result": "verified · no sorry · axioms used by main: propext · SHA-256 4680f93e4060…"
+ },
+ "agents": [
+  {
+   "label": "Strategist",
+   "status": "2 plans · 4 obstacles noted",
+   "summary": "Plan 1: parametric-definition (plain); Plan 2: modular-reduction (reduction)."
+  },
+  {
+   "label": "Worker · Plan 1",
+   "status": "solved, accepted",
+   "summary": "parametric-definition: Use the explicit odd-integer representation and exhibit an integer quotient for (a+b)/2."
+  },
+  {
+   "label": "Worker · Plan 2",
+   "status": "solved, unverified",
+   "summary": "modular-reduction: Reduce the statement to addition in Z/2Z: odd means residue 1, even means residue 0, and 1+1=0 modulo 2."
+  },
+  {
+   "label": "Independent verifier",
+   "status": "4 of 4 accepted (model verifier, not a Lean certificate)",
+   "summary": "Lemma 1: correct. Lemma 2: correct. Lemma 3: correct. Target theorem: correct."
+  },
+  {
+   "label": "Curator",
+   "status": "Plan 1 closed, Plan 2 dead",
+   "summary": "Scored the exploration graph; the proof is the verified fact closure of the target theorem."
+  },
+  {
+   "label": "Lean 4 stage",
+   "status": "verified by the kernel",
+   "summary": "theorem main (a b : ℤ) (ha : Odd a) (hb : Odd b) : Even (a + b) · The file states exactly that for arbitrary integers a, b over ℤ, Odd a and Odd b imply Even (a + b), which is precisely the problem's claim."
+  }
+ ],
+ "informal_graph": {
+  "title": "Facts · model-verifier accepted (not a Lean certificate)",
+  "nodes": [
+   {
+    "id": "4fd6fa17f43b8308",
+    "label": "Lemma 1",
+    "kind": "lemma",
+    "statement": "For every integer x ∈ Z: (a) x is odd if and only if there exists k ∈ Z such that x = 2k + 1; and (b) x is even if and only if there exists t ∈ Z such that x = 2t. Throughout this write-up, the notions are defined as follows: an integer x is odd iff there exists k ∈ Z with x = 2k + 1, and an integer x is even iff there exists t ∈ Z with x = 2t."
+   },
+   {
+    "id": "62018a4d2785e13b",
+    "label": "Lemma 2",
+    "kind": "lemma",
+    "statement": "The integers are closed under addition: for all m ∈ Z and all n ∈ Z, m + n ∈ Z, and consequently m + n + 1 ∈ Z."
+   },
+   {
+    "id": "7375ef9adbaef834",
+    "label": "Lemma 3",
+    "kind": "lemma",
+    "statement": "For all integers a ∈ Z and b ∈ Z, if a is odd and b is odd, then a + b is even, where an integer x is called odd iff there exists k ∈ Z with x = 2k + 1, and an integer y is called even iff there exists t ∈ Z with y = 2t."
+   },
+   {
+    "id": "7ac28a5a823dd9a4",
+    "label": "Target theorem",
+    "kind": "conclusion",
+    "statement": "Prove that the sum of two odd integers is even."
+   }
+  ],
+  "edges": [
+   {
+    "from": "4fd6fa17f43b8308",
+    "to": "7375ef9adbaef834",
+    "label": "uses"
+   },
+   {
+    "from": "62018a4d2785e13b",
+    "to": "7375ef9adbaef834",
+    "label": "uses"
+   },
+   {
+    "from": "4fd6fa17f43b8308",
+    "to": "7ac28a5a823dd9a4",
+    "label": "uses"
+   },
+   {
+    "from": "62018a4d2785e13b",
+    "to": "7ac28a5a823dd9a4",
+    "label": "uses"
+   },
+   {
+    "from": "7375ef9adbaef834",
+    "to": "7ac28a5a823dd9a4",
+    "label": "uses"
+   }
+  ]
+ },
+ "formal_graph": {
+  "title": "Lean declarations · kernel-checked",
+  "nodes": [
+   {
+    "id": "odd_even_param",
+    "label": "odd_even_param",
+    "kind": "lemma",
+    "lean_kind": "lemma",
+    "statement": "lemma odd_even_param (x : ℤ) :\n (Odd x ↔ ∃ k : ℤ, x = 2 * k + 1) ∧ (Even x ↔ ∃ t : ℤ, x = 2 * t)"
+   },
+   {
+    "id": "int_add_closure",
+    "label": "int_add_closure",
+    "kind": "lemma",
+    "lean_kind": "lemma",
+    "statement": "lemma int_add_closure (m n : ℤ) :\n (∃ s : ℤ, s = m + n) ∧ (∃ t : ℤ, t = m + n + 1)"
+   },
+   {
+    "id": "odd_add_odd_even",
+    "label": "odd_add_odd_even",
+    "kind": "lemma",
+    "lean_kind": "lemma",
+    "statement": "lemma odd_add_odd_even (a b : ℤ) (ha : Odd a) (hb : Odd b) : Even (a + b)"
+   },
+   {
+    "id": "main",
+    "label": "main",
+    "kind": "conclusion",
+    "lean_kind": "theorem",
+    "statement": "theorem main (a b : ℤ) (ha : Odd a) (hb : Odd b) : Even (a + b)"
+   }
+  ],
+  "edges": [
+   {
+    "from": "int_add_closure",
+    "to": "odd_add_odd_even",
+    "label": "uses"
+   },
+   {
+    "from": "odd_even_param",
+    "to": "odd_add_odd_even",
+    "label": "uses"
+   },
+   {
+    "from": "odd_add_odd_even",
+    "to": "main",
+    "label": "uses"
+   }
+  ]
+ }
+}

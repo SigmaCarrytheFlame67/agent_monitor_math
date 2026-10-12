@@ -19,6 +19,7 @@ from agent_monitor import lean_broker
 from agent_monitor.engines_registry import (
     CLI_ENGINES,
     CODEX_SUBSCRIPTION_ENGINES,
+    LEGACY_ENGINE_IDS,
     all_engine_ids,
     build_cli_command,
     list_engines,
@@ -71,6 +72,16 @@ _TEST_LEAN_RELEASE_ID = hashlib.sha256(
         + "\n"
     ).encode("utf-8")
 ).hexdigest()
+
+
+def _probe_stdout(source: str, report: str) -> str:
+    """Lean's output for the axioms probe: its `#print "…"` markers around ``report``."""
+    import re
+
+    markers = re.findall(r'(?m)^#print "(AGENT_MONITOR_AXIOMS::[0-9a-f]+::(?:begin|end))"$', source)
+    return "".join(line + "\n" for line in markers[:1]) + report + "".join(
+        line + "\n" for line in markers[1:]
+    )
 
 
 def _broker_bound_lean_check(
@@ -2724,7 +2735,13 @@ theorem main : True := by
             return {
                 "status": "completed",
                 "exit_code": 0,
-                "stdout": "",
+                # Each clean check is followed by its `#print axioms` probe,
+                # whose marker lines Lean echoes around the report.
+                "stdout": (
+                    _probe_stdout(source, "'main' does not depend on any axioms\n")
+                    if "#print axioms" in source
+                    else ""
+                ),
                 "stderr": "",
                 "error": "",
                 "duration": 0.01,
@@ -2757,28 +2774,50 @@ theorem main : True := by
                 first.join(timeout=2)
                 second.join(timeout=2)
 
-        self.assertEqual(broker_calls, [0, 1])
+        # Two checks, each with its soundness probe, and never concurrently.
+        self.assertEqual(broker_calls, [0, 1, 2, 3])
         self.assertEqual([result["status"] for result in results], ["verified", "verified"])
 
-    def test_broad_mathlib_import_is_rejected_before_spawn(self) -> None:
+    def test_broad_mathlib_import_is_checked_by_the_mathlib_broker(self) -> None:
+        # Full `import Mathlib` loads in ~6 s / ~4.4 GiB on the 8 GiB Mathlib
+        # broker profile, so it is accepted — but still only through the
+        # sandboxed broker, never a local process.
+        source = "import Mathlib\n\ntheorem main : True := by trivial\n"
+        profiles: list[bool] = []
+
+        def fake_check(text: str, *, uses_mathlib: bool, timeout: float):
+            profiles.append(uses_mathlib)
+            return {
+                "status": "completed",
+                "exit_code": 0,
+                "stdout": _probe_stdout(text, "'main' does not depend on any axioms\n")
+                if "#print axioms" in text
+                else "",
+                "stderr": "",
+                "error": "",
+                "duration": 0.01,
+                "source_sha256": hashlib.sha256(text.encode()).hexdigest(),
+                "toolchain": lean_broker.EXPECTED_TOOLCHAIN,
+                "sandbox": lean_broker.SANDBOX_MARKER,
+                "stdout_truncated": False,
+                "stderr_truncated": False,
+            }
+
         with tempfile.TemporaryDirectory() as tmp:
             ldir = Path(tmp)
-            (ldir / "Proof.lean").write_text("import Mathlib\n\ntheorem main : True := by trivial\n")
+            (ldir / "Proof.lean").write_text(source)
             with (
-                patch.object(
-                    lean_verify,
-                    "toolchain_status",
-                    return_value={
-                        "available": True, "lean": "/fake/lean", "lake": "/fake/lake",
-                        "elan": None, "version": "fake",
-                    },
-                ),
+                patch.object(lean_broker, "check_source", side_effect=fake_check),
                 patch("agent_monitor.lean_verify.subprocess.Popen") as popen,
             ):
-                result = lean_verify._run_lean_check(ldir, uses_mathlib=True)
+                result = lean_verify._run_lean_check(
+                    ldir, uses_mathlib=lean_verify._detect_mathlib(source)
+                )
 
-        self.assertFalse(result["ok"])
-        self.assertIn("Broad `import Mathlib` is disabled", result["stderr"])
+        self.assertTrue(result["ok"])
+        self.assertNotIn("disabled", result["stderr"])
+        self.assertEqual(result["checker_profile"], "mathlib")
+        self.assertEqual(profiles, [True, True])
         popen.assert_not_called()
 
     def test_lean_timeout_kills_the_entire_process_group(self) -> None:
@@ -3434,10 +3473,12 @@ theorem main : True := by
             patch("agent_monitor.codex_login.account_login_ready", return_value=False),
         ):
             current = settings.get_settings({"id": 7})
+            # A stored custom base is honored only for the operator (admin);
+            # non-admin accounts are pinned to built-in endpoints (SSRF).
             verified = settings.verify_provider(
                 "kimi",
                 options={"KIMI_REASONING_EFFORT": "low"},
-                user={"id": 7},
+                user={"id": 7, "is_admin": True},
             )
 
         kimi = next(provider for provider in current["providers"] if provider["id"] == "kimi")
@@ -3487,6 +3528,9 @@ class EngineRegistryTests(unittest.TestCase):
     def test_cli_timeout_uses_audit_safe_deepagents_default_and_overrides(self) -> None:
         self.assertEqual(jobs._cli_timeout_seconds("deepagents", {}), 10_800)
         self.assertEqual(jobs._cli_timeout_seconds("math_harness", {}), 7_200)
+        # The Claude route derives its watchdog from the CGM pipeline budget
+        # (every call at the slowest stage timeout, capped by max_seconds,
+        # plus a publication margin), never below the 7200 s default.
         self.assertEqual(
             jobs._cli_timeout_seconds(
                 "math_harness",
@@ -3496,7 +3540,30 @@ class EngineRegistryTests(unittest.TestCase):
                     "AGENT_MONITOR_MATH_HARNESS_CLAUDE_TIMEOUT": "3600",
                 },
             ),
-            18_300,
+            7_200,
+        )
+        self.assertEqual(
+            jobs._cli_timeout_seconds(
+                "math_harness",
+                {
+                    "AGENT_MONITOR_CLAUDE_SUBSCRIPTION": "1",
+                    "AGENT_MONITOR_MATH_HARNESS_MAX_WORKERS": "2",
+                    "AGENT_MONITOR_MATH_HARNESS_CLAUDE_TIMEOUT": "3600",
+                    "AGENT_MONITOR_CGM_MAX_SECONDS": "14400",
+                },
+            ),
+            14_700,
+        )
+        # The kimi engine runs the same CGM pipeline: own-key runs cover the
+        # default 5400 s budget plus one API timeout and publication; guest
+        # and sponsored runs keep the one-hour default above their 2400 s.
+        self.assertEqual(jobs._cli_timeout_seconds("kimi", {}), 6_000)
+        self.assertEqual(
+            jobs._cli_timeout_seconds("kimi", {"AGENT_MONITOR_GUEST": "1"}), 3_600
+        )
+        self.assertEqual(
+            jobs._cli_timeout_seconds("kimi", {"AGENT_MONITOR_SPONSORED_KIMI": "1"}),
+            3_600,
         )
         self.assertEqual(jobs._cli_timeout_seconds("codex", {}), 3_600)
         self.assertEqual(jobs._cli_timeout_seconds("claude", {}), 3_600)
@@ -3720,9 +3787,9 @@ class EngineRegistryTests(unittest.TestCase):
             by_id["deepseek_harness"]["auth_modes"],
             ["codex_subscription", "api_key"],
         )
-        self.assertEqual(by_id["danus"]["auth_modes"], ["codex_subscription"])
-        self.assertFalse(by_id["danus"]["available"])
-        self.assertEqual(by_id["danus"]["risk_level"], "high")
+        # Danus was retired from the console; old runs keep the id as provenance.
+        self.assertNotIn("danus", by_id)
+        self.assertIn("danus", LEGACY_ENGINE_IDS)
 
     def test_deepseek_wrapper_uses_the_active_interpreter(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -4465,8 +4532,10 @@ class LeanHarnessRegressionTests(unittest.TestCase):
             lean_src = "theorem helper : True := by trivial"
             lean_dir = workspace / lean_verify.LEAN_DIRNAME
             lean_dir.mkdir()
+            # _persist binds the receipt to the canonical bytes it writes
+            # (source + final LF); the checked file must be those bytes.
             (lean_dir / lean_verify.PROOF_FILENAME).write_text(
-                lean_src, encoding="utf-8"
+                lean_src + "\n", encoding="utf-8"
             )
             authoritative_check = _broker_bound_lean_check(lean_dir, False)
             with patch.object(
@@ -4610,22 +4679,42 @@ theorem main : True := by
         self.assertEqual(len(reconciled), 2)
 
     def test_statement_fidelity_fix_gets_one_bounded_compile_repair(self) -> None:
-        check_outcomes = iter([True, False, True])
+        # Statement-first flow: the skeleton is audited BEFORE proof effort.
+        # A major finding gets one statement fix; a fix that does not compile
+        # gets at most one statement repair; the repaired statement is
+        # re-audited, locked, and only then proved. The final status reflects
+        # the re-audit (the lock lets it stand for the proved file).
+        check_outcomes = iter([True, False, True, True])
+        probed_mains: list[object] = []
+        fingerprinted: list[str] = []
 
-        def broker_check(lean_dir: Path, uses_mathlib: bool) -> dict[str, object]:
+        def broker_check(
+            lean_dir: Path, uses_mathlib: bool, main_decl: object = None
+        ) -> dict[str, object]:
+            probed_mains.append(main_decl)
             ok = next(check_outcomes)
             return _broker_bound_lean_check(
                 lean_dir,
                 uses_mathlib,
                 ok=ok,
-                stdout="" if ok else "unsolved goals",
+                stdout="" if ok else "Proof.lean:1:40: error: unknown tactic",
             )
-        translated = json.dumps(
-            {"lean": "theorem main (p : Prop) (h : p) : p := by exact h"}
-        )
-        compiled_repair = json.dumps(
-            {"lean": "theorem main (p : Prop) (h : p) : p := by exact h"}
-        )
+
+        def fenced(source: str) -> str:
+            return f"```lean\n{source}\n```\n```json\n{{\"main_decl\": \"main\"}}\n```"
+
+        def statement_fingerprint(
+            source: str, *, uses_mathlib: bool, main_decl: str, timeout=None
+        ) -> dict[str, object]:
+            # Lean's statement fingerprint, faked from the text lock: the
+            # proved file states exactly the locked, re-audited statement.
+            fingerprinted.append(source)
+            lock = lean_verify._statement_lock(source, main_decl)
+            return {"ok": True, "fingerprint": lock["sha256"]}
+
+        weak_skeleton = fenced("theorem main (p : Prop) (h : p) : p ∨ True := by\n  sorry")
+        repaired_skeleton = fenced("theorem main (p : Prop) (h : p) : p := by\n  sorry")
+        proved = fenced("theorem main (p : Prop) (h : p) : p := by\n  exact h")
         statement_fix = {
             "lean": "theorem main (p : Prop) (h : p) : p := by badTactic",
             "uses_mathlib": False,
@@ -4646,10 +4735,11 @@ theorem main : True := by
                     lean_verify,
                     "_chat",
                     side_effect=[
-                        ("gpt-test", translated),
-                        ("gpt-test", compiled_repair),
+                        ("gpt-test", weak_skeleton),
+                        ("gpt-test", repaired_skeleton),
+                        ("gpt-test", proved),
                     ],
-                ),
+                ) as chat,
                 patch.object(
                     lean_verify,
                     "_run_lean_check",
@@ -4659,6 +4749,11 @@ theorem main : True := by
                     lean_verify,
                     "_repair_statement",
                     return_value=statement_fix,
+                ) as statement_repair,
+                patch.object(
+                    lean_verify,
+                    "_statement_fingerprint",
+                    side_effect=statement_fingerprint,
                 ),
                 patch.object(
                     lean_verify,
@@ -4677,7 +4772,7 @@ theorem main : True := by
                             "issues": [],
                         },
                     ],
-                ),
+                ) as audits,
                 patch.object(
                     lean_verify,
                     "toolchain_status",
@@ -4695,9 +4790,23 @@ theorem main : True := by
         self.assertEqual(result["status"], "verified")
         self.assertEqual(
             [attempt["action"] for attempt in result["attempts"]],
-            ["verify", "statement-fix", "statement-repair"],
+            ["statement", "statement-fix", "statement-repair", "prove"],
         )
+        self.assertEqual(chat.call_count, 3)
+        self.assertEqual(statement_repair.call_count, 1)
+        self.assertEqual(audits.call_count, 2)
         self.assertTrue(result["fidelity"]["audit"]["faithful"])
+        self.assertEqual(result["fidelity"]["audit"]["scope"], "statement")
+        self.assertEqual(result["statement_lock"]["main_decl"], "main")
+        self.assertIn("exact h", result["lean"])
+        # Every compile names the main theorem for the axioms probe, and the
+        # audit is reused only because Lean confirmed the locked statement.
+        self.assertEqual(probed_mains, ["main"] * 4)
+        self.assertTrue(result["statement_lock"]["fingerprint"])
+        self.assertEqual(
+            result["fidelity"]["audit"]["statement_fingerprint"],
+            result["statement_lock"]["fingerprint"],
+        )
 
     def test_legacy_mathlib_omega_import_maps_to_lean_414_core_module(self) -> None:
         payload = lean_verify._parse_model_payload(
@@ -4749,13 +4858,35 @@ theorem main : True := by
         self.assertIn("import Mathlib.Tactic.DeriveFintype", payload["lean"])
         self.assertNotIn("import Mathlib.Data.Fintype.Basic", payload["lean"])
 
-    def test_lean_prompts_require_narrow_mathlib_imports(self) -> None:
-        self.assertIn("Never use the broad `import Mathlib`", lean_verify.TRANSLATE_PROMPT)
+    def test_lean_prompts_are_version_grounded_and_allow_full_mathlib(self) -> None:
+        # Policy change: the Mathlib broker profile now has 8 GiB, so the
+        # whole library is recommended instead of guessed 2024 module paths.
+        for prompt in (
+            lean_verify.TRANSLATE_PROMPT,
+            lean_verify.PROVE_PROMPT,
+            lean_verify.REPAIR_PROMPT,
+            lean_verify.HARNESS_TASK,
+        ):
+            self.assertIn("Lean 4.14.0", prompt)
+            self.assertIn("import Mathlib", prompt)
+            self.assertNotIn("Never use the broad `import Mathlib`", prompt)
+            self.assertNotIn("Core-only proofs are strongly preferred", prompt)
+        self.assertIn("4bbdccd9", lean_verify.TRANSLATE_PROMPT)
+        self.assertIn("do NOT exist here", lean_verify.TRANSLATE_PROMPT)
+        # native_decide is forbidden everywhere, never offered as a pattern.
+        self.assertIn("`native_decide`", lean_verify.STATEMENT_FIDELITY)
+        self.assertNotIn("native_decide` / `decide`", lean_verify.TRANSLATE_PROMPT)
+        # The harness uses the mirror-backed wrapper, never a git lakefile.
+        self.assertIn("./check.sh", lean_verify.HARNESS_TASK)
         self.assertIn("lake env lean Proof.lean", lean_verify.HARNESS_TASK)
-        self.assertIn("never the\nbroad `import Mathlib`", lean_verify.HARNESS_TASK)
+        self.assertIn("never run `lake update`", lean_verify.HARNESS_TASK)
+        # Statement-fidelity rules that remain pinned.
         self.assertIn("formalise\n  each feasible self-derived lemma", lean_verify.TRANSLATE_PROMPT)
         self.assertIn("Do not conjoin optional\n  minimality", lean_verify.TRANSLATE_PROMPT)
         self.assertIn("added nonessential conjuncts", lean_verify.REPAIR_PROMPT)
+        # Output contract: Lean in a fence, metadata separately.
+        self.assertIn("```lean", lean_verify.TRANSLATE_PROMPT)
+        self.assertIn("```json", lean_verify.TRANSLATE_PROMPT)
 
     @staticmethod
     def _write_verified_lean_cache(workspace: Path) -> None:
@@ -5817,7 +5948,7 @@ class HumanInterventionRegressionTests(unittest.TestCase):
                 patch("agent_monitor.jobs.threading.Thread", FakeThread),
             ):
                 result = jobs.continue_run(
-                    "deepagents_toggle", message="Continue directly.", user={"id": 61}
+                    "deepagents_toggle", message="Continue directly.", user={"id": 61, "is_admin": True}
                 )
 
         self.assertEqual(captured["extra_env"]["AGENT_MONITOR_USE_SUBAGENTS"], "0")
@@ -5935,12 +6066,13 @@ class HumanInterventionRegressionTests(unittest.TestCase):
                     )
 
             self.assertEqual(result, {"ok": True})
+            # The follow-up carries the owner's real role (61 is no operator).
             resume.assert_called_once_with(
                 run_id,
                 message="First correction\n\nSecond correction",
                 model="gpt-test",
                 max_iterations=7,
-                user={"id": 61},
+                user={"id": 61, "is_admin": False},
                 problems_recorded=True,
             )
             self.assertFalse((workspace / jobs._PENDING_FEEDBACK_FILENAME).exists())
@@ -6080,7 +6212,7 @@ class AuthenticationModeSettingsTests(unittest.TestCase):
         self.assertEqual(models, list(codex_login.DEFAULT_CODEX_MODELS))
         html = (console_server.WEB_DIR / "console.html").read_text(encoding="utf-8")
         self.assertIn("async function applyCodexStatus(st)", html)
-        self.assertIn("if(needsModels)await loadSettings()", html)
+        self.assertIn("if(needsModels)await loadSettings({keepEngine:true})", html)
 
     def test_fresh_seed_includes_validated_skill_packages(self) -> None:
         from agent_monitor.skill_seeds import (
@@ -6257,7 +6389,8 @@ class AuthenticationModeSettingsTests(unittest.TestCase):
             patch("agent_monitor.codex_login.account_login_ready", return_value=True),
             patch("agent_monitor.codex_login.available_models", return_value=["gpt-codex-test"]),
         ):
-            result = settings.get_settings({"id": 7, "is_admin": False})
+            # Only the site administrator links Codex.
+            result = settings.get_settings({"id": 7, "is_admin": True})
 
         self.assertFalse(result["codex_enabled"])
         self.assertTrue(result["codex_connected"])
@@ -6306,7 +6439,7 @@ class AuthenticationModeSettingsTests(unittest.TestCase):
                     engine="plain",
                     problem_text="Prove 2 = 2.",
                     model="claude-test-model",
-                    user={"id": 7, "email": "test@example.com"},
+                    user={"id": 7, "email": "test@example.com", "is_admin": True},
                 )
 
         self.assertEqual(captured["extra_env"]["AGENT_MONITOR_AUTH_MODE"], "api_key")
@@ -6343,7 +6476,7 @@ class AuthenticationModeSettingsTests(unittest.TestCase):
                     engine="codex",
                     problem_text="Prove 2 = 2.",
                     model="kimi-k3",
-                    user={"id": 7, "email": "test@example.com"},
+                    user={"id": 7, "email": "test@example.com", "is_admin": True},
                 )
         configure.assert_not_called()
         thread.assert_not_called()
@@ -6822,7 +6955,7 @@ class AutoPipelineAndSandboxRegressionTests(unittest.TestCase):
         self.assertEqual(state["stages"]["formal_dag"]["detail"], "2 Lean nodes · shared formal DAG")
         self.assertEqual(
             state["stages"]["coverage"]["detail"],
-            "2/2 informal statements formally verified",
+            "2/2 informal statements linked to kernel-verified Lean declarations",
         )
         self.assertEqual(generate.call_args.kwargs["kind"], "formal")
         build.assert_called_once_with(workspace, selected_harness="codex")

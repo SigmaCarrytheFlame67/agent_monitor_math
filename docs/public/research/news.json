@@ -1,119 +1,388 @@
 {
   "schema_version": 1,
-  "updated_at": "2026-09-16T21:46:08Z",
-  "last_checked_at": "2026-09-16T21:46:08Z",
+  "updated_at": "2026-10-11T07:02:39Z",
+  "last_checked_at": "2026-10-11T07:02:39Z",
   "refresh_interval_minutes": 30,
-  "last_successful_refresh_at": "2026-09-16T21:46:08Z",
+  "last_successful_refresh_at": "2026-10-11T07:02:39Z",
   "items": [
     {
-      "id": "news-fa54f41973ecb891f8c6fb90",
-      "title": "A Short Proof of a Conjecture Regarding Quadratic Representations of Practical Numbers",
-      "summary": "The authors report a short proof of the second part of a conjecture by Wang and Sun on quadratic representations of practical numbers, showing that for odd b and even c some n between 2 and max(b,c) makes n^2+bn+c practical. Per the abstract, combined with prior work by Somu, Li, and Kukla this settles the conjecture; the result is a preprint claim.",
-      "url": "https://arxiv.org/abs/2608.25591",
-      "source": "arxiv-math-nt",
-      "category": "mathematics",
-      "published_at": "2026-09-16T04:00:00Z",
-      "status": "Preprint"
-    },
-    {
-      "id": "news-efb97d5f14ac952e2f60c930",
-      "title": "Arithmetic dynamics and Generalized Fermat's conjecture",
-      "summary": "This preprint proposes a generalized form of Fermat's conjecture framed in arithmetic dynamics, offers supporting evidence, and adds a multi-indexed version. The conjecture is a proposal, not an established result.",
-      "url": "https://arxiv.org/abs/2601.08207",
-      "source": "arxiv-math-nt",
-      "category": "mathematics",
-      "published_at": "2026-09-16T04:00:00Z",
-      "status": "Preprint"
-    },
-    {
-      "id": "news-e44c8dbde93065550581d880",
-      "title": "Improved bounds for Szpiro's conjecture",
-      "summary": "The author claims the unconditional bound log Delta << N log log N for Szpiro's conjecture over Q, improving on a 2013 bound of log Delta << N log N and previously known only under GRH, with log Delta << N for semistable curves. The methods build on the author's approach to the abc conjecture via Shimura curves; this is a preprint claim.",
-      "url": "https://arxiv.org/abs/2609.17390",
-      "source": "arxiv-math-nt",
-      "category": "mathematics",
-      "published_at": "2026-09-16T04:00:00Z",
-      "status": "Preprint"
-    },
-    {
-      "id": "news-d8de20fbf4dc8a7f2694691a",
-      "title": "Character sums on an oriented singer conic and explicit Ramanujan double covers",
-      "summary": "The paper studies odd multiplicative Fourier coefficients of a lift of the trace conic in F_{q^3} for odd q and claims a bound of 2 sqrt(q). As an application, the author reports constructing explicit Singer-invariant signings of the point-line incidence graph of PG(2,q) that yield connected Ramanujan double covers.",
-      "url": "https://arxiv.org/abs/2609.14332",
-      "source": "arxiv-math-nt",
-      "category": "mathematics",
-      "published_at": "2026-09-16T04:00:00Z",
-      "status": "Preprint"
-    },
-    {
-      "id": "news-90bd869598f778a59b5aacba",
-      "title": "On Sarnak--Str\\\"{o}mbergsson conjecture",
-      "summary": "The author claims a proof of the Sarnak-Strombergsson conjecture in dimension three, identifying the FCC and BCC lattices as minimizers of the theta function depending on the parameter and the FCC lattice as minimizer of the Epstein zeta function. The result is a preprint announcement, not an independently confirmed proof.",
-      "url": "https://arxiv.org/abs/2609.17356",
-      "source": "arxiv-math-nt",
-      "category": "mathematics",
-      "published_at": "2026-09-16T04:00:00Z",
-      "status": "Preprint"
-    },
-    {
-      "id": "news-8fb38cb7dabdbadeee837828",
-      "title": "The 1/2-Conjecture for $q$-Binomial Coefficients with Fractional Index",
-      "summary": "The authors study generalized Gaussian binomial coefficients with fractional index r and their integer trace, formulating the 1/2-Conjecture that r=1/2 maximizes this trace coefficientwise. They report proving special cases and providing computational evidence; the conjecture remains unproven in general.",
-      "url": "https://arxiv.org/abs/2606.01919",
-      "source": "arxiv-math-nt",
-      "category": "mathematics",
-      "published_at": "2026-09-16T04:00:00Z",
-      "status": "Preprint"
-    },
-    {
-      "id": "news-8cf684629af21dd3ae76127e",
-      "title": "The Waring-Goldbach problem in short intervals under the Generalized Riemann Hypothesis",
-      "summary": "Assuming the Generalized Riemann Hypothesis, the author claims results on representing integers as sums of almost equal k-th powers of primes in short intervals, including an asymptotic formula for the number of solutions when m and k are sufficiently large. These are conditional preprint claims.",
-      "url": "https://arxiv.org/abs/2609.16048",
-      "source": "arxiv-math-nt",
-      "category": "mathematics",
-      "published_at": "2026-09-16T04:00:00Z",
-      "status": "Preprint"
-    },
-    {
-      "id": "news-570b73872448505f18481afd",
-      "title": "On a classical zero-sum invariant II: Disproof of a long-standing conjecture",
-      "summary": "The author reports a disproof of a 2000 conjecture by Gao about the zero-sum invariant nu(G) for finite abelian groups, which stated that nu(G) always equals d(G)-1. The conjecture had been confirmed for many group families before this claimed counterexample.",
-      "url": "https://arxiv.org/abs/2609.17127",
-      "source": "arxiv-math-nt",
-      "category": "mathematics",
-      "published_at": "2026-09-16T04:00:00Z",
-      "status": "Preprint"
-    },
-    {
-      "id": "news-4d5124e048131bde5944b82a",
-      "title": "ProIQA: A Process-Based Framework for Fine-Grained Math Item Quality Assessment",
+      "id": "news-8099c6dcea8f9592a28c1bd0",
+      "title": "Slightly improved zero-free half-planes for the quasi-Riemann hypothesis",
       "summary": "",
-      "url": "https://arxiv.org/abs/2609.15292",
-      "source": "arxiv-ai",
+      "url": "https://arxiv.org/abs/2610.12234",
+      "source": "arxiv-math-ai",
       "category": "research",
-      "published_at": "2026-09-16T04:00:00Z",
-      "status": "Preprint"
+      "published_at": "2026-10-08T16:18:53Z",
+      "status": "Preprint",
+      "source_role": "preprint"
     },
     {
-      "id": "news-1bc2c0aaba1a1fbf5a5e255e",
-      "title": "Uniform Mordell-Lang conjecture for semiabelian varieties",
+      "id": "news-26bc2e91d1f0f6e2d037a396",
+      "title": "Natural Language to First-Order Logic LLM-based Autoformalization",
       "summary": "",
-      "url": "https://arxiv.org/abs/2609.17233",
-      "source": "arxiv-math-nt",
-      "category": "mathematics",
-      "published_at": "2026-09-16T04:00:00Z",
-      "status": "Preprint"
+      "url": "https://arxiv.org/abs/2610.12030",
+      "source": "arxiv-math-ai",
+      "category": "research",
+      "published_at": "2026-10-08T14:24:12Z",
+      "status": "Preprint",
+      "source_role": "preprint"
     },
     {
-      "id": "news-044398ff073cc033a68ac365",
-      "title": "A proof of Sylvester's conjecture",
+      "id": "news-8bb253fccf85b62e76ce6188",
+      "title": "NanoProof: Open and Efficient Automated Theorem Proving in Lean 4",
       "summary": "",
-      "url": "https://arxiv.org/abs/2609.14893",
-      "source": "arxiv-math-nt",
+      "url": "https://arxiv.org/abs/2610.11605",
+      "source": "arxiv-math-ai",
+      "category": "research",
+      "published_at": "2026-10-08T09:49:39Z",
+      "status": "Preprint",
+      "source_role": "preprint"
+    },
+    {
+      "id": "news-8cff88be923ede54982a297f",
+      "title": "Universal Radial Laws for Random Polynomials: Erdős Problem #522 and Non-Universal Fluctuations",
+      "summary": "",
+      "url": "https://arxiv.org/abs/2610.11324",
+      "source": "arxiv-math-ai",
+      "category": "research",
+      "published_at": "2026-10-08T06:23:48Z",
+      "status": "Preprint",
+      "source_role": "preprint"
+    },
+    {
+      "id": "news-551629f36c382cb432a35cf2",
+      "title": "AHM Statement on OpenAI’s October 6 Release of Mathematical Documents",
+      "summary": "[This is a guest post by the Association for Human Mathematics, reposted from their statements page. This blog post was initially written in a different file format and converted using AI. — T.] Yesterday, on October 6th, 2026, OpenAI — which is currently defending lawsuits against accusations of illegal plagiarism, copyright infringement, and trademark dilution […]",
+      "url": "https://terrytao.wordpress.com/2026/10/07/ahm-statement-on-openais-october-6-release-of-mathematical-documents/",
+      "source": "tao",
       "category": "mathematics",
-      "published_at": "2026-09-16T04:00:00Z",
-      "status": "Preprint"
+      "published_at": "2026-10-08T00:02:51Z",
+      "status": "Published",
+      "story_id": "openai-math",
+      "summary_source": "source",
+      "source_role": "commentary"
+    },
+    {
+      "id": "news-9b955ce8af2763d0997a43e3",
+      "title": "The Mathocalypse",
+      "summary": "Updates (Oct. 9): To address some questions that keep coming up… No, I’m not aware of any direct practical implications of any of these results. I certainly don’t expect the O(n log0.9999999999999 n)-time Fourier Transform algorithm to get practically deployed anytime soon! But anyone who harps on this, simply doesn’t understand what mathematical progress looks […]",
+      "url": "https://scottaaronson.blog/?p=10169",
+      "source": "aaronson",
+      "category": "research",
+      "published_at": "2026-10-07T18:57:26Z",
+      "status": "Published",
+      "story_id": "openai-math",
+      "summary_source": "source",
+      "source_role": "commentary"
+    },
+    {
+      "id": "news-f4325b9e5af450f44481a5b2",
+      "title": "As AI Closed In on ‘Unique Games’ Proof, Researchers Raced to Beat the Machines",
+      "summary": "In the shadow of a rumored AI proof of one of the biggest problems in their field, three computer scientists rushed to publish their own milestone result.",
+      "url": "https://www.quantamagazine.org/as-ai-closed-in-on-unique-games-proof-researchers-raced-to-beat-the-machines-20261007/",
+      "source": "quanta-cs",
+      "category": "mathematics",
+      "published_at": "2026-10-07T15:08:46Z",
+      "status": "Published",
+      "story_id": "openai-math",
+      "summary_source": "source",
+      "source_role": "journalism"
+    },
+    {
+      "id": "news-67f5f61696a2949df2730f40",
+      "title": "One Model Family, Two Gold-Level Results: Fine-Tuning Nemotron for IOI and IMO",
+      "summary": "",
+      "url": "https://huggingface.co/blog/nvidia/nemotron-ioi-and-imo-2026",
+      "source": "huggingface",
+      "category": "research",
+      "published_at": "2026-10-07T12:45:31Z",
+      "status": "Published",
+      "source_role": "primary"
+    },
+    {
+      "id": "news-0a408b6f89baf9dab04f2c4c",
+      "title": "Cost-Efficient Theorem Proving via Agent Orchestration in Program Verification",
+      "summary": "",
+      "url": "https://arxiv.org/abs/2610.09681",
+      "source": "arxiv-math-ai",
+      "category": "research",
+      "published_at": "2026-10-07T08:42:24Z",
+      "status": "Preprint",
+      "source_role": "preprint"
+    },
+    {
+      "id": "news-3bdf62a9c1837cfa67756960",
+      "title": "Updates: Sharing AI progress on mathematics (amazing!); and my lecture plans",
+      "summary": "With Danny and Sharon Kleitman and Michel Goemans at the MIT Endicott house. Sharing AI progress on mathematics (OpenAI) A few hours ago, Open AI shared solution to a few hundred mathematical problems. Certainly this is an amazing milestone for …",
+      "url": "https://gilkalai.wordpress.com/2026/10/07/updates-sharing-ai-progress-on-mathematics-amazing-and-my-lecture-plans/",
+      "source": "kalai",
+      "category": "mathematics",
+      "published_at": "2026-10-07T02:35:52Z",
+      "status": "Published",
+      "story_id": "openai-math",
+      "summary_source": "source",
+      "source_role": "commentary"
+    },
+    {
+      "id": "news-e232877cfb59ccd8dc584db8",
+      "title": "OpenAI withdraws three manuscripts and revises 14 in an update to openai/math",
+      "summary": "The October 7 update to OpenAI’s openai/math repository withdrew three manuscripts after a sign error in “Algebraicity of Weil classes on split abelian eightfolds” invalidated a stabilization-trace cancellation argument and the construction used by two dependent papers. It revised 14 other manuscripts, updated 13 more to cite the revisions, and added 6 formalizations and 5 supporting additions; the repository now reports 300 of 719 top-line results (about 42%) formalized.",
+      "url": "https://github.com/openai/math/blob/fd4aeeb2ee4fc729c18d98444fed42fd0529eeeb/history.md#october-7-2026",
+      "source": "openai-math",
+      "category": "mathematics",
+      "published_at": "2026-10-07T00:00:00Z",
+      "status": "Correction",
+      "date_precision": "day",
+      "related_links": [
+        {
+          "label": "Commit 3014888 with these changes · October 8, 05:03 UTC",
+          "url": "https://github.com/openai/math/commit/301488868beec11bfd897168433b0a64f5258559"
+        },
+        {
+          "label": "Pull request #1 · merged October 8, 05:20 UTC",
+          "url": "https://github.com/openai/math/pull/1"
+        },
+        {
+          "label": "openai/math after the update · commit fd4aeeb",
+          "url": "https://github.com/openai/math/tree/fd4aeeb2ee4fc729c18d98444fed42fd0529eeeb"
+        }
+      ],
+      "importance": 3,
+      "topic": "ai-math-result",
+      "story_id": "openai-math",
+      "summary_source": "editor",
+      "source_role": "repository"
+    },
+    {
+      "id": "news-c8dd933967aa5e27eb8e549c",
+      "title": "Slopocalypse",
+      "summary": "OpenAI has just released a vast number of new results in preprint form, see here. These are the products of an internal frontier model. About the AGMAI, they say they “have drawn on their advice and public recommendations⁠ to inform …",
+      "url": "https://www.math.columbia.edu/~woit/wordpress/?p=15896",
+      "source": "woit",
+      "category": "mathematics",
+      "published_at": "2026-10-06T22:40:18Z",
+      "status": "Published",
+      "story_id": "openai-math",
+      "summary_source": "source",
+      "source_role": "commentary"
+    },
+    {
+      "id": "news-f81687c189c66fcfe69f3f3b",
+      "title": "An AI-Assisted Formalization of the Poincaré Conjecture",
+      "summary": "",
+      "url": "https://arxiv.org/abs/2610.08329",
+      "source": "arxiv-math-ai",
+      "category": "research",
+      "published_at": "2026-10-06T13:27:51Z",
+      "status": "Preprint",
+      "source_role": "preprint"
+    },
+    {
+      "id": "news-40e9f43ed914f8193a97da5e",
+      "title": "SCOPE: Certified Theorem Proving with a Language Model as the Policy Planner",
+      "summary": "",
+      "url": "https://arxiv.org/abs/2610.08319",
+      "source": "arxiv-math-ai",
+      "category": "research",
+      "published_at": "2026-10-06T13:22:24Z",
+      "status": "Preprint",
+      "source_role": "preprint"
+    },
+    {
+      "id": "news-00427e47df5ef3064509e152",
+      "title": "OpenAI releases 722 manuscripts with AI-generated results on open problems",
+      "summary": "OpenAI published 722 mathematical manuscripts in 372 families in its openai/math repository, with Lean formalizations for part of them; 719 remain after the October 7 update. The repository says they were produced by an internal OpenAI model during evaluations on open research problems (the vast majority of results with an unreleased model and one fixed procedure), that the results are at different stages of verification, and that some unformalized results could have issues. The Association for Human Mathematics criticized the release.",
+      "url": "https://openai.com/index/sharing-ai-progress-in-mathematics",
+      "source": "openai",
+      "category": "mathematics",
+      "published_at": "2026-10-06T12:00:00Z",
+      "status": "Proof announced",
+      "related_links": [
+        {
+          "label": "openai/math as released · commit adc7f12",
+          "url": "https://github.com/openai/math/tree/adc7f1241b42e322a6451854ab7e4b4c146bf78a"
+        },
+        {
+          "label": "Repository history · October 7 update (commit fd4aeeb)",
+          "url": "https://github.com/openai/math/blob/fd4aeeb2ee4fc729c18d98444fed42fd0529eeeb/history.md#october-7-2026"
+        },
+        {
+          "label": "Statement by the Association for Human Mathematics (guest post on Terence Tao’s blog)",
+          "url": "https://terrytao.wordpress.com/2026/10/07/ahm-statement-on-openais-october-6-release-of-mathematical-documents/"
+        }
+      ],
+      "importance": 3,
+      "topic": "ai-math-result",
+      "story_id": "openai-math",
+      "summary_source": "editor",
+      "source_role": "primary"
+    },
+    {
+      "id": "news-d9ae5a9e80693cef139c5eb0",
+      "title": "Navier-Stokes lost in translation: Why Lean verification of AI autoformalisation does not guarantee correct natural language proofs",
+      "summary": "",
+      "url": "https://arxiv.org/abs/2610.08144",
+      "source": "arxiv-math-ai",
+      "category": "research",
+      "published_at": "2026-10-06T10:58:01Z",
+      "status": "Preprint",
+      "source_role": "preprint"
+    },
+    {
+      "id": "news-7b13148604cb7e5f3859d633",
+      "title": "October 2026 update-2 for the 21st edition",
+      "summary": "",
+      "url": "https://kourovkanotebookorg.wordpress.com/2026/10/06/october-2026-update-2-for-the-21st-edition/",
+      "source": "kourovka",
+      "category": "mathematics",
+      "published_at": "2026-10-06T07:29:15Z",
+      "status": "Published",
+      "importance": 1,
+      "topic": "problem-status",
+      "source_role": "primary"
+    },
+    {
+      "id": "news-48fc50536cf34f312a575dc3",
+      "title": "Is AI the End of Math As We Know It?",
+      "summary": "Quanta reports that mathematicians are reacting to rapid AI-driven change with grief, anger and a search for fresh ideas, with one warning that if the field does not adapt there could be no more math in 50 years.",
+      "url": "https://www.quantamagazine.org/is-ai-the-end-of-math-as-we-know-it-20261005/",
+      "source": "quanta",
+      "category": "mathematics",
+      "published_at": "2026-10-05T13:40:07Z",
+      "status": "Published",
+      "summary_source": "model",
+      "source_role": "journalism"
+    },
+    {
+      "id": "news-e8b8e54e67bd493def89a87c",
+      "title": "What Does the Fourth Dimension Actually Look Like?",
+      "summary": "Mathematician Maggie Miller explains why intuition built for three dimensions fails in four, describing how she pictures four-dimensional spaces as a sequence of three-dimensional snapshots.",
+      "url": "https://www.quantamagazine.org/what-does-the-fourth-dimension-actually-look-like-20261001/",
+      "source": "quanta",
+      "category": "mathematics",
+      "published_at": "2026-10-01T13:20:29Z",
+      "status": "Published",
+      "summary_source": "model",
+      "source_role": "journalism"
+    },
+    {
+      "id": "news-ce56aa83d0064ef1be25967d",
+      "title": "Gemini 4 Argon: our next era of frontier intelligence",
+      "summary": "",
+      "url": "https://deepmind.google/blog/gemini-4-argon-our-next-era-of-frontier-intelligence/",
+      "source": "deepmind",
+      "category": "models",
+      "published_at": "2026-09-30T20:01:45Z",
+      "status": "Published",
+      "source_role": "primary"
+    },
+    {
+      "id": "news-911a0a6b7e653b3a2d789480",
+      "title": "October 2026 update for the 21st edition",
+      "summary": "",
+      "url": "https://kourovkanotebookorg.wordpress.com/2026/09/30/october-2026-update-for-the-21st-edition/",
+      "source": "kourovka",
+      "category": "mathematics",
+      "published_at": "2026-09-30T12:50:52Z",
+      "status": "Published",
+      "importance": 1,
+      "topic": "problem-status",
+      "source_role": "primary"
+    },
+    {
+      "id": "news-d6b9f5e651b1891e950e0096",
+      "title": "Introducing GPT-6.1 Sol",
+      "summary": "OpenAI announced GPT-6.1 Sol, which it describes as offering near-Astra intelligence for coding, computer use, and professional work at one-fifth of Astra's standard API token prices.",
+      "url": "https://openai.com/index/introducing-gpt-6-1-sol",
+      "source": "openai",
+      "category": "models",
+      "published_at": "2026-09-29T10:00:00Z",
+      "status": "Published",
+      "summary_source": "model",
+      "source_role": "primary"
+    },
+    {
+      "id": "news-b89ef215c061305ddb78509b",
+      "title": "Mathematicians Harness Randomness To Crack a 55-Year-Old Conjecture",
+      "summary": "Quanta reports that a group of young mathematicians used randomness to resolve a 55-year-old conjecture, likely inspired by juggling, after a long period without progress.",
+      "url": "https://www.quantamagazine.org/mathematicians-harness-randomness-to-crack-a-55-year-old-conjecture-20260928/",
+      "source": "quanta",
+      "category": "mathematics",
+      "published_at": "2026-09-28T14:35:21Z",
+      "status": "Published",
+      "summary_source": "model",
+      "source_role": "journalism"
+    },
+    {
+      "id": "news-34692efacd3b982a5758af6c",
+      "title": "Introducing Gemini 3.8 Live with Live Avatar",
+      "summary": "",
+      "url": "https://deepmind.google/blog/introducing-gemini-38-live-with-live-avatar/",
+      "source": "deepmind",
+      "category": "models",
+      "published_at": "2026-09-24T16:20:39Z",
+      "status": "Published",
+      "source_role": "primary"
+    },
+    {
+      "id": "news-73461b3e97af0d93277a11c9",
+      "title": "Introducing GPT-6 Sol and Luna",
+      "summary": "OpenAI announced GPT-6 Sol and Luna, which it describes as two models bringing frontier intelligence to everyday work with different trade-offs between capability and cost.",
+      "url": "https://openai.com/index/introducing-gpt-6-sol-and-luna",
+      "source": "openai",
+      "category": "models",
+      "published_at": "2026-09-22T18:00:00Z",
+      "status": "Published",
+      "summary_source": "model",
+      "source_role": "primary"
+    },
+    {
+      "id": "news-08ffdb24bebd9aa2ffda2f84",
+      "title": "Advisory Group on Mathematics and Artificial Intelligence",
+      "summary": "OpenAI says it is working with an independent Advisory Group on Mathematics and Artificial Intelligence to guide how emerging AI results are reviewed and communicated.",
+      "url": "https://openai.com/index/advisory-group-on-mathematics-and-ai",
+      "source": "openai",
+      "category": "mathematics",
+      "published_at": "2026-09-21T12:00:00Z",
+      "status": "Published",
+      "summary_source": "model",
+      "source_role": "primary"
+    },
+    {
+      "id": "news-6432076c12c20140da39821e",
+      "title": "Mathematicians Build Long-Awaited Graph Sandwich",
+      "summary": "Quanta reports that researchers proved a decades-old conjecture about graphs, a result described as giving a new way to understand complex networks.",
+      "url": "https://www.quantamagazine.org/mathematicians-build-long-awaited-graph-sandwich-20260918/",
+      "source": "quanta",
+      "category": "mathematics",
+      "published_at": "2026-09-18T13:55:50Z",
+      "status": "Published",
+      "summary_source": "model",
+      "source_role": "journalism"
+    },
+    {
+      "id": "news-31c5a88caac894959218ed2b",
+      "title": "In August, 25% of math preprints acknowledged AI use, up from 4% in April",
+      "summary": "Acknowledgments of AI use in arXiv math preprints rose from 4% in April 2026 to 25% in August, with 6% crediting AI with a substantial research contribution.",
+      "url": "https://epoch.ai/data-insights/math-preprints-disclosed-ai-use",
+      "source": "epoch",
+      "category": "research",
+      "published_at": "2026-09-18T00:00:00Z",
+      "status": "Published",
+      "summary_source": "source",
+      "source_role": "primary"
+    },
+    {
+      "id": "news-e071729bfd0b5961bd853b5b",
+      "title": "GPT-6 Astra leads on math benchmarks, but not on software engineering",
+      "summary": "OpenAI's GPT-6 Astra tops the Epoch Capabilities Index (ECI) with a score of 166, ahead of Claude Fable 5.1 at 164 and GPT-5.6 Sol at 162. Its Math-ECI of 170 sets a new record, but on software engineering benchmarks its SWE-ECI of 164 still lags behind Fable 5.1's 167.",
+      "url": "https://epoch.ai/data-insights/astra-eci-breakdown",
+      "source": "epoch",
+      "category": "research",
+      "published_at": "2026-09-16T00:00:00Z",
+      "status": "Published",
+      "summary_source": "source",
+      "source_role": "primary"
     },
     {
       "id": "news-947e89eaa83a27aef331dc76",
@@ -123,7 +392,20 @@
       "source": "deepmind",
       "category": "models",
       "published_at": "2026-09-15T17:05:57Z",
-      "status": "Published"
+      "status": "Published",
+      "source_role": "primary"
+    },
+    {
+      "id": "news-63bb569ab52bd95197e493b5",
+      "title": "A human set a new mathematical record. Then AI came for it",
+      "summary": "OpenAI is at the center of another controversy over machines tackling big math problems. This one’s about the twin prime conjecture.",
+      "url": "https://www.sciencenews.org/article/human-math-record-twin-primes-openai",
+      "source": "sciencenews-math",
+      "category": "mathematics",
+      "published_at": "2026-09-11T19:00:00Z",
+      "status": "Published",
+      "summary_source": "source",
+      "source_role": "journalism"
     },
     {
       "id": "news-38fae5f8610574ff4fd83168",
@@ -133,7 +415,9 @@
       "source": "arxiv-ai",
       "category": "research",
       "published_at": "2026-09-11T17:18:04Z",
-      "status": "Preprint"
+      "status": "Preprint",
+      "summary_source": "editor",
+      "source_role": "preprint"
     },
     {
       "id": "news-f805a46f8df62abe6c9eb5bb",
@@ -153,7 +437,9 @@
           "label": "Clay prize rules",
           "url": "https://www.claymath.org/wp-content/uploads/2022/03/millennium_prize_rules_0.pdf"
         }
-      ]
+      ],
+      "summary_source": "editor",
+      "source_role": "primary"
     },
     {
       "id": "news-8c4c7fc4c8be0489d3800129",
@@ -169,7 +455,9 @@
           "label": "Original research paper · March 2026",
           "url": "https://arxiv.org/abs/2603.24880"
         }
-      ]
+      ],
+      "summary_source": "editor",
+      "source_role": "journalism"
     },
     {
       "id": "news-85052f9befba2c4e17fa41a5",
@@ -179,17 +467,20 @@
       "source": "huggingface",
       "category": "research",
       "published_at": "2026-09-10T00:00:00Z",
-      "status": "Published"
+      "status": "Published",
+      "source_role": "primary"
     },
     {
-      "id": "news-e4e9bf5452bdf91b06822f53",
-      "title": "What Is Math’s Mysterious Langlands Program Really About?",
-      "summary": "Hidden correspondences hint at a deeper structure to the mathematical universe. Our columnist unpacks one of those connections and asks mathematicians what they might mean. The post What Is Math’s Mysterious Langlands Program Really About? first appeared on Quanta Magazine",
-      "url": "https://www.quantamagazine.org/what-is-maths-mysterious-langlands-program-really-about-20260909/",
-      "source": "quanta",
+      "id": "news-028949ed6d51ffd1f5ac5670",
+      "title": "AI may have solved one of math’s biggest puzzles, raising controversy",
+      "summary": "For decades, researchers wondered if the Navier-Stokes equations, which describe fluid flow, break down. OpenAI put thousands of agents on the question.",
+      "url": "https://www.sciencenews.org/article/ai-math-puzzle-navier-stokes-openai",
+      "source": "sciencenews-math",
       "category": "mathematics",
-      "published_at": "2026-09-09T14:44:13Z",
-      "status": "Published"
+      "published_at": "2026-09-09T19:55:57Z",
+      "status": "Published",
+      "summary_source": "source",
+      "source_role": "journalism"
     },
     {
       "id": "news-2c827cba158d2f26e6e99088",
@@ -205,7 +496,9 @@
           "label": "Clay response · September 11",
           "url": "https://www.claymath.org/news/navier-stokes-announcement/"
         }
-      ]
+      ],
+      "summary_source": "editor",
+      "source_role": "primary"
     },
     {
       "id": "news-23f0f9c47f987f1c790e65d4",
@@ -225,7 +518,9 @@
           "label": "Clay response · September 11",
           "url": "https://www.claymath.org/news/navier-stokes-announcement/"
         }
-      ]
+      ],
+      "summary_source": "editor",
+      "source_role": "journalism"
     },
     {
       "id": "news-3784d7aba9718af9aa1923cc",
@@ -235,17 +530,21 @@
       "source": "openai",
       "category": "research",
       "published_at": "2026-09-06T08:00:00Z",
-      "status": "Research result"
+      "status": "Research result",
+      "summary_source": "editor",
+      "source_role": "primary"
     },
     {
       "id": "news-d5e3b49d0e243eb8d08841bd",
       "title": "Live from ICM 2026: What Is Math For in the Age of AI?",
-      "summary": "In this special live recording from the International Congress of Mathematicians in Philadelphia, July 2026, the central question discussed was what do mathematicians really value about doing mathematics in the first place? The post Live from ICM 2026: What Is Math For in the Age of AI? first appeared on Quanta Magazine",
+      "summary": "In this special live recording from the International Congress of Mathematicians in Philadelphia, July 2026, the central question discussed was what do mathematicians really value about doing mathematics in the first place?",
       "url": "https://www.quantamagazine.org/live-from-icm-2026-what-is-math-for-in-the-age-of-ai-20260903/",
-      "source": "quanta",
+      "source": "quanta-cs",
       "category": "mathematics",
       "published_at": "2026-09-03T13:41:48Z",
-      "status": "Published"
+      "status": "Published",
+      "summary_source": "source",
+      "source_role": "journalism"
     },
     {
       "id": "news-039a4975e102cb538c368495",
@@ -255,7 +554,9 @@
       "source": "openai",
       "category": "models",
       "published_at": "2026-09-03T11:00:00Z",
-      "status": "Model release"
+      "status": "Model release",
+      "summary_source": "editor",
+      "source_role": "primary"
     },
     {
       "id": "news-a139f80b159295ada71d0ef0",
@@ -265,7 +566,8 @@
       "source": "huggingface",
       "category": "research",
       "published_at": "2026-09-03T00:00:00Z",
-      "status": "Published"
+      "status": "Published",
+      "source_role": "primary"
     },
     {
       "id": "news-63b19b50b4021cb509d5c4a6",
@@ -275,7 +577,22 @@
       "source": "deepmind",
       "category": "models",
       "published_at": "2026-09-02T16:18:31Z",
-      "status": "Model release"
+      "status": "Model release",
+      "summary_source": "editor",
+      "source_role": "primary"
+    },
+    {
+      "id": "news-e7118f8f73efa7d8d97632dc",
+      "title": "September 2026 update for the 21st edition",
+      "summary": "",
+      "url": "https://kourovkanotebookorg.wordpress.com/2026/09/01/september-2026-update-for-the-21st-edition/",
+      "source": "kourovka",
+      "category": "mathematics",
+      "published_at": "2026-09-01T13:44:29Z",
+      "status": "Published",
+      "importance": 1,
+      "topic": "problem-status",
+      "source_role": "primary"
     },
     {
       "id": "news-e7232d52f37fd859a2ad6331",
@@ -285,17 +602,22 @@
       "source": "anthropic",
       "category": "models",
       "published_at": "2026-09-01T00:00:00Z",
-      "status": "Model release"
+      "status": "Model release",
+      "date_precision": "day",
+      "summary_source": "editor",
+      "source_role": "primary"
     },
     {
-      "id": "news-9cc6e313651b74f06deaeff7",
-      "title": "‘Stunning’ Percolation Proof Solves Decades-Old Puzzle About Phase Transitions",
-      "summary": "Mathematicians found that a broad class of networks will abruptly shift behavior past a critical point. The post ‘Stunning’ Percolation Proof Solves Decades-Old Puzzle About Phase Transitions first appeared on Quanta Magazine",
-      "url": "https://www.quantamagazine.org/stunning-percolation-proof-solves-decades-old-puzzle-about-phase-transitions-20260831/",
-      "source": "quanta",
-      "category": "mathematics",
-      "published_at": "2026-08-31T14:24:27Z",
-      "status": "Published"
+      "id": "news-4a6b365702b710e76a078ce4",
+      "title": "Announcing FrontierMath Erdős",
+      "summary": "A benchmark of 68 significant Erdős problems, open as of August 2026, curated by Thomas Bloom and formalized in Lean. AI systems must prove or disprove them within a fixed budget.",
+      "url": "https://epoch.ai/latest/announcing-frontiermath-erdos",
+      "source": "epoch",
+      "category": "research",
+      "published_at": "2026-09-01T00:00:00Z",
+      "status": "Published",
+      "summary_source": "source",
+      "source_role": "primary"
     },
     {
       "id": "news-43643a3dd841363b8ac91be3",
@@ -305,7 +627,8 @@
       "source": "deepmind",
       "category": "models",
       "published_at": "2026-08-13T17:04:18Z",
-      "status": "Published"
+      "status": "Published",
+      "source_role": "primary"
     },
     {
       "id": "news-1a7704a62ecc3f65b10f9dd0",
@@ -315,7 +638,9 @@
       "source": "microsoft-research",
       "category": "research",
       "published_at": "2026-08-12T16:00:00Z",
-      "status": "Research result"
+      "status": "Research result",
+      "summary_source": "editor",
+      "source_role": "primary"
     },
     {
       "id": "news-e299630b866e2d7ebb7f5430",
@@ -325,7 +650,9 @@
       "source": "openai",
       "category": "mathematics",
       "published_at": "2026-08-01T00:00:00Z",
-      "status": "Research result"
+      "status": "Research result",
+      "summary_source": "editor",
+      "source_role": "primary"
     },
     {
       "id": "news-79bd715dffc89139800d0470",
@@ -335,7 +662,9 @@
       "source": "clay",
       "category": "mathematics",
       "published_at": "2026-07-23T14:10:17Z",
-      "status": "Published"
+      "status": "Published",
+      "summary_source": "editor",
+      "source_role": "primary"
     },
     {
       "id": "news-e38a2bc2474832f28ea96744",
@@ -345,17 +674,21 @@
       "source": "deepmind",
       "category": "models",
       "published_at": "2026-07-21T15:16:30Z",
-      "status": "Published"
+      "status": "Published",
+      "summary_source": "source",
+      "source_role": "primary"
     },
     {
       "id": "news-e1b2acb9dc9a123d0ebc2682",
       "title": "Frontiers of Science Prize",
-      "summary": "Congratulations to former Clay Research Fellows Dennis Gaitsgory, Ben Green, Sergei Gukov, Adrian Ioana, Elon Lindenstrauss, James Maynard, and Terence Tao, and to CMI president Martin Bridson on being awarded 2026 Frontiers of Science Prizes. The prizes will be presented at the International Congress of Basic Sciences in Beijing on August 9, 2026. The post Frontiers of Science Prize appeared first on Clay Mathematics Institute.",
+      "summary": "The Clay Mathematics Institute congratulated several former Clay Research Fellows, including Terence Tao and James Maynard, and CMI president Martin Bridson on receiving 2026 Frontiers of Science Prizes.",
       "url": "https://www.claymath.org/news/frontiers-of-science-prize/",
       "source": "clay",
       "category": "mathematics",
       "published_at": "2026-07-20T13:38:27Z",
-      "status": "Published"
+      "status": "Published",
+      "summary_source": "model",
+      "source_role": "primary"
     },
     {
       "id": "news-b5de177ccc831b459c55321b",
@@ -365,17 +698,9 @@
       "source": "deepmind",
       "category": "models",
       "published_at": "2026-07-17T15:00:11Z",
-      "status": "Published"
-    },
-    {
-      "id": "news-3fb14968493dc68260e4892e",
-      "title": "Introducing GPT-Live",
-      "summary": "A new generation of voice models for natural human-AI interaction, now powering ChatGPT Voice.",
-      "url": "https://openai.com/index/introducing-gpt-live",
-      "source": "openai",
-      "category": "models",
-      "published_at": "2026-07-08T00:00:00Z",
-      "status": "Published"
+      "status": "Published",
+      "summary_source": "source",
+      "source_role": "primary"
     }
   ],
   "sources": [
@@ -383,57 +708,176 @@
       "id": "openai",
       "name": "OpenAI",
       "url": "https://openai.com/news/",
-      "automated": true
+      "automated": true,
+      "role": "primary"
+    },
+    {
+      "id": "openai-math",
+      "name": "OpenAI · openai/math manuscripts repository (GitHub)",
+      "url": "https://github.com/openai/math",
+      "automated": true,
+      "role": "repository"
+    },
+    {
+      "id": "openai-math-history",
+      "name": "OpenAI · openai/math history.md commits (evidence)",
+      "url": "https://github.com/openai/math/commits/main/history.md",
+      "automated": true,
+      "role": "repository",
+      "evidence_only": true
     },
     {
       "id": "deepmind",
       "name": "Google DeepMind",
       "url": "https://deepmind.google/blog/",
-      "automated": true
+      "automated": true,
+      "role": "primary"
+    },
+    {
+      "id": "formal-conjectures",
+      "name": "Google DeepMind · formal-conjectures commits (evidence)",
+      "url": "https://github.com/google-deepmind/formal-conjectures",
+      "automated": true,
+      "role": "repository",
+      "evidence_only": true
     },
     {
       "id": "clay",
       "name": "Clay Mathematics Institute",
       "url": "https://www.claymath.org/news/",
-      "automated": true
+      "automated": true,
+      "role": "primary"
     },
     {
       "id": "quanta",
       "name": "Quanta Magazine · mathematics journalism",
       "url": "https://www.quantamagazine.org/mathematics/",
-      "automated": true
+      "automated": true,
+      "role": "journalism"
+    },
+    {
+      "id": "quanta-cs",
+      "name": "Quanta Magazine · computer science journalism",
+      "url": "https://www.quantamagazine.org/computer-science/",
+      "automated": true,
+      "role": "journalism"
+    },
+    {
+      "id": "tao",
+      "name": "Terence Tao · What’s new (blog)",
+      "url": "https://terrytao.wordpress.com/",
+      "automated": true,
+      "role": "commentary"
+    },
+    {
+      "id": "kalai",
+      "name": "Gil Kalai · Combinatorics and more (blog)",
+      "url": "https://gilkalai.wordpress.com/",
+      "automated": true,
+      "role": "commentary"
+    },
+    {
+      "id": "aaronson",
+      "name": "Scott Aaronson · Shtetl-Optimized (blog)",
+      "url": "https://scottaaronson.blog/",
+      "automated": true,
+      "role": "commentary"
+    },
+    {
+      "id": "woit",
+      "name": "Peter Woit · Not Even Wrong (blog)",
+      "url": "https://www.math.columbia.edu/~woit/wordpress/",
+      "automated": true,
+      "role": "commentary"
+    },
+    {
+      "id": "xena",
+      "name": "Kevin Buzzard · Xena Project (blog)",
+      "url": "https://xenaproject.wordpress.com/",
+      "automated": true,
+      "role": "commentary"
+    },
+    {
+      "id": "sciencenews-math",
+      "name": "Science News · math",
+      "url": "https://www.sciencenews.org/topic/math",
+      "automated": true,
+      "role": "journalism"
+    },
+    {
+      "id": "epoch",
+      "name": "Epoch AI",
+      "url": "https://epoch.ai/latest",
+      "automated": true,
+      "role": "primary"
+    },
+    {
+      "id": "kourovka",
+      "name": "Kourovka Notebook · editors’ updates",
+      "url": "https://kourovkanotebookorg.wordpress.com/",
+      "automated": true,
+      "role": "primary"
     },
     {
       "id": "microsoft-research",
       "name": "Microsoft Research",
       "url": "https://www.microsoft.com/en-us/research/blog/",
-      "automated": true
+      "automated": true,
+      "role": "primary"
     },
     {
       "id": "huggingface",
       "name": "Hugging Face · publisher and research-team blogs",
       "url": "https://huggingface.co/blog",
-      "automated": true
+      "automated": true,
+      "role": "primary"
+    },
+    {
+      "id": "arxiv-math-ai",
+      "name": "arXiv · AI-assisted and formal mathematics preprints (search)",
+      "url": "https://arxiv.org/",
+      "automated": true,
+      "role": "preprint"
     },
     {
       "id": "arxiv-ai",
       "name": "arXiv · artificial intelligence preprints",
       "url": "https://arxiv.org/list/cs.AI/recent",
-      "automated": true
+      "automated": true,
+      "role": "preprint"
     },
     {
       "id": "arxiv-math-nt",
       "name": "arXiv · number theory preprints",
       "url": "https://arxiv.org/list/math.NT/recent",
-      "automated": true
+      "automated": true,
+      "role": "preprint"
     },
     {
       "id": "anthropic",
       "name": "Anthropic",
       "url": "https://www.anthropic.com/news",
-      "automated": false
+      "automated": false,
+      "role": "primary"
     }
   ],
   "source_errors": [],
-  "summary_errors": []
+  "summary_errors": [],
+  "stories": [
+    {
+      "id": "openai-math",
+      "label": "OpenAI’s openai/math release and updates",
+      "item_ids": [
+        "news-551629f36c382cb432a35cf2",
+        "news-9b955ce8af2763d0997a43e3",
+        "news-f4325b9e5af450f44481a5b2",
+        "news-3bdf62a9c1837cfa67756960",
+        "news-e232877cfb59ccd8dc584db8",
+        "news-c8dd933967aa5e27eb8e549c",
+        "news-00427e47df5ef3064509e152"
+      ],
+      "lead_id": "news-00427e47df5ef3064509e152",
+      "updated_at": "2026-10-07T15:08:46Z"
+    }
+  ]
 }

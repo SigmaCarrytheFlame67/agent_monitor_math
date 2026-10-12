@@ -2,12 +2,15 @@
 from __future__ import annotations
 
 import hashlib
+import ipaddress
 import json
 import logging
 import os
 import queue
 import re
+import socket
 import stat
+import sys
 import threading
 import time
 from collections import deque
@@ -17,6 +20,7 @@ from typing import Any
 from urllib.parse import parse_qs, quote, urlparse, urlsplit, urlunsplit
 
 from agent_monitor import CACHE_DIR, PROBLEMS_DIR, ROOT, RUNS_DIR
+from agent_monitor import account_policy
 from agent_monitor import jobs as job_manager
 from agent_monitor.run_sharing import RunSharingMixin
 from agent_monitor.projects import ProjectsMixin
@@ -41,7 +45,9 @@ PACKAGE_DIR = Path(__file__).resolve().parent
 WEB_DIR = PACKAGE_DIR / "web"
 DASHBOARD_WEB = ROOT / "monitor_core" / "harness_dashboard" / "web"
 PORT = int(os.environ.get("AGENT_MONITOR_PORT", os.environ.get("LLM_MONITOR_PORT", "4600")))
-HOST = os.environ.get("AGENT_MONITOR_HOST", "0.0.0.0").strip() or "0.0.0.0"
+# Loopback by default: the public deployment sits behind Caddy, and binding
+# every interface must be an explicit operator choice.
+HOST = os.environ.get("AGENT_MONITOR_HOST", "127.0.0.1").strip() or "127.0.0.1"
 logger = logging.getLogger("agent_monitor.console_server")
 
 # Password-reset delivery must not make HTTP response timing depend on whether
@@ -51,7 +57,7 @@ _PASSWORD_RESET_COOLDOWN_SECONDS = 300.0
 _PASSWORD_RESET_WINDOW_SECONDS = 60.0
 _PASSWORD_RESET_WINDOW_LIMIT = 30
 _PASSWORD_RESET_RECENT_LIMIT = 4096
-_PASSWORD_RESET_QUEUE: queue.Queue[tuple[str, str]] = queue.Queue(maxsize=64)
+_PASSWORD_RESET_QUEUE: queue.Queue[tuple[str, str, str]] = queue.Queue(maxsize=64)
 _PASSWORD_RESET_LOCK = threading.Lock()
 _PASSWORD_RESET_RECENT: dict[bytes, float] = {}
 _PASSWORD_RESET_WINDOW: deque[float] = deque()
@@ -77,20 +83,56 @@ _GUEST_DERIVED_ACTIVE_USERS: set[int] = set()
 _GUEST_DERIVED_LOCK = threading.Lock()
 _GUEST_PIPELINE_BOOTSTRAP_LOCK = threading.Lock()
 _GUEST_PIPELINE_BOOTSTRAPS: dict[str, tuple[int, Path]] = {}
+# Per-client guest accounting (see guest_client_key): hourly windows keyed by
+# client bucket, on top of the per-identity and site-wide limits, so one
+# visitor minting many guest identities cannot use up everyone's allowance.
+_GUEST_CLIENT_WINDOW_SECONDS = 3600.0
+_GUEST_SESSION_CLIENT_WINDOWS: dict[str, deque[float]] = {}
+_GUEST_RUN_CLIENT_WINDOWS: dict[str, deque[float]] = {}
+_GUEST_DERIVED_CLIENT_WINDOWS: dict[str, deque[float]] = {}
+# Active guest run id -> the client bucket that started it.
+_GUEST_RUN_CLIENTS: dict[str, str] = {}
+# Self-registered (member) accounts: new-account creation per client and
+# site-wide, and hourly run starts per member (sponsored Kimi is shared).
+_SIGNUP_WINDOW_SECONDS = 3600.0
+_SIGNUP_CLIENT_WINDOWS: dict[str, deque[float]] = {}
+_SIGNUP_GLOBAL_WINDOW: deque[float] = deque()
+_SIGNUP_LOCK = threading.Lock()
+_MEMBER_RUN_WINDOW_SECONDS = 3600.0
+_MEMBER_RUN_WINDOWS: dict[int, deque[float]] = {}
+_MEMBER_RUN_LOCK = threading.Lock()
+# Every member chat message, including one that joins feedback already queued
+# for a running run (which uses no run start), per member and hour.
+_MEMBER_MESSAGE_WINDOWS: dict[int, deque[float]] = {}
 GUEST_MAX_LEAN_CHARACTERS = 100_000
 GUEST_MAX_FEEDBACK_CHARACTERS = 8_000
+# A guest run request carries at most a 20,000-character problem and the small
+# guest attachment allowance, so its body is capped like ordinary JSON routes
+# before anything is read (members keep the 29 MiB attachment ceiling).
+GUEST_MAX_REQUEST_BYTES = 1_000_000
+# After refusing a request before reading its body (413, or 401/403 on an
+# attachment route), read and discard at most this much of the body for at
+# most this long before closing.  Closing with unread data makes the kernel
+# reset the connection, which can destroy the refusal in flight (Caddy then
+# answers 502 or aborts the HTTP/2 stream instead of passing on the 413).
+REFUSED_BODY_DRAIN_BYTES = 32 * 1024 * 1024
+REFUSED_BODY_DRAIN_SECONDS = 5.0
 
 
 def _password_reset_worker() -> None:
+    """Send queued reset and verification emails off the request path."""
     while True:
-        email, base_url = _PASSWORD_RESET_QUEUE.get()
+        kind, email, base_url = _PASSWORD_RESET_QUEUE.get()
         try:
-            from agent_monitor.auth import handle_forgot_password
+            from agent_monitor import auth
 
-            handle_forgot_password(email, base_url)
+            if kind == "verify":
+                auth.send_email_verification(email, base_url)
+            else:
+                auth.handle_forgot_password(email, base_url)
         except Exception as exc:  # noqa: BLE001
-            # Never include an address, reset token, or link in this log.
-            logger.error("Queued password reset request failed (%s)", type(exc).__name__)
+            # Never include an address, token, or link in this log.
+            logger.error("Queued %s email failed (%s)", kind, type(exc).__name__)
         finally:
             _PASSWORD_RESET_QUEUE.task_done()
 
@@ -109,11 +151,20 @@ def _start_password_reset_worker_locked() -> None:
 
 def _enqueue_password_reset(email: str, base_url: str) -> bool:
     """Queue a generic reset attempt without performing an account lookup."""
+    return _enqueue_mail_job("reset", email, base_url)
+
+
+def _enqueue_email_verification(email: str, base_url: str) -> bool:
+    """Queue a verification link; the worker skips unknown or verified accounts."""
+    return _enqueue_mail_job("verify", email, base_url)
+
+
+def _enqueue_mail_job(kind: str, email: str, base_url: str) -> bool:
     normalized = (email or "").strip().lower()
     if not normalized or len(normalized) > 320:
         return False
 
-    key = hashlib.sha256(normalized.encode("utf-8")).digest()
+    key = hashlib.sha256(f"{kind}:{normalized}".encode("utf-8")).digest()
     now = time.monotonic()
     with _PASSWORD_RESET_LOCK:
         cutoff = now - _PASSWORD_RESET_WINDOW_SECONDS
@@ -137,7 +188,7 @@ def _enqueue_password_reset(email: str, base_url: str) -> bool:
         if len(_PASSWORD_RESET_WINDOW) >= _PASSWORD_RESET_WINDOW_LIMIT:
             return False
         try:
-            _PASSWORD_RESET_QUEUE.put_nowait((normalized, base_url))
+            _PASSWORD_RESET_QUEUE.put_nowait((kind, normalized, base_url))
         except queue.Full:
             return False
 
@@ -171,8 +222,31 @@ PUBLIC_MODE = os.environ.get("AGENT_MONITOR_PUBLIC", "").strip().lower() in {
 
 # Only the single remote API call baseline is guest-eligible. Local agent and
 # harness engines do not provide an operating-system isolation boundary.
-GUEST_ELIGIBLE_ENGINES = frozenset({"kimi", "plain"})
-GUEST_DEFAULT_ENGINES = GUEST_ELIGIBLE_ENGINES
+# Ansatz Analyze is tool-free too; guests get it behind its own switch
+# (AGENT_MONITOR_ANALYZE_GUESTS), not through AGENT_MONITOR_GUEST_ENGINES.
+GUEST_PROOF_ENGINES = frozenset({"kimi", "plain"})
+GUEST_ELIGIBLE_ENGINES = GUEST_PROOF_ENGINES | {"analyze"}
+GUEST_DEFAULT_ENGINES = GUEST_PROOF_ENGINES
+# One Analyze per guest session per hour (and a few per client network);
+# guest analyses also count against the guest run limits above.
+GUEST_ANALYZE_RUNS_PER_HOUR = 1
+GUEST_ANALYZE_RUNS_PER_CLIENT_PER_HOUR = 3
+_GUEST_ANALYZE_WINDOWS: dict[int, deque[float]] = {}
+_GUEST_ANALYZE_CLIENT_WINDOWS: dict[str, deque[float]] = {}
+# Guest re-checks (each up to eight sponsored calls) belong to the guest
+# Analyze allowance, not only to the generic derived-action limits: a few per
+# analysis (analyze_runs.GUEST_RECHECKS_PER_ANALYSIS), per guest session and
+# per client network each hour.
+GUEST_RECHECKS_PER_HOUR = 2
+GUEST_RECHECKS_PER_CLIENT_PER_HOUR = 4
+_GUEST_RECHECK_WINDOWS: dict[int, deque[float]] = {}
+_GUEST_RECHECK_CLIENT_WINDOWS: dict[str, deque[float]] = {}
+# Link previews (POST /api/analyze/resolve) fetch metadata from arXiv/GitHub.
+ANALYZE_RESOLVES_PER_HOUR = {"guest": 10, "member": 30, "admin": 120}
+GUEST_ANALYZE_RESOLVES_PER_CLIENT_PER_HOUR = 20
+_ANALYZE_RESOLVE_WINDOWS: dict[int, deque[float]] = {}
+_ANALYZE_RESOLVE_CLIENT_WINDOWS: dict[str, deque[float]] = {}
+_ANALYZE_LOCK = threading.Lock()
 
 
 def _env_flag(name: str, *, default: bool) -> bool:
@@ -188,6 +262,84 @@ def _bounded_env_int(name: str, *, default: int, minimum: int, maximum: int) -> 
     except (TypeError, ValueError):
         value = default
     return max(minimum, min(value, maximum))
+
+
+def _prune_windows(windows: dict[Any, deque[float]], cutoff: float) -> None:
+    for key, window in list(windows.items()):
+        while window and window[0] <= cutoff:
+            window.popleft()
+        if not window:
+            windows.pop(key, None)
+
+
+def guest_client_key(peer: str | None, forwarded_for: str | None) -> str | None:
+    """The client bucket for per-client guest limits, or None for the host.
+
+    Behind the loopback reverse proxy (Caddy) the client is the last
+    ``X-Forwarded-For`` hop: Caddy writes the address of the peer it accepted
+    and replaces any value an untrusted client sent.  A direct, non-loopback
+    peer is keyed on itself and its forwarding header is ignored.  A loopback
+    caller without a forwarding header, or a loopback client address, is a
+    process on this host (smoke checks, tests, the operator) and is exempt.
+    IPv6 clients are bucketed by /64, the smallest block a host usually gets.
+    """
+    raw_peer = str(peer or "").strip()
+    try:
+        peer_ip = ipaddress.ip_address(raw_peer)
+    except ValueError:
+        peer_ip = None
+    if peer_ip is not None and not peer_ip.is_loopback:
+        candidate = raw_peer
+    else:
+        hops = [hop.strip() for hop in str(forwarded_for or "").split(",") if hop.strip()]
+        if not hops:
+            return None if peer_ip is not None else f"peer:{raw_peer[:64]}"
+        candidate = hops[-1]
+    try:
+        address = ipaddress.ip_address(candidate.strip("[]"))
+    except ValueError:
+        # One shared bucket for anything that is not an address.
+        return "unparsed"
+    if isinstance(address, ipaddress.IPv6Address) and address.ipv4_mapped is not None:
+        address = address.ipv4_mapped
+    if address.is_loopback:
+        return None
+    if address.version == 6:
+        return str(ipaddress.ip_network(f"{address}/64", strict=False))
+    return str(address)
+
+
+def guest_sessions_per_client_per_hour() -> int:
+    return _bounded_env_int(
+        "AGENT_MONITOR_GUEST_SESSIONS_PER_CLIENT_PER_HOUR",
+        default=6,
+        minimum=1,
+        maximum=120,
+    )
+
+
+def guest_runs_per_client_per_hour() -> int:
+    return _bounded_env_int(
+        "AGENT_MONITOR_GUEST_RUNS_PER_CLIENT_PER_HOUR",
+        default=12,
+        minimum=1,
+        maximum=240,
+    )
+
+
+def guest_client_concurrency() -> int:
+    return _bounded_env_int(
+        "AGENT_MONITOR_GUEST_CLIENT_CONCURRENCY", default=1, minimum=1, maximum=16
+    )
+
+
+def guest_derived_actions_per_client_per_hour() -> int:
+    return _bounded_env_int(
+        "AGENT_MONITOR_GUEST_DERIVED_ACTIONS_PER_CLIENT_PER_HOUR",
+        default=48,
+        minimum=1,
+        maximum=480,
+    )
 
 
 def guest_access_enabled() -> bool:
@@ -206,7 +358,7 @@ def guest_engine_allowlist() -> frozenset[str]:
         if raw is None
         else {part.strip().lower() for part in raw.split(",") if part.strip()}
     )
-    allowed = requested & GUEST_ELIGIBLE_ENGINES
+    allowed = requested & GUEST_PROOF_ENGINES
     # A command override changes Plain from the reviewed single-call runner
     # into arbitrary operator-selected local code. Never expose that variant
     # through an anonymous session.
@@ -214,6 +366,11 @@ def guest_engine_allowlist() -> frozenset[str]:
         allowed.discard("plain")
     if os.environ.get("KIMI_PROOF_CMD", "").strip():
         allowed.discard("kimi")
+    from agent_monitor import analyze_runs
+
+    # Analyze follows its own switches (and an ANALYZE_CMD override removes it).
+    if analyze_runs.guests_enabled():
+        allowed.add("analyze")
     return frozenset(allowed)
 
 
@@ -291,6 +448,10 @@ def guest_policy(user: dict | None = None) -> dict[str, Any]:
         "hosted_guest_available": hosted_guest_kimi_available(),
         "max_iterations": guest_max_iterations(),
         "max_output_tokens": guest_max_output_tokens(),
+        # Ansatz CGM (kimi) calls always use this bounded per-call ceiling.
+        "cgm_max_output_tokens": job_manager._CGM_BOUNDED_OUTPUT_TOKENS,
+        "max_lean_repairs": _guest_lean_repairs(),
+        "max_feedback_repairs": _GUEST_REVISE_MAX_REPAIRS,
         "runs_per_session": guest_runs_per_session(),
         "runs_per_hour": guest_runs_per_hour(),
         "provider_verifications_per_hour": guest_verifications_per_hour(),
@@ -303,10 +464,144 @@ def guest_policy(user: dict | None = None) -> dict[str, Any]:
         "derived_actions_per_hour": guest_derived_actions_per_hour(),
         "provider": "kimi",
         "custom_provider_base": False,
+        "attachments": research_attachments.guest_policy(),
+        "analyze": _guest_analyze_summary(),
     }
 
 
-def _guest_run_capacity_error(user_id: int) -> str | None:
+def _guest_analyze_summary() -> dict[str, Any]:
+    """What a guest may analyze (the engine listing has the full policy)."""
+    from agent_monitor import analyze_runs
+
+    enabled = analyze_runs.guests_enabled()
+    return {
+        "enabled": enabled,
+        "runs_per_hour": GUEST_ANALYZE_RUNS_PER_HOUR,
+        "links": sorted(analyze_runs.GUEST_CONNECTORS),
+        "paste_chars": analyze_runs.GUEST_PASTE_CHARS,
+        "caps": (
+            analyze_runs._caps_view(analyze_runs.effective_caps("guest", sponsored=True))
+            if enabled else None
+        ),
+    }
+
+
+def _guest_lean_repairs() -> int:
+    from agent_monitor import lean_verify
+
+    return int(lean_verify.GUEST_MAX_REPAIRS)
+
+
+def _window_full(window: deque[float] | None, limit: int, now: float, span: float) -> int:
+    """Seconds until ``window`` admits another event (0 = admits now)."""
+    if window is None:
+        return 0
+    while window and window[0] <= now - span:
+        window.popleft()
+    if len(window) >= limit:
+        return max(1, int(span - (now - window[0])))
+    return 0
+
+
+def _guest_analyze_capacity(user_id: int, client: str | None, *, reserve: bool) -> tuple[str | None, int]:
+    """One Analyze per guest session per hour, a few per client network."""
+    now = time.monotonic()
+    with _ANALYZE_LOCK:
+        _prune_windows(_GUEST_ANALYZE_WINDOWS, now - 3600.0)
+        _prune_windows(_GUEST_ANALYZE_CLIENT_WINDOWS, now - 3600.0)
+        retry = _window_full(_GUEST_ANALYZE_WINDOWS.get(user_id), GUEST_ANALYZE_RUNS_PER_HOUR, now, 3600.0)
+        if retry:
+            return "Guests can start one analysis per hour; sign in for more", retry
+        if client is not None:
+            retry = _window_full(_GUEST_ANALYZE_CLIENT_WINDOWS.get(client),
+                                 GUEST_ANALYZE_RUNS_PER_CLIENT_PER_HOUR, now, 3600.0)
+            if retry:
+                return "Too many guest analyses from your network this hour; please try again later", retry
+        if reserve:
+            _GUEST_ANALYZE_WINDOWS.setdefault(user_id, deque()).append(now)
+            if client is not None:
+                _GUEST_ANALYZE_CLIENT_WINDOWS.setdefault(client, deque()).append(now)
+    return None, 0
+
+
+def _release_guest_analyze(user_id: int, client: str | None) -> None:
+    """Return the newest guest Analyze start when the request started nothing."""
+    with _ANALYZE_LOCK:
+        window = _GUEST_ANALYZE_WINDOWS.get(user_id)
+        if window:
+            window.pop()
+        if client is not None:
+            client_window = _GUEST_ANALYZE_CLIENT_WINDOWS.get(client)
+            if client_window:
+                client_window.pop()
+
+
+def _reserve_guest_recheck(user_id: int, client: str | None) -> tuple[str | None, int]:
+    """Guest re-checks per hour: a few per guest session and per client network."""
+    now = time.monotonic()
+    with _ANALYZE_LOCK:
+        _prune_windows(_GUEST_RECHECK_WINDOWS, now - 3600.0)
+        _prune_windows(_GUEST_RECHECK_CLIENT_WINDOWS, now - 3600.0)
+        retry = _window_full(_GUEST_RECHECK_WINDOWS.get(user_id), GUEST_RECHECKS_PER_HOUR, now, 3600.0)
+        if retry:
+            return (f"Guests can re-check {GUEST_RECHECKS_PER_HOUR} results per hour; sign in for more",
+                    retry)
+        if client is not None:
+            retry = _window_full(_GUEST_RECHECK_CLIENT_WINDOWS.get(client),
+                                 GUEST_RECHECKS_PER_CLIENT_PER_HOUR, now, 3600.0)
+            if retry:
+                return "Too many guest re-checks from your network this hour; please try again later", retry
+        _GUEST_RECHECK_WINDOWS.setdefault(user_id, deque()).append(now)
+        if client is not None:
+            _GUEST_RECHECK_CLIENT_WINDOWS.setdefault(client, deque()).append(now)
+    return None, 0
+
+
+def _release_guest_recheck(user_id: int, client: str | None) -> None:
+    """Return the newest guest re-check when the request started nothing."""
+    with _ANALYZE_LOCK:
+        window = _GUEST_RECHECK_WINDOWS.get(user_id)
+        if window:
+            window.pop()
+        if client is not None:
+            client_window = _GUEST_RECHECK_CLIENT_WINDOWS.get(client)
+            if client_window:
+                client_window.pop()
+
+
+def _reserve_analyze_resolve(user: dict[str, Any], client: str | None) -> tuple[str | None, int]:
+    """Link previews per hour: guests 10 (and 20 per network), members 30."""
+    from agent_monitor import analyze_runs
+
+    role = analyze_runs.role_of(user)
+    limit = ANALYZE_RESOLVES_PER_HOUR.get(role, 10)
+    now = time.monotonic()
+    user_id = int(user.get("id") or 0)
+    with _ANALYZE_LOCK:
+        _prune_windows(_ANALYZE_RESOLVE_WINDOWS, now - 3600.0)
+        _prune_windows(_ANALYZE_RESOLVE_CLIENT_WINDOWS, now - 3600.0)
+        retry = _window_full(_ANALYZE_RESOLVE_WINDOWS.get(user_id), limit, now, 3600.0)
+        if retry:
+            return "You have previewed many links this hour; please try again later", retry
+        if role == "guest" and client is not None:
+            retry = _window_full(_ANALYZE_RESOLVE_CLIENT_WINDOWS.get(client),
+                                 GUEST_ANALYZE_RESOLVES_PER_CLIENT_PER_HOUR, now, 3600.0)
+            if retry:
+                return "Too many link previews from your network this hour; please try again later", retry
+        _ANALYZE_RESOLVE_WINDOWS.setdefault(user_id, deque()).append(now)
+        if role == "guest" and client is not None:
+            _ANALYZE_RESOLVE_CLIENT_WINDOWS.setdefault(client, deque()).append(now)
+    return None, 0
+
+
+def analyze_policy(user: dict | None) -> dict[str, Any]:
+    """The viewer's Analyze policy (engine listing, guest policy)."""
+    from agent_monitor import analyze_runs
+
+    return analyze_runs.viewer_policy(user, guest_runs_per_hour=GUEST_ANALYZE_RUNS_PER_HOUR)
+
+
+def _guest_run_capacity_error(user_id: int, client: str | None = None) -> str | None:
     from agent_monitor.auth import guest_runs_started
     if max(guest_runs_started(user_id), job_manager.persisted_run_count(user_id)) >= guest_runs_per_session():
         return f"You have used all {guest_runs_per_session()} guest runs. Sign in to continue"
@@ -316,11 +611,20 @@ def _guest_run_capacity_error(user_id: int) -> str | None:
         for job in job_manager.list_jobs()
         if str(job.get("status") or "").lower() in active_states
     ]
+    active_run_ids = {str(job.get("run_id") or "") for job in active}
+    for run_id in list(_GUEST_RUN_CLIENTS):
+        if run_id not in active_run_ids:
+            _GUEST_RUN_CLIENTS.pop(run_id, None)
     per_guest_limit = _bounded_env_int(
         "AGENT_MONITOR_GUEST_CONCURRENCY", default=1, minimum=1, maximum=4
     )
     if sum(job.get("owner_id") == user_id for job in active) >= per_guest_limit:
         return "Wait for your current guest run to finish before starting another"
+    if client is not None and (
+        sum(owner == client for owner in _GUEST_RUN_CLIENTS.values())
+        >= guest_client_concurrency()
+    ):
+        return "Wait for the current guest run from your network to finish before starting another"
     global_limit = _bounded_env_int(
         "AGENT_MONITOR_GUEST_GLOBAL_CONCURRENCY", default=2, minimum=1, maximum=16
     )
@@ -329,8 +633,8 @@ def _guest_run_capacity_error(user_id: int) -> str | None:
     return None
 
 
-def _reserve_guest_run_slot(user_id: int) -> tuple[str | None, int]:
-    """Atomically enforce active, per-session, and rolling guest run limits."""
+def _reserve_guest_run_slot(user_id: int, client: str | None = None) -> tuple[str | None, int]:
+    """Atomically enforce active, per-session, per-client and rolling guest run limits."""
     now = time.monotonic()
     cutoff = now - _GUEST_RUN_WINDOW_SECONDS
     with _GUEST_RUN_START_LOCK:
@@ -341,14 +645,19 @@ def _reserve_guest_run_slot(user_id: int) -> tuple[str | None, int]:
                 _GUEST_RUN_WINDOWS.pop(existing_id, None)
         while _GUEST_GLOBAL_RUN_WINDOW and _GUEST_GLOBAL_RUN_WINDOW[0] <= cutoff:
             _GUEST_GLOBAL_RUN_WINDOW.popleft()
+        _prune_windows(_GUEST_RUN_CLIENT_WINDOWS, now - _GUEST_CLIENT_WINDOW_SECONDS)
 
-        capacity_error = _guest_run_capacity_error(user_id)
+        capacity_error = _guest_run_capacity_error(user_id, client)
         if capacity_error:
             return capacity_error, 30
         user_window = _GUEST_RUN_WINDOWS.setdefault(user_id, deque())
         if len(user_window) >= guest_runs_per_hour():
             retry = max(1, int(_GUEST_RUN_WINDOW_SECONDS - (now - user_window[0])))
             return "This guest session has reached its hourly run limit", retry
+        client_window = _GUEST_RUN_CLIENT_WINDOWS.get(client) if client is not None else None
+        if client_window and len(client_window) >= guest_runs_per_client_per_hour():
+            retry = max(1, int(_GUEST_CLIENT_WINDOW_SECONDS - (now - client_window[0])))
+            return "Too many guest runs from your network this hour; please try again later", retry
         if len(_GUEST_GLOBAL_RUN_WINDOW) >= guest_global_runs_per_hour():
             retry = max(
                 1,
@@ -361,10 +670,12 @@ def _reserve_guest_run_slot(user_id: int) -> tuple[str | None, int]:
 
         user_window.append(now)
         _GUEST_GLOBAL_RUN_WINDOW.append(now)
+        if client is not None:
+            _GUEST_RUN_CLIENT_WINDOWS.setdefault(client, deque()).append(now)
     return None, 0
 
 
-def _reserve_guest_session_slot() -> tuple[bool, int]:
+def _reserve_guest_session_slot(client: str | None = None) -> tuple[bool, int]:
     """Bound anonymous account creation; existing guest sessions bypass this."""
     limit = _bounded_env_int(
         "AGENT_MONITOR_GUEST_SESSIONS_PER_MINUTE",
@@ -377,11 +688,130 @@ def _reserve_guest_session_slot() -> tuple[bool, int]:
         cutoff = now - _GUEST_SESSION_WINDOW_SECONDS
         while _GUEST_SESSION_WINDOW and _GUEST_SESSION_WINDOW[0] <= cutoff:
             _GUEST_SESSION_WINDOW.popleft()
+        if client is not None:
+            # Checked first so one client cannot hold the site-wide minute
+            # window: it gets only a few new identities per hour.
+            _prune_windows(_GUEST_SESSION_CLIENT_WINDOWS, now - _GUEST_CLIENT_WINDOW_SECONDS)
+            client_window = _GUEST_SESSION_CLIENT_WINDOWS.get(client)
+            if client_window and len(client_window) >= guest_sessions_per_client_per_hour():
+                retry = max(1, int(_GUEST_CLIENT_WINDOW_SECONDS - (now - client_window[0])))
+                return False, retry
         if len(_GUEST_SESSION_WINDOW) >= limit:
             retry = max(1, int(_GUEST_SESSION_WINDOW_SECONDS - (now - _GUEST_SESSION_WINDOW[0])))
             return False, retry
         _GUEST_SESSION_WINDOW.append(now)
+        if client is not None:
+            _GUEST_SESSION_CLIENT_WINDOWS.setdefault(client, deque()).append(now)
     return True, 0
+
+
+def _reserve_signup_slot(client: str | None = None) -> tuple[bool, int]:
+    """Bound new registered accounts per client address and site-wide."""
+    per_client = _bounded_env_int(
+        "AGENT_MONITOR_SIGNUPS_PER_CLIENT_PER_HOUR", default=5, minimum=1, maximum=100
+    )
+    site_wide = _bounded_env_int(
+        "AGENT_MONITOR_SIGNUPS_PER_HOUR", default=60, minimum=1, maximum=2000
+    )
+    now = time.monotonic()
+    cutoff = now - _SIGNUP_WINDOW_SECONDS
+    with _SIGNUP_LOCK:
+        while _SIGNUP_GLOBAL_WINDOW and _SIGNUP_GLOBAL_WINDOW[0] <= cutoff:
+            _SIGNUP_GLOBAL_WINDOW.popleft()
+        _prune_windows(_SIGNUP_CLIENT_WINDOWS, cutoff)
+        client_window = _SIGNUP_CLIENT_WINDOWS.get(client) if client is not None else None
+        if client_window and len(client_window) >= per_client:
+            return False, max(1, int(_SIGNUP_WINDOW_SECONDS - (now - client_window[0])))
+        if len(_SIGNUP_GLOBAL_WINDOW) >= site_wide:
+            return False, max(1, int(_SIGNUP_WINDOW_SECONDS - (now - _SIGNUP_GLOBAL_WINDOW[0])))
+        _SIGNUP_GLOBAL_WINDOW.append(now)
+        if client is not None:
+            _SIGNUP_CLIENT_WINDOWS.setdefault(client, deque()).append(now)
+    return True, 0
+
+
+def _reserve_member_run_slot(user_id: int) -> tuple[str | None, int]:
+    """Bound a member's concurrent and hourly run starts (continuations count)."""
+    concurrency = _bounded_env_int(
+        "AGENT_MONITOR_MEMBER_CONCURRENCY", default=2, minimum=1, maximum=8
+    )
+    per_hour = _bounded_env_int(
+        "AGENT_MONITOR_MEMBER_RUNS_PER_HOUR", default=12, minimum=1, maximum=240
+    )
+    now = time.monotonic()
+    with _MEMBER_RUN_LOCK:
+        active_states = {"queued", "starting", "running", "continuing"}
+        active = sum(
+            job.get("owner_id") == user_id
+            and str(job.get("status") or "").lower() in active_states
+            for job in job_manager.list_jobs()
+        )
+        if active >= concurrency:
+            return "Wait for one of your current runs to finish before starting another", 30
+        window = _MEMBER_RUN_WINDOWS.setdefault(user_id, deque())
+        while window and window[0] <= now - _MEMBER_RUN_WINDOW_SECONDS:
+            window.popleft()
+        if len(window) >= per_hour:
+            return (
+                "Your account has reached its hourly run limit; please try again later",
+                max(1, int(_MEMBER_RUN_WINDOW_SECONDS - (now - window[0]))),
+            )
+        window.append(now)
+    return None, 0
+
+
+def _member_subscription_status(kind: str) -> dict[str, Any]:
+    """Login status for a member, who may not link a Codex or Claude account.
+
+    Answered without the CLI status probe, so the member gets no account home.
+    """
+    status: dict[str, Any] = {
+        "status": "admin_only",
+        "running": False,
+        "connected": False,
+        "policy": "admin_only",
+        "error": account_policy.subscription_notes()[kind],
+    }
+    if kind == "codex":
+        from agent_monitor import codex_login
+
+        status["codex_installed"] = codex_login.codex_binary() is not None
+    else:
+        from agent_monitor import claude_login
+
+        status.update(
+            claude_installed=claude_login.claude_binary() is not None,
+            reauth_required=False,
+            models=[],
+        )
+    return status
+
+
+def _release_member_run_slot(user_id: int) -> None:
+    """Give back the newest run start reserved for a member that started nothing."""
+    with _MEMBER_RUN_LOCK:
+        window = _MEMBER_RUN_WINDOWS.get(user_id)
+        if window:
+            window.pop()
+
+
+def _reserve_member_message(user_id: int) -> tuple[str | None, int]:
+    """Bound how often a member sends run feedback, queued messages included."""
+    per_hour = _bounded_env_int(
+        "AGENT_MONITOR_MEMBER_MESSAGES_PER_HOUR", default=60, minimum=1, maximum=600
+    )
+    now = time.monotonic()
+    with _MEMBER_RUN_LOCK:
+        window = _MEMBER_MESSAGE_WINDOWS.setdefault(user_id, deque())
+        while window and window[0] <= now - _MEMBER_RUN_WINDOW_SECONDS:
+            window.popleft()
+        if len(window) >= per_hour:
+            return (
+                "Your account has sent its hourly limit of run feedback; please try again later",
+                max(1, int(_MEMBER_RUN_WINDOW_SECONDS - (now - window[0]))),
+            )
+        window.append(now)
+    return None, 0
 
 
 def _reserve_guest_verification(user_id: int) -> tuple[str | None, int]:
@@ -445,8 +875,8 @@ def guest_derived_actions_per_hour() -> int:
     )
 
 
-def _reserve_guest_derived_action(user_id: int) -> tuple[str | None, int]:
-    """Bound synchronous Formal/DAG work independently from key checks."""
+def _reserve_guest_derived_action(user_id: int, client: str | None = None) -> tuple[str | None, int]:
+    """Bound Formal/DAG work (and its background refresh) independently from key checks."""
     now = time.monotonic()
     cutoff = now - _GUEST_DERIVED_WINDOW_SECONDS
     with _GUEST_DERIVED_LOCK:
@@ -457,6 +887,7 @@ def _reserve_guest_derived_action(user_id: int) -> tuple[str | None, int]:
                 _GUEST_DERIVED_WINDOWS.pop(existing_id, None)
         while _GUEST_DERIVED_GLOBAL_WINDOW and _GUEST_DERIVED_GLOBAL_WINDOW[0] <= cutoff:
             _GUEST_DERIVED_GLOBAL_WINDOW.popleft()
+        _prune_windows(_GUEST_DERIVED_CLIENT_WINDOWS, now - _GUEST_CLIENT_WINDOW_SECONDS)
         if user_id in _GUEST_DERIVED_ACTIVE_USERS:
             return "Wait for your current Formal or DAG action to finish", 20
         concurrency = _bounded_env_int(
@@ -481,8 +912,14 @@ def _reserve_guest_derived_action(user_id: int) -> tuple[str | None, int]:
         if user_window and len(user_window) >= guest_derived_actions_per_hour():
             retry = max(1, int(_GUEST_DERIVED_WINDOW_SECONDS - (now - user_window[0])))
             return "This guest session has reached its hourly Formal and DAG limit", retry
+        client_window = _GUEST_DERIVED_CLIENT_WINDOWS.get(client) if client is not None else None
+        if client_window and len(client_window) >= guest_derived_actions_per_client_per_hour():
+            retry = max(1, int(_GUEST_CLIENT_WINDOW_SECONDS - (now - client_window[0])))
+            return "Too many guest Formal and DAG actions from your network this hour", retry
         _GUEST_DERIVED_WINDOWS.setdefault(user_id, deque()).append(now)
         _GUEST_DERIVED_GLOBAL_WINDOW.append(now)
+        if client is not None:
+            _GUEST_DERIVED_CLIENT_WINDOWS.setdefault(client, deque()).append(now)
         _GUEST_DERIVED_ACTIVE_USERS.add(user_id)
     return None, 0
 
@@ -490,6 +927,74 @@ def _reserve_guest_derived_action(user_id: int) -> tuple[str | None, int]:
 def _release_guest_derived_action(user_id: int) -> None:
     with _GUEST_DERIVED_LOCK:
         _GUEST_DERIVED_ACTIVE_USERS.discard(user_id)
+
+
+class _GuestDerivedSlot:
+    """One admitted guest Formal/DAG action; released exactly once.
+
+    The slot stays held while any model work the action scheduled is still
+    running (the formal DAG refresh after a Lean action runs on a background
+    thread), so the per-guest and site-wide concurrency limits cover it.
+    """
+
+    def __init__(self, user_id: int) -> None:
+        self.user_id = int(user_id)
+        self.handed_off = False
+        self._lock = threading.Lock()
+        self._released = False
+
+    def release(self) -> None:
+        with self._lock:
+            if self._released:
+                return
+            self._released = True
+        _release_guest_derived_action(self.user_id)
+
+
+_MANUAL_MAX_REPAIRS = 6
+_REVISE_MAX_REPAIRS = 3
+# lean_verify.revise_with_feedback clamps every guest feedback revision to one
+# repair round; mirror it here so the console never promises more.
+_GUEST_REVISE_MAX_REPAIRS = 1
+
+
+def _bounded_repairs(
+    requested: object,
+    *,
+    default: int,
+    cap: int,
+    guest: bool,
+    guest_cap: int | None = None,
+) -> int:
+    """Clamp a manual Lean repair budget; guests never exceed the guest cap."""
+    from agent_monitor import lean_verify
+
+    if requested is None:
+        value = default
+    else:
+        if isinstance(requested, bool):
+            raise ValueError("max_repairs must be an integer")
+        try:
+            value = int(requested)  # type: ignore[arg-type]
+        except (TypeError, ValueError):
+            raise ValueError("max_repairs must be an integer") from None
+    if guest:
+        cap = min(
+            cap,
+            lean_verify.GUEST_MAX_REPAIRS if guest_cap is None else guest_cap,
+        )
+    return max(0, min(value, cap))
+
+
+# The Lean toolchain status a guest may read (GET /api/lean/status): broker
+# availability and the fixed pinned toolchain, never host paths.
+_GUEST_LEAN_STATUS_FIELDS = (
+    "available",
+    "mathlib_available",
+    "version",
+    "checker_backend",
+    "checker_sandbox",
+)
 
 
 def _guest_formal_options() -> dict[str, Any]:
@@ -562,6 +1067,25 @@ def _bootstrap_guest_pipeline(
             return None
         finally:
             _release_guest_derived_action(owner_id)
+
+
+def _guest_run_completed(run_id: str, owner_id: int, workspace: Path) -> None:
+    """Start a finished guest run's bounded derived pipeline immediately.
+
+    Uses exactly the open-time bootstrap (sponsored Kimi only, derived-action
+    rate limit, at most two concurrent guest sidecars); opening the run later
+    remains the fallback when capacity was full at completion time.
+    """
+    record = _run_record_for(run_id)
+    ws = _workspace_for_run(run_id)
+    if not record or ws is None or ws != Path(workspace).resolve():
+        return
+    _bootstrap_guest_pipeline(
+        {"id": int(owner_id), "guest": True}, run_id, ws, record
+    )
+
+
+job_manager.set_guest_completion_hook(_guest_run_completed)
 
 
 def _with_base(path: str, base_path: str | None = None) -> str:
@@ -730,6 +1254,17 @@ def _read_run_record_at(parent: Path, name: str) -> dict | None:
     return value if isinstance(value, dict) else None
 
 
+def _derived_record_for(run_id: str) -> dict | None:
+    """The run record as Lean and graph work sees it.
+
+    A Max run (Claude Code + Codex) does derived work on its worker route, the
+    linked Codex account; every other record is returned unchanged.
+    """
+    from agent_monitor import cgm_max
+
+    return cgm_max.formal_view(_run_record_for(run_id))
+
+
 def _run_record_for(run_id: str) -> dict | None:
     """The bounded cached run record for a validated run id, if readable."""
     if (
@@ -893,14 +1428,95 @@ def _save_sandbox_proof(
     }
 
 
+def _live_writes(data: dict) -> str:
+    """The latest non-tool agent writes of a run (its live Sandbox text)."""
+    writes: list[str] = []
+    longest = ""
+    for agent in data.get("agents") or []:
+        out = str(agent.get("output") or "").strip()
+        if not out:
+            continue
+        if len(out) > len(longest):
+            longest = out
+        role = str(agent.get("role") or "").lower()
+        stage = str(agent.get("pipeline_stage") or "").lower()
+        if role in {"tools", "tool", "exec"} or stage == "act":
+            continue
+        if out.lower().startswith("edited:"):
+            continue
+        writes.append(out)
+    return "\n\n---\n\n".join(writes[-12:]) if writes else longest
+
+
+def _https_link(value: object) -> str | None:
+    text = str(value or "").strip()
+    return text if text.startswith("https://") and len(text) <= 2000 else None
+
+
+def _analysis_preview(run_id: str, data: dict) -> dict:
+    """The Sandbox of an Analyze run: ``analysis/report.md`` (live progress
+    until it exists).  Never anything under ``analysis/source/``; the owner
+    opens the manuscript through ``source_url`` (the link) or ``source_file``
+    (a pasted or uploaded file, via /api/workspace/<id>/file)."""
+    report = ""
+    revision = "missing"
+    mtime = 0.0
+    source_file = None
+    ws = _workspace_for_run(run_id)
+    if ws:
+        path = _workspace_target(ws, "analysis/report.md")
+        if path is not None and path.is_file():
+            try:
+                report = path.read_text(encoding="utf-8", errors="replace")[:400_000]
+                revision = _file_revision(path)
+                mtime = path.stat().st_mtime
+            except OSError:
+                report = ""
+        manuscript = _workspace_target(ws, "analysis/manuscript.json")
+        try:
+            root_file = (
+                json.loads(manuscript.read_text(encoding="utf-8")).get("root_file")
+                if manuscript is not None and manuscript.is_file() and manuscript.stat().st_size < 4_000_000
+                else None
+            )
+        except (OSError, ValueError, AttributeError):
+            root_file = None
+        if isinstance(root_file, str) and root_file and ".." not in root_file.split("/"):
+            candidate = _workspace_target(ws, f"analysis/source/{root_file}")
+            if candidate is not None and candidate.is_file():
+                source_file = f"analysis/source/{root_file}"
+    block = data.get("analyze") if isinstance(data.get("analyze"), dict) else {}
+    source = block.get("source") if isinstance(block.get("source"), dict) else {}
+    live = "" if report else _live_writes(data)
+    return {
+        "kind": "analysis",
+        "text": report or live,
+        "source": "analysis/report.md" if report else ("live" if live else ""),
+        "has_report": bool(report),
+        "has_proof_md": False,
+        "has_proof_tex": False,
+        "editable": False,
+        "revision": revision,
+        "mtime": mtime,
+        "source_url": _https_link(source.get("resolved_url") or source.get("input_url")),
+        "source_file": source_file,
+        "title": str(source.get("title") or "")[:300],
+    }
+
+
 def _sandbox_preview(run_id: str, data: dict | None) -> dict:
     """Proof.md if it exists, otherwise the latest non-tool agent writes.
 
     The sandbox tab used to wait for a separate /files round-trip and stayed
     blank for the whole run. Folding the draft into /api/run makes preview
-    follow the same payload the HITL panel already uses.
+    follow the same payload the HITL panel already uses.  An Analyze run
+    previews its report instead (it has no proof).
     """
     data = data or {}
+    from agent_monitor import analyze_runs
+
+    if analyze_runs.is_analyze_record(data):
+        return _analysis_preview(run_id, data)
     proof_md = ""
     proof_revision = "missing"
     proof_mtime = 0.0
@@ -919,22 +1535,7 @@ def _sandbox_preview(run_id: str, data: dict | None) -> dict:
             (target := _workspace_target(ws, name)) is not None and target.is_file()
             for name in ("proof.tex", "proof.pdf")
         )
-    writes: list[str] = []
-    longest = ""
-    for agent in data.get("agents") or []:
-        out = str(agent.get("output") or "").strip()
-        if not out:
-            continue
-        if len(out) > len(longest):
-            longest = out
-        role = str(agent.get("role") or "").lower()
-        stage = str(agent.get("pipeline_stage") or "").lower()
-        if role in {"tools", "tool", "exec"} or stage == "act":
-            continue
-        if out.lower().startswith("edited:"):
-            continue
-        writes.append(out)
-    live_text = "\n\n---\n\n".join(writes[-12:]) if writes else longest
+    live_text = _live_writes(data)
     text = proof_md or live_text
     source = "proof.md" if proof_md else ("live" if live_text else "")
     return {
@@ -945,6 +1546,33 @@ def _sandbox_preview(run_id: str, data: dict | None) -> dict:
         "revision": proof_revision,
         "mtime": proof_mtime,
     }
+
+
+def _refresh_analyze_block(data: dict, ws: Path | None) -> None:
+    """An Analyze record shows ``run["analyze"]`` (never ``run["analysis"]``,
+    the Monitor block).  A finished analysis whose stored block lacks its
+    summary (written before a restart, say) is completed from the workspace;
+    a running one is left as stored."""
+    from agent_monitor import analyze_runs
+
+    if not analyze_runs.is_analyze_record(data):
+        return
+    data["run_kind"] = "analyze"
+    block = data.get("analyze") if isinstance(data.get("analyze"), dict) else {}
+    data["analyze"] = block
+    if ws is None or block.get("summary") or str(data.get("status") or "") == "running":
+        return
+    from agent_monitor.analyze import record as analyze_record
+
+    try:
+        fresh = analyze_record.run_block(ws)
+    except Exception:  # noqa: BLE001 - the stored block stays
+        fresh = None
+    if fresh:
+        for key in ("recheck", "rechecks"):
+            if block.get(key):
+                fresh[key] = block[key]
+        data["analyze"] = fresh
 
 
 def _list_workspace_files(ws: Path) -> list[dict]:
@@ -1027,10 +1655,16 @@ def _compile_workspace_pdf(ws: Path, tex_rel: str) -> Path | None:
     return None
 
 
+# Content types an HTML form can submit cross-site without a CORS preflight.
+_FORM_CONTENT_TYPES = frozenset(
+    {"application/x-www-form-urlencoded", "multipart/form-data", "text/plain"}
+)
+
 # Paths reachable without a session.
 _PUBLIC_PATHS = {
     "/login",
     "/reset-password",
+    "/verify-email",
     "/health",
     "/api/auth/login",
     "/api/auth/register",
@@ -1040,12 +1674,58 @@ _PUBLIC_PATHS = {
     "/api/auth/forgot-password",
     "/api/auth/reset-password",
     "/api/auth/verify-reset-token",
+    "/api/auth/verify-email",
+    "/api/auth/resend-verification",
 }
 
 
 class Handler(RunSharingMixin, ProjectsMixin, ResearchMixin, BaseHTTPRequestHandler):
+    # Socket timeout for each blocking read/write: a client that stalls a
+    # request (or its body) loses the connection instead of pinning a thread
+    # and its buffers forever.  Longer than Caddy's 2-minute upstream
+    # keep-alive, so the proxy always retires idle connections first.
+    timeout = 300
+
     def log_message(self, fmt, *args):  # noqa: A003
-        print(f"[console] {self.address_string()} {fmt % args}")
+        print(f"[console] {self.address_string()} {fmt % args}", flush=True)
+
+    def handle_one_request(self):
+        try:
+            super().handle_one_request()
+        except (BrokenPipeError, ConnectionResetError):
+            # The client (or Caddy) went away before the reply was written;
+            # nothing more can be sent on this connection, and a traceback
+            # per disconnect only buries real errors in the journal.
+            self.close_connection = True
+
+    def _linger_after_refusal(self, declared_length: int) -> None:
+        """Close gracefully after answering before the request body was read.
+
+        The reply is already written: half-close our side so the peer sees the
+        complete response, then read and discard (bounded in bytes and time)
+        whatever of the declared body is still arriving, so the final close
+        does not turn into a connection reset that truncates the reply.
+        """
+        self.close_connection = True
+        try:
+            self.wfile.flush()
+            self.connection.shutdown(socket.SHUT_WR)
+        except OSError:
+            return
+        remaining = min(max(0, int(declared_length or 0)), REFUSED_BODY_DRAIN_BYTES)
+        deadline = time.monotonic() + REFUSED_BODY_DRAIN_SECONDS
+        try:
+            while remaining > 0:
+                left = deadline - time.monotonic()
+                if left <= 0:
+                    break
+                self.connection.settimeout(min(left, 1.0))
+                chunk = self.rfile.read1(min(65536, remaining))
+                if not chunk:
+                    break
+                remaining -= len(chunk)
+        except (OSError, ValueError):
+            pass
 
     def log_request(self, code="-", size="-"):
         """Log request paths without query strings that may contain reset tokens."""
@@ -1096,7 +1776,7 @@ class Handler(RunSharingMixin, ProjectsMixin, ResearchMixin, BaseHTTPRequestHand
     def _issue_guest(self, *, replace_account_token: str | None = None) -> dict | None:
         from agent_monitor import auth
 
-        available, retry_after = _reserve_guest_session_slot()
+        available, retry_after = _reserve_guest_session_slot(self._guest_client_key())
         if not available:
             self._send(
                 429,
@@ -1180,6 +1860,48 @@ class Handler(RunSharingMixin, ProjectsMixin, ResearchMixin, BaseHTTPRequestHand
         )
         return True
 
+    def _deny_member(
+        self, user: dict, capability: str, *, explanation: str | None = None
+    ) -> bool:
+        """Reject host-level capabilities for self-registered accounts."""
+        if not account_policy.is_member(user):
+            return False
+        self._send(
+            403,
+            json.dumps(
+                {
+                    "ok": False,
+                    "error": explanation
+                    or f"{capability} is limited to the site administrator",
+                }
+            ),
+            headers={"Cache-Control": "no-store"},
+        )
+        return True
+
+    def _admit_member_run(self, user: dict) -> bool:
+        if not account_policy.is_member(user):
+            return True
+        error, retry_after = _reserve_member_run_slot(int(user["id"]))
+        if error:
+            self._send(429, json.dumps({"error": error}), headers={"Retry-After": str(retry_after)})
+            return False
+        return True
+
+    def _release_member_run(self, user: dict) -> None:
+        """Return an admitted member start when the request started nothing."""
+        if account_policy.is_member(user):
+            _release_member_run_slot(int(user["id"]))
+
+    def _admit_member_message(self, user: dict) -> bool:
+        if not account_policy.is_member(user):
+            return True
+        error, retry_after = _reserve_member_message(int(user["id"]))
+        if error:
+            self._send(429, json.dumps({"error": error}), headers={"Retry-After": str(retry_after)})
+            return False
+        return True
+
     def _admit_guest_derived_action(self, user: dict, workspace: Path) -> bool:
         if not user.get("guest"):
             return True
@@ -1193,7 +1915,9 @@ class Handler(RunSharingMixin, ProjectsMixin, ResearchMixin, BaseHTTPRequestHand
                 headers={"Retry-After": "20"},
             )
             return False
-        error, retry_after = _reserve_guest_derived_action(int(user["id"]))
+        error, retry_after = _reserve_guest_derived_action(
+            int(user["id"]), self._guest_client_key()
+        )
         if error:
             self._send(
                 429,
@@ -1203,11 +1927,32 @@ class Handler(RunSharingMixin, ProjectsMixin, ResearchMixin, BaseHTTPRequestHand
             return False
         return True
 
+    def _guest_client_key(self) -> str | None:
+        peer = self.client_address[0] if self.client_address else None
+        return guest_client_key(peer, self.headers.get("X-Forwarded-For"))
+
     def _deny_run_compilation(self, user: dict, run_id: str) -> bool:
-        """Never execute TeX originating from an anonymous guest run."""
+        """Never execute TeX originating from an anonymous guest run, or a
+        third-party manuscript (an Analyze run's sources are never compiled)."""
         if user.get("guest"):
             return self._deny_guest(user, "server-side proof compilation")
+        if self._deny_member(user, "Server-side compilation"):
+            return True
         record = _run_record_for(run_id) or {}
+        from agent_monitor import analyze_runs
+
+        if analyze_runs.is_analyze_record(record):
+            self._send(
+                403,
+                json.dumps(
+                    {
+                        "ok": False,
+                        "error": "Analyze runs are never compiled: their TeX is a third-party manuscript",
+                    }
+                ),
+                headers={"Cache-Control": "no-store"},
+            )
+            return True
         owner = str(record.get("owner") or "").strip().lower()
         if record.get("guest") or owner.endswith("@public.local"):
             self._send(
@@ -1222,6 +1967,302 @@ class Handler(RunSharingMixin, ProjectsMixin, ResearchMixin, BaseHTTPRequestHand
             )
             return True
         return False
+
+    # ── Analyze (run_kind "analyze"; see agent_monitor/analyze_runs.py) ──
+
+    def _analysis_lean_request(
+        self, ws: Path, action: str, body: dict, *, user: dict | None = None, record: dict | None = None
+    ) -> dict | None:
+        """Validate a Lean action on an Analyze run; Verify returns the
+        statement-only inputs for the selected ``targets`` (default: the main
+        results).  Formalizing is model work, so the Analyze switches apply
+        (compiling or checking existing Lean is not)."""
+        from agent_monitor import analyze_runs
+        from agent_monitor.analyze import graph as analysis_graph
+
+        if action in {"compile", "check"}:
+            return None
+        if action not in {"verify", "generate"}:
+            raise analyze_runs.AnalyzeRequestError(
+                "An analysis formalizes the statements of selected results (Verify with targets), "
+                "or compiles and checks its Lean source"
+            )
+        if body.get("prove") not in (None, False):
+            raise analyze_runs.AnalyzeRequestError(
+                "Analyze formalizes statements only; proofs are not attempted"
+            )
+        refusal = analyze_runs.derived_work_error(user, record)
+        if refusal is not None:
+            raise refusal
+        graph = analysis_graph.load(ws)
+        if graph is None:
+            raise analyze_runs.AnalyzeRequestError(
+                "The analysis has not published its graph yet", status=409
+            )
+        targets = body.get("targets")
+        chosen = (
+            analyze_runs.default_targets(graph)
+            if targets is None
+            else analyze_runs.validate_targets(graph, targets)
+        )
+        if not chosen:
+            raise analyze_runs.AnalyzeRequestError("Select results in the DAG to formalize")
+        return analyze_runs.lean_inputs(graph, chosen)
+
+    def _send_analyze_error(self, exc: Exception) -> None:
+        status = int(getattr(exc, "status", 400) or 400)
+        retry_after = getattr(exc, "retry_after", None)
+        headers = {"Cache-Control": "no-store"}
+        if retry_after:
+            headers["Retry-After"] = str(int(retry_after))
+        self._send(status, json.dumps({"error": str(exc)}, ensure_ascii=False), headers=headers)
+
+    def _refuse_analyze_continuation(self, run_id: str) -> bool:
+        """Continue and chat do not apply to an analysis (400, plain message)."""
+        from agent_monitor import analyze_runs
+
+        if analyze_runs.is_analyze_record(_run_record_for(run_id)):
+            self._send(400, json.dumps({"error": analyze_runs.CONTINUE_REFUSAL}))
+            return True
+        return False
+
+    def _start_analyze_run(self, body: dict, user: dict) -> None:
+        """``POST /api/runs`` with ``run_kind: "analyze"``.
+
+        Validation by role first (plain 400s), then the sponsored capacity
+        (429) and the guest and member run admission, then ``start_job``.
+        """
+        from agent_monitor import analyze_runs
+
+        guest = bool(user.get("guest"))
+        requested_model = body.get("model") or None
+        try:
+            refusal = analyze_runs.availability_error(user)
+            if refusal is not None:
+                raise refusal
+            analyze_runs.normalize_request(body, user)
+            if requested_model is not None and not isinstance(requested_model, str):
+                raise analyze_runs.AnalyzeRequestError("model must be text")
+            if guest:
+                from agent_monitor.settings import validate_guest_model
+
+                if requested_model is not None:
+                    try:
+                        requested_model = validate_guest_model(requested_model)
+                    except ValueError as exc:
+                        raise analyze_runs.AnalyzeRequestError(str(exc)) from None
+                capacity = analyze_runs.GATE.capacity_error(guest=True)
+                if capacity is not None:
+                    raise capacity
+        except analyze_runs.AnalyzeRequestError as exc:
+            self._send_analyze_error(exc)
+            return
+
+        def start() -> dict:
+            return research_projects.start_run(
+                body.get("project_id"),
+                user["id"],
+                body.get("project_task"),
+                lambda: job_manager.start_job(
+                    engine="analyze",
+                    run_kind="analyze",
+                    source=body.get("source"),
+                    analyze=body.get("analyze"),
+                    attachments=body.get("attachments"),
+                    # Analyze formalizes only when asked (statements only).
+                    formalize=body.get("formalize") is True,
+                    model=requested_model,
+                    user=user,
+                    use_subagents=False,
+                    auth_route=(str(body.get("auth_route") or "").strip() or None),
+                    reasoning_effort=(str(body.get("reasoning_effort") or "").strip() or None),
+                    speed_mode=(str(body.get("speed_mode") or "").strip() or None),
+                ),
+            )
+
+        try:
+            if guest:
+                from agent_monitor.auth import release_guest_run, reserve_guest_run
+
+                user_id = int(user["id"])
+                client = self._guest_client_key()
+                with _GUEST_RUN_START_LOCK:
+                    error, retry_after = _guest_analyze_capacity(user_id, client, reserve=False)
+                    if error:
+                        self._send(429, json.dumps({"error": error}), headers={"Retry-After": str(retry_after)})
+                        return
+                    capacity_error, retry_after = _reserve_guest_run_slot(user_id, client)
+                    if capacity_error:
+                        self._send(
+                            429,
+                            json.dumps({"error": capacity_error, "guest_policy": guest_policy(user),
+                                        "login_required": guest_policy(user)["login_required"]}),
+                            headers={"Retry-After": str(retry_after)},
+                        )
+                        return
+                    if not reserve_guest_run(user_id, guest_runs_per_session(),
+                                             previous_runs=job_manager.persisted_run_count(user_id)):
+                        self._send(403, json.dumps({"error": "Guest limit reached. Sign in to continue",
+                                                   "login_required": True, "guest_policy": guest_policy(user)}))
+                        return
+                    _guest_analyze_capacity(user_id, client, reserve=True)
+                    try:
+                        job = start()
+                    except Exception:
+                        release_guest_run(user_id)
+                        _release_guest_analyze(user_id, client)
+                        raise
+                    if client is not None and job.get("run_id"):
+                        _GUEST_RUN_CLIENTS[str(job["run_id"])] = client
+                    job = {**job, "guest_policy": guest_policy(user)}
+            else:
+                member_error = account_policy.member_run_error(
+                    user, "analyze", model=requested_model, auth_route=body.get("auth_route")
+                )
+                if member_error:
+                    self._send(403, json.dumps({
+                        "error": member_error,
+                        "allowed_engines": sorted(account_policy.member_engine_allowlist()),
+                    }))
+                    return
+                if not self._admit_member_run(user):
+                    return
+                try:
+                    job = start()
+                except Exception:
+                    self._release_member_run(user)
+                    raise
+        except analyze_runs.AnalyzeRequestError as exc:
+            self._send_analyze_error(exc)
+            return
+        except Exception as exc:  # noqa: BLE001
+            self._send(400, json.dumps({"error": str(exc)}, ensure_ascii=False))
+            return
+        self._send(200, json.dumps(job))
+
+    def _resolve_analyze_link(self, body: dict, user: dict) -> None:
+        """``POST /api/analyze/resolve {url}``: metadata only, at most 10 s."""
+        from agent_monitor import analyze_runs
+
+        refusal = analyze_runs.availability_error(user)
+        if refusal is not None:
+            self._send_analyze_error(refusal)
+            return
+        url = body.get("url")
+        if not isinstance(url, str) or not url.strip():
+            self._send(400, json.dumps({"error": "Paste a link to preview"}))
+            return
+        if len(url) > analyze_runs.MAX_URL_CHARS:
+            self._send(400, json.dumps({"error": "The link is too long"}))
+            return
+        error, retry_after = _reserve_analyze_resolve(user, self._guest_client_key())
+        if error:
+            self._send(429, json.dumps({"error": error}), headers={"Retry-After": str(retry_after)})
+            return
+        result = analyze_runs.resolve_link(url.strip(), role=analyze_runs.role_of(user))
+        self._send(200, json.dumps(result, ensure_ascii=False), headers={"Cache-Control": "no-store"})
+
+    def _start_analysis_recheck(self, rid: str, body: dict, user: dict) -> None:
+        """``POST /api/run/<id>/analysis/recheck {node_id}`` (owner or admin)."""
+        from agent_monitor import analyze_runs
+
+        node_id = body.get("node_id")
+        if not isinstance(node_id, str) or not node_id.strip():
+            self._send(400, json.dumps({"error": "node_id is required"}))
+            return
+        ws = _workspace_for_run(rid)
+        if ws is None:
+            self._send(404, json.dumps({"error": "run not found"}))
+            return
+        record = _run_record_for(rid)
+        if not analyze_runs.is_analyze_record(record):
+            self._send(400, json.dumps({"error": "Only Analyze runs have nodes to re-check"}))
+            return
+        slot: _GuestDerivedSlot | None = None
+        member_admitted = False
+        guest_window: tuple[int, str | None] | None = None
+        if user.get("guest"):
+            # A guest re-check spends sponsored calls from the guest Analyze
+            # allowance: a few per analysis (jobs re-checks this under the
+            # launch claim), per hour and per network, then the guest derived
+            # limits like any Formal or DAG action.
+            if job_manager.recheck_count(record) >= analyze_runs.GUEST_RECHECKS_PER_ANALYSIS:
+                self._send(403, json.dumps({
+                    "error": analyze_runs.GUEST_RECHECK_LIMIT_MESSAGE.format(
+                        limit=analyze_runs.GUEST_RECHECKS_PER_ANALYSIS),
+                    "login_required": True,
+                }))
+                return
+            user_id, client = int(user["id"]), self._guest_client_key()
+            error, retry_after = _reserve_guest_recheck(user_id, client)
+            if error:
+                self._send(429, json.dumps({"error": error}), headers={"Retry-After": str(retry_after)})
+                return
+            guest_window = (user_id, client)
+            if not self._admit_guest_derived_action(user, ws):
+                _release_guest_recheck(*guest_window)
+                return
+            slot = _GuestDerivedSlot(int(user["id"]))
+        elif account_policy.is_member(user):
+            # It spends the member's key or sponsored budget like a run start.
+            if not self._admit_member_run(user):
+                return
+            member_admitted = True
+
+        def refused() -> None:
+            # Nothing started: the member's hourly start and the guest's
+            # re-check allowance come back.
+            if member_admitted:
+                self._release_member_run(user)
+            if guest_window is not None:
+                _release_guest_recheck(*guest_window)
+
+        try:
+            result = job_manager.start_analysis_recheck(
+                rid, node_id.strip(), user=user, on_exit=slot.release if slot is not None else None
+            )
+        except analyze_runs.AnalyzeRequestError as exc:
+            refused()
+            self._send_analyze_error(exc)
+            return
+        except FileNotFoundError:
+            refused()
+            self._send(404, json.dumps({"error": "run not found"}))
+            return
+        except ValueError as exc:
+            refused()
+            self._send(400, json.dumps({"error": str(exc)}, ensure_ascii=False))
+            return
+        except Exception as exc:  # noqa: BLE001
+            refused()
+            self._send(500, json.dumps({"error": f"The re-check could not start: {exc}"}, ensure_ascii=False))
+            return
+        self._send(200, json.dumps(result, ensure_ascii=False))
+
+    def _analysis_graph_payload(self, rid: str, ws: Path, kind: str) -> dict:
+        """``kind=analysis``: the manuscript graph; ``kind=informal``: its
+        deterministic projection (no model call either way)."""
+        from agent_monitor import proof_graph
+        from agent_monitor.analyze import graph as analysis_graph
+
+        record = _run_record_for(rid) or {}
+        if kind == "informal":
+            return proof_graph.load_or_build_informal(ws, record) or {"status": "none", "kind": "informal"}
+        graph = analysis_graph.load(ws)
+        if graph is None:
+            return {"status": "none", "kind": "analysis"}
+        block = record.get("analyze") if isinstance(record.get("analyze"), dict) else {}
+        return {
+            "status": "ready",
+            "kind": "analysis",
+            "schema": graph.get("schema"),
+            "generated_at": graph.get("generated_at"),
+            "source": "analysis/analysis_graph.json",
+            "basis": analysis_graph.BASIS,
+            "certificate": False,
+            "summary": block.get("summary"),
+            "graph": graph,
+        }
 
     def _session_cookie_header(
         self, token: str | None, *, guest: bool = False
@@ -1260,7 +2301,7 @@ class Handler(RunSharingMixin, ProjectsMixin, ResearchMixin, BaseHTTPRequestHand
             self.end_headers()
         return None
 
-    def _send_html(self, html: str, code: int = 200):
+    def _send_html(self, html: str, code: int = 200, headers: dict[str, str] | None = None):
         self._send(
             code,
             _inject_base(html, self._request_base_path()),
@@ -1270,6 +2311,7 @@ class Handler(RunSharingMixin, ProjectsMixin, ResearchMixin, BaseHTTPRequestHand
                 "Pragma": "no-cache",
                 "Expires": "0",
                 "CDN-Cache-Control": "no-store",
+                **(headers or {}),
             },
         )
 
@@ -1322,6 +2364,13 @@ class Handler(RunSharingMixin, ProjectsMixin, ResearchMixin, BaseHTTPRequestHand
             return _is_operator_user(user)  # legacy runs belong to the operator
         return owner == user.get("id") or _is_operator_user(user)
 
+    def _is_run_owner(self, run_id: str, user: dict) -> bool:
+        """Owner or operator only: project membership grants access, not deletion."""
+        owner = job_manager.run_owner(run_id)
+        if owner is None:
+            return _is_operator_user(user)
+        return owner == user.get("id") or _is_operator_user(user)
+
     def _send_bytes(self, code: int, body: bytes, ctype: str, *, download_name: str | None = None, headers: dict[str, str] | None = None):
         self.send_response(code)
         self.send_header("Content-Type", ctype)
@@ -1333,6 +2382,48 @@ class Handler(RunSharingMixin, ProjectsMixin, ResearchMixin, BaseHTTPRequestHand
             self.send_header(k, v)
         self.end_headers()
         self.wfile.write(body)
+
+    def _reject_cross_origin_write(self) -> bool:
+        """Refuse a state-changing request that a browser sent from elsewhere.
+
+        Runs before any body is read, for every POST and DELETE (including the
+        unauthenticated cookie-setting auth routes, where SameSite=Lax gives
+        no protection). A browser always labels such requests: a foreign
+        ``Origin`` or ``Sec-Fetch-Site: cross-site``/``same-site``. HTML forms
+        can only send the three form content types, which no console client
+        uses. Non-browser clients (no Origin, no Sec-Fetch-Site) are unaffected.
+        """
+        site = (self.headers.get("Sec-Fetch-Site") or "").strip().lower()
+        origin = self.headers.get("Origin")
+        foreign = site in {"cross-site", "same-site"}
+        if origin is not None:
+            try:
+                origin_host = urlsplit(origin.strip()).netloc.lower()
+            except ValueError:
+                origin_host = ""
+            host = (self.headers.get("Host") or "").strip().lower()
+            if not origin_host or origin_host != host:
+                foreign = True
+        if foreign:
+            self.close_connection = True
+            self._send(
+                403,
+                json.dumps({"error": "Cross-origin requests are not accepted; use the console"}),
+                headers={"Cache-Control": "no-store"},
+            )
+            return True
+        if (
+            self.headers.get("Content-Type") is not None
+            and self.headers.get_content_type() in _FORM_CONTENT_TYPES
+        ):
+            self.close_connection = True
+            self._send(
+                415,
+                json.dumps({"error": "Expected application/json"}),
+                headers={"Cache-Control": "no-store"},
+            )
+            return True
+        return False
 
     def do_OPTIONS(self):  # noqa: N802
         self._send(204, "")
@@ -1347,7 +2438,7 @@ class Handler(RunSharingMixin, ProjectsMixin, ResearchMixin, BaseHTTPRequestHand
         if self._research_route(path, "GET") or self._sharing_get(path) or self._projects_route(path, "GET"):
             return
 
-        if path.rstrip("/") in ("/login", "/reset-password"):
+        if path.rstrip("/") in ("/login", "/reset-password", "/verify-email"):
             if (
                 path.rstrip("/") == "/login"
                 and PUBLIC_MODE
@@ -1358,7 +2449,13 @@ class Handler(RunSharingMixin, ProjectsMixin, ResearchMixin, BaseHTTPRequestHand
                 self.end_headers()
                 return
             html_path = WEB_DIR / "login.html"
-            self._send_html(html_path.read_text(encoding="utf-8"))
+            # Sign in with Google identifies the page by its origin, which a
+            # no-referrer policy withholds; cross-origin requests still get only
+            # the origin, never the path or a token in the query string.
+            self._send_html(
+                html_path.read_text(encoding="utf-8"),
+                headers={"Referrer-Policy": "strict-origin-when-cross-origin"},
+            )
             return
 
         if path == "/api/auth/verify-reset-token":
@@ -1375,7 +2472,13 @@ class Handler(RunSharingMixin, ProjectsMixin, ResearchMixin, BaseHTTPRequestHand
             return
 
         if path == "/api/auth/me":
-            from agent_monitor.auth import google_client_id, registration_open
+            from agent_monitor.auth import (
+                email_delivery_configured,
+                email_verification_required,
+                google_client_id,
+                registration_email_suffixes,
+                registration_open,
+            )
 
             user = self._current_user()
             if user is None and PUBLIC_MODE and guest_access_enabled():
@@ -1392,6 +2495,9 @@ class Handler(RunSharingMixin, ProjectsMixin, ResearchMixin, BaseHTTPRequestHand
                         "guest_access": guest_access_enabled(),
                         "guest_policy": guest_policy(user),
                         "registration_open": registration_open(),
+                        "registration_email_suffixes": list(registration_email_suffixes()),
+                        "email_verification_required": email_verification_required(),
+                        "password_reset_available": email_delivery_configured(),
                     }
                 ),
                 headers={"Cache-Control": "no-store"},
@@ -1447,12 +2553,33 @@ class Handler(RunSharingMixin, ProjectsMixin, ResearchMixin, BaseHTTPRequestHand
             return
 
         if path == "/api/engines":
+            from agent_monitor import sponsored_kimi_client
             from agent_monitor.engines_registry import list_engines
 
-            engines = list_engines()
+            engines = sponsored_kimi_client.with_degraded_notice(list_engines(), user)
             if user.get("guest"):
                 allowed = guest_engine_allowlist()
-                engines = [{**engine, "requires_login": engine.get("id") not in allowed} for engine in engines]
+                # Signing up gives a member account, so an engine members
+                # cannot run is administrator-only, not "after sign-in".
+                after_sign_in = allowed | account_policy.member_engine_allowlist()
+                engines = [
+                    {**engine, "requires_login": engine.get("id") not in allowed}
+                    if engine.get("id") in after_sign_in
+                    else account_policy.admin_only_engine_view(engine)
+                    for engine in engines
+                ]
+            elif account_policy.is_member(user):
+                # Local harnesses are administrator-only; the rest bill an API
+                # key (the CGM harness only the member's own, never Kimi K3).
+                engines = [account_policy.member_engine_view(engine) for engine in engines]
+            # The Analyze engine carries this viewer's Analyze policy, so the
+            # browser offers the mode only as this server accepts it.
+            engines = [
+                {**engine, "analyze": analyze_policy(user)}
+                if engine.get("id") == "analyze"
+                else engine
+                for engine in engines
+            ]
             self._send(200, json.dumps({"engines": engines}))
             return
 
@@ -1519,6 +2646,9 @@ class Handler(RunSharingMixin, ProjectsMixin, ResearchMixin, BaseHTTPRequestHand
         if path == "/api/settings/codex/status":
             if self._deny_guest(user, "account connections"):
                 return
+            if account_policy.is_member(user):
+                self._send(200, json.dumps(_member_subscription_status("codex"), ensure_ascii=False))
+                return
             from agent_monitor import codex_login
 
             self._send(200, json.dumps(codex_login.status(user["id"]), ensure_ascii=False))
@@ -1526,6 +2656,9 @@ class Handler(RunSharingMixin, ProjectsMixin, ResearchMixin, BaseHTTPRequestHand
 
         if path == "/api/settings/codex/login/poll":
             if self._deny_guest(user, "account connections"):
+                return
+            if account_policy.is_member(user):
+                self._send(200, json.dumps(_member_subscription_status("codex"), ensure_ascii=False))
                 return
             from agent_monitor import codex_login
 
@@ -1535,6 +2668,9 @@ class Handler(RunSharingMixin, ProjectsMixin, ResearchMixin, BaseHTTPRequestHand
         if path == "/api/settings/claude/status":
             if self._deny_guest(user, "account connections"):
                 return
+            if account_policy.is_member(user):
+                self._send(200, json.dumps(_member_subscription_status("claude"), ensure_ascii=False))
+                return
             from agent_monitor import claude_login
 
             self._send(200, json.dumps(claude_login.status(user["id"]), ensure_ascii=False))
@@ -1542,6 +2678,9 @@ class Handler(RunSharingMixin, ProjectsMixin, ResearchMixin, BaseHTTPRequestHand
 
         if path == "/api/settings/claude/login/poll":
             if self._deny_guest(user, "account connections"):
+                return
+            if account_policy.is_member(user):
+                self._send(200, json.dumps(_member_subscription_status("claude"), ensure_ascii=False))
                 return
             from agent_monitor import claude_login
 
@@ -1589,8 +2728,16 @@ class Handler(RunSharingMixin, ProjectsMixin, ResearchMixin, BaseHTTPRequestHand
                 self._send(404, json.dumps({"error": "run not found"}))
                 return
             kind = (qs.get("kind") or ["informal"])[0].strip().lower()
-            if kind not in {"informal", "formal", "engine"}:
+            if kind not in {"informal", "formal", "engine", "analysis"}:
                 kind = "informal"
+            from agent_monitor import analyze_runs
+
+            if analyze_runs.is_analyze_record(_run_record_for(rid)) and kind in {"informal", "analysis"}:
+                self._send(200, json.dumps(self._analysis_graph_payload(rid, ws, kind), ensure_ascii=False))
+                return
+            if kind == "analysis":
+                self._send(400, json.dumps({"error": "This run has no manuscript analysis"}))
+                return
             try:
                 if kind == "engine":
                     from agent_monitor import engine_graph
@@ -1605,7 +2752,9 @@ class Handler(RunSharingMixin, ProjectsMixin, ResearchMixin, BaseHTTPRequestHand
                     if kind == "formal":
                         cached = proof_graph.load_or_parse_formal(ws)
                     else:
-                        cached = proof_graph.load_cached(ws, kind="informal")
+                        # A CGM fact DAG yields the informal DAG without a
+                        # model call; otherwise only the cached graph is read.
+                        cached = proof_graph.load_or_build_informal(ws)
             except ValueError as exc:
                 self._send(400, json.dumps({"error": str(exc)}, ensure_ascii=False))
                 return
@@ -1613,11 +2762,18 @@ class Handler(RunSharingMixin, ProjectsMixin, ResearchMixin, BaseHTTPRequestHand
             return
 
         if path == "/api/lean/status":
-            if self._deny_guest(user, "Lean toolchain diagnostics"):
-                return
             from agent_monitor import lean_verify
 
+            toolchain = lean_verify.toolchain_status()
             if user.get("guest"):
+                # Read-only and host-neutral: whether the sandboxed Lean broker
+                # is installed and which fixed toolchain it pins, never local
+                # paths or harness discovery (and no guest action is spent).
+                toolchain = {
+                    key: toolchain[key]
+                    for key in _GUEST_LEAN_STATUS_FIELDS
+                    if key in toolchain
+                }
                 formal_options = _guest_formal_options()
             else:
                 model_options = lean_verify.harness_model_options(user)
@@ -1634,7 +2790,7 @@ class Handler(RunSharingMixin, ProjectsMixin, ResearchMixin, BaseHTTPRequestHand
                 200,
                 json.dumps(
                     {
-                        **lean_verify.toolchain_status(),
+                        **toolchain,
                         **formal_options,
                     },
                     ensure_ascii=False,
@@ -1650,7 +2806,7 @@ class Handler(RunSharingMixin, ProjectsMixin, ResearchMixin, BaseHTTPRequestHand
             if not ws or not self._owns_run(rid, user):
                 self._send(404, json.dumps({"error": "run not found"}))
                 return
-            run_record = _run_record_for(rid)
+            run_record = _derived_record_for(rid)
             cached = lean_verify.load_cached(ws) or {"status": "none"}
             try:
                 if user.get("guest"):
@@ -1771,21 +2927,47 @@ class Handler(RunSharingMixin, ProjectsMixin, ResearchMixin, BaseHTTPRequestHand
         path = self._resolve_path()
         if path is None:
             return
-        # Authenticate before accepting the larger attachment request bodies.
-        accepts_attachments = path == "/api/runs" or bool(re.fullmatch(r"/api/runs/[^/]+/chat", path))
-        upload_user = self._require_user(path) if accepts_attachments else None
-        if accepts_attachments and upload_user is None:
-            self.close_connection = True
+        if self._reject_cross_origin_write():
             return
+        # Authenticate before accepting the larger attachment request bodies.
+        is_chat = bool(re.fullmatch(r"/api/runs/[^/]+/chat", path))
+        accepts_attachments = path == "/api/runs" or is_chat
         try:
             length = int(self.headers.get("Content-Length") or 0)
         except ValueError:
-            self._send(400, json.dumps({"error": "invalid content length"}))
+            length = None
+        upload_user = self._require_user(path) if accepts_attachments else None
+        if accepts_attachments and upload_user is None:
+            self._linger_after_refusal(length or 0)
             return
-        max_body = research_attachments.MAX_REQUEST_BYTES if accepts_attachments else 1_000_000
+        if is_chat and upload_user.get("guest"):
+            # Refused before the (up to 29 MiB) body is read or parsed.
+            self.close_connection = True
+            self._deny_guest(upload_user, "run continuation")
+            self._linger_after_refusal(length or 0)
+            return
+        if length is None:
+            self.close_connection = True
+            self._send(
+                400,
+                json.dumps({"error": "invalid content length"}),
+                headers={"Connection": "close"},
+            )
+            return
+        if accepts_attachments and not upload_user.get("guest"):
+            max_body = research_attachments.MAX_REQUEST_BYTES
+        elif accepts_attachments:
+            max_body = GUEST_MAX_REQUEST_BYTES
+        else:
+            max_body = 1_000_000
         if length < 0 or length > max_body:
             self.close_connection = True
-            self._send(413, json.dumps({"error": "request body too large"}))
+            self._send(
+                413,
+                json.dumps({"error": "request body too large"}),
+                headers={"Connection": "close"},
+            )
+            self._linger_after_refusal(length)
             return
         raw = self.rfile.read(length) if length else b"{}"
         try:
@@ -1853,6 +3035,15 @@ class Handler(RunSharingMixin, ProjectsMixin, ResearchMixin, BaseHTTPRequestHand
             try:
                 token = None
                 if path == "/api/auth/register":
+                    if auth.registration_open():
+                        admitted, retry_after = _reserve_signup_slot(self._guest_client_key())
+                        if not admitted:
+                            self._send(
+                                429,
+                                json.dumps({"error": "Too many new accounts right now; please try again later"}),
+                                headers={"Retry-After": str(retry_after)},
+                            )
+                            return
                     account = auth.register(
                         str(body.get("email") or ""),
                         str(body.get("password") or ""),
@@ -1872,11 +3063,38 @@ class Handler(RunSharingMixin, ProjectsMixin, ResearchMixin, BaseHTTPRequestHand
             except ValueError as exc:
                 self._send(400, json.dumps({"error": str(exc)}, ensure_ascii=False))
                 return
+            except auth.EmailVerificationRequired as exc:
+                self._send(
+                    403,
+                    json.dumps({"error": str(exc), "verification_required": True, "email": exc.email}, ensure_ascii=False),
+                )
+                return
             except PermissionError as exc:
                 self._send(403, json.dumps({"error": str(exc)}, ensure_ascii=False))
                 return
+            except auth.EmailDeliveryUnavailable as exc:
+                self._send(503, json.dumps({"error": str(exc)}, ensure_ascii=False))
+                return
             except Exception as exc:  # noqa: BLE001
                 self._send(400, json.dumps({"error": f"Sign-in failed: {exc}"}, ensure_ascii=False))
+                return
+            if (
+                path == "/api/auth/register"
+                and auth.email_verification_required()
+                and auth.email_verification_pending(int(account["id"]))
+            ):
+                # The account exists but cannot sign in until its address is confirmed.
+                base_url = self._password_reset_base_url()
+                if base_url:
+                    _enqueue_email_verification(account["email"], base_url)
+                self._send(
+                    200,
+                    json.dumps(
+                        {"ok": True, "verification_required": True, "email": account["email"]},
+                        ensure_ascii=False,
+                    ),
+                    headers={"Cache-Control": "no-store", "Pragma": "no-cache"},
+                )
                 return
             if token is None:
                 token = auth.create_session(int(account["id"]))
@@ -1895,6 +3113,42 @@ class Handler(RunSharingMixin, ProjectsMixin, ResearchMixin, BaseHTTPRequestHand
             auth.destroy_session(self._session_token())
             self._send(200, json.dumps({"ok": True}), headers={"Set-Cookie": self._session_cookie_header(None)})
             return
+        if path == "/api/auth/verify-email":
+            from agent_monitor import auth
+
+            try:
+                result = auth.verify_email(str(body.get("token") or "").strip())
+            except ValueError as exc:
+                self._send(
+                    400,
+                    json.dumps({"ok": False, "error": str(exc)}, ensure_ascii=False),
+                    headers={"Cache-Control": "no-store", "Pragma": "no-cache"},
+                )
+                return
+            self._send(
+                200,
+                json.dumps(result, ensure_ascii=False),
+                headers={"Cache-Control": "no-store", "Pragma": "no-cache"},
+            )
+            return
+
+        if path == "/api/auth/resend-verification":
+            email = (body.get("email") or "").strip().lower()
+            base_url = self._password_reset_base_url()
+            if email and base_url:
+                _enqueue_email_verification(email, base_url)
+            self._send(
+                200,
+                json.dumps(
+                    {
+                        "ok": True,
+                        "message": "If that account still needs verification, a new link is on its way. It can take a few minutes; check your spam folder too.",
+                    }
+                ),
+                headers={"Cache-Control": "no-store", "Pragma": "no-cache"},
+            )
+            return
+
         if path == "/api/auth/forgot-password":
             email = (body.get("email") or "").strip().lower()
             base_url = self._password_reset_base_url()
@@ -1965,6 +3219,18 @@ class Handler(RunSharingMixin, ProjectsMixin, ResearchMixin, BaseHTTPRequestHand
         if user is None:
             return
 
+        if path == "/api/analyze/resolve":
+            self._resolve_analyze_link(body, user)
+            return
+
+        if path.startswith("/api/run/") and path.endswith("/analysis/recheck"):
+            rid = path.removeprefix("/api/run/").removesuffix("/analysis/recheck")
+            if not rid or "/" in rid or not self._is_run_owner(rid, user):
+                self._send(404, json.dumps({"error": "run not found"}))
+                return
+            self._start_analysis_recheck(rid, body, user)
+            return
+
         if path.startswith("/api/library/tools/") and path.endswith("/run"):
             if self._deny_guest(user, "trusted library tools"):
                 return
@@ -2002,6 +3268,13 @@ class Handler(RunSharingMixin, ProjectsMixin, ResearchMixin, BaseHTTPRequestHand
             if rel != "proof.md":
                 self._send(400, json.dumps({"error": "Only proof.md is editable in Sandbox"}))
                 return
+            from agent_monitor import analyze_runs
+
+            if analyze_runs.is_analyze_record(_run_record_for(run_id)):
+                self._send(400, json.dumps({
+                    "error": "An analysis has no editable proof; its report is generated from the manuscript checks",
+                }))
+                return
             content = body.get("content")
             if not isinstance(content, str):
                 self._send(400, json.dumps({"error": "content must be text"}))
@@ -2020,7 +3293,7 @@ class Handler(RunSharingMixin, ProjectsMixin, ResearchMixin, BaseHTTPRequestHand
             return
 
         if path == "/api/agent/config":
-            if self._deny_guest(user, "the shared agent profile"):
+            if not self._require_operator(user):
                 return
             from agent_monitor import agent_config
 
@@ -2035,7 +3308,7 @@ class Handler(RunSharingMixin, ProjectsMixin, ResearchMixin, BaseHTTPRequestHand
             return
 
         if path == "/api/agent/skills":
-            if self._deny_guest(user, "the shared agent profile"):
+            if not self._require_operator(user):
                 return
             from agent_monitor import agent_config
 
@@ -2051,7 +3324,7 @@ class Handler(RunSharingMixin, ProjectsMixin, ResearchMixin, BaseHTTPRequestHand
             return
 
         if path == "/api/agent/memory":
-            if self._deny_guest(user, "the shared agent profile"):
+            if not self._require_operator(user):
                 return
             from agent_monitor import agent_config
 
@@ -2063,8 +3336,8 @@ class Handler(RunSharingMixin, ProjectsMixin, ResearchMixin, BaseHTTPRequestHand
             return
 
         if path.startswith("/api/run/") and path.endswith("/proof_graph"):
-            if self._deny_guest(user, "model-generated proof graphs"):
-                return
+            # Guests may refresh DAGs under the bounded guest branch below
+            # (Kimi only, derived-action limits, global concurrency).
             from agent_monitor import proof_graph
 
             rid = path.removeprefix("/api/run/").removesuffix("/proof_graph")
@@ -2072,15 +3345,41 @@ class Handler(RunSharingMixin, ProjectsMixin, ResearchMixin, BaseHTTPRequestHand
             if not ws or not self._owns_run(rid, user):
                 self._send(404, json.dumps({"error": "run not found"}))
                 return
-            run_record = _run_record_for(rid)
+            run_record = _derived_record_for(rid)
             kind = str(body.get("kind") or "informal").strip().lower()
             model = str(body.get("model") or "").strip() or None
+            from agent_monitor import analyze_runs
+
+            if analyze_runs.is_analyze_record(run_record) and kind in {"informal", "analysis"}:
+                # The manuscript structure is deterministic: a refresh never
+                # spends a model call (or a guest's derived action).
+                self._send(200, json.dumps(self._analysis_graph_payload(rid, ws, kind), ensure_ascii=False))
+                return
+            if kind == "analysis":
+                self._send(400, json.dumps({"error": "This run has no manuscript analysis"}))
+                return
             if user.get("guest"):
                 from agent_monitor.settings import GUEST_DEFAULT_MODEL
 
                 model = GUEST_DEFAULT_MODEL
                 if kind not in {"informal", "formal", "engine"}:
                     self._send(400, json.dumps({"error": "Unknown proof graph kind"}))
+                    return
+                if kind == "engine":
+                    # Model-free and deterministic: the same view GET returns,
+                    # so a guest refresh never spends a Formal/DAG action.
+                    from agent_monitor import engine_graph
+
+                    try:
+                        result = engine_graph.load_or_build(
+                            ws,
+                            run_record,
+                            view=str(body.get("view") or "auto").strip().lower() or "auto",
+                        )
+                    except ValueError as exc:
+                        self._send(400, json.dumps({"error": str(exc)}, ensure_ascii=False))
+                        return
+                    self._send(200, json.dumps(result, ensure_ascii=False))
                     return
             if not self._admit_guest_derived_action(user, ws):
                 return
@@ -2116,10 +3415,9 @@ class Handler(RunSharingMixin, ProjectsMixin, ResearchMixin, BaseHTTPRequestHand
             return
 
         if path.startswith("/api/run/") and path.endswith("/lean_verify"):
-            if self._deny_guest(user, "model-assisted Lean actions"):
-                return
-            from agent_monitor import lean_verify
-
+            # Guests get the documented bounded actions (Verify, Compile,
+            # Check, Audit, feedback revision) under the guest branch below;
+            # coding-agent Formal harnesses stay sign-in only.
             rid = path.removeprefix("/api/run/").removesuffix("/lean_verify")
             ws = _workspace_for_run(rid)
             if not ws or not self._owns_run(rid, user):
@@ -2133,6 +3431,25 @@ class Handler(RunSharingMixin, ProjectsMixin, ResearchMixin, BaseHTTPRequestHand
             else:
                 lean_arg = None
             feedback = str(body.get("message") or body.get("feedback") or "")
+            if action in {"harness", "stop_harness"} and self._deny_member(
+                user, "The local formal harness"
+            ):
+                return
+            analysis_lean = None
+            from agent_monitor import analyze_runs
+
+            run_record = _run_record_for(rid)
+            if analyze_runs.is_analyze_record(run_record):
+                # An analysis formalizes the STATEMENTS of selected nodes on the
+                # server's Lean 4.14 checker (proofs are not attempted), or
+                # compiles/checks the Lean source; nothing reads a report as a proof.
+                try:
+                    analysis_lean = self._analysis_lean_request(
+                        ws, action, body, user=user, record=run_record
+                    )
+                except analyze_runs.AnalyzeRequestError as exc:
+                    self._send_analyze_error(exc)
+                    return
             if user.get("guest"):
                 from agent_monitor.settings import GUEST_DEFAULT_MODEL
 
@@ -2151,82 +3468,44 @@ class Handler(RunSharingMixin, ProjectsMixin, ResearchMixin, BaseHTTPRequestHand
                     return
             if not self._admit_guest_derived_action(user, ws):
                 return
+            slot = _GuestDerivedSlot(int(user["id"])) if user.get("guest") else None
             try:
-                if action in {"compile", "check"}:
-                    result = lean_verify.compile_or_check(
-                        workspace=ws, lean=lean_arg, mode=action
-                    )
-                elif action == "harness":
-                    result = lean_verify.start_harness(
-                        workspace=ws,
-                        run_record=_run_record_for(rid),
-                        user=user,
-                        engine=str(body.get("engine") or "codex").strip().lower(),
-                        model=model,
-                        lean=lean_arg,
-                    )
-                elif action == "stop_harness":
-                    result = lean_verify.stop_harness(ws)
-                elif action == "audit":
-                    result = lean_verify.audit_current(
-                        workspace=ws,
-                        run_record=_run_record_for(rid),
-                        user=user,
-                        model=model,
-                        lean=lean_arg,
-                    )
-                elif action == "revise":
-                    repairs = body.get("max_repairs")
-                    result = lean_verify.revise_with_feedback(
-                        workspace=ws,
-                        user=user,
-                        run_record=_run_record_for(rid),
-                        message=feedback,
-                        model=model,
-                        lean=lean_arg,
-                        max_repairs=max(0, min(int(repairs) if repairs is not None else 1, 1 if user.get("guest") else 3)),
-                    )
-                else:
-                    repairs = body.get("max_repairs")
-                    result = lean_verify.generate(
-                        workspace=ws,
-                        run_record=_run_record_for(rid),
-                        user=user,
-                        model=model,
-                        max_repairs=max(0, min(int(repairs) if repairs is not None else 2, 1 if user.get("guest") else 4)),
-                    )
-            except ValueError as exc:
-                self._send(400, json.dumps({"error": str(exc)}, ensure_ascii=False))
-                return
-            except Exception as exc:  # noqa: BLE001
-                self._send(500, json.dumps({"error": f"Lean verification failed: {exc}"}, ensure_ascii=False))
-                return
-            finally:
-                if user.get("guest"):
-                    _release_guest_derived_action(int(user["id"]))
-            if action in {"compile", "check", "audit", "revise"} and str(
-                result.get("status") or ""
-            ) != "running":
-                from agent_monitor import auto_pipeline
-
-                run_record = _run_record_for(rid) or {}
-                auto_pipeline.refresh_formal(
-                    run_id=rid,
-                    workspace=ws,
-                    owner_id=user.get("id"),
-                    model=model or result.get("model"),
-                    engine=str(run_record.get("engine") or "unknown"),
+                self._lean_verify_action(
+                    rid, ws, user, action, model, lean_arg, feedback, body, slot,
+                    analysis_lean=analysis_lean,
+                    analysis_run=analyze_runs.is_analyze_record(run_record),
                 )
-            self._send(200, json.dumps(result, ensure_ascii=False))
+            finally:
+                # Released here unless the formal refresh took ownership.
+                if slot is not None and not slot.handed_off:
+                    slot.release()
             return
 
         if path == "/api/runs":
+            from agent_monitor import analyze_runs
+
+            try:
+                run_kind = analyze_runs.run_kind_of(body)
+            except analyze_runs.AnalyzeRequestError as exc:
+                self._send(exc.status, json.dumps({"error": str(exc)}))
+                return
             try:
                 research_projects.prepare_run(body, user)
             except (PermissionError, ValueError) as exc:
                 self._send(403, json.dumps({"error": str(exc)}))
                 return
+            if run_kind == "analyze":
+                self._start_analyze_run(body, user)
+                return
             engine = str(body.get("engine") or ("kimi" if user.get("guest") else "")).lower()
+            if engine == "analyze":
+                self._send(
+                    400,
+                    json.dumps({
+                        "error": "Ansatz Analyze runs in the Analyze mode; reload the console and choose Analyze",
+                    }),
+                )
+                return
             requested_model = body.get("model") or None
             requested_subagent_model = (
                 str(body.get("subagent_model") or "").strip() or None
@@ -2256,6 +3535,15 @@ class Handler(RunSharingMixin, ProjectsMixin, ResearchMixin, BaseHTTPRequestHand
                     return
                 if len(problem_text or "") > 20_000:
                     self._send(400, json.dumps({"error": "Guest problems are limited to 20,000 characters"}))
+                    return
+                try:
+                    # Multibyte text can fit the character limit yet exceed the
+                    # CGM byte limit; refuse it before a run slot is reserved.
+                    job_manager._check_cgm_problem_size(engine, problem_text or "")
+                    # Likewise the (text-only, small) guest attachment allowance.
+                    research_attachments.validate(body.get("attachments"), guest=True)
+                except ValueError as exc:
+                    self._send(400, json.dumps({"error": str(exc)}, ensure_ascii=False))
                     return
                 if requested_model is not None:
                     try:
@@ -2290,15 +3578,18 @@ class Handler(RunSharingMixin, ProjectsMixin, ResearchMixin, BaseHTTPRequestHand
                         speed_mode=(
                             str(body.get("speed_mode") or "").strip() or None
                         ),
+                        # Only an explicit false turns automatic formalization off.
+                        formalize=body.get("formalize") is not False,
                     ))
 
                 if user.get("guest"):
                     # Keep admission and start_job's synchronous job/run
                     # registration atomic with respect to other guest starts.
                     # The runner itself executes on its own worker thread.
+                    client = self._guest_client_key()
                     with _GUEST_RUN_START_LOCK:
                         capacity_error, retry_after = _reserve_guest_run_slot(
-                            int(user["id"])
+                            int(user["id"]), client
                         )
                         if capacity_error:
                             self._send(
@@ -2318,9 +3609,38 @@ class Handler(RunSharingMixin, ProjectsMixin, ResearchMixin, BaseHTTPRequestHand
                         except Exception:
                             release_guest_run(int(user["id"]))
                             raise
+                        if client is not None and job.get("run_id"):
+                            _GUEST_RUN_CLIENTS[str(job["run_id"])] = client
                         job = {**job, "guest_policy": guest_policy(user)}
                 else:
-                    job = start()
+                    requested_model = account_policy.member_run_model(
+                        user, engine, requested_model
+                    )
+                    member_error = account_policy.member_run_error(
+                        user,
+                        engine,
+                        model=requested_model,
+                        auth_route=body.get("auth_route"),
+                    )
+                    if member_error:
+                        self._send(
+                            403,
+                            json.dumps(
+                                {
+                                    "error": member_error,
+                                    "allowed_engines": sorted(account_policy.member_engine_allowlist()),
+                                }
+                            ),
+                        )
+                        return
+                    if not self._admit_member_run(user):
+                        return
+                    try:
+                        job = start()
+                    except Exception:
+                        # A refused start (no key, bad input) starts nothing.
+                        self._release_member_run(user)
+                        raise
             except Exception as exc:  # noqa: BLE001
                 self._send(400, json.dumps({"error": str(exc)}, ensure_ascii=False))
                 return
@@ -2347,6 +3667,15 @@ class Handler(RunSharingMixin, ProjectsMixin, ResearchMixin, BaseHTTPRequestHand
             if not run_id or "/" in run_id or not self._owns_run(run_id, user):
                 self._send(404, json.dumps({"error": "not found"}))
                 return
+            if self._refuse_analyze_continuation(run_id):
+                return
+            # A repeated Continue on a running run starts nothing, so it is
+            # answered before a member's run start is reserved.
+            if job_manager.run_is_active(run_id):
+                self._send(200, json.dumps({"ok": False, "status": "already_running", "run_id": run_id}))
+                return
+            if not self._admit_member_run(user):
+                return
             try:
                 result = job_manager.continue_run(
                     run_id,
@@ -2356,11 +3685,22 @@ class Handler(RunSharingMixin, ProjectsMixin, ResearchMixin, BaseHTTPRequestHand
                     user=user,
                 )
             except FileNotFoundError as exc:
+                self._release_member_run(user)
                 self._send(404, json.dumps({"error": str(exc)}))
                 return
+            except ValueError as exc:
+                # A refused continuation (retired engine, member policy, a
+                # disconnected account) is the caller's error, as for /chat.
+                self._release_member_run(user)
+                self._send(400, json.dumps({"error": str(exc)}))
+                return
             except Exception as exc:  # noqa: BLE001
+                self._release_member_run(user)
                 self._send(500, json.dumps({"error": str(exc)}))
                 return
+            if not result.get("ok"):
+                # Another request started this run's continuation first.
+                self._release_member_run(user)
             self._send(200, json.dumps(result, ensure_ascii=False))
             return
 
@@ -2370,6 +3710,16 @@ class Handler(RunSharingMixin, ProjectsMixin, ResearchMixin, BaseHTTPRequestHand
             run_id = path.removeprefix("/api/runs/").removesuffix("/chat")
             if not run_id or "/" in run_id or not self._owns_run(run_id, user):
                 self._send(404, json.dumps({"error": "not found"}))
+                return
+            if self._refuse_analyze_continuation(run_id):
+                return
+            if not self._admit_member_message(user):
+                return
+            # Every message may start or book a continuation, so a member's
+            # run start is reserved first; send_human_message decides under
+            # the job lock whether it only joined feedback its author already
+            # queued for a running run, and only then is the start returned.
+            if not self._admit_member_run(user):
                 return
             try:
                 result = job_manager.send_human_message(
@@ -2381,11 +3731,16 @@ class Handler(RunSharingMixin, ProjectsMixin, ResearchMixin, BaseHTTPRequestHand
                     attachments=body.get("attachments"),
                 )
             except (ValueError, FileNotFoundError) as exc:
+                self._release_member_run(user)
                 self._send(400, json.dumps({"error": str(exc)}))
                 return
             except Exception as exc:  # noqa: BLE001
+                self._release_member_run(user)
                 self._send(500, json.dumps({"error": str(exc)}))
                 return
+            if result.get("joined_follow_up"):
+                # It rides on a follow-up this account already paid for.
+                self._release_member_run(user)
             self._send(200, json.dumps(result, ensure_ascii=False))
             return
 
@@ -2441,6 +3796,12 @@ class Handler(RunSharingMixin, ProjectsMixin, ResearchMixin, BaseHTTPRequestHand
         ):
             if self._deny_guest(user, "account connections"):
                 return
+            if path.endswith("/start") and self._deny_member(
+                user,
+                "Connecting a Codex subscription",
+                explanation=account_policy.subscription_notes()["codex"],
+            ):
+                return
             # Every operation is scoped to user["id"] from the authenticated
             # session — never from the request body — so a user can only
             # ever start, poll, cancel, or disconnect their *own* Codex
@@ -2464,6 +3825,12 @@ class Handler(RunSharingMixin, ProjectsMixin, ResearchMixin, BaseHTTPRequestHand
         ):
             if self._deny_guest(user, "account connections"):
                 return
+            if path.endswith("/start") and self._deny_member(
+                user,
+                "Connecting a Claude subscription",
+                explanation=account_policy.subscription_notes()["claude"],
+            ):
+                return
             from agent_monitor import claude_login
 
             try:
@@ -2482,7 +3849,7 @@ class Handler(RunSharingMixin, ProjectsMixin, ResearchMixin, BaseHTTPRequestHand
             return
 
         if path == "/api/library":
-            if self._deny_guest(user, "the shared library"):
+            if not self._require_operator(user):
                 return
             from agent_monitor import library
 
@@ -2495,7 +3862,7 @@ class Handler(RunSharingMixin, ProjectsMixin, ResearchMixin, BaseHTTPRequestHand
             return
 
         if path == "/api/library/settings":
-            if self._deny_guest(user, "the shared library"):
+            if not self._require_operator(user):
                 return
             from agent_monitor import library
 
@@ -2504,9 +3871,133 @@ class Handler(RunSharingMixin, ProjectsMixin, ResearchMixin, BaseHTTPRequestHand
 
         self._send(404, json.dumps({"error": "not found"}))
 
+    def _lean_verify_action(
+        self,
+        rid: str,
+        ws: Path,
+        user: dict,
+        action: str,
+        model: str | None,
+        lean_arg: str | None,
+        feedback: str,
+        body: dict,
+        slot: "_GuestDerivedSlot | None",
+        *,
+        analysis_lean: dict | None = None,
+        analysis_run: bool = False,
+    ) -> None:
+        """Run one admitted Lean action and answer the request.
+
+        A guest's derived-action ``slot`` moves to the formal DAG refresh the
+        action schedules, which releases it when its model work is done.
+        ``analysis_lean`` (an Analyze run's Verify) formalizes the statements
+        of the selected nodes only.
+        """
+        from agent_monitor import lean_verify
+
+        try:
+            if action in {"compile", "check"}:
+                # An analysis's Lean states results; checking it again never
+                # turns it into a proof attempt.
+                result = lean_verify.compile_or_check(
+                    workspace=ws, lean=lean_arg, mode=action,
+                    statements_only=True if analysis_run else None,
+                )
+            elif action == "harness":
+                result = lean_verify.start_harness(
+                    workspace=ws,
+                    run_record=_derived_record_for(rid),
+                    user=user,
+                    engine=str(body.get("engine") or "codex").strip().lower(),
+                    model=model,
+                    lean=lean_arg,
+                )
+            elif action == "stop_harness":
+                result = lean_verify.stop_harness(ws)
+            elif action == "audit":
+                result = lean_verify.audit_current(
+                    workspace=ws,
+                    run_record=_derived_record_for(rid),
+                    user=user,
+                    model=model,
+                    lean=lean_arg,
+                )
+            elif action == "revise":
+                repairs = body.get("max_repairs")
+                result = lean_verify.revise_with_feedback(
+                    workspace=ws,
+                    user=user,
+                    run_record=_derived_record_for(rid),
+                    message=feedback,
+                    model=model,
+                    lean=lean_arg,
+                    max_repairs=_bounded_repairs(
+                        repairs,
+                        default=1,
+                        cap=_REVISE_MAX_REPAIRS,
+                        guest=bool(user.get("guest")),
+                        guest_cap=_GUEST_REVISE_MAX_REPAIRS,
+                    ),
+                )
+            else:
+                repairs = body.get("max_repairs")
+                overrides = (
+                    {
+                        "guidance": analysis_lean["guidance"],
+                        "problem_override": analysis_lean["problem"],
+                        "proof_override": analysis_lean["proof"],
+                        "prove": False,
+                        "targets": analysis_lean["targets"],
+                        "source_label": "analysis/analysis_graph.json",
+                    }
+                    if analysis_lean
+                    else {}
+                )
+                result = lean_verify.generate(
+                    workspace=ws,
+                    run_record=_derived_record_for(rid),
+                    user=user,
+                    model=model,
+                    max_repairs=_bounded_repairs(
+                        repairs,
+                        default=lean_verify.AUTO_MAX_REPAIRS,
+                        cap=_MANUAL_MAX_REPAIRS,
+                        guest=bool(user.get("guest")),
+                    ),
+                    **overrides,
+                )
+        except ValueError as exc:
+            self._send(400, json.dumps({"error": str(exc)}, ensure_ascii=False))
+            return
+        except Exception as exc:  # noqa: BLE001
+            self._send(500, json.dumps({"error": f"Lean verification failed: {exc}"}, ensure_ascii=False))
+            return
+        from agent_monitor import auto_pipeline
+
+        # Verify is how an informal-only run is formalized later; its formal
+        # stages then leave "off" exactly as after a manual check.
+        refreshes = action in {"compile", "check", "audit", "revise"} or (
+            action == "verify" and auto_pipeline.formal_stages_off(ws)
+        )
+        if refreshes and str(result.get("status") or "") != "running":
+            run_record = _derived_record_for(rid) or {}
+            auto_pipeline.refresh_formal(
+                run_id=rid,
+                workspace=ws,
+                owner_id=user.get("id"),
+                model=model or result.get("model"),
+                engine=str(run_record.get("engine") or "unknown"),
+                on_exit=slot.release if slot is not None else None,
+            )
+            if slot is not None:
+                slot.handed_off = True
+        self._send(200, json.dumps(result, ensure_ascii=False))
+
     def do_DELETE(self):  # noqa: N802
         path = self._resolve_path()
         if path is None:
+            return
+        if self._reject_cross_origin_write():
             return
 
         if self._research_route(path, "DELETE", {}) or self._sharing_write(path, "DELETE", {}) or self._projects_route(path, "DELETE", {}):
@@ -2516,7 +4007,7 @@ class Handler(RunSharingMixin, ProjectsMixin, ResearchMixin, BaseHTTPRequestHand
             return
 
         if path.startswith("/api/agent/skills/"):
-            if self._deny_guest(user, "the shared agent profile"):
+            if not self._require_operator(user):
                 return
             from urllib.parse import unquote
 
@@ -2531,7 +4022,7 @@ class Handler(RunSharingMixin, ProjectsMixin, ResearchMixin, BaseHTTPRequestHand
             return
 
         if path.startswith("/api/agent/memory/"):
-            if self._deny_guest(user, "the shared agent profile"):
+            if not self._require_operator(user):
                 return
             from urllib.parse import unquote
 
@@ -2546,7 +4037,7 @@ class Handler(RunSharingMixin, ProjectsMixin, ResearchMixin, BaseHTTPRequestHand
             return
 
         if path.startswith("/api/library/"):
-            if self._deny_guest(user, "the shared library"):
+            if not self._require_operator(user):
                 return
             from agent_monitor import library
 
@@ -2562,6 +4053,9 @@ class Handler(RunSharingMixin, ProjectsMixin, ResearchMixin, BaseHTTPRequestHand
             run_id = path.removeprefix("/api/runs/")
             if not run_id or "/" in run_id or not self._owns_run(run_id, user):
                 self._send(404, json.dumps({"error": "not found"}))
+                return
+            if not self._is_run_owner(run_id, user):
+                self._send(403, json.dumps({"error": "Only the member who started this run can delete it."}))
                 return
             try:
                 result = job_manager.delete_run(run_id)
@@ -2718,8 +4212,9 @@ class Handler(RunSharingMixin, ProjectsMixin, ResearchMixin, BaseHTTPRequestHand
 
                 data = normalize_run(data, engine=data.get("engine") or "hermes")
                 data["problems"] = job_manager.ensure_problems(data, run_id)
-                data["sandbox_preview"] = _sandbox_preview(run_id, data)
                 ws = _workspace_for_run(run_id)
+                _refresh_analyze_block(data, ws)
+                data["sandbox_preview"] = _sandbox_preview(run_id, data)
                 if ws:
                     from agent_monitor import auto_pipeline, lean_verify, proof_bridge
 
@@ -2759,12 +4254,128 @@ class Handler(RunSharingMixin, ProjectsMixin, ResearchMixin, BaseHTTPRequestHand
         self._send(404, json.dumps({"error": "not found"}))
 
 
+def _data_key_required() -> bool:
+    return os.environ.get("AGENT_MONITOR_REQUIRE_DATA_KEY", "").strip().lower() in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }
+
+
+def _open_account_database() -> None:
+    """Open (and migrate/validate) the account database before serving.
+
+    With ``AGENT_MONITOR_REQUIRE_DATA_KEY=1`` a missing, unreadable or invalid
+    data key, or stored settings it cannot authenticate, stop the console at
+    startup instead of on the first request (so a health check never reports a
+    console that cannot read any account's settings).
+    """
+    from agent_monitor import auth
+
+    required = _data_key_required()
+    try:
+        if required and auth._dedicated_fernet() is None:
+            raise RuntimeError(
+                "AGENT_MONITOR_REQUIRE_DATA_KEY=1 but no user-environment data key is configured"
+            )
+        auth._conn().close()
+    except Exception as exc:  # noqa: BLE001
+        if required:
+            raise SystemExit(
+                f"[startup] refusing to start: account database/data key check failed: {exc}"
+            ) from None
+        logger.warning("Account database check failed at startup (%s)", type(exc).__name__)
+
+
+_GUEST_RETENTION_INTERVAL_SECONDS = 6 * 3600.0
+_GUEST_RETENTION_FIRST_DELAY_SECONDS = 600.0
+
+
+def guest_run_retention_days() -> int:
+    """Days finished guest runs are kept; 0 (the default) keeps them all.
+
+    The public deployment sets AGENT_MONITOR_GUEST_RUN_RETENTION_DAYS in its
+    unit, so anonymous run records and workspaces do not accumulate forever.
+    """
+    return _bounded_env_int(
+        "AGENT_MONITOR_GUEST_RUN_RETENTION_DAYS", default=0, minimum=0, maximum=3650
+    )
+
+
+def _purge_expired_guest_runs() -> list[str]:
+    days = guest_run_retention_days()
+    if days < 1:
+        return []
+    # In this process, so the console's own job index drops the runs too.
+    deleted = job_manager.purge_guest_runs(older_than_days=days, dry_run=False)
+    if deleted:
+        logger.info("Guest retention: deleted %d finished guest run(s) older than %d days", len(deleted), days)
+    return deleted
+
+
+def _guest_retention_loop(stop: threading.Event) -> None:
+    delay = _GUEST_RETENTION_FIRST_DELAY_SECONDS
+    while not stop.wait(delay):
+        delay = _GUEST_RETENTION_INTERVAL_SECONDS
+        try:
+            _purge_expired_guest_runs()
+        except Exception as exc:  # noqa: BLE001 - retry on the next interval
+            logger.warning("Guest retention purge failed (%s)", type(exc).__name__)
+
+
+def start_guest_retention_thread() -> threading.Event | None:
+    """Purge finished guest runs past the retention period every few hours."""
+    if guest_run_retention_days() < 1:
+        return None
+    stop = threading.Event()
+    threading.Thread(
+        target=_guest_retention_loop, args=(stop,), name="guest-retention", daemon=True
+    ).start()
+    return stop
+
+
+class ConsoleHTTPServer(ThreadingHTTPServer):
+    """The console's HTTP server.
+
+    ``socketserver``'s default listen backlog is 5: a burst of polling tabs
+    behind Caddy overflowed it and surfaced as 502s at the edge.
+    """
+
+    request_queue_size = 128
+    daemon_threads = True
+
+
+def _line_buffered_output() -> None:
+    """Write log lines through to journald as they happen.
+
+    Under systemd, stdout is a socket and Python block-buffers it (8 KiB), so
+    access lines arrived minutes late, in bursts, out of order with stderr,
+    and were lost on every stop.  Environment=PYTHONUNBUFFERED=1 in the unit
+    does the same; this keeps an older unit correct too.
+    """
+    for stream in (sys.stdout, sys.stderr):
+        try:
+            stream.reconfigure(line_buffering=True)
+        except (AttributeError, ValueError, OSError):
+            pass
+
+
 def main(port: int | None = None):
+    _line_buffered_output()
     port = port or PORT
     ensure_data_dirs()
+    # Link previews (POST /api/analyze/resolve) share the server-wide arXiv
+    # politeness slot ($AGENT_MONITOR_DATA_DIR/cache) with every Analyze runner.
+    from agent_monitor.analyze import sources as analyze_sources
+
+    analyze_sources.ARXIV_SLOT_PATH = "auto"
+    _open_account_database()
     recovered = job_manager.reconcile_stale_running_runs(min_age_seconds=0)
     if recovered:
         print(f"[recovery] marked {len(recovered)} orphaned run(s) interrupted: {', '.join(recovered)}")
+    if start_guest_retention_thread() is not None:
+        print(f"  guest run retention       -> {guest_run_retention_days()} days")
     root = f"http://localhost:{port}{BASE_PATH or ''}"
     print(f"Unified Math Proving Console -> {root}/")
     print(f"  bind                      -> {HOST}:{port}")
@@ -2777,7 +4388,7 @@ def main(port: int | None = None):
     from agent_monitor import usage_ledger
 
     usage_ledger.start_backfill_thread()
-    ThreadingHTTPServer((HOST, port), Handler).serve_forever()
+    ConsoleHTTPServer((HOST, port), Handler).serve_forever()
 
 
 if __name__ == "__main__":

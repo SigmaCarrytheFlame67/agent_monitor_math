@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import sys
-from types import SimpleNamespace
 from pathlib import Path
 
 from agent_monitor import engines_registry, settings
@@ -22,6 +21,16 @@ def test_astra_is_available_in_openai_model_presets() -> None:
     openai = next(provider for provider in settings.PROVIDERS if provider["id"] == "openai")
 
     assert "gpt-6-astra" in openai["models"]
+
+
+def test_openai_presets_offer_the_gpt6_family_once_without_dead_ids() -> None:
+    openai = next(provider for provider in settings.PROVIDERS if provider["id"] == "openai")
+    models = openai["models"]
+
+    assert {"gpt-6-astra", "gpt-6.1-sol", "gpt-6-sol", "gpt-6-luna"} <= set(models)
+    assert len(models) == len(set(models))
+    # OpenAI answers model_not_found for the bare "gpt-5.6" id.
+    assert "gpt-5.6" not in models
 
 
 def test_hermes_model_picker_fallback_includes_astra(
@@ -91,18 +100,40 @@ def test_latest_chat_alias_and_reasoning_models_are_routed_correctly(monkeypatch
     assert {"gpt-6-astra", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "chat-latest"} <= set(openai["models"])
     projected = project_provider_env({"OPENAI_API_KEY": "own-key", "KIMI_API_KEY": "other-key"}, ("chat-latest",))
     assert projected == {"OPENAI_API_KEY": "own-key"}
+    # Plain reaches providers through api_backend's HTTP transport, so the
+    # routed request is captured at that boundary instead of an SDK client.
     requests = []
-    def create(**kwargs):
-        requests.append(kwargs)
-        return SimpleNamespace(output_text="A proof.", usage=SimpleNamespace(input_tokens=7, output_tokens=8))
-    monkeypatch.setitem(sys.modules, "openai", SimpleNamespace(OpenAI=lambda: SimpleNamespace(responses=SimpleNamespace(create=create))))
-    monkeypatch.delenv("AGENT_MONITOR_CODEX_SUBSCRIPTION", raising=False)
-    monkeypatch.setenv("PLAIN_MODEL", "gpt-6-astra")
+
+    def fake_http_json(url, *, method, headers, payload, timeout):
+        requests.append({"url": url, "headers": headers, "payload": payload})
+        return 200, {
+            "model": payload["model"],
+            "output_text": "# Proof\n\nA proof.",
+            "usage": {"input_tokens": 7, "output_tokens": 8},
+        }
+
+    monkeypatch.setattr(settings, "_http_json", fake_http_json)
+    for name in (
+        "AGENT_MONITOR_CODEX_SUBSCRIPTION",
+        "AGENT_MONITOR_CLAUDE_SUBSCRIPTION",
+        "AGENT_MONITOR_MAX_OUTPUT_TOKENS",
+        "AGENT_MONITOR_API_MAX_TOKENS",
+        "OPENAI_BASE_URL",
+    ):
+        monkeypatch.delenv(name, raising=False)
+    monkeypatch.setenv("OPENAI_API_KEY", "own-key")
     monkeypatch.setenv("AGENT_MONITOR_PLAIN_MAX_OUTPUT_TOKENS", "1024")
     monkeypatch.setattr(sys, "argv", ["plain_runner.py", "Prove it."])
     monkeypatch.chdir(tmp_path)
-    assert plain_runner.main() == 0
-    assert requests[0]["model"] == "gpt-6-astra"
-    assert requests[0]["max_output_tokens"] == 1024
-    assert "messages" not in requests[0]
-    assert (tmp_path / "proof.md").read_text() == "A proof."
+    for model in ("gpt-6-astra", "chat-latest"):
+        monkeypatch.setenv("PLAIN_MODEL", model)
+        assert plain_runner.main() == 0
+        request = requests[-1]
+        # Reasoning models and the latest-chat alias both use OpenAI's
+        # Responses API with its native output-token ceiling.
+        assert request["url"] == "https://api.openai.com/v1/responses"
+        assert request["headers"]["Authorization"] == "Bearer own-key"
+        assert request["payload"]["model"] == model
+        assert request["payload"]["max_output_tokens"] == 1024
+        assert "messages" not in request["payload"]
+        assert (tmp_path / "proof.md").read_text().startswith("# Proof\n\nA proof.")

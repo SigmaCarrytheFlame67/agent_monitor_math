@@ -23,15 +23,70 @@ IMAGE_TYPES = {
     ".webp": "image/webp", ".gif": "image/gif",
 }
 TYPES = {**TEXT_TYPES, **IMAGE_TYPES, ".pdf": "application/pdf"}
+# Anonymous guest runs are tool-free (the CGM pipeline reads text excerpts
+# only), so guests may attach a little text and nothing else.  Workspaces of
+# guest runs outlive the 24-hour guest identity until the retention purge.
+GUEST_MAX_FILES = 2
+GUEST_MAX_BATCH_BYTES = 64 * 1024
+GUEST_TYPES = dict(TEXT_TYPES)
+# Analyze runs read manuscripts: text and PDF, plus zip and tar(.gz) bundles
+# for signed-in accounts (expanded safely by agent_monitor.analyze.archives,
+# never executed).  Guests keep the text-only allowance above.  Images are not
+# manuscripts.
+ARCHIVE_TYPES = {
+    ".zip": "application/zip", ".tar.gz": "application/gzip",
+    ".tgz": "application/gzip", ".tar": "application/x-tar",
+}
+ANALYZE_TYPES = {**TEXT_TYPES, ".pdf": "application/pdf", **ARCHIVE_TYPES}
 _LOCK = threading.Lock()
 
 
-def validate(items: object) -> list[tuple[dict, bytes]]:
-    """Decode and validate the entire batch before writing any files."""
+def _suffix(name: str) -> str:
+    """The attachment type suffix (``.tar.gz`` counts as one)."""
+    lowered = name.lower()
+    if lowered.endswith(".tar.gz"):
+        return ".tar.gz"
+    return Path(name).suffix.lower()
+
+
+def analyze_extensions(*, guest: bool) -> list[str]:
+    """File extensions an Analyze upload accepts for this kind of account."""
+    allowed = GUEST_TYPES if guest else ANALYZE_TYPES
+    return sorted(suffix.lstrip(".") for suffix in allowed)
+
+
+def _archive_ok(suffix: str, data: bytes) -> bool:
+    if suffix == ".zip":
+        return data.startswith(b"PK\x03\x04")
+    if suffix in (".tar.gz", ".tgz"):
+        return data.startswith(b"\x1f\x8b")
+    return len(data) >= 262 and data[257:262] == b"ustar"
+
+
+def guest_policy() -> dict:
+    """The guest attachment allowance, as advertised to the browser."""
+    return {
+        "max_files": GUEST_MAX_FILES,
+        "max_total_bytes": GUEST_MAX_BATCH_BYTES,
+        "extensions": sorted(suffix.lstrip(".") for suffix in GUEST_TYPES),
+    }
+
+
+def validate(items: object, *, guest: bool = False, analyze: bool = False) -> list[tuple[dict, bytes]]:
+    """Decode and validate the entire batch before writing any files.
+
+    ``analyze`` validates an Analyze run's manuscript uploads: text, PDF and
+    (signed-in accounts only) zip / tar / tar.gz bundles, but no images.
+    """
     if items is None:
         return []
-    if not isinstance(items, list) or len(items) > MAX_FILES:
-        raise ValueError(f"Attach at most {MAX_FILES} files per message")
+    max_files = GUEST_MAX_FILES if guest else MAX_FILES
+    if not isinstance(items, list) or len(items) > max_files:
+        raise ValueError(
+            f"Guests can attach at most {GUEST_MAX_FILES} text files"
+            if guest
+            else f"Attach at most {MAX_FILES} files per message"
+        )
     result = []
     total = 0
     for item in items:
@@ -44,9 +99,25 @@ def validate(items: object) -> list[tuple[dict, bytes]]:
         # Never use a client filename as a storage path or response header.
         name = name.replace("\\", "/").split("/")[-1]
         name = "".join(c for c in name if c.isprintable()).strip()
-        suffix = Path(name).suffix.lower()
-        if suffix not in TYPES:
+        suffix = _suffix(name) if analyze else Path(name).suffix.lower()
+        if analyze and suffix not in ANALYZE_TYPES:
+            raise ValueError(
+                f"{name}: Analyze reads TeX, Markdown, text and PDF files"
+                + ("" if guest else " and zip or tar.gz bundles")
+            )
+        if not analyze and suffix not in TYPES:
             raise ValueError(f"Unsupported file type: {name}")
+        if guest and suffix not in GUEST_TYPES:
+            raise ValueError(
+                f"{name}: guests can attach text files only ("
+                + ", ".join(sorted(GUEST_TYPES))
+                + ")"
+            )
+        if guest and (
+            not isinstance(encoded, str)
+            or len(encoded) > 4 * ((GUEST_MAX_BATCH_BYTES + 2) // 3)
+        ):
+            raise ValueError(f"Guest attachments must total at most {GUEST_MAX_BATCH_BYTES // 1024} KB")
         if not isinstance(encoded, str) or len(encoded) > 4 * ((MAX_FILE_BYTES + 2) // 3):
             raise ValueError(f"{name}: maximum file size is 10 MB")
         try:
@@ -56,6 +127,8 @@ def validate(items: object) -> list[tuple[dict, bytes]]:
         if not data or len(data) > MAX_FILE_BYTES:
             raise ValueError(f"{name}: file must be nonempty and at most 10 MB")
         total += len(data)
+        if guest and total > GUEST_MAX_BATCH_BYTES:
+            raise ValueError(f"Guest attachments must total at most {GUEST_MAX_BATCH_BYTES // 1024} KB")
         if total > MAX_BATCH_BYTES:
             raise ValueError("Attachments must total at most 20 MB per message")
         if suffix in TEXT_TYPES:
@@ -65,6 +138,9 @@ def validate(items: object) -> list[tuple[dict, bytes]]:
                 raise ValueError(f"{name}: text files must use UTF-8") from exc
             if "\x00" in content:
                 raise ValueError(f"{name}: expected a text file")
+        elif suffix in ARCHIVE_TYPES:
+            if not _archive_ok(suffix, data):
+                raise ValueError(f"{name}: contents do not match the file type")
         else:
             valid = {
                 ".pdf": data.startswith(b"%PDF-"),
@@ -79,7 +155,8 @@ def validate(items: object) -> list[tuple[dict, bytes]]:
         ident = uuid.uuid4().hex
         result.append(({
             "id": ident, "name": name, "size": len(data),
-            "type": TYPES[suffix], "path": f"attachments/{ident}{suffix}",
+            "type": ANALYZE_TYPES[suffix] if analyze else TYPES[suffix],
+            "path": f"attachments/{ident}{suffix}",
         }, data))
     return result
 

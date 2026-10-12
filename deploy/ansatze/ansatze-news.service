@@ -1,0 +1,66 @@
+# Optional live news feed for https://ansatze.ai/research/news.json (installed
+# by install.sh --with-news together with ansatze-news.timer).
+#
+# Publishes /var/lib/ansatze-news/news.json, which Caddy serves in place of the
+# snapshot bundled with the docs build.  Kimi summaries go through the loopback
+# sponsored broker; this unit never receives a provider key.
+[Unit]
+Description=Ansätze math news refresh
+Documentation=file:/home/repo/agent_monitor_math/deploy/ansatze/README.md
+After=network-online.target ansatze-kimi.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=ansatze-news
+Group=ansatze-news
+StateDirectory=ansatze-news
+# Caddy (user caddy) must be able to read news.json; state.json stays 0600.
+StateDirectoryMode=0755
+UMask=0022
+WorkingDirectory=/var/lib/ansatze-news
+ExecStart=/home/repo/agent_monitor_math/.venv/bin/python /home/repo/agent_monitor_math/scripts/update_math_news.py --output /var/lib/ansatze-news/news.json --state /var/lib/ansatze-news/state.json --seed /home/repo/agent_monitor_math/agent_monitor/data/news_seed.json
+Environment=PYTHONNOUSERSITE=1
+Environment=PYTHONDONTWRITEBYTECODE=1
+Environment=HOME=/var/lib/ansatze-news
+Environment=AGENT_MONITOR_DATA_DIR=/var/lib/ansatze-news/agent-monitor
+Environment=AGENT_MONITOR_ENV_PATH=/dev/null
+Environment=AGENT_MONITOR_SPONSORED_KIMI=1
+Environment=AGENT_MONITOR_SPONSORED_KIMI_URL=http://127.0.0.1:4610
+TimeoutStartSec=15min
+
+ProtectHome=tmpfs
+BindReadOnlyPaths=/home/repo/agent_monitor_math
+BindReadOnlyPaths=/home/ubuntu/.local/share/uv/python/cpython-3.13-linux-x86_64-gnu
+InaccessiblePaths=-/home/repo/agent_monitor_math/.env -/home/repo/agent_monitor_math/.secrets -/home/repo/agent_monitor_math/data -/var/lib/ansatze
+
+NoNewPrivileges=yes
+CapabilityBoundingSet=
+AmbientCapabilities=
+ProtectSystem=strict
+PrivateTmp=yes
+PrivateDevices=yes
+PrivateUsers=no
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+ProtectProc=invisible
+ProcSubset=pid
+RestrictNamespaces=yes
+RestrictSUIDSGID=yes
+RestrictRealtime=yes
+LockPersonality=yes
+RemoveIPC=yes
+KeyringMode=private
+DevicePolicy=closed
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+SystemCallFilter=~@privileged @resources @mount @reboot @swap @obsolete @debug @raw-io
+SystemCallErrorNumber=EPERM
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+TasksMax=32
+MemoryMax=512M
+LimitCORE=0

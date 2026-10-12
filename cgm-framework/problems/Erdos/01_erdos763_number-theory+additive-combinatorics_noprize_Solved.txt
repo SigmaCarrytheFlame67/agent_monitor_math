@@ -1,0 +1,1 @@
+Let $A\subseteq \mathbb{N}$. Can there exist some constant $c>0$ such that\[\sum_{n\leq N} 1_A\ast 1_A(n) = cN+O(1)?\]

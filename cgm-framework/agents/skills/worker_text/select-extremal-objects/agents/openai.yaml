@@ -1,0 +1,7 @@
+interface:
+  display_name: "Select Extremal Objects"
+  short_description: "Prove via a minimal/maximal object and an improving modification"
+  default_prompt: "Use $select-extremal-objects to run an extremal argument: prove an extremal object exists, apply a legal local modification, verify strict improvement, and derive the contradiction or forced structure."
+
+policy:
+  allow_implicit_invocation: true

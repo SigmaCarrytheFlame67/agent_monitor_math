@@ -13,7 +13,7 @@ import os
 import threading
 import time
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 STATE_FILENAME = "auto_pipeline.json"
 _ACTIVE: dict[str, threading.Thread] = {}
@@ -23,6 +23,9 @@ _PENDING_START: dict[
 _ACTIVE_LOCK = threading.Lock()
 _FORMAL_REFRESH_ACTIVE: dict[str, threading.Thread] = {}
 _FORMAL_REFRESH_VERSION: dict[str, int] = {}
+# Callbacks run once the workspace's formal refresh worker has finished all the
+# work it coalesced (for example, releasing a guest's derived-action slot).
+_FORMAL_REFRESH_ON_EXIT: dict[str, list[Callable[[], None]]] = {}
 _FORMAL_REFRESH_LOCK = threading.Lock()
 _STATE_LOCKS: dict[str, threading.Lock] = {}
 _STATE_LOCKS_GUARD = threading.Lock()
@@ -119,6 +122,25 @@ def _lean_outcome(status: Any) -> str:
     return "error"
 
 
+def _coverage_detail(summary: dict[str, Any], lean_outcome: str | None) -> str:
+    """Coverage stage wording that does not overstate per-lemma evidence.
+
+    A linked informal statement counts when a Lean declaration tagged with (or
+    matched to) it compiled inside the kernel-verified file; only the main
+    theorem's statement is fidelity-audited, so the audited count is shown
+    separately when the coverage record carries it.
+    """
+    verified = summary.get("verified", 0)
+    total = summary.get("total", 0)
+    if lean_outcome != "success":
+        return f"{verified}/{total} informal statements with conservative formal links"
+    text = f"{verified}/{total} informal statements linked to kernel-verified Lean declarations"
+    audited = summary.get("statement_audited")
+    if isinstance(audited, int) and not isinstance(audited, bool):
+        text += f" ({audited} with an audited statement)"
+    return text
+
+
 def _coverage_outcome(status: Any) -> str:
     normalized = str(status or "").strip().lower()
     if normalized == "verified":
@@ -164,6 +186,44 @@ def _has_lean_source(workspace: Path) -> bool:
         )
     except (OSError, ValueError):
         return False
+
+
+# Stages a run started as "informal only" never runs automatically. They stay
+# "off" (not an error) until the user verifies the proof from the Lean tab,
+# which refreshes them like any manual Lean action.
+_FORMAL_STAGES = ("lean", "formal_dag", "coverage")
+_FORMALIZATION_OFF = (
+    "Formalization is off for this run · press ∎ Verify in the Lean tab to formalize it"
+)
+# Analyze runs formalize selected statements only (never proofs).
+_ANALYSIS_FORMALIZATION_OFF = (
+    "Formalization is off for this analysis · select results in the DAG and "
+    "formalize their statements (proofs are not attempted)"
+)
+ANALYSIS_EXECUTOR = "analysis-projection"
+
+
+def is_analysis_run(run_record: dict[str, Any] | None) -> bool:
+    """An Analyze run (``run_kind: "analyze"``; the ``analyze`` engine only analyzes)."""
+    record = run_record or {}
+    return str(record.get("run_kind") or "") == "analyze" or str(record.get("engine") or "") == "analyze"
+
+
+def formalization_requested(run_record: dict[str, Any] | None) -> bool:
+    """False only for a run started as informal only (an analysis by default)."""
+    return (run_record or {}).get("formalize") is not False
+
+
+def _formalization_off(workspace: Path, *, analysis: bool = False) -> None:
+    detail = _ANALYSIS_FORMALIZATION_OFF if analysis else _FORMALIZATION_OFF
+    for name in _FORMAL_STAGES:
+        _set_stage(workspace, name, "off", detail=detail, outcome="not_run")
+
+
+def formal_stages_off(workspace: Path) -> bool:
+    """True while an informal-only run has not been formalized."""
+    stages = (load_state(workspace) or {}).get("stages") or {}
+    return str((stages.get("lean") or {}).get("status") or "") == "off"
 
 
 def _block_coverage(
@@ -273,9 +333,11 @@ def _prepare_pending_refresh(workspace: Path) -> None:
 
 def _run_record(run_id: str) -> dict[str, Any] | None:
     try:
+        from agent_monitor import cgm_max
         from agent_monitor.jobs import _load_run_record
 
-        return _load_run_record(run_id)
+        # A Max run's Lean and graph work runs on its worker (Codex) route.
+        return cgm_max.formal_view(_load_run_record(run_id))
     except (FileNotFoundError, OSError, json.JSONDecodeError):
         return None
 
@@ -297,6 +359,18 @@ def _run_user(
 def _source_signature(workspace: Path, run_record: dict[str, Any] | None) -> str:
     from agent_monitor import proof_graph
 
+    if is_analysis_run(run_record):
+        # An analysis has no proof: its derived views come from the published
+        # analysis graph, once the runner is done with it.  A report is never
+        # read as a proof (no GRAPH_PROMPT, no Lean from report.md).
+        if str((run_record or {}).get("status") or "") not in _TERMINAL:
+            return ""
+        body = proof_graph._read_workspace_text(
+            workspace, "analysis/analysis_graph.json", limit=8_000_000
+        )
+        if not body.strip():
+            return ""
+        return "analysis:" + hashlib.sha256(body.encode("utf-8")).hexdigest()
     for name in ("proof.md", "proof.tex"):
         body = proof_graph._read_workspace_text(
             workspace, name, limit=proof_graph.MAX_SOURCE_BYTES
@@ -401,17 +475,29 @@ def _informal_worker(
         graph = result.get("graph") or {}
         if shared is not None:
             shared["informal_graph"] = graph
+        from_facts = result.get("model") == proof_graph.FACT_GRAPH_MODEL
+        # Only a valid harness-gate receipt makes the facts model-verified;
+        # unattested facts are labelled as such, never as verified.
+        detail = (
+            f"{len(graph.get('nodes') or [])} fact nodes · derived from the CGM fact DAG · "
+            f"{proof_graph.fact_graph_basis(result)} · no model call"
+            if from_facts
+            else f"{len(graph.get('nodes') or [])} proof nodes · shared DAG · proof from {selected}"
+        )
+        stage_result = {
+            "proof_engine": selected,
+            "derived_executor": "cgm-fact-graph" if from_facts else "shared-dag-tool",
+            "model": result.get("model"),
+            "source": result.get("source"),
+        }
+        if from_facts:
+            stage_result["attested"] = result.get("attested") is True
         _set_stage(
             workspace,
             "informal_dag",
             "done",
-            detail=f"{len(graph.get('nodes') or [])} proof nodes · shared DAG · proof from {selected}",
-            result={
-                "proof_engine": selected,
-                "derived_executor": "shared-dag-tool",
-                "model": result.get("model"),
-                "source": result.get("source"),
-            },
+            detail=detail,
+            result=stage_result,
         )
     except Exception as exc:
         fallback = dict((shared or {}).get("informal_graph") or {})
@@ -445,6 +531,55 @@ def _informal_worker(
             _set_stage(workspace, "informal_dag", "error", detail=str(exc))
 
 
+def _guidance_wait_seconds() -> float:
+    try:
+        value = float(os.environ.get("AGENT_MONITOR_LEAN_GUIDANCE_WAIT", "240"))
+    except ValueError:
+        value = 240.0
+    return max(0.0, min(value, 900.0))
+
+
+def _lean_guidance(
+    workspace: Path, shared: dict[str, Any] | None
+) -> tuple[str, str]:
+    """Blueprint for the Lean translator and where it came from.
+
+    A math-harness run's critic-accepted fact DAG is the strongest blueprint
+    (one Lean lemma per fact, ``main`` = target). Otherwise wait, bounded,
+    for the semantic informal DAG so Lean does not settle for the structural
+    paragraph parse seeded at batch start.
+    """
+    from agent_monitor import proof_bridge
+
+    try:
+        from agent_monitor import engine_graph
+
+        loader = getattr(engine_graph, "load_fact_dag", None)
+    except Exception:  # noqa: BLE001 - the blueprint is advisory
+        loader = None
+    if callable(loader):
+        try:
+            facts = loader(workspace)
+        except Exception:  # noqa: BLE001 - a bad fact DAG must not block Lean
+            facts = None
+        text = proof_bridge.guidance_from_facts(facts) if facts else ""
+        if text:
+            return text, "fact_dag"
+    ready = (shared or {}).get("informal_ready")
+    if ready is not None and hasattr(ready, "wait"):
+        ready.wait(timeout=_guidance_wait_seconds())
+    graph = (shared or {}).get("informal_graph")
+    text = proof_bridge.guidance_for_lean(graph)
+    if not text:
+        return "", "none"
+    parsed = all(
+        "structural parse" in (node.get("citations") or [])
+        for node in (graph or {}).get("nodes") or []
+        if isinstance(node, dict)
+    )
+    return text, "structural_parse" if parsed else "informal_dag"
+
+
 def _lean_and_formal_worker(
     workspace: Path,
     run_record: dict[str, Any] | None,
@@ -456,9 +591,6 @@ def _lean_and_formal_worker(
     from agent_monitor import lean_verify, proof_bridge, proof_graph
 
     selected = _selected_harness(run_record, engine)
-    guidance = proof_bridge.guidance_for_lean(
-        (shared or {}).get("informal_graph")
-    )
     _set_stage(
         workspace,
         "lean",
@@ -466,14 +598,36 @@ def _lean_and_formal_worker(
         detail=f"Shared Lean translator + kernel checker · proof from {selected}",
         result={"proof_engine": selected, "derived_executor": "shared-lean-translator-kernel"},
     )
+    analysis_lean = (shared or {}).get("analysis_lean")
+    if analysis_lean:
+        # Analyze: statements of the selected results only, from the
+        # analysis graph (never the report), proofs not attempted.
+        guidance, blueprint_source = analysis_lean["guidance"], "analysis_graph"
+    else:
+        guidance, blueprint_source = _lean_guidance(workspace, shared)
     try:
         lean_result = lean_verify.generate(
             workspace=workspace,
             run_record=run_record,
             user=user,
             model=_api_model(model),
-            max_repairs=1 if (user or {}).get("guest") else 2,
+            max_repairs=(
+                lean_verify.GUEST_MAX_REPAIRS
+                if (user or {}).get("guest")
+                else lean_verify.AUTO_MAX_REPAIRS
+            ),
             guidance=guidance,
+            **(
+                {
+                    "problem_override": analysis_lean["problem"],
+                    "proof_override": analysis_lean["proof"],
+                    "prove": False,
+                    "targets": analysis_lean["targets"],
+                    "source_label": "analysis/analysis_graph.json",
+                }
+                if analysis_lean
+                else {}
+            ),
         )
     except Exception as exc:
         _set_stage(
@@ -503,6 +657,11 @@ def _lean_and_formal_worker(
     detail = (
         f"Lean {lean_status} · shared translator/kernel · proof from {selected}"
     )
+    if analysis_lean:
+        detail = (
+            f"{lean_result.get('status_label') or 'Statements formalized'} · "
+            f"{len(analysis_lean['targets'])} selected statement(s) · Lean 4.14 checker"
+        )
     if not has_lean_source:
         lean_outcome = "error"
         detail += " · no usable Proof.lean was produced"
@@ -519,7 +678,13 @@ def _lean_and_formal_worker(
             "outcome": lean_outcome,
             "model": lean_result.get("model"),
             "used_informal_dag": bool(guidance),
+            "blueprint_source": blueprint_source,
             "proof_lean": "available" if has_lean_source else "missing",
+            **(
+                {"scope": "statements", "targets": list(analysis_lean["targets"])}
+                if analysis_lean
+                else {}
+            ),
         },
     )
     if not has_lean_source:
@@ -625,6 +790,12 @@ def _run_batch(
 
     selected = _selected_harness(run_record, engine)
     shared: dict[str, Any] = {}
+    if is_analysis_run(run_record):
+        if not _analysis_batch(workspace, run_record, shared, selected, user=user):
+            return
+        _lean_and_formal_worker(workspace, run_record, user, model, shared, selected)
+        _coverage_after_lean(workspace, selected)
+        return
     # This fast structural pass lets Lean consume the informal proof topology
     # immediately while the richer informal DAG and Lean run concurrently.
     try:
@@ -634,24 +805,42 @@ def _run_batch(
     except (OSError, ValueError):
         pass
 
+    # Lean waits (bounded) for the semantic informal DAG instead of using the
+    # structural parse; the event fires however the informal worker ends.
+    informal_ready = threading.Event()
+    shared["informal_ready"] = informal_ready
     worker_args = (workspace, run_record, user, model, shared, selected)
+
+    def informal_then_signal() -> None:
+        try:
+            _informal_worker(*worker_args)
+        finally:
+            informal_ready.set()
+
+    if not formalization_requested(run_record):
+        _formalization_off(workspace)
+        informal_then_signal()
+        return
+
     sponsored_kimi = str(
         (run_record or {}).get("credential_source") or ""
     ).strip().lower() == "sponsored_kimi"
     claude_subscription = _route_from_record(run_record) == "claude_subscription"
-    if (user or {}).get("guest") or sponsored_kimi or claude_subscription:
+    has_fact_dag = proof_graph.fact_graph_result(workspace) is not None
+    if has_fact_dag or (user or {}).get("guest") or sponsored_kimi or claude_subscription:
+        # A CGM fact DAG makes the informal DAG deterministic (no model call),
+        # so it is built first and Lean receives the fact blueprint at once.
         # The sponsored gateway is a shared, cost-bounded service, while two
         # Claude Code processes for one run share the same per-user OAuth
         # account directory. Starting informal DAG and Lean translation
         # together can respectively trigger avoidable HTTP 429s or contention
         # in the account-backed CLI. Keep the same call budget and execute this
         # run's derived model work serially instead.
-        _informal_worker(*worker_args)
+        informal_then_signal()
         _lean_and_formal_worker(*worker_args)
     else:
         informal = threading.Thread(
-            target=_informal_worker,
-            args=worker_args,
+            target=informal_then_signal,
             daemon=True,
             name=f"informal-dag-{workspace.name}",
         )
@@ -665,6 +854,102 @@ def _run_batch(
         formal.start()
         informal.join()
         formal.join()
+
+    _coverage_after_lean(workspace, selected)
+
+
+def _analysis_off(workspace: Path, detail: str) -> None:
+    for name in _FORMAL_STAGES:
+        _set_stage(workspace, name, "off", detail=detail, outcome="not_run")
+
+
+def _analysis_batch(
+    workspace: Path,
+    run_record: dict[str, Any] | None,
+    shared: dict[str, Any],
+    selected: str,
+    *,
+    user: dict[str, Any] | None = None,
+) -> bool:
+    """Derived views of an analysis; true when statement-only Lean should run.
+
+    The informal DAG is the deterministic projection of
+    ``analysis/analysis_graph.json`` (no model call; the report is never
+    re-read as a proof).  Lean runs only when formalization was requested and
+    the analysis finished: the statements of its main results (at most six),
+    proofs not attempted.
+    """
+    from agent_monitor import analyze_runs, proof_graph
+    from agent_monitor.analyze import graph as analysis_graph
+
+    _set_stage(
+        workspace,
+        "informal_dag",
+        "running",
+        detail="Manuscript DAG · projecting the analysis graph (no model call)",
+        result={"proof_engine": selected, "derived_executor": ANALYSIS_EXECUTOR},
+    )
+    graph = analysis_graph.load(workspace)
+    try:
+        if graph is None:
+            raise ValueError("The analysis published no readable graph")
+        projection = analysis_graph.to_proof_graph(graph)
+        proof_graph._write_cached(workspace, proof_graph.GRAPH_FILENAME, projection)
+    except (OSError, ValueError) as exc:
+        _set_stage(workspace, "informal_dag", "error", detail=str(exc))
+        _analysis_off(workspace, "No manuscript DAG to formalize")
+        return False
+    nodes = len(projection["graph"]["nodes"])
+    _set_stage(
+        workspace,
+        "informal_dag",
+        "done",
+        detail=(
+            f"{nodes} manuscript statements · deterministic projection of the "
+            "analysis graph · no model call"
+        ),
+        result={
+            "proof_engine": selected,
+            "derived_executor": ANALYSIS_EXECUTOR,
+            "model": projection.get("model"),
+            "source": projection.get("source"),
+        },
+    )
+    shared["informal_graph"] = projection["graph"]
+    if not formalization_requested(run_record):
+        _formalization_off(workspace, analysis=True)
+        return False
+    if str((run_record or {}).get("status") or "") != "finished":
+        _analysis_off(
+            workspace,
+            "The analysis did not finish, so nothing was formalized automatically · "
+            "select results in the DAG to formalize their statements",
+        )
+        return False
+    # The Analyze switches cover the automatic statement formalization too.
+    # The rebuilt owner carries no admin flag (see _run_user), and the run was
+    # admitted when it started, so only the switches matter here: Analyze off,
+    # guests off for a guest's analysis, sponsored Analyze off for a sponsored one.
+    guest_run = bool((run_record or {}).get("guest") or (user or {}).get("guest"))
+    refusal = analyze_runs.derived_work_error({"guest": True} if guest_run else None, run_record)
+    if refusal is not None:
+        _analysis_off(workspace, f"{str(refusal).rstrip('.')} · nothing was formalized")
+        return False
+    targets = analyze_runs.default_targets(graph)
+    if not targets:
+        _analysis_off(
+            workspace,
+            "No main result was identified · select results in the DAG to formalize "
+            "their statements",
+        )
+        return False
+    shared["analysis_lean"] = analyze_runs.lean_inputs(graph, targets)
+    return True
+
+
+def _coverage_after_lean(workspace: Path, selected: str) -> None:
+    """Cross-link coverage once Lean (and the formal DAG) have run."""
+    from agent_monitor import proof_bridge
 
     state = load_state(workspace) or {}
     lean_stage = (state.get("stages") or {}).get("lean") or {}
@@ -709,15 +994,7 @@ def _run_batch(
             workspace,
             "coverage",
             "done",
-            detail=(
-                f"{summary.get('verified', 0)}/{summary.get('total', 0)} "
-                + (
-                    "informal statements formally verified"
-                    if lean_outcome == "success"
-                    else "informal statements with conservative formal links"
-                )
-                + structural_note
-            ),
+            detail=_coverage_detail(summary, lean_outcome) + structural_note,
             outcome=outcome,
             result={
                 "proof_engine": selected,
@@ -913,15 +1190,7 @@ def _refresh_formal_once(
             workspace,
             "coverage",
             "done",
-            detail=(
-                f"{summary.get('verified', 0)}/{summary.get('total', 0)} "
-                + (
-                    "informal statements formally verified"
-                    if lean_outcome == "success"
-                    else "informal statements with conservative formal links"
-                )
-                + structural_note
-            ),
+            detail=_coverage_detail(summary, lean_outcome) + structural_note,
             outcome=outcome,
             result={
                 "proof_engine": selected,
@@ -959,6 +1228,7 @@ def _formal_refresh_loop(
 ) -> None:
     """Wait out the initial pipeline and coalesce consecutive formal edits."""
     key = str(workspace.resolve())
+    on_exit: list[Callable[[], None]] = []
     try:
         while True:
             with _ACTIVE_LOCK:
@@ -979,6 +1249,9 @@ def _formal_refresh_loop(
                 if _FORMAL_REFRESH_VERSION.get(key, 0) == version:
                     _FORMAL_REFRESH_ACTIVE.pop(key, None)
                     _FORMAL_REFRESH_VERSION.pop(key, None)
+                    # Taken atomically with retiring this worker, so a
+                    # callback registered for a newer worker is never run here.
+                    on_exit = _FORMAL_REFRESH_ON_EXIT.pop(key, [])
                     return
     finally:
         with _FORMAL_REFRESH_LOCK:
@@ -986,6 +1259,16 @@ def _formal_refresh_loop(
             if active is threading.current_thread():
                 _FORMAL_REFRESH_ACTIVE.pop(key, None)
                 _FORMAL_REFRESH_VERSION.pop(key, None)
+                on_exit = on_exit + _FORMAL_REFRESH_ON_EXIT.pop(key, [])
+        _run_callbacks(on_exit)
+
+
+def _run_callbacks(callbacks: list[Callable[[], None]]) -> None:
+    for callback in callbacks:
+        try:
+            callback()
+        except Exception:  # noqa: BLE001 - a release hook must not kill the worker
+            pass
 
 
 def refresh_formal(
@@ -995,13 +1278,23 @@ def refresh_formal(
     owner_id: int | None,
     model: str | None,
     engine: str | None,
+    on_exit: Callable[[], None] | None = None,
 ) -> bool:
-    """Schedule a formal-only derived-view refresh; return true if spawned."""
+    """Schedule a formal-only derived-view refresh; return true if spawned.
+
+    ``on_exit`` is called exactly once, after the worker that performs this
+    request's refresh (a new one, or the one already running for the
+    workspace, which picks the request up) has finished all its work, or at
+    once if no worker can be started.  The console uses it to keep a guest's
+    derived-action slot held for as long as the background model call runs.
+    """
     key = str(workspace.resolve())
     with _FORMAL_REFRESH_LOCK:
         _FORMAL_REFRESH_VERSION[key] = _FORMAL_REFRESH_VERSION.get(key, 0) + 1
         active = _FORMAL_REFRESH_ACTIVE.get(key)
         if active and active.is_alive():
+            if on_exit is not None:
+                _FORMAL_REFRESH_ON_EXIT.setdefault(key, []).append(on_exit)
             return False
         thread = threading.Thread(
             target=_formal_refresh_loop,
@@ -1010,8 +1303,39 @@ def refresh_formal(
             name=f"formal-refresh-{run_id}",
         )
         _FORMAL_REFRESH_ACTIVE[key] = thread
-        thread.start()
-        return True
+        if on_exit is not None:
+            _FORMAL_REFRESH_ON_EXIT.setdefault(key, []).append(on_exit)
+        try:
+            thread.start()
+        except BaseException as exc:  # e.g. "can't start new thread"
+            _FORMAL_REFRESH_ACTIVE.pop(key, None)
+            _FORMAL_REFRESH_VERSION.pop(key, None)
+            pending = _FORMAL_REFRESH_ON_EXIT.pop(key, [])
+            failure = exc
+        else:
+            return True
+    _run_callbacks(pending)
+    raise failure
+
+# An analysis's own deadline (analysis/request.json caps.max_seconds), plus
+# the longest single model call, the CLI watchdog margin and the record write.
+_ANALYSIS_WAIT_MARGIN_SECONDS = 900 + 300 + 300
+
+
+def analysis_wait_seconds(workspace: Path) -> float:
+    """How long the pipeline waits for an analysis to end: never less than the
+    analysis's own watchdog (an administrator's may run four hours)."""
+    from agent_monitor.analyze import limits as analyze_limits
+    from agent_monitor.analyze import request as analysis_request
+
+    try:
+        seconds = int(analysis_request.load(workspace)["caps"].get("max_seconds") or 0)
+    except (analysis_request.RequestError, KeyError, TypeError, ValueError, OSError):
+        seconds = 0
+    if seconds <= 0:
+        seconds = analyze_limits.CEILING_SECONDS
+    return float(min(seconds, analyze_limits.CEILING_SECONDS) + _ANALYSIS_WAIT_MARGIN_SECONDS)
+
 
 def _run(
     run_id: str,
@@ -1023,14 +1347,26 @@ def _run(
     timeout = max(
         60.0, float(os.environ.get("AGENT_MONITOR_AUTO_PIPELINE_TIMEOUT") or 7200)
     )
+    if is_analysis_run(_run_record(run_id)):
+        # Its derived views come from the published graph, once it has ended.
+        timeout = max(timeout, analysis_wait_seconds(workspace))
     processed_sig = ""
     try:
         sig, record = _wait_for_source(run_id, workspace, timeout=timeout)
         if not sig:
-            for stage in ("informal_dag", "lean", "formal_dag", "coverage"):
-                _set_stage(
-                    workspace, stage, "skipped", detail="The engine produced no proof draft"
+            still_running = str((record or {}).get("status") or "") not in _TERMINAL
+            missing = (
+                (
+                    "The analysis was still running when the automatic steps stopped waiting · "
+                    "the Manuscript DAG builds when opened"
+                    if still_running
+                    else "The analysis published no graph"
                 )
+                if is_analysis_run(record)
+                else "The engine produced no proof draft"
+            )
+            for stage in ("informal_dag", "lean", "formal_dag", "coverage"):
+                _set_stage(workspace, stage, "skipped", detail=missing)
             _finish(workspace)
             return
         _mutate(workspace, lambda state: state.update({"source_signature": sig}))
@@ -1180,6 +1516,22 @@ def start(
                 },
             },
         }
+        record = _run_record(run_id)
+        analysis = is_analysis_run(record)
+        if analysis:
+            initial["run_kind"] = "analyze"
+            initial["stages"]["informal_dag"].update(
+                detail="Waiting for the analysis", derived_executor=ANALYSIS_EXECUTOR
+            )
+            initial["stages"]["lean"]["detail"] = "Waiting for the analysis"
+        if not formalization_requested(record):
+            initial["formalize"] = False
+            for name in _FORMAL_STAGES:
+                initial["stages"][name].update(
+                    status="off",
+                    detail=_ANALYSIS_FORMALIZATION_OFF if analysis else _FORMALIZATION_OFF,
+                    outcome="not_run",
+                )
         with _state_lock(workspace):
             _write_state(workspace, initial)
         thread = threading.Thread(

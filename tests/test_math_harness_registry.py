@@ -44,7 +44,7 @@ class MathHarnessCatalogTests(unittest.TestCase):
         self.assertNotIn("ucla", ids)
 
         engine = next(item for item in catalog if item["id"] == "math_harness")
-        self.assertEqual(engine["label"], "Math Agent Harness")
+        self.assertEqual(engine["label"], "Ansatz CGM harness")
         self.assertEqual(engine["kind"], "cli")
         self.assertEqual(
             engine["auth_modes"],

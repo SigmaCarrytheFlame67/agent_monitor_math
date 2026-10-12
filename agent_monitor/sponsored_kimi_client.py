@@ -33,8 +33,16 @@ _SPONSORED_ENGINES = frozenset(
         "openhands", "plain",
     }
 )
+# Shown with the sponsored Kimi engine while the broker reports its provider
+# as degraded (recent sponsored calls failed or were refused at once).
+DEGRADED_NOTICE = (
+    "Kimi's provider is slow or refusing requests right now, so runs may fail. "
+    "Try again later."
+)
 _credential_lock = threading.RLock()
 _health_cache: tuple[float, str, bool] = (0.0, "", False)
+# The broker's passive view of its provider, from the same /healthz answer.
+_health_degraded: tuple[str, bool] = ("", False)
 _credential_cache: dict[
     tuple[str, str, str], tuple[float, dict[str, str]]
 ] = {}
@@ -108,8 +116,10 @@ def _request(
     client_ip: str = "",
     bearer: str = "",
     timeout: float = 10.0,
+    extra_headers: Mapping[str, str] | None = None,
 ) -> tuple[dict[str, Any], str]:
-    headers = {"Accept": "application/json"}
+    # Extra headers (such as X-Ansatze-Timeout) never replace the fixed ones.
+    headers = {**dict(extra_headers or {}), "Accept": "application/json"}
     data = None
     if payload is not None:
         data = json.dumps(payload, ensure_ascii=False, separators=(",", ":")).encode(
@@ -137,7 +147,11 @@ def _request(
             value = _decode_response(exc)
         except SponsoredKimiError:
             value = {}
-        message = str(value.get("error") or f"HTTP {exc.code}")
+        error = value.get("error")
+        if isinstance(error, Mapping):
+            # Internal endpoints answer with a typed {"error": {"message": ...}}.
+            error = error.get("message")
+        message = str(error or f"HTTP {exc.code}")
         raise SponsoredKimiError(f"Sponsored Kimi request failed: {message}") from None
     except (OSError, urllib.error.URLError) as exc:
         raise SponsoredKimiError(
@@ -168,7 +182,7 @@ def configured(*, timeout: float = 1.5) -> bool:
 
 
 def available(*, timeout: float = 1.5) -> bool:
-    global _health_cache
+    global _health_cache, _health_degraded
     try:
         route = endpoint()
     except SponsoredKimiError:
@@ -179,11 +193,62 @@ def available(*, timeout: float = 1.5) -> bool:
     try:
         value, _cookie = _request("/healthz", timeout=timeout)
     except SponsoredKimiError:
+        _health_degraded = (route, False)
         _health_cache = (now + 5, route, False)
         return False
     ok = value.get("ok") is True and value.get("service") == "public-kimi"
+    upstream = value.get("upstream")
+    _health_degraded = (
+        route,
+        ok and isinstance(upstream, Mapping) and upstream.get("degraded") is True,
+    )
     _health_cache = (now + 5, route, ok)
     return ok
+
+
+def upstream_degraded() -> bool:
+    """Whether the broker reports its Kimi provider as slow or refusing.
+
+    Read from the cached /healthz answer behind ``configured``; the broker
+    reports only what recent sponsored calls saw and never probes Kimi.
+    """
+    if not configured():
+        return False
+    route, degraded = _health_degraded
+    try:
+        return degraded and route == endpoint()
+    except SponsoredKimiError:
+        return False
+
+
+def _own_kimi_key(user: Mapping[str, Any] | None) -> bool:
+    """Whether this account's Kimi runs use its own key, never the broker."""
+    if user is None:
+        return False
+    from agent_monitor.settings import resolved_user_env
+
+    try:
+        env = resolved_user_env(dict(user))
+    except Exception:  # noqa: BLE001 - the notice must not break the engine list
+        return False
+    return bool(str(env.get("KIMI_API_KEY") or "").strip())
+
+
+def with_degraded_notice(
+    engines: list[dict[str, Any]], user: Mapping[str, Any] | None = None
+) -> list[dict[str, Any]]:
+    """Add ``DEGRADED_NOTICE`` to the engines the sponsored broker serves.
+
+    Only while it applies, and only for a viewer whose Kimi runs would use the
+    broker (an account with its own Kimi key never does).  The console shows
+    it while one of those engines runs a Kimi model.
+    """
+    if not upstream_degraded() or _own_kimi_key(user):
+        return engines
+    return [
+        {**engine, "notice": DEGRADED_NOTICE} if supports_engine(engine.get("id")) else engine
+        for engine in engines
+    ]
 
 
 def _client_ip(client_id: int | str | None) -> str:

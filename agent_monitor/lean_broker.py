@@ -52,6 +52,14 @@ class LeanBrokerError(ValueError):
     """The broker is unavailable or returned an invalid response."""
 
 
+class LeanBrokerUnavailable(LeanBrokerError):
+    """No broker is listening at the fixed socket (not installed or stopped).
+
+    Callers report this as ``toolchain_missing`` instead of a compile failure,
+    so no model repair round is spent on an infrastructure error.
+    """
+
+
 def _sha256_field(value: Any, field: str) -> str:
     if not isinstance(value, str) or len(value) != 64 or any(
         char not in "0123456789abcdef" for char in value
@@ -207,7 +215,7 @@ def _exchange(
             client.close()
         except (OSError, UnboundLocalError):
             pass
-        raise LeanBrokerError(
+        raise LeanBrokerUnavailable(
             f"Lean {profile} broker is unavailable at its fixed socket"
         ) from exc
 

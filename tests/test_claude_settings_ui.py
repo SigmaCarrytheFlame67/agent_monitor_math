@@ -99,7 +99,20 @@ console.log(JSON.stringify([runtimeUiSpec('claude').state,body.includes('Reconne
         self.assertIn("if(runtime==='claude')return SETTINGS?.claude_connected", HTML)
         self.assertIn("if(runtime==='codex')return SETTINGS?.codex_connected", HTML)
         self.assertIn("Switch runtime in Settings or choose a compatible harness.", HTML)
-        self.assertIn("${usable?'':'disabled'}", HTML)
+        # Runtime-incompatible or unavailable harnesses stay disabled. The one
+        # exception is a harness a guest may not use: it stays clickable only
+        # to show the sign-in prompt and is never selected (the server also
+        # rejects it for guests).
+        self.assertIn("${usable||e.requires_login?'':'disabled'}", HTML)
+        self.assertIn(
+            "if(next?.requires_login){showEngineSignIn(next.label);closeChoiceMenus();return;}",
+            HTML,
+        )
+        self.assertIn(
+            "if(next?.requires_login){$('engine-select').value=engine;showEngineSignIn(next.label);return;}",
+            HTML,
+        )
+        self.assertIn("if(selected.requires_login)return 'Sign in to use '+selected.label+'.';", HTML)
 
     def test_runtime_routing_behavior_never_falls_back_to_api(self) -> None:
         if not NODE:

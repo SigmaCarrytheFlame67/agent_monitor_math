@@ -1,5 +1,6 @@
 {
-  "schema_version": 1,
+  "schema_version": 2,
+  "_comment": "Source types: rss, atom, github-commits (Atom commit feeds), changelog (a Markdown history file split into dated sections), arxiv-api (arXiv search API), manual. Sources with publish=false are evidence only. See OPERATIONS.md, News refresh.",
   "sources": [
     {
       "id": "openai",
@@ -20,12 +21,115 @@
         "navier",
         "reasoning",
         "introducing gpt",
-        "a new generation of intelligence"
+        "a new generation of intelligence",
+        "lean",
+        "erdős",
+        "erdos",
+        "conjecture"
       ],
       "exclude_keywords": [
         "prototyping games",
         "financial statement"
-      ]
+      ],
+      "type": "rss",
+      "role": "primary",
+      "match_fields": [
+        "title",
+        "excerpt"
+      ],
+      "excerpt_keywords": [
+        "mathematics",
+        "mathematical",
+        "theorem",
+        "proof",
+        "proofs",
+        "lean",
+        "conjecture",
+        "erdős",
+        "erdos",
+        "formalization",
+        "formalized",
+        "olympiad",
+        "imo",
+        "frontiermath"
+      ],
+      "triage": "borderline",
+      "category_rules": [
+        {
+          "keywords": [
+            "mathematics",
+            "mathematical",
+            "theorem",
+            "proof",
+            "proofs",
+            "lean",
+            "conjecture",
+            "erdős",
+            "erdos",
+            "navier"
+          ],
+          "category": "mathematics"
+        }
+      ],
+      "min_interval_minutes": 30
+    },
+    {
+      "id": "openai-math",
+      "type": "changelog",
+      "role": "repository",
+      "name": "OpenAI · openai/math manuscripts repository (GitHub)",
+      "url": "https://github.com/openai/math",
+      "feed_url": "https://raw.githubusercontent.com/openai/math/main/history.md",
+      "allowed_hosts": [
+        "github.com",
+        "raw.githubusercontent.com"
+      ],
+      "category": "mathematics",
+      "status": "Update",
+      "importance": 2,
+      "topic": "ai-math-result",
+      "changelog": {
+        "item_url": "https://github.com/openai/math/blob/{ref}/history.md#{anchor}",
+        "title": "openai/math repository update · {date}",
+        "evidence_source": "openai-math-history",
+        "evidence_days": 2,
+        "revision_url": "https://raw.githubusercontent.com/openai/math/{ref}/history.md",
+        "correction_headings": [
+          "withdrawals",
+          "withdrawal",
+          "retractions",
+          "corrections"
+        ],
+        "commit_label": "Commit {sha} with these changes",
+        "related_links": [
+          {
+            "label": "openai/math repository",
+            "url": "https://github.com/openai/math"
+          }
+        ]
+      },
+      "min_interval_minutes": 30,
+      "include_keywords": [],
+      "exclude_keywords": []
+    },
+    {
+      "id": "openai-math-history",
+      "type": "github-commits",
+      "role": "repository",
+      "publish": false,
+      "name": "OpenAI · openai/math history.md commits (evidence)",
+      "url": "https://github.com/openai/math/commits/main/history.md",
+      "feed_url": "https://github.com/openai/math/commits/main/history.md.atom",
+      "allowed_hosts": [
+        "github.com"
+      ],
+      "category": "mathematics",
+      "status": "Update",
+      "retention": "rolling",
+      "retention_days": 90,
+      "min_interval_minutes": 30,
+      "include_keywords": [],
+      "exclude_keywords": []
     },
     {
       "id": "deepmind",
@@ -46,9 +150,54 @@
         "proof",
         "introducing gemini",
         "reasoning",
-        "alphaevolve"
+        "alphaevolve",
+        "gemini 4",
+        "alphaproof",
+        "alphageometry",
+        "olympiad",
+        "imo",
+        "formal"
       ],
-      "exclude_keywords": []
+      "exclude_keywords": [],
+      "type": "rss",
+      "role": "primary",
+      "min_interval_minutes": 30
+    },
+    {
+      "id": "formal-conjectures",
+      "type": "github-commits",
+      "role": "repository",
+      "publish": false,
+      "proposals": "formalization",
+      "name": "Google DeepMind · formal-conjectures commits (evidence)",
+      "url": "https://github.com/google-deepmind/formal-conjectures",
+      "feed_url": "https://github.com/google-deepmind/formal-conjectures/commits/main.atom",
+      "allowed_hosts": [
+        "github.com"
+      ],
+      "category": "research",
+      "status": "Published",
+      "include_keywords": [
+        "is false",
+        "is true",
+        "disproved",
+        "disprove",
+        "proved",
+        "prove",
+        "solved",
+        "solve",
+        "formal proof",
+        "formal proofs",
+        "counterexample"
+      ],
+      "exclude_keywords": [
+        "chore",
+        "ci",
+        "bump",
+        "revert"
+      ],
+      "min_interval_minutes": 60,
+      "max_items": 20
     },
     {
       "id": "clay",
@@ -62,7 +211,10 @@
       "category": "mathematics",
       "status": "Published",
       "include_keywords": [],
-      "exclude_keywords": []
+      "exclude_keywords": [],
+      "type": "rss",
+      "role": "primary",
+      "min_interval_minutes": 60
     },
     {
       "id": "quanta",
@@ -75,7 +227,300 @@
       "category": "mathematics",
       "status": "Published",
       "include_keywords": [],
-      "exclude_keywords": []
+      "exclude_keywords": [],
+      "type": "rss",
+      "role": "journalism",
+      "min_interval_minutes": 30
+    },
+    {
+      "id": "quanta-cs",
+      "type": "rss",
+      "role": "journalism",
+      "name": "Quanta Magazine · computer science journalism",
+      "url": "https://www.quantamagazine.org/computer-science/",
+      "feed_url": "https://www.quantamagazine.org/computer-science/feed/",
+      "allowed_hosts": [
+        "www.quantamagazine.org"
+      ],
+      "category": "research",
+      "status": "Published",
+      "include_keywords": [
+        "proof",
+        "proofs",
+        "theorem",
+        "conjecture",
+        "mathematics",
+        "mathematical",
+        "math",
+        "mathematicians",
+        "unique games",
+        "complexity",
+        "lean"
+      ],
+      "exclude_keywords": [],
+      "category_rules": [
+        {
+          "keywords": [
+            "mathematics",
+            "mathematical",
+            "theorem",
+            "proof",
+            "proofs",
+            "lean",
+            "conjecture",
+            "erdős",
+            "erdos",
+            "navier"
+          ],
+          "category": "mathematics"
+        }
+      ],
+      "min_interval_minutes": 60,
+      "max_items": 6
+    },
+    {
+      "id": "tao",
+      "type": "rss",
+      "role": "commentary",
+      "name": "Terence Tao · What’s new (blog)",
+      "url": "https://terrytao.wordpress.com/",
+      "feed_url": "https://terrytao.wordpress.com/feed/",
+      "allowed_hosts": [
+        "terrytao.wordpress.com"
+      ],
+      "category": "mathematics",
+      "status": "Published",
+      "match_fields": [
+        "title",
+        "feed_categories"
+      ],
+      "include_keywords": [
+        "ai",
+        "lean",
+        "erdős",
+        "erdos",
+        "openai",
+        "formalization",
+        "mathematics",
+        "mathematicians",
+        "navier",
+        "fluids"
+      ],
+      "category_keywords": [
+        "ai",
+        "lean",
+        "erdos",
+        "formalization",
+        "artificial intelligence",
+        "navier-stokes equations"
+      ],
+      "exclude_keywords": [
+        "postdoc position"
+      ],
+      "min_interval_minutes": 60,
+      "max_items": 8
+    },
+    {
+      "id": "kalai",
+      "type": "rss",
+      "role": "commentary",
+      "name": "Gil Kalai · Combinatorics and more (blog)",
+      "url": "https://gilkalai.wordpress.com/",
+      "feed_url": "https://gilkalai.wordpress.com/feed/",
+      "allowed_hosts": [
+        "gilkalai.wordpress.com"
+      ],
+      "category": "mathematics",
+      "status": "Published",
+      "match_fields": [
+        "title",
+        "feed_categories"
+      ],
+      "include_keywords": [
+        "ai",
+        "proved",
+        "disproved",
+        "conjecture",
+        "solved"
+      ],
+      "category_keywords": [
+        "ai",
+        "artificial intelligence"
+      ],
+      "exclude_keywords": [],
+      "min_interval_minutes": 120,
+      "max_items": 6
+    },
+    {
+      "id": "aaronson",
+      "type": "rss",
+      "role": "commentary",
+      "name": "Scott Aaronson · Shtetl-Optimized (blog)",
+      "url": "https://scottaaronson.blog/",
+      "feed_url": "https://scottaaronson.blog/?feed=rss2",
+      "allowed_hosts": [
+        "scottaaronson.blog"
+      ],
+      "category": "research",
+      "status": "Published",
+      "match_fields": [
+        "title",
+        "excerpt"
+      ],
+      "include_keywords": [
+        "mathocalypse",
+        "proof",
+        "proofs",
+        "theorem",
+        "theorems",
+        "conjecture",
+        "mathematics",
+        "mathematical",
+        "math"
+      ],
+      "excerpt_keywords": [
+        "mathematics",
+        "mathematical",
+        "theorem",
+        "proof",
+        "proofs",
+        "lean",
+        "conjecture",
+        "erdős",
+        "erdos",
+        "formalization",
+        "formalized",
+        "olympiad",
+        "imo",
+        "frontiermath"
+      ],
+      "exclude_keywords": [],
+      "triage": "borderline",
+      "min_interval_minutes": 120,
+      "max_items": 4
+    },
+    {
+      "id": "woit",
+      "type": "rss",
+      "role": "commentary",
+      "name": "Peter Woit · Not Even Wrong (blog)",
+      "url": "https://www.math.columbia.edu/~woit/wordpress/",
+      "feed_url": "https://www.math.columbia.edu/~woit/wordpress/?feed=rss2",
+      "allowed_hosts": [
+        "www.math.columbia.edu"
+      ],
+      "category": "mathematics",
+      "status": "Published",
+      "match_fields": [
+        "title",
+        "feed_categories"
+      ],
+      "include_keywords": [
+        "slopocalypse",
+        "ai",
+        "mathematics",
+        "mathematicians"
+      ],
+      "category_keywords": [
+        "ai"
+      ],
+      "exclude_keywords": [],
+      "min_interval_minutes": 120,
+      "max_items": 4
+    },
+    {
+      "id": "xena",
+      "type": "rss",
+      "role": "commentary",
+      "name": "Kevin Buzzard · Xena Project (blog)",
+      "url": "https://xenaproject.wordpress.com/",
+      "feed_url": "https://xenaproject.wordpress.com/feed/",
+      "allowed_hosts": [
+        "xenaproject.wordpress.com"
+      ],
+      "category": "mathematics",
+      "status": "Published",
+      "include_keywords": [],
+      "exclude_keywords": [],
+      "min_interval_minutes": 180,
+      "max_items": 4
+    },
+    {
+      "id": "sciencenews-math",
+      "type": "rss",
+      "role": "journalism",
+      "name": "Science News · math",
+      "url": "https://www.sciencenews.org/topic/math",
+      "feed_url": "https://www.sciencenews.org/topic/math/feed",
+      "allowed_hosts": [
+        "www.sciencenews.org"
+      ],
+      "category": "mathematics",
+      "status": "Published",
+      "match_fields": [
+        "title",
+        "feed_categories"
+      ],
+      "category_keywords": [
+        "math"
+      ],
+      "include_keywords": [],
+      "exclude_keywords": [],
+      "min_interval_minutes": 180,
+      "max_items": 6
+    },
+    {
+      "id": "epoch",
+      "type": "atom",
+      "role": "primary",
+      "name": "Epoch AI",
+      "url": "https://epoch.ai/latest",
+      "feed_url": "https://epoch.ai/atom.xml",
+      "allowed_hosts": [
+        "epoch.ai"
+      ],
+      "category": "research",
+      "status": "Published",
+      "match_fields": [
+        "title",
+        "feed_categories"
+      ],
+      "include_keywords": [
+        "frontiermath",
+        "math",
+        "mathematics",
+        "mathematical",
+        "proof",
+        "theorem",
+        "erdős",
+        "erdos"
+      ],
+      "category_keywords": [
+        "math"
+      ],
+      "exclude_keywords": [],
+      "min_interval_minutes": 180,
+      "max_items": 4
+    },
+    {
+      "id": "kourovka",
+      "type": "rss",
+      "role": "primary",
+      "name": "Kourovka Notebook · editors’ updates",
+      "url": "https://kourovkanotebookorg.wordpress.com/",
+      "feed_url": "https://kourovkanotebookorg.wordpress.com/feed/",
+      "allowed_hosts": [
+        "kourovkanotebookorg.wordpress.com"
+      ],
+      "category": "mathematics",
+      "status": "Published",
+      "include_keywords": [],
+      "exclude_keywords": [],
+      "importance": 1,
+      "topic": "problem-status",
+      "excerpt_fallback": false,
+      "min_interval_minutes": 360,
+      "max_items": 3
     },
     {
       "id": "microsoft-research",
@@ -95,9 +540,13 @@
         "theorem",
         "proof",
         "optimization",
-        "mindtopo"
+        "mindtopo",
+        "lean"
       ],
-      "exclude_keywords": []
+      "exclude_keywords": [],
+      "type": "rss",
+      "role": "primary",
+      "min_interval_minutes": 60
     },
     {
       "id": "huggingface",
@@ -116,9 +565,75 @@
         "model release",
         "foundation model",
         "grpo",
-        "reinforcement learning"
+        "reinforcement learning",
+        "imo",
+        "olympiad",
+        "prover",
+        "lean",
+        "theorem"
       ],
-      "exclude_keywords": []
+      "exclude_keywords": [],
+      "type": "rss",
+      "role": "primary",
+      "min_interval_minutes": 60
+    },
+    {
+      "id": "arxiv-math-ai",
+      "type": "arxiv-api",
+      "role": "preprint",
+      "name": "arXiv · AI-assisted and formal mathematics preprints (search)",
+      "url": "https://arxiv.org/",
+      "feed_url": "https://export.arxiv.org/api/query?search_query=abs:%22Lean+4%22+OR+abs:autoformalization+OR+abs:autoformalisation+OR+ti:%22theorem+proving%22+OR+abs:%22Erd%C5%91s+problem%22+OR+abs:%22Erdos+problem%22+OR+abs:Kourovka+OR+((abs:%22language+model%22+OR+abs:%22AI-assisted%22+OR+abs:%22AI+system%22+OR+abs:OpenAI)+AND+(cat:math.NT+OR+cat:math.CO+OR+cat:math.AG+OR+cat:math.PR+OR+cat:math.AP+OR+cat:math.GT+OR+cat:math.LO+OR+cat:math.HO+OR+cat:math.MG+OR+cat:math.RA+OR+cat:math.GR+OR+cat:math.DS))&sortBy=submittedDate&sortOrder=descending&max_results=60",
+      "backfill_url": "https://export.arxiv.org/api/query?search_query=abs:%22Lean+4%22+OR+abs:autoformalization+OR+abs:autoformalisation+OR+ti:%22theorem+proving%22+OR+abs:%22Erd%C5%91s+problem%22+OR+abs:%22Erdos+problem%22+OR+abs:Kourovka+OR+((abs:%22language+model%22+OR+abs:%22AI-assisted%22+OR+abs:%22AI+system%22+OR+abs:OpenAI)+AND+(cat:math.NT+OR+cat:math.CO+OR+cat:math.AG+OR+cat:math.PR+OR+cat:math.AP+OR+cat:math.GT+OR+cat:math.LO+OR+cat:math.HO+OR+cat:math.MG+OR+cat:math.RA+OR+cat:math.GR+OR+cat:math.DS))&sortBy=submittedDate&sortOrder=descending&max_results=200",
+      "allowed_hosts": [
+        "export.arxiv.org",
+        "arxiv.org"
+      ],
+      "category": "research",
+      "status": "Preprint",
+      "match_fields": [
+        "title",
+        "excerpt"
+      ],
+      "include_keywords": [
+        "erdős problem",
+        "erdos problem",
+        "kourovka",
+        "openai",
+        "ai-assisted",
+        "ai assisted",
+        "autoformalization",
+        "autoformalisation",
+        "lean",
+        "lean 4",
+        "theorem proving",
+        "quasi-riemann",
+        "navier-stokes",
+        "navier stokes"
+      ],
+      "excerpt_keywords": [
+        "mathematics",
+        "mathematical",
+        "theorem",
+        "proof",
+        "proofs",
+        "lean",
+        "conjecture",
+        "erdős",
+        "erdos",
+        "formalization",
+        "formalized",
+        "olympiad",
+        "imo",
+        "frontiermath"
+      ],
+      "exclude_keywords": [],
+      "triage": "borderline",
+      "url_normalizer": "arxiv-unversioned",
+      "retention": "rolling",
+      "retention_days": 30,
+      "min_interval_minutes": 180,
+      "max_items": 8
     },
     {
       "id": "arxiv-ai",
@@ -138,9 +653,25 @@
         "formal proof",
         "formal verification",
         "math",
-        "proof assistant"
+        "proof assistant",
+        "proof search",
+        "lean 4",
+        "autoformalization",
+        "formalization",
+        "prover"
       ],
-      "exclude_keywords": []
+      "exclude_keywords": [],
+      "type": "rss",
+      "role": "preprint",
+      "url_normalizer": "arxiv-unversioned",
+      "retention": "rolling",
+      "retention_days": 30,
+      "announce_types": [
+        "new",
+        "cross"
+      ],
+      "min_interval_minutes": 60,
+      "max_items": 8
     },
     {
       "id": "arxiv-math-nt",
@@ -162,7 +693,17 @@
         "riemann",
         "ramanujan"
       ],
-      "exclude_keywords": []
+      "exclude_keywords": [],
+      "type": "rss",
+      "role": "preprint",
+      "url_normalizer": "arxiv-unversioned",
+      "retention": "rolling",
+      "retention_days": 30,
+      "announce_types": [
+        "new"
+      ],
+      "min_interval_minutes": 60,
+      "max_items": 6
     },
     {
       "id": "anthropic",
@@ -177,7 +718,27 @@
       "category": "models",
       "status": "Published",
       "include_keywords": [],
-      "exclude_keywords": []
+      "exclude_keywords": [],
+      "type": "manual",
+      "role": "primary"
+    }
+  ],
+  "stories": [
+    {
+      "id": "openai-math",
+      "label": "OpenAI’s openai/math release and updates",
+      "since": "2026-10-06T00:00:00Z",
+      "sources": [
+        "openai-math"
+      ],
+      "urls": [
+        "https://openai.com/index/sharing-ai-progress-in-mathematics",
+        "https://terrytao.wordpress.com/2026/10/07/ahm-statement-on-openais-october-6-release-of-mathematical-documents/",
+        "https://gilkalai.wordpress.com/2026/10/07/updates-sharing-ai-progress-on-mathematics-amazing-and-my-lecture-plans/",
+        "https://scottaaronson.blog/?p=10169",
+        "https://www.math.columbia.edu/~woit/wordpress/?p=15896",
+        "https://www.quantamagazine.org/as-ai-closed-in-on-unique-games-proof-researchers-raced-to-beat-the-machines-20261007/"
+      ]
     }
   ]
 }

@@ -8,6 +8,7 @@ Template placeholders: {prompt} {workspace} {problem_file} {model_args}
 """
 from __future__ import annotations
 
+import importlib.util
 import os
 import shlex
 import shutil
@@ -38,7 +39,20 @@ BUILTIN_ENGINES: list[dict[str, Any]] = [
 # deliberately absent from the new-run catalog.  In particular, ``ucla`` must
 # never be treated as an alias for the replacement Math Agent Harness: doing so
 # would dispatch an old continuation through a different implementation.
-LEGACY_ENGINE_IDS = frozenset({"ucla"})
+LEGACY_ENGINE_IDS = frozenset({"ucla", "danus"})
+
+
+def retired_engine_error(engine: str) -> str | None:
+    """Why a run of a retired engine cannot be continued, else ``None``.
+
+    UCLA keeps its explicit legacy continuation path; Danus has no runner.
+    """
+    if engine == "danus":
+        return (
+            "Danus has been retired. This run stays readable, but it cannot be "
+            "continued; start a new run instead."
+        )
+    return None
 
 # ── External CLI harnesses ────────────────────────────────────────────────
 # Each defines: availability check + default command template.
@@ -120,29 +134,18 @@ def proof_prompt(
 
 
 CLI_ENGINES: dict[str, dict[str, Any]] = {
-    "kimi": {
-        "id": "kimi",
-        "label": "Kimi Proof",
-        "vendor": "Moonshot AI",
-        "description": "Draft, critique, and refine a proof with Kimi",
-        "kind": "cli",
-        "url": "https://platform.moonshot.ai",
-        "check_file": "agent_monitor/runners/kimi_runner.py",
-        "cmd_env": "KIMI_PROOF_CMD",
-        "default_cmd": "{python} -u {root}/agent_monitor/runners/kimi_runner.py {prompt}",
-        "install_hint": "Add a Kimi API key in Settings",
-        "parser_style": "codex",
-        "supported_models": ["kimi-k3"],
-    },
     # Keep the replacement in the former UCLA card position: built-ins render
-    # first, then CLI engines in insertion order.  The runner is a bounded,
-    # response-only adapter around the supplied Danus/Exploring-Graph system;
-    # it does not expose the upstream sandbox-bypassing worker launch directly.
+    # first, then CLI engines in insertion order.  The runner is the bounded,
+    # response-only Ansatz CGM pipeline (strategist, workers, independent model
+    # verifier, curator) on any account route; it never exposes tools.
     "math_harness": {
         "id": "math_harness",
-        "label": "Math Agent Harness",
-        "vendor": "Danus / Exploring Graph",
-        "description": "Bounded response-only proof swarm with native Fact and Exploring DAGs",
+        "label": "Ansatz CGM harness",
+        "vendor": "Ansatz · CGM",
+        "description": (
+            "Response-only CGM pipeline on any account route · verified fact "
+            "DAG and exploring graph (model-verified, not a Lean certificate)"
+        ),
         "kind": "cli",
         "url": None,
         "check_file": "agent_monitor/runners/math_harness_runner.py",
@@ -151,19 +154,23 @@ CLI_ENGINES: dict[str, dict[str, Any]] = {
             "{python} -u "
             "{root}/agent_monitor/runners/math_harness_runner.py"
         ),
-        "install_hint": "Math Agent Harness response adapter is missing",
-        "ready_detail": "bounded response-only adapter ready",
+        "install_hint": "Ansatz CGM harness runner is missing",
+        "ready_detail": "bounded response-only CGM pipeline ready",
         "parser_style": "codex",
     },
-    # Tool-free Kimi draft/critique/refine harness. This is the default engine
-    # for guest sessions, which cannot use the coding-agent CLIs.
+    # The same CGM pipeline pinned to a tool-free Kimi K3 route. This is the
+    # default engine for guests and new accounts, which cannot use the
+    # coding-agent CLIs; the id stays ``kimi`` for stored runs and settings.
     "kimi": {
         "id": "kimi",
-        "label": "Kimi Proof",
-        "vendor": "Moonshot AI",
-        "description": "Draft, critique, and refine a proof with Kimi",
+        "label": "Ansatz CGM · Kimi K3",
+        "vendor": "Ansatz · Kimi K3",
+        "description": (
+            "Tool-free, guest-safe CGM pipeline on Kimi K3 · verified fact DAG "
+            "(model-verified, not a Lean certificate)"
+        ),
         "kind": "cli",
-        "url": "https://platform.moonshot.ai",
+        "url": None,
         "check_file": "agent_monitor/runners/kimi_runner.py",
         "cmd_env": "KIMI_PROOF_CMD",
         "default_cmd": (
@@ -171,6 +178,7 @@ CLI_ENGINES: dict[str, dict[str, Any]] = {
             "{root}/agent_monitor/runners/kimi_runner.py {prompt}"
         ),
         "install_hint": "Add a Kimi API key in Settings",
+        "ready_detail": "tool-free Kimi K3 CGM pipeline ready",
         "parser_style": "codex",
         "supported_models": ["kimi-k3"],
     },
@@ -341,41 +349,72 @@ CLI_ENGINES: dict[str, dict[str, Any]] = {
         "ready_detail": "official dsh headless adapter ready",
         "parser_style": "codex",
     },
-    "danus": {
-        "id": "danus",
-        "label": "Danus",
-        "vendor": "frenzymath",
-        "description": "Codex-only proof-search swarm · isolated initialization required",
+    # Ansatz Analyze checks an existing manuscript result by result into a
+    # verdict-annotated DAG.  It is the only engine of the Analyze mode
+    # (``run_kind: "analyze"``), never serves a Prove request, and is
+    # response-only and tool-free on every route (sponsored Kimi K3, an own
+    # API key, or an administrator's Codex / Claude Code account).  The runner
+    # reads ``analysis/request.json`` from its workspace, so the command has no
+    # ``{prompt}``.  It is listed only while AGENT_MONITOR_ANALYZE_ENABLED is on.
+    "analyze": {
+        "id": "analyze",
+        "label": "Ansatz Analyze",
+        "vendor": "Ansatz · Analyze",
+        "description": (
+            "Checks an existing manuscript result by result into a verdict DAG · "
+            "tool-free · checked by a model verifier, not a certificate"
+        ),
         "kind": "cli",
-        "url": "https://github.com/frenzymath/Danus/tree/codex",
-        "check_file": "agent_monitor/runners/danus_runner.py",
-        "cmd_env": "DANUS_CMD",
+        "url": None,
+        "check_file": "agent_monitor/runners/analyze_runner.py",
+        "cmd_env": "ANALYZE_CMD",
         "default_cmd": (
             "{python} -u "
-            "{root}/agent_monitor/runners/danus_runner.py {prompt}"
+            "{root}/agent_monitor/runners/analyze_runner.py"
         ),
-        "explicit_command_required": True,
-        "install_hint": (
-            "source installed; initialize the official codex branch on an isolated "
-            "host, then set DANUS_CMD to the approved launch adapter"
-        ),
-        "risk_level": "high",
-        "risk_note": "official workers bypass approvals and sandboxing",
+        "install_hint": "Ansatz Analyze runner is missing",
+        "ready_detail": "tool-free manuscript analysis ready",
         "parser_style": "codex",
+        "modes": ["analyze"],
     },
 }
 
+# Console modes: every engine proves (``run_kind: "prove"``) unless its spec
+# names other modes.  The listing advertises them so the browser shows the
+# Analyze mode only when this server offers it.
+DEFAULT_MODES = ("prove",)
+ANALYZE_ENGINE_ID = "analyze"
+# Parser packages the Analyze runner imports (pinned in pyproject.toml).
+ANALYZE_PACKAGES = ("pylatexenc", "pypdf")
+
+
+def engine_modes(engine_id: str) -> list[str]:
+    """The console modes ``engine_id`` runs (``["prove"]`` for proof engines)."""
+    spec = CLI_ENGINES.get(engine_id) or {}
+    return list(spec.get("modes") or DEFAULT_MODES)
+
+
+def analyze_missing_packages() -> list[str]:
+    """Analyze parser packages this interpreter cannot import."""
+    return [name for name in ANALYZE_PACKAGES if importlib.util.find_spec(name) is None]
+
+
+def _analyze_enabled() -> bool:
+    from agent_monitor.analyze import limits as analyze_limits
+
+    return analyze_limits.enabled()
+
 _ROOT = Path(__file__).resolve().parent.parent
 CODEX_SUBSCRIPTION_ENGINES = frozenset(
-    {"hermes", "improof", "math_harness", "codex", "openclaude", "openhands", "openclaw", "deepagents", "metaharness", "plain", "deepseek_harness", "danus"}
+    {"hermes", "improof", "math_harness", "codex", "openclaude", "openhands", "openclaw", "deepagents", "metaharness", "plain", "deepseek_harness", "analyze"}
 )
 CLAUDE_SUBSCRIPTION_ENGINES = frozenset(
-    {"claude", "improof", "math_harness", "openclaw", "deepagents", "plain", "metaharness"}
+    {"claude", "improof", "math_harness", "openclaw", "deepagents", "plain", "metaharness", "analyze"}
 )
 # Manual Formal Lean harnesses must have a real root ``Proof.lean`` contract.
 # This is deliberately narrower than the informal/auth capability sets above:
-# OpenHands and DeepSeek Harness currently require ``proof.md`` at runner exit,
-# while Danus has no approved formal-artifact adapter.  Advertising those
+# OpenHands and DeepSeek Harness currently require ``proof.md`` at runner exit.
+# Advertising those
 # engines in Lean Verification makes a successful child look like a missing
 # formal proof, so keep them fail-closed until their runners validate a fresh
 # ``Proof.lean`` themselves.
@@ -397,12 +436,15 @@ ENGINE_AUTH_MODES: dict[str, list[str]] = {
     "plain": ["codex_subscription", "claude_subscription", "api_key"],
     "metaharness": ["codex_subscription", "claude_subscription", "api_key"],
     "deepseek_harness": ["codex_subscription", "api_key"],
-    "danus": ["codex_subscription"],
+    "analyze": ["codex_subscription", "claude_subscription", "api_key"],
 }
 
+# ``~/.npm-global/bin`` comes first: it holds the exactly pinned, vetted Codex
+# build (``npm i -g --prefix ~/.npm-global @openai/codex@0.160.0``), while
+# ``~/.local/bin/codex`` may point at a self-updating standalone install.
 _DEFAULT_EXTRA_PATHS = [
-    "~/.local/node24/bin",
     "~/.npm-global/bin",
+    "~/.local/node24/bin",
     "~/.local/bin",
     "~/.cargo/bin",
 ]
@@ -431,8 +473,8 @@ def _cli_available(spec: dict[str, Any]) -> tuple[bool, str | None]:
             return False, None
         return True, spec["default_cmd"]
     if spec.get("explicit_command_required"):
-        # Danus workers bypass approvals and sandboxing. A command override is
-        # the operator's explicit, deployment-specific safety gate.
+        # An engine that bypasses approvals or sandboxing runs only through an
+        # operator-supplied command override, its explicit safety gate.
         return False, None
     if spec.get("check_file"):
         if not (_ROOT / spec["check_file"]).exists():
@@ -483,9 +525,22 @@ def list_engines() -> list[dict[str, Any]]:
             "subscription_supported": engine["id"] in CODEX_SUBSCRIPTION_ENGINES,
             "claude_subscription_supported": engine["id"] in CLAUDE_SUBSCRIPTION_ENGINES,
             "formal_lean_supported": engine["id"] in FORMAL_LEAN_ENGINES,
+            "modes": list(DEFAULT_MODES),
         })
     for spec in CLI_ENGINES.values():
+        if spec["id"] == ANALYZE_ENGINE_ID and not _analyze_enabled():
+            # AGENT_MONITOR_ANALYZE_ENABLED=0 hides the Analyze mode entirely.
+            continue
         ok, _cmd = _cli_available(spec)
+        hint = spec.get("install_hint")
+        if ok and spec["id"] == ANALYZE_ENGINE_ID:
+            missing = analyze_missing_packages()
+            if missing:
+                ok = False
+                hint = (
+                    "Analyze needs the Python package(s) " + ", ".join(missing)
+                    + " installed on this server"
+                )
         out.append({
             "id": spec["id"],
             "label": spec["label"],
@@ -494,9 +549,9 @@ def list_engines() -> list[dict[str, Any]]:
             "kind": "cli",
             "url": spec["url"],
             "available": ok,
-            "hint": None if ok else spec.get("install_hint"),
+            "hint": None if ok else hint,
             "health": "ready" if ok else "setup_required",
-            "health_detail": (spec.get("ready_detail") or "runner available") if ok else spec.get("install_hint"),
+            "health_detail": (spec.get("ready_detail") or "runner available") if ok else hint,
             "auth_modes": ENGINE_AUTH_MODES.get(spec["id"], []),
             "subscription_supported": spec["id"] in CODEX_SUBSCRIPTION_ENGINES,
             "claude_subscription_supported": spec["id"] in CLAUDE_SUBSCRIPTION_ENGINES,
@@ -505,6 +560,7 @@ def list_engines() -> list[dict[str, Any]]:
             "risk_note": spec.get("risk_note"),
             "supported_models": list(spec.get("supported_models") or []),
             "model_note": spec.get("model_note"),
+            "modes": engine_modes(spec["id"]),
         })
     return out
 

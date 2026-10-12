@@ -4,6 +4,15 @@
 <meta charset="utf-8"/>
 <meta name="viewport" content="width=device-width,initial-scale=1"/>
 <title>Harness Pipeline Monitor</title>
+<script>
+// The console's Monitor view sizes this frame to its content and scrolls
+// the monitor and the conversation below it as one page.
+try {
+  if (window.parent !== window && new URLSearchParams(location.search).get('layout') === 'flow') {
+    document.documentElement.classList.add('flow-embed');
+  }
+} catch (_) {}
+</script>
 <style>
 :root, [data-theme="dark"] {
   --bg: #0c0f14; --card: #141a22; --card2: #1a2230; --border: #2a3548;
@@ -47,6 +56,7 @@ body.embedded .layout { min-height: 0; height: auto; }
 .stat { background: var(--card); border: 1px solid var(--border); border-radius: 8px; padding: 10px 14px; min-width: 110px; }
 .stat .lbl { font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: .04em; }
 .stat .val { font-size: 20px; font-weight: 600; margin-top: 2px; font-family: var(--mono); }
+.stat .stat-sub { font-size: 10px; color: var(--muted); margin-top: 2px; font-variant-numeric: tabular-nums; }
 .view-toggle { display:flex; gap:6px; margin:6px 0 10px; align-items:center; }
 .view-toggle .vt-btn { font-size:11px; padding:5px 14px; border-radius:999px; border:1px solid var(--border); background:var(--card); color:var(--muted); cursor:pointer; }
 .view-toggle .vt-btn.active { background:var(--accent); color:var(--on-accent); border-color:var(--accent); }
@@ -210,23 +220,6 @@ tr.sel td { background: color-mix(in srgb, var(--accent) 12%, var(--card)); }
 .pipe-links .type-verify { color: #5eead4; }
 .pipe-links .type-refine, .pipe-links .type-reverify { color: #86efac; }
 .pipe-links .type-proof { color: #7dd3fc; }
-.proof-wrap { background: var(--card); border: 1px solid var(--border); border-radius: 10px; padding: 14px 16px; margin-bottom: 16px; }
-.proof-wrap h2 { font-size: 14px; margin-bottom: 4px; }
-.proof-sub { font-size: 11px; color: var(--muted); margin-bottom: 10px; line-height: 1.45; }
-.proof-tabs { display: flex; gap: 6px; margin-bottom: 10px; flex-wrap: wrap; }
-.proof-tabs button { background: var(--card2); border: 1px solid var(--border); color: var(--muted); padding: 5px 12px; border-radius: 6px; font-size: 11px; cursor: pointer; }
-.proof-tabs button.active { border-color: var(--accent); color: var(--fg); background: color-mix(in srgb, var(--accent) 14%, var(--card)); }
-.proof-pdf { width: 100%; height: 520px; border: 1px solid var(--border); border-radius: 8px; background: #fff; }
-.proof-source { max-height: 420px; }
-.prov-table { width: 100%; border-collapse: collapse; font-size: 11px; margin-top: 8px; }
-.prov-table th, .prov-table td { text-align: left; padding: 6px 8px; border-bottom: 1px solid var(--border); vertical-align: top; }
-.prov-table tr { cursor: pointer; }
-.prov-table tr:hover td { background: var(--card2); }
-.prov-table tr.sel td { background: color-mix(in srgb, var(--accent) 12%, var(--card)); }
-.prov-preview { color: var(--muted); font-size: 10px; line-height: 1.4; max-width: 360px; }
-.prov-lines { font-family: var(--mono); color: var(--cyan); white-space: nowrap; }
-.proof-meta { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 10px; font-size: 11px; }
-.proof-meta span { padding: 3px 8px; border-radius: 5px; border: 1px solid var(--border); color: var(--muted); }
 .lean-monitor { background:
   radial-gradient(620px 220px at 8% 0%, color-mix(in srgb, #8b5cf6 12%, transparent), transparent 70%),
   var(--card); border: 1px solid color-mix(in srgb, #8b5cf6 38%, var(--border));
@@ -260,13 +253,6 @@ tr.sel td { background: color-mix(in srgb, var(--accent) 12%, var(--card)); }
   border-radius: 10px; color: var(--muted); }
 ::-webkit-scrollbar { width: 9px; height: 9px; }
 ::-webkit-scrollbar-thumb { background: var(--scroll); border-radius: 5px; }
-.md-render { border: 1px solid var(--border); border-radius: 10px; background: var(--card); padding: 22px 28px; font-size: 13.5px; line-height: 1.7; max-height: 640px; overflow-y: auto; }
-.md-render h1, .md-render h2, .md-render h3 { margin: 1em 0 .45em; line-height: 1.3; }
-.md-render h1 { font-size: 1.4em; border-bottom: 1px solid var(--border); padding-bottom: .25em; }
-.md-render code { background: var(--card2); border: 1px solid var(--border); border-radius: 4px; padding: 1px 4px; font-family: var(--mono); font-size: .9em; }
-.md-render pre { background: var(--card2); border: 1px solid var(--border); border-radius: 8px; padding: 10px 12px; overflow-x: auto; }
-.md-render blockquote { border-left: 3px solid var(--accent); margin: .7em 0; padding: 2px 12px; color: var(--muted); }
-.md-render .katex-display { overflow-x: auto; padding: 4px 0; }
 
 /* The monitor owns its viewport; content never sets its embedding frame height. */
 html, body { width: 100%; height: 100%; min-height: 0; overflow: hidden; overscroll-behavior: none; }
@@ -311,7 +297,6 @@ header .hdr-actions { flex-wrap: wrap; min-width: 0; max-width: 100%; }
 .map-controls .map-interact { display: none; width: auto; padding: 0 9px; font-size: 11px; }
 .map-controls .map-interact[aria-pressed="true"] { background: var(--accent); color: var(--card); }
 .map-legend { max-width: calc(100% - 16px); pointer-events: none; }
-.proof-pdf { width: 100%; height: 540px; max-height: 70dvh; border: 0; }
 @media (max-width: 980px) {
   .layout, body.embedded .layout { display: block; overflow-x: hidden; overflow-y: auto; overscroll-behavior: contain; scrollbar-gutter: stable; }
   .main { overflow: visible; scrollbar-gutter: auto; }
@@ -389,8 +374,8 @@ header button:hover { background: var(--card2); border-color: var(--accent); }
 .stat { border-radius: 11px; background: var(--card); box-shadow: var(--shadow); }
 .stat .lbl { font-size: 10px; letter-spacing: .075em; }
 .stat .val { font-family: var(--body-font); font-size: 24px; font-weight: 500; letter-spacing: -.05em; font-variant-numeric: tabular-nums; }
-.view-toggle .vt-btn, .filter-bar button, .proof-tabs button { border-radius: 7px; font-size: 11px; font-weight: 500; }
-.view-toggle .vt-btn:hover, .filter-bar button:hover, .proof-tabs button:hover { border-color: var(--accent); color: var(--accent); }
+.view-toggle .vt-btn, .filter-bar button { border-radius: 7px; font-size: 11px; font-weight: 500; }
+.view-toggle .vt-btn:hover, .filter-bar button:hover { border-color: var(--accent); color: var(--accent); }
 .view-toggle .vt-btn.active:hover { color: var(--on-accent); }
 .view-toggle .vt-hint { font-size: 10px; }
 .agent-map { border-radius: 13px; background: radial-gradient(circle, color-mix(in srgb, var(--border) 70%, transparent) .8px, transparent .8px) 0 0 / 22px 22px, var(--card); }
@@ -411,7 +396,7 @@ header button:hover { background: var(--card2); border-color: var(--accent); }
 .map-controls button { background: var(--card); border-radius: 7px; }
 .map-controls button:hover { border-color: var(--accent); color: var(--accent); }
 .map-legend { background: color-mix(in srgb, var(--card) 96%, transparent); color: var(--muted); box-shadow: var(--shadow); font-size: 10px; }
-.stage-col, .flow-wrap, .proof-wrap, .insights, .lean-monitor { border-radius: 12px; box-shadow: var(--shadow); }
+.stage-col, .flow-wrap, .insights, .lean-monitor { border-radius: 12px; box-shadow: var(--shadow); }
 .stage-hdr { background: color-mix(in srgb, var(--card2) 50%, var(--card)); }
 .agent-node { background: var(--card); }
 .agent-node:hover { background: color-mix(in srgb, var(--accent) 3%, var(--card)); }
@@ -429,12 +414,12 @@ header button:hover { background: var(--card2); border-color: var(--accent); }
 .visual-legend .sw-high-cost { border-color: var(--memory); }
 .visual-legend .sw-waste, tr.is-waste td { background: color-mix(in srgb, var(--err) 8%, var(--card)) !important; border-color: color-mix(in srgb, var(--err) 40%, var(--border)); }
 tr.cost-high-mark td { border-left-color: color-mix(in srgb, var(--memory) 55%, var(--border)); }
-.insights h2, .flow-wrap h2, .proof-wrap h2, .lean-monitor-head h2, .compare-wrap h2, .table-wrap h2, .sidebar-hdr h2 {
+.insights h2, .flow-wrap h2, .lean-monitor-head h2, .compare-wrap h2, .table-wrap h2, .sidebar-hdr h2 {
   font-family: var(--heading-font); font-size: 21px; font-weight: 500; letter-spacing: -.015em; line-height: 1.2; color: var(--fg);
 }
 .insight-block, .lean-monitor-block { background: var(--card2); border-radius: 9px; }
 .insight-block h3, .lean-monitor-block h3, .field .fl, .sec { font-size: 10px; font-weight: 500; letter-spacing: .065em; }
-.flow-sub, .proof-sub, .lean-monitor-head p, .stage-note { font-size: 11px; line-height: 1.65; }
+.flow-sub, .lean-monitor-head p, .stage-note { font-size: 11px; line-height: 1.65; }
 .pill { border-radius: 5px; font-weight: 500; }
 th { font-size: 10px; letter-spacing: .035em; font-weight: 500; }
 .sidebar-hdr h2 { font-size: 21px; }
@@ -459,8 +444,6 @@ th { font-size: 10px; letter-spacing: .035em; font-weight: 500; }
 .empty h2 { font-family: var(--heading-font); font-size: 27px; font-weight: 500; letter-spacing: -.02em; color: var(--fg); }
 .empty p { font-size: 12px; line-height: 1.65; }
 .detail-body .empty h2 { font-size: 22px; }
-.md-render { font-size: 13px; line-height: 1.8; }
-.md-render h1, .md-render h2, .md-render h3 { font-family: var(--heading-font); font-weight: 500; }
 
 .trace-guide { margin: 0 0 10px; border: 1px solid var(--border); border-radius: 8px; background: var(--card); }
 .trace-guide summary { padding: 9px 12px; cursor: pointer; color: var(--muted); font-size: 11px; font-weight: 500; }
@@ -474,10 +457,6 @@ th { font-size: 10px; letter-spacing: .035em; font-weight: 500; }
   *, *::before, *::after { animation: none !important; transition: none !important; scroll-behavior: auto !important; }
 }
 </style>
-<script src="https://cdn.jsdelivr.net/npm/marked@12.0.2/marked.min.js"></script>
-<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.css">
-<script src="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.js"></script>
-<script src="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/contrib/auto-render.min.js"></script>
 <style id="clear-palette-style">
 :root, [data-theme="light"] {
   --bg:#ffffff; --card:#ffffff; --card2:#f4f6fa; --border:#dfe5ee;
@@ -494,6 +473,29 @@ th { font-size: 10px; letter-spacing: .035em; font-weight: 500; }
   --scroll:#56657a; --on-accent:#111318; --shadow:0 2px 8px rgb(0 0 0 / .15);
   --write:#82b1ff; --critic:#67d4df; --think:#c4adff; --tool:#fbbf24;
   --orch:#bdc8d8; --final:#ffac7c; --memory:#6cdbb1;
+}
+</style>
+<style id="monitor-flow-style">
+/* Console Monitor view: the embedding frame grows to fit this document, so
+   nothing here may scroll on its own or size itself from the frame's
+   viewport (vh would grow with the frame). --host-vh is the console view's
+   height, set by the console. */
+html.flow-embed { height: auto; min-height: 0; overflow: hidden; overscroll-behavior: auto; }
+html.flow-embed body, html.flow-embed body.embedded {
+  display: block; height: auto; min-height: 0; overflow: visible; overscroll-behavior: auto;
+}
+html.flow-embed body.embedded .layout {
+  flex: none; height: auto; min-height: 0; overflow: visible; grid-template-rows: auto;
+}
+html.flow-embed .main, html.flow-embed .sidebar, html.flow-embed .detail-body {
+  overflow: visible; scrollbar-gutter: auto; max-height: none;
+}
+html.flow-embed .pre { max-height: calc(var(--host-vh, 900px) * .5); }
+html.flow-embed body.embedded .agent-map { height: clamp(300px, calc(var(--host-vh, 900px) * .54), 600px); }
+@media (max-width: 980px) {
+  html.flow-embed body.embedded .layout { overflow: visible; }
+  html.flow-embed .detail-body .pre { max-height: none; }
+  html.flow-embed body.embedded .agent-map { height: clamp(300px, calc(var(--host-vh, 800px) * .5), 440px); }
 }
 </style>
 </head>
@@ -574,7 +576,10 @@ window.addEventListener('message', e => {
   }
   if (e.data?.type === 'proving-console-run') {
     const rid = e.data.run_id || '';
-    if (rid) loadRun(rid);
+    // Re-selecting the shown run refreshes it in place (keeping the selected
+    // agent and scroll); another run loads from scratch.
+    if (rid && rid === State.currentRunId && State.run) refreshLiveRun(true);
+    else if (rid) loadRun(rid);
     else clearRunView();
   }
 });
@@ -586,54 +591,52 @@ $('theme-btn')?.addEventListener('click', () => {
 initTheme();
 
 const fmtN = n => n>=1e6?(n/1e6).toFixed(1)+'M':n>=1e3?(n/1e3).toFixed(1)+'k':String(n||0);
-const esc = s => String(s??'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;');
-const SAFE_MARKDOWN_TAGS = new Set([
-  'A','BLOCKQUOTE','BR','CODE','DEL','EM','H1','H2','H3','H4','H5','H6','HR',
-  'LI','OL','P','PRE','STRONG','TABLE','TBODY','TD','TFOOT','TH','THEAD','TR','UL'
-]);
-function safeMarkdownHref(raw) {
-  if (!raw) return null;
-  try {
-    const parsed = new URL(raw, window.location.href);
-    return ['http:', 'https:', 'mailto:'].includes(parsed.protocol) ? parsed.href : null;
-  } catch (e) { return null; }
-}
-// Proof and trace text comes from models and tools, so restrict the rendered
-// result to a markdown-shaped element/attribute subset before inserting it.
-function sanitizeRenderedHtml(value) {
-  const template = document.createElement('template');
-  template.innerHTML = String(value || '');
-  function scrub(el) {
-    [...el.children].forEach(scrub);
-    if (!SAFE_MARKDOWN_TAGS.has(el.tagName)) {
-      el.replaceWith(document.createTextNode(el.textContent || ''));
-      return;
-    }
-    const href = el.tagName === 'A' ? safeMarkdownHref(el.getAttribute('href')) : null;
-    const title = el.tagName === 'A' ? (el.getAttribute('title') || '') : '';
-    const codeClass = el.tagName === 'CODE' ? (el.getAttribute('class') || '') : '';
-    [...el.attributes].forEach(attr => el.removeAttribute(attr.name));
-    if (href) {
-      el.setAttribute('href', href);
-      el.setAttribute('rel', 'noopener noreferrer');
-    }
-    if (title) el.setAttribute('title', title);
-    if (/^language-[A-Za-z0-9_-]+$/.test(codeClass)) el.setAttribute('class', codeClass);
+// Small runs cost cents: "$0.0" / "$0" hid every per-agent and per-stage cost.
+const fmtUsd = value => {
+  const n = Number(value) || 0;
+  if (n <= 0) return '$0';
+  if (n < 0.01) return '<$0.01';
+  if (n < 100) return '$' + n.toFixed(2);
+  return '$' + n.toFixed(0);
+};
+// Whether a node carries usage of its own. Stream markers (e.g. a stage's
+// "Math Harness · …" reasoning item) make no model call; response-only
+// transports put the call's usage on its message node or only in run totals.
+function agentUsageKnown(a) {
+  if (!a) return false;
+  for (const key of ['input_tokens', 'output_tokens', 'total_input_tokens']) {
+    if (Number(a[key]) > 0) return true;
   }
-  [...template.content.children].forEach(scrub);
-  return template.innerHTML;
+  return Number(a.cost_usd) > 0;
 }
-function safeMarkdown(text) {
-  let html;
-  try {
-    html = window.marked ? marked.parse(String(text || ''), {mangle:false, headerIds:false}) : null;
-  } catch (e) { html = null; }
-  return sanitizeRenderedHtml(html || `<pre>${esc(text)}</pre>`);
+function agentMonitor(a) {
+  const mon = (a && a.monitor) || {};
+  return agentUsageKnown(a) ? mon : { ...mon, cost_tier: 'untracked' };
 }
+function agentTokenLine(a) {
+  if (!agentUsageKnown(a)) return '<span title="This node reports no usage of its own; see the run totals">no usage of its own</span>';
+  return `in <b>${fmtN(a.total_input_tokens)}</b> · out <b>${fmtN(a.output_tokens)}</b>${a.cost_usd?` · <b>${fmtUsd(a.cost_usd)}</b>`:''}`;
+}
+function pipelineStageNote(run) {
+  const stages = Array.isArray(run?.pipeline) ? run.pipeline : [];
+  return stages.length ? `Pipeline stages 1–${stages.length}.` : '';
+}
+const esc = s => String(s??'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;');
 
-const State = { runs: [], run: null, formalRun: null, agent: null, tab: 'overview', filterHigh: false, filterWaste: false, proofTab: 'pdf', finalTexCache: {}, currentRunId: null, viewMode: localStorage.getItem('hd-view-mode') || 'map', monitorMode: localStorage.getItem('hd-monitor-mode') || 'agent', showSolutionPath: false };
+const State = { runs: [], run: null, formalRun: null, agent: null, tab: 'overview', filterHigh: false, filterWaste: false, currentRunId: null, viewMode: localStorage.getItem('hd-view-mode') || 'map', monitorMode: localStorage.getItem('hd-monitor-mode') || 'agent', showSolutionPath: false };
 const isEmbedded = window.parent !== window;
 if (isEmbedded) document.body.classList.add('embedded');
+const isFlowLayout = document.documentElement.classList.contains('flow-embed');
+// In the console's Monitor view the page scrolls in the console's view, not here.
+function flowHostScroller() {
+  if (!isFlowLayout) return null;
+  try {
+    for (let el = window.frameElement?.parentElement; el; el = el.parentElement) {
+      if (/^(auto|scroll|overlay)$/.test(getComputedStyle(el).overflowY)) return el;
+    }
+  } catch (_) {}
+  return null;
+}
 function syncMonitorMode() {
   document.body.classList.toggle('formal-monitor', State.monitorMode === 'lean');
   document.querySelectorAll('#monitor-mode [data-monitor-mode]').forEach(btn => {
@@ -724,6 +727,11 @@ function renderVisualLegend() {
   </div>`;
 }
 
+function agentsLackUsage(analysis) {
+  const usage = analysis?.per_agent_usage;
+  return !!(usage && Number(usage.agents) > 0 && Number(usage.tracked) === 0);
+}
+
 function renderInsights(run) {
   const a = run.analysis;
   if (!a) return '';
@@ -736,7 +744,7 @@ function renderInsights(run) {
   let stageBars = stages.map(([id, s]) => `<div class="stage-bar-row">
     <div class="lbl" title="${esc(s.label)}">${esc(id)} ${esc((s.label||'').slice(0,14))}</div>
     <div class="bar"><i style="width:${Math.max(s.pct_cost,2)}%;background:${colors[id]||colors.other}"></i></div>
-    <div class="val">$${s.cost_usd.toFixed(0)}</div>
+    <div class="val">${fmtUsd(s.cost_usd)}</div>
   </div>`).join('');
 
   const flags = (a.flags || []);
@@ -744,19 +752,19 @@ function renderInsights(run) {
     ? flags.map(f => `<div class="flag-item ${esc(f.severity||'warn')}" data-trace="${esc(f.trace_id||'')}">${esc(f.message)}</div>`).join('')
     : '<div style="font-size:11px;color:var(--muted)">No flags</div>';
 
-  const top = (a.top_expensive || []).slice(0, 6).map(t => {
+  const top = (a.top_expensive || []).filter(t => Number(t.cost_usd) > 0).slice(0, 6).map(t => {
     const oc = t.outcome === 'ok' ? 'ok' : t.outcome === 'fail' ? 'err' : t.outcome === 'warn' ? 'warn' : '';
     return `<div class="top-row" data-trace="${esc(t.trace_id)}">
       <div class="nm">${esc(t.stage_name)}</div>
       <span class="pill ${oc}">${esc(t.outcome_label||'—')}</span>
-      <div class="c">$${t.cost_usd.toFixed(1)}</div>
+      <div class="c">${fmtUsd(t.cost_usd)}</div>
     </div>`;
   }).join('');
 
   const chains = (a.verify_chains || []).filter(c => c.refine_rounds > 0 || c.verify_failures > 0).slice(0, 5);
   let chainHtml = chains.length
     ? chains.map(c => `<div class="chain-row">
-      <b>${esc(c.task_id)}</b> · $${c.cost_usd.toFixed(1)} · verify✗×${c.verify_failures} · refine×${c.refine_rounds}
+      <b>${esc(c.task_id)}</b> · ${fmtUsd(c.cost_usd)} · verify✗×${c.verify_failures} · refine×${c.refine_rounds}
       ${c.final_verdict != null ? ` · final: ${esc(c.final_verdict)}` : ''}
       <div class="stages">${esc((c.stages||[]).join(' → '))}</div>
     </div>`).join('')
@@ -765,7 +773,7 @@ function renderInsights(run) {
   const repeats = (a.repeat_groups || []).slice(0, 6);
   let repeatHtml = repeats.length
     ? repeats.map(r => `<div class="chain-row">
-      <b>${esc(r.label || r.key)}</b> · ×${r.count} · $${r.total_cost_usd.toFixed(1)}
+      <b>${esc(r.label || r.key)}</b> · ×${r.count} · ${fmtUsd(r.total_cost_usd)}
       <span class="pill warn">${esc(r.kind)}</span>
     </div>`).join('')
     : '<div style="font-size:11px;color:var(--muted)">No significant repeat calls</div>';
@@ -773,7 +781,7 @@ function renderInsights(run) {
   const wastes = (a.waste_groups || []).slice(0, 6);
   let wasteHtml = wastes.length
     ? wastes.map(w => `<div class="chain-row">
-      <b>${esc(w.label || w.reason)}</b> · ×${w.count} · $${w.total_cost_usd.toFixed(1)}
+      <b>${esc(w.label || w.reason)}</b> · ×${w.count} · ${fmtUsd(w.total_cost_usd)}
       <span class="pill err">waste</span>
     </div>`).join('')
     : '<div style="font-size:11px;color:var(--muted)">No significant token waste detected</div>';
@@ -789,7 +797,7 @@ function renderInsights(run) {
         <h3>Stage cost breakdown</h3>
         ${stageBars || '<div class="empty" style="padding:8px">No data</div>'}
         <div style="margin-top:8px;font-size:11px;color:var(--muted)">
-          Literature stages 1–3: $${(lit.cost_usd||0).toFixed(0)} (${lit.pct_cost||0}%) ·
+          Literature stages 1–3: ${fmtUsd(lit.cost_usd)} (${lit.pct_cost||0}%) ·
           Effective output cost share: ${eff.cost_efficiency_pct||0}%
           ${bm.is_relaxation === true ? ' · <span class="pill warn">partial result</span>' : bm.is_relaxation === false ? ' · <span class="pill ok">full result</span>' : ''}
         </div>
@@ -800,7 +808,7 @@ function renderInsights(run) {
       </div>
       <div class="insight-block">
         <h3>Top expensive agents</h3>
-        <div class="top-list">${top || '—'}</div>
+        <div class="top-list">${top || (agentsLackUsage(a) ? '<div style="font-size:11px;color:var(--muted)">No node reports its own cost; see the run totals</div>' : '—')}</div>
       </div>
       <div class="insight-block">
         <h3>Verify / refine chains</h3>
@@ -844,7 +852,7 @@ function renderAgentFlowSection(run) {
     stripHtml += `<div class="pipe-stage" style="border-top-color:${stageColor(st.id)}">
       <div class="pipe-stage-hdr">${esc(st.label)}</div>
       <div class="pipe-stage-sub">${esc(st.title)}</div>
-      <div class="pipe-stage-tot">${st.agent_count} agents · $${(st.cost_usd||0).toFixed(0)}</div>
+      <div class="pipe-stage-tot">${st.agent_count} agents · ${fmtUsd(st.cost_usd)}</div>
       ${roles || '<div class="pipe-role"><span class="nm">—</span></div>'}
     </div>`;
   });
@@ -875,121 +883,6 @@ function formatMemoryContext(ctx) {
     const body = typeof v === 'string' ? v : JSON.stringify(v, null, 2);
     return `### ${k} ###\n${body}`;
   }).join('\n\n');
-}
-
-function renderFinalProofSection(run) {
-  const fl = run.final_latex;
-  if (!fl) {
-    return `<div class="proof-wrap">
-      <h2>Final Proof</h2>
-      <div class="proof-sub">No final LaTeX/Markdown proof file found for this run.</div>
-    </div>`;
-  }
-
-  const mdAvail = (fl.format === 'markdown') || String(fl.source_label || '').endsWith('.md');
-  const pdfAvail = fl.is_latex && !mdAvail;
-  let tab = State.proofTab || 'pdf';
-  if (tab === 'pdf' && mdAvail) tab = 'rendered';
-  if (tab === 'rendered' && !mdAvail) tab = pdfAvail ? 'pdf' : 'source';
-  const meta = `<div class="proof-meta">
-    <span>${esc(fl.source_label || 'proof')}</span>
-    <span>${fl.line_count || 0} lines · ${fmtN(fl.char_count || 0)} chars</span>
-    <span>${esc(fl.format || 'text')}</span>
-    ${fl.matched_line_pct != null ? `<span>${fl.matched_line_pct}% lines attributed to agents</span>` : ''}
-    ${fl.selector?.selected_is_relaxation === true ? '<span class="pill warn">partial result</span>' : fl.selector?.selected_is_relaxation === false ? '<span class="pill ok">full result</span>' : ''}
-    ${fl.selector?.selected_verified === true ? '<span class="pill ok">verified</span>' : ''}
-  </div>`;
-
-  let body = '';
-  if (tab === 'rendered') {
-    body = `<div class="md-render" id="proof-md-render"><div class="loading">Rendering markdown…</div></div>
-      <div class="proof-sub" style="margin-top:8px">Markdown proof rendered with math — every block is text-traceable to agents (see Agent trace).</div>`;
-  } else if (tab === 'pdf') {
-    if (pdfAvail) {
-      body = `<iframe class="proof-pdf" src="${(window.__pcUrl||(p=>p))('/api/run/'+encodeURIComponent(run.run_id)+'/final.pdf')}" title="Final proof PDF"></iframe>
-        <div class="proof-sub" style="margin-top:8px">PDF compiled on demand via pdflatex. If blank, switch to Source tab.</div>`;
-    } else {
-      body = `<div class="empty" style="padding:20px">This proof is ${esc(fl.format || 'plain text')} (not LaTeX) — open the Source tab to read it.</div>`;
-    }
-  } else if (tab === 'source') {
-    const cached = State.finalTexCache[run.run_id];
-    body = cached
-      ? `<div class="pre proof-source">${esc(cached)}</div>`
-      : `<div class="loading" id="proof-source-loading">Loading source…</div>`;
-  } else {
-    const prov = fl.provenance || [];
-    if (!prov.length) {
-      body = `<div class="empty" style="padding:16px">Per-agent attribution unavailable — this engine reports a single session trace (an activity log rather than raw proof text), so lines in the compiled proof can't be matched back to individual agent outputs. Multi-agent engines (IMProof / UCLA) show a full attribution table here.</div>`;
-    } else {
-      body = `<table class="prov-table"><thead><tr>
-        <th>Agent</th><th>Role</th><th>Lines</th><th>Share</th><th>Preview</th>
-      </tr></thead><tbody>` + prov.map(p => {
-        const sel = State.agent?.trace_id === p.trace_id ? ' class="sel"' : '';
-        const regions = (p.regions || []).map(r => `L${r.start_line}–${r.end_line}`).join(', ');
-        const preview = (p.regions && p.regions[0]?.preview) || '';
-        return `<tr${sel} data-trace="${esc(p.trace_id)}">
-          <td>${esc(p.stage_name)}</td>
-          <td>${esc(p.role)}</td>
-          <td class="prov-lines">${esc(regions || '—')}</td>
-          <td>${p.contribution_pct != null ? p.contribution_pct + '%' : '—'}</td>
-          <td class="prov-preview">${esc(preview)}</td>
-        </tr>`;
-      }).join('') + '</tbody></table>';
-      body += `<div class="proof-sub" style="margin-top:8px">Click a row to jump to that agent. Attribution uses text matching between agent outputs and final proof blocks (writeup, refine, assembly, author, finalize).</div>`;
-    }
-  }
-
-  const tabs = [
-    mdAvail ? ['rendered', 'Rendered'] : null,
-    pdfAvail ? ['pdf', 'PDF'] : null,
-    ['source', 'Source'],
-    ['provenance', 'Agent trace'],
-  ].filter(Boolean).map(([id, label]) =>
-    `<button type="button" class="proof-tab${tab === id ? ' active' : ''}" data-proof-tab="${id}">${label}</button>`
-  ).join('');
-
-  return `<div class="proof-wrap">
-    <h2>Final Proof</h2>
-    <div class="proof-sub">Final compiled output and which agents contributed text that appears in it.</div>
-    ${meta}
-    <div class="proof-tabs">${tabs}</div>
-    ${body}
-  </div>`;
-}
-
-async function loadFinalTexSource(runId) {
-  if (State.finalTexCache[runId]) return State.finalTexCache[runId];
-  const r = await fetch(`/api/run/${encodeURIComponent(runId)}/final.tex`);
-  if (!r.ok) throw new Error('source not found');
-  const text = await r.text();
-  State.finalTexCache[runId] = text;
-  return text;
-}
-
-function ensureProofSourceLoaded(run) {
-  if (!run?.final_latex) return;
-  const mdEl = $('proof-md-render');
-  if (mdEl) {
-    loadFinalTexSource(run.run_id).then(text => {
-      mdEl.innerHTML = safeMarkdown(text);
-      if (window.renderMathInElement) {
-        try { renderMathInElement(mdEl, {delimiters:[{left:'$$',right:'$$',display:true},{left:'\\[',right:'\\]',display:true},{left:'$',right:'$',display:false},{left:'\\(',right:'\\)',display:false}], throwOnError:false}); } catch(e) {}
-      }
-    }).catch(e => { mdEl.textContent = 'Failed to load: ' + e.message; });
-  }
-  if (State.proofTab !== 'source') return;
-  if (State.finalTexCache[run.run_id]) {
-    const el = $('proof-source-loading');
-    if (el) el.outerHTML = `<div class="pre proof-source">${esc(State.finalTexCache[run.run_id])}</div>`;
-    return;
-  }
-  loadFinalTexSource(run.run_id).then(() => {
-    const el = $('proof-source-loading');
-    if (el) el.outerHTML = `<div class="pre proof-source">${esc(State.finalTexCache[run.run_id])}</div>`;
-  }).catch(e => {
-    const el = $('proof-source-loading');
-    if (el) el.textContent = 'Failed to load source: ' + e.message;
-  });
 }
 
 function renderRunMemorySection(run) {
@@ -1331,7 +1224,6 @@ function renderPipeline(run) {
   }
 
   let html = renderCompare(State.runs);
-  html += renderFinalProofSection(run);
   html += renderResearchAuditSection(run);
   html += renderRunMemorySection(run);
   html += renderPapersSection(run);
@@ -1340,14 +1232,14 @@ function renderPipeline(run) {
   const isImproof = run.source === 'improofbench_artifacts';
   const stageNote = isImproof
     ? 'IMProofBench pipeline: Workflow → Author → Critic (+ Council / Compute when used).'
-    : 'Pipeline stages 1–9.';
+    : pipelineStageNote(run);
   html += `<div class="stage-note">${stageNote}${run.source === 'previous_log'
       ? `<br><span class="pill warn">Historical stdout log</span> source: <code>${esc(run.log_file||'')}</code>`
       : ''
   }</div>`;
   html += `<div class="stats">
     <div class="stat"><div class="lbl">Agents</div><div class="val">${run.totals?.agents||0}</div></div>
-    <div class="stat"><div class="lbl">Input tokens</div><div class="val">${fmtN(run.totals?.input_tokens)}</div></div>
+    <div class="stat"><div class="lbl">Input tokens</div><div class="val">${fmtN(run.totals?.input_tokens)}</div>${Number(run.totals?.cached_input_tokens) > 0 ? `<div class="stat-sub">incl. ${fmtN(run.totals.cached_input_tokens)} cached</div>` : ''}</div>
     <div class="stat"><div class="lbl">Output tokens</div><div class="val">${fmtN(run.totals?.output_tokens)}</div></div>
     <div class="stat"><div class="lbl">Latency</div><div class="val">${(run.totals?.latency_s||0).toFixed(0)}s</div></div>
     ${run.totals?.cost_usd?`<div class="stat"><div class="lbl">Cost</div><div class="val">$${run.totals.cost_usd.toFixed(2)}</div></div>`:''}
@@ -1389,7 +1281,7 @@ function renderPipeline(run) {
   for (const st of stages) {
     const list = byStage[st.id] || [];
     const emptyCls = list.length ? '' : ' empty-stage';
-    const stageCost = list.reduce((s,a) => s + (a.cost_usd||0), 0);
+    const stageCost = list.reduce((s,a) => s + (Number(a.cost_usd)||0), 0);
     const stagePct = run.totals?.cost_usd ? (stageCost / run.totals.cost_usd * 100) : 0;
     const stageHeat = stagePct >= 40 ? ' stage-heat-critical' : stagePct >= 22 ? ' stage-heat-high' : '';
     const skipHint = list.length ? '' : (st.env ? `<div class="stage-skip">Not run<br><span style="font-size:10px">${esc(st.env)}${st.default_on===false?'=0 (off by default)':''}</span></div>` : '<div class="stage-skip">Not run</div>');
@@ -1397,13 +1289,13 @@ function renderPipeline(run) {
       <div class="stage-hdr" style="border-top:3px solid ${stageColor(st.id)};${list.length?'':'opacity:.55'}">
         ${esc(st.label)}
         <div class="stitle">${esc(st.title)}</div>
-        ${list.length ? `<div class="stage-cost">$${stageCost.toFixed(0)} · ${stagePct.toFixed(0)}% · ${list.length} calls</div>` : ''}
+        ${list.length ? `<div class="stage-cost">${fmtUsd(stageCost)} · ${stagePct.toFixed(0)}% · ${list.length} calls</div>` : ''}
       </div>
       <div class="stage-body${emptyCls}">`;
     if (list.length) {
       for (const a of list) {
         const sel = State.agent?.trace_id === a.trace_id ? ' active' : '';
-        const mon = a.monitor || {};
+        const mon = agentMonitor(a);
         const oc = outcomeClass(mon.outcome);
         const heat = costHeatClass(mon);
         const waste = wasteVisualClass(mon);
@@ -1421,7 +1313,7 @@ function renderPipeline(run) {
         html += `<div class="agent-node${sel}${oc}${heat}${waste}${dim}" data-trace="${esc(a.trace_id)}" data-seq="${a.call_seq}">
           <div class="role">${wasteTag}${status}${esc(a.role)}${outBadge}</div>
           <div class="name">${esc(a.stage_name)}</div>
-          <div class="tok">in <b>${fmtN(a.total_input_tokens)}</b> · out <b>${fmtN(a.output_tokens)}</b>${a.cost_usd?` · <b>$${a.cost_usd.toFixed(2)}</b>`:''} · ${a.latency_s ? (a.latency_s).toFixed(0)+'s' : '—'}</div>
+          <div class="tok">${agentTokenLine(a)} · ${a.latency_s ? (a.latency_s).toFixed(0)+'s' : '—'}</div>
           ${barW > 0.5 ? `<div class="cost-bar" title="${barW.toFixed(1)}% of run cost"><i style="width:${barW}%"></i></div>` : ''}
         </div>`;
       }
@@ -1452,7 +1344,7 @@ function renderAllAgentsTable(run, agents, title='All Agents') {
   const sortedAgents = [...agents].sort((x,y) => (y.cost_usd||0) - (x.cost_usd||0));
   for (const a of sortedAgents) {
     const sel = State.agent?.trace_id === a.trace_id ? ' class="sel"' : '';
-    const mon = a.monitor || {};
+    const mon = agentMonitor(a);
     let impact = '—';
     if (a.decision_impact) {
       const d = a.decision_impact;
@@ -1474,7 +1366,7 @@ function renderAllAgentsTable(run, agents, title='All Agents') {
       <td>${esc(a.stage_name)}${rep}${waste}</td><td>${esc(a.role)}</td>
       <td>${esc(a.round_id??'—')}</td>
       <td>${a.cost_usd != null ? '$'+a.cost_usd.toFixed(2) : '—'}</td>
-      <td>${fmtN(a.total_input_tokens)}</td><td>${fmtN(a.output_tokens)}</td>
+      <td>${agentUsageKnown(a) ? fmtN(a.total_input_tokens) : '—'}</td><td>${agentUsageKnown(a) ? fmtN(a.output_tokens) : '—'}</td>
       <td><span class="pill ${mon.outcome==='ok'?'ok':mon.outcome==='fail'?'err':mon.outcome==='warn'?'warn':''}">${esc(oc)}</span></td>
       <td>${flags}</td><td>${impact}</td>
     </tr>`;
@@ -1497,7 +1389,7 @@ function mapKind(a) {
 
 function mapNodeHtml(a, solPath) {
   const kind = mapKind(a);
-  const mon = a.monitor || {};
+  const mon = agentMonitor(a);
   const kcolor = { write:'var(--write)', critic:'var(--critic)', think:'var(--think)', tool:'var(--tool)', orch:'var(--orch)', final:'var(--final)' }[kind];
   const badge = mon.outcome_label && mon.outcome_label !== '—'
     ? `<span class="mbadge" style="background:${mon.outcome==='ok'?'var(--ok)':mon.outcome==='fail'?'var(--err)':'var(--warn)'};color:#fff">${esc(mon.outcome_label)}</span>` : '';
@@ -1509,7 +1401,7 @@ function mapNodeHtml(a, solPath) {
   if (a.total_input_tokens) stat.push(`in ${fmtN(a.total_input_tokens)}`);
   if (a.output_tokens) stat.push(`out ${fmtN(a.output_tokens)}`);
   if (a.reasoning_tokens) stat.push(`rsn ${fmtN(a.reasoning_tokens)}`);
-  if (a.cost_usd) stat.push(`$${a.cost_usd.toFixed(2)}`);
+  if (a.cost_usd) stat.push(fmtUsd(a.cost_usd));
   if (a.latency_s) stat.push(`${a.latency_s.toFixed(0)}s`);
   const tok = stat.length ? `<div class="mt">${stat.join(' · ')}</div>` : '';
   // Per-kind body: each node type shows what matters for it.
@@ -1879,6 +1771,15 @@ function initAgentMap(run) {
         if (/^(auto|scroll|overlay|hidden)$/.test(style.overflowY) &&
             (style.overscrollBehaviorY === 'contain' || style.overscrollBehaviorY === 'none')) break;
       }
+      const hostPane = flowHostScroller();
+      if (hostPane) {
+        const maximum = hostPane.scrollHeight - hostPane.clientHeight;
+        const next = Math.max(0, Math.min(maximum, hostPane.scrollTop + delta));
+        if (maximum > 0 && Math.abs(next - hostPane.scrollTop) >= .5) {
+          hostPane.scrollTop = next;
+          ev.preventDefault();
+        }
+      }
       return;
     }
     ev.preventDefault();
@@ -2071,14 +1972,14 @@ function renderDetail(agent) {
       <div class="field"><div class="fl">round_id</div><div class="fv">${esc(agent.round_id??'—')}</div></div>
       <div class="field"><div class="fl">agent_id</div><div class="fv">${esc(agent.agent_id??'—')}</div></div>
       <div class="field"><div class="fl">role</div><div class="fv">${esc(agent.role)}</div></div>
-      <div class="field"><div class="fl">input_tokens</div><div class="fv">${agent.input_tokens} (+cache ${agent.cache_read_tokens}/${agent.cache_write_tokens}) = ${fmtN(agent.total_input_tokens)}</div></div>
-      <div class="field"><div class="fl">output_tokens</div><div class="fv">${fmtN(agent.output_tokens)}${agent.reasoning_tokens?` (reasoning ${fmtN(agent.reasoning_tokens)})`:''}</div></div>
+      <div class="field"><div class="fl">input_tokens</div><div class="fv">${agentUsageKnown(agent) ? `${agent.input_tokens ?? 0} (+cache ${agent.cache_read_tokens||0}/${agent.cache_write_tokens||0}) = ${fmtN(agent.total_input_tokens)}` : '— (no usage of its own; see run totals)'}</div></div>
+      <div class="field"><div class="fl">output_tokens</div><div class="fv">${agentUsageKnown(agent) ? `${fmtN(agent.output_tokens)}${agent.reasoning_tokens?` (reasoning ${fmtN(agent.reasoning_tokens)})`:''}` : '—'}</div></div>
       <div class="field"><div class="fl">model</div><div class="fv">${esc(agent.model)}</div></div>
       <div class="field"><div class="fl">latency</div><div class="fv">${agent.latency_s != null ? (agent.latency_s).toFixed(1)+'s' : '—'}</div></div>
       ${agent.status ? `<div class="field"><div class="fl">status</div><div class="fv">${esc(agent.status)}</div></div>` : ''}
       ${agent.cost_usd != null ? `<div class="field"><div class="fl">cost_usd</div><div class="fv">$${agent.cost_usd.toFixed(4)} (${(agent.monitor?.cost_share_pct||0).toFixed(1)}% of run)</div></div>` : ''}
       ${agent.monitor ? `<div class="field"><div class="fl">outcome</div><div class="fv">${esc(agent.monitor.outcome_label)} (${esc(agent.monitor.outcome)})</div></div>` : ''}
-      ${agent.monitor ? `<div class="field"><div class="fl">cost tier</div><div class="fv">${esc(agent.monitor.cost_tier)}</div></div>` : ''}
+      ${agent.monitor ? `<div class="field"><div class="fl">cost tier</div><div class="fv">${esc(agentMonitor(agent).cost_tier)}</div></div>` : ''}
       ${agent.monitor?.is_repeat ? `<div class="field"><div class="fl">repeat</div><div class="fv">#${agent.monitor.repeat_index} / ${agent.monitor.repeat_count} same stage (stats only, not red)</div></div>` : ''}
       ${agent.monitor?.in_verify_refine_cycle ? `<div class="field"><div class="fl">cycle</div><div class="fv">in verify/refine loop (stats only, not red)</div></div>` : ''}
       ${agent.monitor?.is_token_waste ? `<div class="field"><div class="fl">token waste</div><div class="fv">${esc(agent.monitor.waste_label||'—')}${agent.monitor.waste_ref_stage?` · vs ${esc(agent.monitor.waste_ref_stage)}`:''}${agent.monitor.waste_similarity!=null?` · ${(agent.monitor.waste_similarity*100).toFixed(0)}% similar`:''}</div></div>` : ''}
@@ -2124,6 +2025,19 @@ function renderDetail(agent) {
 }
 
 function scrollMonitorTo(element) {
+  const hostPane = flowHostScroller();
+  if (hostPane && element) {
+    try {
+      const frameTop = window.frameElement.getBoundingClientRect().top - hostPane.getBoundingClientRect().top;
+      const top = frameTop + element.getBoundingClientRect().top + hostPane.scrollTop;
+      const shown = top >= hostPane.scrollTop && top <= hostPane.scrollTop + hostPane.clientHeight - 96;
+      // Side by side, the details panel is often already on screen.
+      if (!shown || matchMedia('(max-width: 980px)').matches) {
+        hostPane.scrollTo({ top: Math.max(0, top - 12), behavior: matchMedia('(prefers-reduced-motion: reduce)').matches ? 'instant' : 'smooth' });
+      }
+    } catch (_) {}
+    return;
+  }
   const layout = document.querySelector('.layout');
   if (!element || !layout || !matchMedia('(max-width: 980px)').matches) return;
   const top = element.getBoundingClientRect().top - layout.getBoundingClientRect().top + layout.scrollTop;
@@ -2150,21 +2064,120 @@ function selectAgent(traceId, tab) {
   });
 }
 
+// While the selected run (or its derived Lean/DAG pipeline) is live, refetch it
+// every few seconds and redraw only when something changed, keeping the
+// selected agent, detail tab and scroll positions.
+const LIVE_RUN_STATES = new Set(['running', 'continuing', 'queued', 'starting']);
+const LIVE_REFRESH_MS = 5000;
+let liveRefreshTimer = null;
+function runIsLive(run) {
+  return LIVE_RUN_STATES.has(String(run?.status || '').toLowerCase())
+    || String(run?.auto_pipeline?.status || '') === 'running';
+}
+function runSignature(run) {
+  const agents = run?.agents || [];
+  const last = agents[agents.length - 1] || {};
+  const totals = run?.totals || {};
+  return JSON.stringify([
+    run?.run_id, run?.status, run?.updated_at, agents.length, last.trace_id, last.status,
+    (last.output || '').length, totals.cost_usd, totals.tokens, totals.total_tokens,
+    run?.auto_pipeline?.status, run?.auto_pipeline?.updated_at,
+    run?.final_latex?.char_count ?? null, run?.lean_verification?.status,
+    run?.lean_verification?.attempt_count,
+  ]);
+}
+function monitorVisible() {
+  if (document.hidden) return false;
+  try {
+    // Hidden Monitor tab in the console: its iframe has no layout boxes.
+    const frame = window.frameElement;
+    if (frame && !frame.getClientRects().length) return false;
+  } catch (_) {}
+  return true;
+}
+function scheduleLiveRefresh() {
+  clearTimeout(liveRefreshTimer);
+  liveRefreshTimer = null;
+  if (State.currentRunId && runIsLive(State.run)) {
+    liveRefreshTimer = setTimeout(() => refreshLiveRun(), LIVE_REFRESH_MS);
+  }
+}
+const SCROLL_KEEPERS = ['.layout', '#main', '#detail-body', '#sidebar', '#agent-map .map-scrollport', '#main .pipe-strip', '#main .pipeline-wrap'];
+function captureScroll() {
+  return SCROLL_KEEPERS.map(sel => {
+    const el = document.querySelector(sel);
+    return el ? [sel, el.scrollTop, el.scrollLeft] : null;
+  }).filter(Boolean);
+}
+function restoreScroll(saved) {
+  for (const [sel, top, left] of saved) {
+    const el = document.querySelector(sel);
+    if (el) { el.scrollTop = top; el.scrollLeft = left; }
+  }
+}
+async function refreshRunCount() {
+  try {
+    const manifest = await api('/api/runs');
+    loadRunsManifest(manifest.runs || []);
+    $('status').textContent = `${State.runs.length} run(s)`;
+  } catch (_) {}
+}
+async function refreshLiveRun(force = false) {
+  clearTimeout(liveRefreshTimer);
+  liveRefreshTimer = null;
+  const runId = State.currentRunId;
+  if (!runId || !State.run) return;
+  if (!force && !monitorVisible()) { scheduleLiveRefresh(); return; }
+  let fresh;
+  try {
+    fresh = await api(`/api/run/${encodeURIComponent(runId)}`);
+  } catch (_) {
+    scheduleLiveRefresh();
+    return;
+  }
+  if (runId !== State.currentRunId) return;
+  const wasLive = runIsLive(State.run);
+  if (runSignature(fresh) !== runSignature(State.run)) {
+    const saved = captureScroll();
+    const keep = State.agent?.trace_id || null;
+    State.run = fresh;
+    renderLoadedRun(keep);
+    restoreScroll(saved);
+    requestAnimationFrame(() => restoreScroll(saved));
+  }
+  if (wasLive && !runIsLive(fresh)) refreshRunCount();
+  scheduleLiveRefresh();
+}
+
 async function loadRun(runId) {
+  clearTimeout(liveRefreshTimer);
+  liveRefreshTimer = null;
   State.currentRunId = runId || null;
   const lbl = $('run-hdr-label');
   if (lbl) lbl.textContent = runId ? `· ${runId}` : '';
   if (!runId) { clearRunView(); return; }
+  if (!State.runs.some(r => r.run_id === runId)) refreshRunCount();
   disposeAgentMap?.();
   disposeAgentMap = null;
   $('main').innerHTML = '<div class="loading">Loading run…</div>';
+  let loaded;
   try {
-    State.run = await api(`/api/run/${encodeURIComponent(runId)}`);
+    loaded = await api(`/api/run/${encodeURIComponent(runId)}`);
   } catch (e) {
+    if (runId !== State.currentRunId) return;
     $('main').innerHTML = `<div class="empty">Load failed: ${esc(e.message)}</div>`;
     $('status').textContent = 'load error';
     return;
   }
+  if (runId !== State.currentRunId) return;
+  State.run = loaded;
+  renderLoadedRun(null);
+  scheduleLiveRefresh();
+}
+
+function renderLoadedRun(keepTraceId) {
+  disposeAgentMap?.();
+  disposeAgentMap = null;
   State.agent = null;
   $('main').innerHTML = renderPipeline(State.run);
   const rerender = () => {
@@ -2173,7 +2186,6 @@ async function loadRun(runId) {
     bindMainClicks();
     initAgentFlow(State.run);
     try { initAgentMap(activeRun); } catch (e) { console.warn('agent map', e); }
-    ensureProofSourceLoaded(State.run);
     if (State.agent) selectAgent(State.agent.trace_id);
   };
   function bindMainClicks() {
@@ -2181,15 +2193,6 @@ async function loadRun(runId) {
       const tid = el.dataset.trace;
       if (!tid) return;
       el.addEventListener('click', () => openAgentDetails(tid));
-    });
-    $('main').querySelectorAll('.prov-table tr[data-trace]').forEach(el => {
-      el.addEventListener('click', () => openAgentDetails(el.dataset.trace));
-    });
-    $('main').querySelectorAll('.proof-tab').forEach(btn => {
-      btn.addEventListener('click', () => {
-        State.proofTab = btn.dataset.proofTab;
-        rerender();
-      });
     });
     $('main').querySelectorAll('tr[data-run]').forEach(el => {
       el.addEventListener('click', () => loadRun(el.dataset.run));
@@ -2221,11 +2224,16 @@ async function loadRun(runId) {
     };
   }
   bindMainClicks();
-  ensureProofSourceLoaded(State.run);
   try { initAgentFlow(State.run); } catch (e) { console.warn('agent flow', e); }
   const activeRun = State.formalRun || State.run;
   try { initAgentMap(activeRun); } catch (e) { console.warn('agent map', e); }
-  if (activeRun.agents?.length) selectAgent(activeRun.agents[0].trace_id);
+  const agents = activeRun.agents || [];
+  const kept = keepTraceId && agents.some(a => a.trace_id === keepTraceId) ? keepTraceId : null;
+  if (kept || agents.length) {
+    const detailScroll = kept ? $('detail-body')?.scrollTop || 0 : 0;
+    selectAgent(kept || agents[0].trace_id);
+    if (kept && $('detail-body')) $('detail-body').scrollTop = detailScroll;
+  }
 }
 
 function loadRunsManifest(runs) {
@@ -2240,6 +2248,8 @@ function loadRunsManifest(runs) {
 }
 
 function clearRunView() {
+  clearTimeout(liveRefreshTimer);
+  liveRefreshTimer = null;
   disposeAgentMap?.();
   disposeAgentMap = null;
   State.run = null;

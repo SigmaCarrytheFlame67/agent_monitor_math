@@ -528,7 +528,8 @@ class FormalHarnessRoutePersistenceTests(unittest.TestCase):
             with self.subTest(engine=engine):
                 self.assertTrue(by_id[engine]["formal_lean_supported"])
                 self.assertTrue(by_id[engine]["available"])
-        for engine in ("openhands", "deepseek_harness", "danus"):
+        self.assertNotIn("danus", by_id)  # retired from the console
+        for engine in ("openhands", "deepseek_harness"):
             with self.subTest(engine=engine):
                 self.assertFalse(by_id[engine]["formal_lean_supported"])
                 self.assertFalse(by_id[engine]["available"])
@@ -540,7 +541,7 @@ class FormalHarnessRoutePersistenceTests(unittest.TestCase):
             "auth_route": "codex_subscription",
             "model": "gpt-5.6-sol",
         }
-        for engine in ("openhands", "deepseek_harness", "danus"):
+        for engine in ("openhands", "deepseek_harness"):
             with self.subTest(engine=engine), tempfile.TemporaryDirectory() as tmp:
                 workspace = Path(tmp)
                 with (

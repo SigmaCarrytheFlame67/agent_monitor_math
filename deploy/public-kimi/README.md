@@ -61,8 +61,11 @@ key, forces `kimi-k3`, clamps output, and never returns provider error bodies.
 The public browser remains Plain-only. The separately authenticated loopback
 session API may preserve bounded tools and streaming for compatible harnesses
 and Formal/Lean DAG; Caddy never exposes those internal paths. Public model
-calls use one upstream attempt: ambiguous timeouts, 5xx responses, or empty
-responses are not replayed, avoiding silent duplicate billing.
+calls never replay an ambiguous timeout, 5xx response or empty response,
+avoiding silent duplicate billing; only a refusal that certainly never reached
+processing (the broker could not be reached; a typed `forwarded: false` busy,
+unavailable or soon-freed quota refusal; or an upstream 429/503 within 2 s)
+is sent again, at most three attempts per logical call.
 
 This urgent v1 keeps the gateway and the browser's response-only Plain worker
 in the same hardened service. Tool-capable original-console harnesses run in a
@@ -82,16 +85,29 @@ credential that has ever appeared in chat, logs, shell history, or source.
 - problem: 12,000 characters
 - active runs: one per anonymous session, one per client IP, two globally
 - starts: five/hour per session and per IP, 20/hour globally
-- gateway calls: four concurrently, 120/hour globally
-- original-console sponsored sessions: 24 active and 20 starts/hour per
-  logical client, enough for all eight compatible harnesses plus Formal/DAG
+- gateway calls: eight concurrently, 900/hour globally (a full console guest
+  proof with its Formal pipeline is roughly 12-30 calls)
+- original-console sponsored sessions: 64 active and 60 starts/hour per
+  logical client, at most 200 model calls per issued token
 - output: at most 8,192 tokens per model call
-- public model attempts: one physical upstream attempt per logical call
+- public model attempts: at most three per logical call, retrying only a
+  refusal that never reached processing
 - internal run iteration value: fixed at 8; users cannot change it
-- model client timeout: 240 seconds; gateway upstream timeout: 225 seconds
+- model call time at the gateway: 600 seconds in total, queue wait included
+  (`PUBLIC_KIMI_UPSTREAM_TIMEOUT_SECONDS`, 60-900); a caller's shorter
+  `X-Ansatze-Timeout` shortens it
+- model client timeout: 240 seconds for the Plain worker, which calls the
+  gateway directly; a call whose caller gives up (or is stopped) first is
+  cut off at the gateway within about a second
 - whole harness job timeout: 600 seconds
 - public metadata/artifact retention: 24 hours, checked at startup and at
   bounded intervals during requests
+
+Operators can tune the gateway, sponsor-token and public-run limits with
+`PUBLIC_KIMI_*` environment variables (see `PublicLimits.from_env` and
+`deploy/ansatze/README.md`). Each value is clamped to a hard ceiling (for
+example 2,000 gateway calls/hour, 16 concurrent calls, 16,384 output tokens);
+a non-integer value stops the service from starting.
 
 The admission and gateway counters are in memory and reset when the service
 restarts. Persistent daily spend/token reservation, request-id deduplication,

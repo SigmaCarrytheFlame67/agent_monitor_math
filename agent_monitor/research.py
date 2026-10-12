@@ -167,6 +167,10 @@ def publish_memory(user, body):
     record = run_sharing.record(rid)
     if not record or record.get("guest") or record.get("status") != "finished" or record.get("completed") is False:
         raise ValueError("Only successfully completed account runs can become DAG memory.")
+    if record.get("run_kind") == "analyze" or record.get("engine") == "analyze":
+        # An analysis checks someone else's manuscript; its statements and
+        # verdicts are not this account's results and never become harness memory.
+        raise ValueError("Analyze runs check an existing manuscript; they can't become shared DAG memory.")
     node = _text(body.get("node_id"), "DAG node", 160)
     if not ID.fullmatch(node):
         raise ValueError("Invalid DAG node.")
@@ -292,12 +296,25 @@ def compose_context(problem, *, maximum=12000):
 
     # Rank across every eligible memory, rather than a newest-500 window. SQLite
     # streams scoring and returns only four excerpts; full results stay in the DB.
+    from agent_monitor.auth import is_operator_account
+
+    # Harness prompts can drive local tools, so only administrators'
+    # publications may enter them; any account can publish (registration may
+    # be open to anyone), which would make this a prompt-injection channel.
+    operators: dict[int, bool] = {}
+
+    def trusted(owner):
+        if owner not in operators:
+            operators[owner] = is_operator_account(owner)
+        return operators[owner]
+
     with connect() as db:
         db.create_function("memory_relevance", 2, relevance, deterministic=True)
+        db.create_function("trusted_owner", 1, trusted)
         marks = ",".join("?" for _ in ALLOWED_MODELS)
         ranked = db.execute(f"""SELECT source_run_id,model,layer,verification,title,
             substr(content,1,2800) AS content,memory_relevance(title,content) AS score
-            FROM memories WHERE model IN ({marks}) AND score>=2
+            FROM memories WHERE model IN ({marks}) AND score>=2 AND trusted_owner(owner)
             ORDER BY score DESC,created DESC,id LIMIT 4""", tuple(sorted(ALLOWED_MODELS))).fetchall()
     blocks = []
     for item in ranked:

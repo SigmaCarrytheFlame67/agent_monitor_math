@@ -1,0 +1,198 @@
+{
+ "models": [
+  {
+   "additional_speed_tiers": [
+    "fast"
+   ],
+   "apply_patch_tool_type": "freeform",
+   "availability_nux": null,
+   "base_instructions": "You are Codex, an agent based on GPT-6. You and the user share one workspace, and your job is to collaborate with them until their intended goal is completely handled.\n\n# When to ask the user for perm",
+   "comp_hash": "3000",
+   "context_window": 272000,
+   "default_reasoning_level": "low",
+   "default_reasoning_summary": "none",
+   "default_verbosity": "low",
+   "description": "Frontier intelligence for the most demanding work.",
+   "display_name": "GPT-6-Astra",
+   "effective_context_window_percent": 95,
+   "experimental_supported_tools": [
+    "send_user_message_async",
+    "clock"
+   ],
+   "include_apps_usage_instructions": false,
+   "include_plugin_usage_instructions": false,
+   "include_skills_usage_instructions": false,
+   "input_modalities": [
+    "text",
+    "image"
+   ],
+   "max_context_window": 872000,
+   "model_messages": {
+    "approvals": {},
+    "auto_review": {},
+    "collaboration_modes": {},
+    "confirmation_policies": {},
+    "guardian_v2": {},
+    "instructions_template": "\u2026",
+    "instructions_variables": null,
+    "multi_agent": {},
+    "permissions": null,
+    "persistent_instructions": "\u2026",
+    "token_budget": {}
+   },
+   "multi_agent_reasoning_effort": "xhigh",
+   "multi_agent_version": "v2",
+   "node_repl_auto_review_required": true,
+   "node_repl_disabled": false,
+   "priority": 2,
+   "service_tiers": [
+    {
+     "description": "2x speed, increased usage",
+     "id": "priority",
+     "name": "Fast"
+    }
+   ],
+   "shell_type": "unified_exec",
+   "slug": "gpt-6-astra",
+   "support_verbosity": true,
+   "supported_in_api": true,
+   "supported_reasoning_levels": [
+    {
+     "description": "Fast responses with lighter reasoning",
+     "effort": "low"
+    },
+    {
+     "description": "Balances speed and reasoning depth for everyday tasks",
+     "effort": "medium"
+    },
+    {
+     "description": "Greater reasoning depth for complex problems",
+     "effort": "high"
+    },
+    {
+     "description": "Extra high reasoning depth for complex problems",
+     "effort": "xhigh"
+    },
+    {
+     "description": "Maximum reasoning depth for the hardest problems",
+     "effort": "max"
+    },
+    {
+     "description": "Maximum reasoning with automatic task delegation",
+     "effort": "ultra"
+    }
+   ],
+   "supports_experimental_context": false,
+   "supports_image_detail_original": true,
+   "supports_reasoning_effort_updates": true,
+   "supports_search_tool": true,
+   "tool_mode": "code_mode_only",
+   "truncation_policy": {
+    "limit": 10000,
+    "mode": "tokens"
+   },
+   "upgrade": null,
+   "use_responses_lite": true,
+   "visibility": "list",
+   "web_search_tool_type": "text_and_image"
+  },
+  {
+   "additional_speed_tiers": [
+    "fast"
+   ],
+   "apply_patch_tool_type": "freeform",
+   "availability_nux": {
+    "message": "Maximize usage with GPT-6.1 Sol. Try it on complex work for near-Astra performance at a lower cost."
+   },
+   "base_instructions": "You are Codex, an agent based on GPT-6. You and the user share one workspace, and your job is to collaborate with them until their intended goal is completely handled.\n\n# When to ask the user for perm",
+   "comp_hash": "3000",
+   "context_window": 272000,
+   "default_reasoning_level": "low",
+   "default_reasoning_summary": "none",
+   "default_verbosity": "low",
+   "description": "Latest workhorse model for coding and everyday work.",
+   "display_name": "GPT-6.1-Sol",
+   "effective_context_window_percent": 95,
+   "experimental_supported_tools": [
+    "send_user_message_async",
+    "clock"
+   ],
+   "include_apps_usage_instructions": false,
+   "include_plugin_usage_instructions": false,
+   "include_skills_usage_instructions": false,
+   "input_modalities": [
+    "text",
+    "image"
+   ],
+   "max_context_window": 872000,
+   "model_messages": {
+    "approvals": {},
+    "auto_review": {},
+    "collaboration_modes": {},
+    "confirmation_policies": {},
+    "guardian_v2": {},
+    "instructions_template": "\u2026",
+    "instructions_variables": null,
+    "multi_agent": {},
+    "permissions": null,
+    "persistent_instructions": "\u2026",
+    "token_budget": {}
+   },
+   "multi_agent_reasoning_effort": "xhigh",
+   "multi_agent_version": "v2",
+   "node_repl_auto_review_required": true,
+   "node_repl_disabled": false,
+   "priority": 1,
+   "service_tiers": [
+    {
+     "description": "2x speed, increased usage",
+     "id": "priority",
+     "name": "Fast"
+    }
+   ],
+   "shell_type": "unified_exec",
+   "slug": "gpt-6.1-sol",
+   "support_verbosity": true,
+   "supported_in_api": true,
+   "supported_reasoning_levels": [
+    {
+     "description": "Fast responses with lighter reasoning",
+     "effort": "low"
+    },
+    {
+     "description": "Balances speed and reasoning depth for everyday tasks",
+     "effort": "medium"
+    },
+    {
+     "description": "Greater reasoning depth for complex problems",
+     "effort": "high"
+    },
+    {
+     "description": "Extra high reasoning depth for complex problems",
+     "effort": "xhigh"
+    },
+    {
+     "description": "Maximum reasoning depth for the hardest problems",
+     "effort": "max"
+    },
+    {
+     "description": "Maximum reasoning with automatic task delegation",
+     "effort": "ultra"
+    }
+   ],
+   "supports_experimental_context": false,
+   "supports_image_detail_original": true,
+   "supports_reasoning_effort_updates": true,
+   "supports_search_tool": true,
+   "tool_mode": "code_mode_only",
+   "truncation_policy": {
+    "limit": 10000,
+    "mode": "tokens"
+   },
+   "upgrade": null,
+   "use_responses_lite": true,
+   "visibility": "list",
+   "web_search_tool_type": "text_and_image"
+  }
+ ]
+}

@@ -1,0 +1,23 @@
+FirstProofBench Problem 1 (computability theory)
+
+We consider infinite countable first-order structures, their automorphism groups, and the descriptive
+aspects of their representations. A representation A of such a structure is an instance of its
+isomorphism type in which the domain is the set of natural numbers N, and the constants, functions,
+and relations are elements of N, multi-variable functions from N to N, and multi-place relations
+on N, respectively. An automorphism of A, or an isomorphism from A to B, is a bijection of N
+preserving the evaluation of all constants, functions, and relations. We let AUT(A) denote the
+automorphism group of A.
+
+Definition.
+- A is computably AUT-countable if every automorphism of A is computable relative to A.
+- A is computably AUT-countable on a cone if there is a C ⊆ N such that whenever B is
+  isomorphic to A, every automorphism of B is computable relative to B ⊕ C.
+
+Definition. A function f : A → A is Σ^in_1-definable in A relative to parameters ā = (a_1, . . . , a_n)
+from A if there is a family of existential formulas (φ_i)_{i∈N} such that for all x, y ∈ A, f(x) = y if and
+only if there is an i ∈ N with A ⊨ φ_i(ā, x, y).
+
+Problem. Is there a countable computably-represented structure A such that A is computably AUT-
+countable on a cone, and such that for any finite set of parameters ā in A there is an automorphism
+π of A which is not Σ^in_1-definable in A relative to the parameters ā ∪ π(ā), where π(ā) is the image
+of ā under π?

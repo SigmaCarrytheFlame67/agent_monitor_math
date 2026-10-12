@@ -158,8 +158,10 @@ console.log(JSON.stringify(output));
             for name in (
                 "dagStatus",
                 "setDagObservation",
+                "dagObservationText",
                 "isCompilerFactsGraph",
                 "compilerFactsPayload",
+                "dagIsCgmEngine",
                 "dagPayloadForMode",
                 "dagUnavailableState",
                 "showDagUnavailable",
@@ -309,12 +311,18 @@ console.log(JSON.stringify(routes.map(route=>({
         self.assertEqual(
             [route["labelOffset"] for route in output], [-9, 9, 0]
         )
+        # One edge renderer serves every mode; its geometry applies each
+        # route's curve and label offsets (renderDag no longer re-lays edges
+        # on expand, so the former duplicated loop is gone).
         render_source = _js_function("renderDag")
-        self.assertEqual(
-            render_source.count("for(const route of edgeRoutes)"), 2
-        )
-        self.assertGreaterEqual(render_source.count("route.curveOffset"), 4)
-        self.assertEqual(render_source.count("route.labelOffset"), 2)
+        self.assertEqual(render_source.count("dagEdgeSvg(edgeRoutes,posXY,"), 1)
+        edge_source = _js_function("dagEdgeSvg")
+        self.assertEqual(edge_source.count("for(const route of edgeRoutes)"), 1)
+        self.assertIn("dagEdgeGeometry(a,b,route)", edge_source)
+        geometry = _js_function("dagEdgeGeometry")
+        self.assertIn("route?.curveOffset", geometry)
+        self.assertIn("route?.labelOffset", geometry)
+        self.assertGreaterEqual(geometry.count("+off"), 4)
 
 
 if __name__ == "__main__":

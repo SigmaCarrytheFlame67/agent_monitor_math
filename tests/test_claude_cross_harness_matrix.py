@@ -21,6 +21,9 @@ COMPATIBLE_ENGINES = (
     "math_harness",
     "deepagents",
     "openclaw",
+    # Ansatz Analyze checks manuscripts with math_harness's response-only
+    # Claude Code transport (administrators only).
+    "analyze",
 )
 UNSUPPORTED_ENGINES = (
     "hermes",
@@ -28,7 +31,6 @@ UNSUPPORTED_ENGINES = (
     "openclaude",
     "openhands",
     "deepseek_harness",
-    "danus",
 )
 RUNNER_ROUTE_KEYS = (
     "AGENT_MONITOR_CODEX_SUBSCRIPTION",
@@ -198,6 +200,12 @@ class ClaudeCompatibilityMatrixTests(unittest.TestCase):
                     patch.object(jobs, "_configure_auth_route") as configure,
                     patch.object(jobs.threading, "Thread") as thread,
                 ):
+                    # An analysis needs a manuscript, not a problem.
+                    kind = (
+                        {"run_kind": "analyze", "source": {"text": "\\section{One} One equals one."}}
+                        if engine == "analyze"
+                        else {}
+                    )
                     with self.assertRaisesRegex(
                         ValueError,
                         "Unsupported Claude account model",
@@ -207,6 +215,7 @@ class ClaudeCompatibilityMatrixTests(unittest.TestCase):
                             problem_text="Prove one equals one.",
                             model=malicious,
                             auth_route="claude_subscription",
+                            **kind,
                         )
                     configure.assert_not_called()
                     thread.assert_not_called()

@@ -11,7 +11,6 @@ from pathlib import Path
 from unittest.mock import Mock, patch
 
 from agent_monitor import console_server, engine_graph, proof_graph
-from agent_monitor.runners import math_harness_runner
 
 
 def _fact_text(
@@ -146,10 +145,29 @@ def _write_bound_receipt(
     return receipt
 
 
-def _write_runner_generation(
-    workspace: Path, *, accepted: bool = True
-) -> Path:
-    runner = math_harness_runner
+_LEGACY_AUTHOR = "math_harness_model_critic"
+_LEGACY_SOURCE = "agent-monitor-math-harness-response-adapter@1"
+
+
+def _legacy_id(*parts: object) -> str:
+    return hashlib.sha256(
+        json.dumps(list(parts), ensure_ascii=False).encode("utf-8")
+    ).hexdigest()[:16]
+
+
+def _legacy_jsonl(rows: list[dict]) -> bytes:
+    return b"".join(
+        json.dumps(row, ensure_ascii=False, sort_keys=True).encode("utf-8") + b"\n"
+        for row in rows
+    )
+
+
+def _write_legacy_generation(workspace: Path, *, accepted: bool = True) -> Path:
+    """Write a historic schema-1 (single-critic adapter) generation.
+
+    This is a frozen copy of the retired runner's publication format so that
+    old runs keep rendering after the CGM pipeline replaced the adapter.
+    """
     problem = "Show that every even integer is divisible by two."
     plans = [
         {"label": "definition", "approach": "Unfold evenness.", "risks": "None."},
@@ -159,62 +177,214 @@ def _write_runner_generation(
         "If n is even, n = 2k for an integer k.",
         "Take the integer witness k from the definition of evenness.",
     ]
-    replies = [
-        ("planner", runner.Reply("planner", {}, "offline", "offline-model")),
-        (
-            "candidate-1",
-            runner.Reply(candidates[0], {}, "offline", "offline-model"),
-        ),
-        (
-            "candidate-2",
-            runner.Reply(candidates[1], {}, "offline", "offline-model"),
-        ),
-        ("critic", runner.Reply("critic", {}, "offline", "offline-model")),
-    ]
     if accepted:
-        critic = runner.Critic("correct", 2, "Accepted.", (), (), "")
-        final_proof = candidates[1]
-        revised = False
+        verdict, selected, summary = "correct", 2, "Accepted."
+        critical, gaps, instructions = [], [], ""
+        final_proof, revised = candidates[1], False
     else:
-        critic = runner.Critic(
-            "needs_revision",
-            2,
-            "A bounded revision remains unattested.",
-            ("One critical error remains.",),
-            ("One justification is missing.",),
-            "Repair the missing justification.",
+        verdict, selected = "needs_revision", 2
+        summary = "A bounded revision remains unattested."
+        critical = ["One critical error remains."]
+        gaps = ["One justification is missing."]
+        instructions = "Repair the missing justification."
+        final_proof, revised = "A bounded revised proof that remains unattested.", True
+    stages = ["planner", "candidate-1", "candidate-2", "critic"] + (
+        ["revision"] if revised else []
+    )
+    timestamp = "2026-09-01T00:00:00.000000Z"
+    goal = "goal:root"
+    fact_id = None
+    fact_payload = None
+    if accepted:
+        canonical = {
+            "problem_id": "legacy-demo",
+            "predecessors": [],
+            "glossary_introduces": {},
+            "statement": " ".join(problem.split()),
+            "proof": " ".join(final_proof.split()),
+        }
+        fact_id = hashlib.sha256(
+            json.dumps(canonical, ensure_ascii=False, sort_keys=True).encode("utf-8")
+        ).hexdigest()[:16]
+        fact_payload = "\n".join(
+            [
+                "---",
+                f"fact_id: {fact_id}",
+                "problem_id: legacy-demo",
+                f"author: {_LEGACY_AUTHOR}",
+                "predecessors: []",
+                "glossary_introduces: {}",
+                "external_refs: []",
+                "---",
+                "",
+                "## statement",
+                problem,
+                "",
+                "## proof",
+                final_proof,
+                "",
+            ]
+        ).encode("utf-8")
+
+    def edge(src: str, dst: str, kind: str, ordinal: int, rationale: str) -> dict:
+        return {
+            "id": _legacy_id(src, dst, kind, _LEGACY_AUTHOR, timestamp, ordinal),
+            "timestamp_utc": timestamp,
+            "author": _LEGACY_AUTHOR,
+            "src": src,
+            "dst": dst,
+            "type": kind,
+            "technique": None,
+            "and_group": None,
+            "rationale": rationale,
+        }
+
+    def entry(kind: str, claim: str, ordinal: int, **fields: object) -> dict:
+        row = {
+            "id": _legacy_id(kind, claim, _LEGACY_AUTHOR, timestamp, ordinal),
+            "timestamp_utc": timestamp,
+            "author": _LEGACY_AUTHOR,
+            "kind": kind,
+            "claim": claim,
+            "fact_id": None,
+            "links": {"subgoal": goal, "predecessors": []},
+            "glossary": {},
+        }
+        row.update(fields)
+        return row
+
+    plan_rows, attempt_rows, edges = [], [], []
+    for index, plan in enumerate(plans, 1):
+        row = entry(
+            "plan",
+            f"Candidate plan {index}: {plan['label']}",
+            index,
+            evidence=f"{plan['approach']}\n\nKnown risks: {plan['risks']}",
+            verifiable=False,
+            status="open",
         )
-        final_proof = "A bounded revised proof that remains unattested."
-        revised = True
-        replies.append(
-            ("revision", runner.Reply(final_proof, {}, "offline", "offline-model"))
+        plan_rows.append(row)
+        edges.append(edge(row["id"], goal, "addresses", index, "Candidate plan."))
+    for index, proof in enumerate(candidates, 1):
+        chosen = accepted and index == selected
+        row = entry(
+            "proof_attempt",
+            f"Proof attempt {index}: {plans[index - 1]['label']}",
+            index,
+            evidence=proof,
+            verifiable=True,
+            status="verified" if chosen else "unverified",
+            fact_id=fact_id if chosen else None,
         )
-    previous = Path.cwd()
-    os.chdir(workspace)
-    try:
-        runner._write_artifacts(
-            problem=problem,
-            task=problem,
-            plan_summary="Two bounded approaches.",
-            plans=plans,
-            candidates=candidates,
-            critic=critic,
-            final_proof=final_proof,
-            revised=revised,
-            route=runner.Route("offline", "offline-model", "api_chat"),
-            replies=replies,
-            prior_fact_ids=(),
+        attempt_rows.append(row)
+        edges.append(edge(row["id"], goal, "supports", index, "Candidate attempt."))
+    if revised:
+        row = entry(
+            "proof_attempt",
+            "Single bounded revision/synthesis",
+            len(attempt_rows) + 1,
+            evidence=final_proof,
+            verifiable=True,
+            status="unverified",
         )
-    finally:
-        os.chdir(previous)
-    return workspace / "math_harness" / "project"
+        attempt_rows.append(row)
+        edges.append(
+            edge(row["id"], attempt_rows[selected - 1]["id"], "refines", 1, "Revision.")
+        )
+    attempt_ids = [row["id"] for row in attempt_rows]
+    verification = entry(
+        "verification",
+        f"Critic verdict: {verdict}",
+        1,
+        evidence=json.dumps({"summary": summary}),
+        verifiable=False,
+        status="supported" if accepted else "open",
+        fact_id=fact_id,
+        links={"subgoal": goal, "predecessors": attempt_ids},
+    )
+    if fact_id is not None:
+        edges.append(
+            edge(attempt_ids[selected - 1], fact_id, "promoted-to", 1, "Accepted.")
+        )
+        edges.append(edge(fact_id, goal, "supports", 99, "Accepted target fact."))
+    annotation = {
+        "id": _legacy_id(goal, _LEGACY_AUTHOR, timestamp),
+        "timestamp_utc": timestamp,
+        "author": _LEGACY_AUTHOR,
+        "node_id": goal,
+        "status": "closed" if accepted else "active",
+        "score": 1.0 if accepted else None,
+        "comment": summary,
+        "evidence_considered": attempt_ids,
+    }
+    project = workspace / "math_harness" / "project"
+    memory = project / "global_memory"
+    facts_dir = project / "fact_graph" / "facts"
+    memory.mkdir(parents=True)
+    facts_dir.mkdir(parents=True)
+    (memory / "plan.jsonl").write_bytes(_legacy_jsonl(plan_rows))
+    (memory / "proof_attempt.jsonl").write_bytes(_legacy_jsonl(attempt_rows))
+    (memory / "verification.jsonl").write_bytes(_legacy_jsonl([verification]))
+    (memory / "edges.jsonl").write_bytes(_legacy_jsonl(edges))
+    (memory / "annotations.jsonl").write_bytes(_legacy_jsonl([annotation]))
+    (project / "PROBLEM.md").write_bytes(("# Problem\n\n" + problem + "\n").encode())
+    proof_payload = final_proof.encode("utf-8") + b"\n"
+    (workspace / "proof.md").write_bytes(proof_payload)
+    target_payload = f"{fact_id}\n".encode("ascii") if fact_id else None
+    if fact_id is not None and fact_payload is not None and target_payload is not None:
+        (facts_dir / f"{fact_id}.md").write_bytes(fact_payload)
+        (project / "TARGET.md").write_bytes(target_payload)
+    binding = {
+        "source_sha256": "1" * 64,
+        "problem_sha256": hashlib.sha256(problem.encode()).hexdigest(),
+        "task_sha256": "2" * 64,
+        "proof_sha256": hashlib.sha256(proof_payload).hexdigest(),
+        "provider": "offline",
+        "model": "offline-model",
+        "verdict": "accepted" if accepted else "unattested",
+        "critic_verdict": verdict,
+        "critic_response_sha256": "3" * 64,
+        "target_fact_ids": [fact_id] if fact_id else [],
+        "target_sha256": hashlib.sha256(target_payload).hexdigest() if target_payload else None,
+        "fact_bytes_sha256": hashlib.sha256(fact_payload).hexdigest() if fact_payload else None,
+        "certificate": False,
+    }
+    receipt = {
+        **binding,
+        "schema_version": 1,
+        "engine": "math_harness",
+        "source": _LEGACY_SOURCE,
+        "semantics": "model-critic",
+        "critic": "response-only-model-critic",
+        "problem_id": "legacy-demo",
+        "requested_model": "offline-model",
+        "transport": "api_chat",
+        "target_fact_id": fact_id,
+        "fact_path": f"fact_graph/facts/{fact_id}.md" if fact_id else None,
+        "fact_bytes": len(fact_payload) if fact_payload else 0,
+        "binding_sha256": hashlib.sha256(
+            json.dumps(binding, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode()
+        ).hexdigest(),
+        "workflow": {
+            "planner_calls": 1,
+            "candidate_calls": 2,
+            "critic_calls": 1,
+            "revision_calls": 1 if revised else 0,
+            "max_candidates": 3,
+            "tools_enabled": False,
+            "response_only_contract": {"transport": "api_chat", "isolation_version": 1},
+        },
+        "calls": [{"stage": stage, "provider": "offline", "model": "offline-model"} for stage in stages],
+    }
+    (project / "engine_receipt.json").write_text(json.dumps(receipt, indent=2) + "\n")
+    return project
 
 
 class EngineGraphAdapterTests(unittest.TestCase):
     def test_workflow_view_projects_real_runner_memory_separately(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             workspace = Path(tmp)
-            project = _write_runner_generation(workspace)
+            project = _write_legacy_generation(workspace)
             run = {"run_id": "workflow-1", "engine": "math_harness"}
 
             facts = engine_graph.rebuild(workspace, run, view="facts")
@@ -296,7 +466,7 @@ class EngineGraphAdapterTests(unittest.TestCase):
     def test_workflow_view_preserves_rejected_revision_as_partial(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             workspace = Path(tmp)
-            _write_runner_generation(workspace, accepted=False)
+            _write_legacy_generation(workspace, accepted=False)
 
             workflow = engine_graph.build(
                 workspace,
@@ -336,7 +506,7 @@ class EngineGraphAdapterTests(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as tmp:
             workspace = Path(tmp)
-            project = _write_runner_generation(workspace)
+            project = _write_legacy_generation(workspace)
             memory = project / "global_memory"
             outside = workspace / "outside.jsonl"
             edge_path = memory / "edges.jsonl"
@@ -352,7 +522,7 @@ class EngineGraphAdapterTests(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as tmp:
             workspace = Path(tmp)
-            project = _write_runner_generation(workspace)
+            project = _write_legacy_generation(workspace)
             memory = project / "global_memory"
             (memory / "unexpected.jsonl").write_text("{}\n", encoding="utf-8")
             with self.assertRaisesRegex(
@@ -364,7 +534,7 @@ class EngineGraphAdapterTests(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as tmp:
             workspace = Path(tmp)
-            project = _write_runner_generation(workspace)
+            project = _write_legacy_generation(workspace)
             edge_path = project / "global_memory" / "edges.jsonl"
             rows = [
                 json.loads(line)
@@ -384,7 +554,7 @@ class EngineGraphAdapterTests(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as tmp:
             workspace = Path(tmp)
-            _write_runner_generation(workspace)
+            _write_legacy_generation(workspace)
             with (
                 patch.object(engine_graph, "MAX_WORKFLOW_FILE_BYTES", 8),
                 self.assertRaisesRegex(
@@ -397,7 +567,7 @@ class EngineGraphAdapterTests(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as tmp:
             workspace = Path(tmp)
-            _write_runner_generation(workspace)
+            _write_legacy_generation(workspace)
             victim = workspace / "workflow-victim.json"
             victim.write_text("unchanged", encoding="utf-8")
             cache = workspace / engine_graph.WORKFLOW_CACHE_FILENAME
@@ -733,10 +903,24 @@ class EngineGraphAdapterTests(unittest.TestCase):
 
             codex_receipt = json.loads(json.dumps(valid_receipt))
             codex_receipt["transport"] = "codex_exec"
+            # Version 4 Codex claims predate the tool-free model catalog and
+            # are never attested; only the current contract (5) is.
             codex_receipt["workflow"]["response_only_contract"] = {
                 "transport": "codex_exec",
                 "isolation_version": 4,
             }
+            (project / "engine_receipt.json").write_text(
+                json.dumps(codex_receipt), encoding="utf-8"
+            )
+            self.assertEqual(
+                engine_graph.build(workspace, {"engine": "math_harness"})[
+                    "provenance"
+                ]["attestation"],
+                "unattested",
+            )
+            codex_receipt["workflow"]["response_only_contract"][
+                "isolation_version"
+            ] = 5
             (project / "engine_receipt.json").write_text(
                 json.dumps(codex_receipt), encoding="utf-8"
             )
@@ -748,7 +932,7 @@ class EngineGraphAdapterTests(unittest.TestCase):
                 "harness-gate-receipt",
             )
             self.assertEqual(
-                codex_graph["provenance"]["response_only_isolation_version"], 4
+                codex_graph["provenance"]["response_only_isolation_version"], 5
             )
 
             extra_id, extra = _fact_text(
@@ -965,6 +1149,107 @@ class EngineGraphRouteTests(unittest.TestCase):
 
             load.assert_not_called()
             self.assertEqual(handler._send.call_args.args[0], 404)
+
+
+class CgmReceiptSchemaVersionTests(unittest.TestCase):
+    """Schema 2 (sequential phase-1 writer) and schema 3 (concurrent writer)
+    are each validated with their exact shape; nothing else is accepted."""
+
+    FIXTURE = Path(__file__).resolve().parent / "fixtures" / "cgm_phase1_artifacts.json"
+
+    def _schema_two_receipts(self) -> list[dict]:
+        cases = json.loads(self.FIXTURE.read_text(encoding="utf-8"))["cases"]
+        return [
+            json.loads(case["files"]["math_harness/project/engine_receipt.json"])
+            for case in cases.values()
+        ]
+
+    @staticmethod
+    def _validate(receipt: dict) -> dict | None:
+        from agent_monitor.cgm import schema as cgm_schema
+
+        receipt = json.loads(json.dumps(receipt))
+        receipt["binding_sha256"] = cgm_schema.receipt_binding_digest(receipt)
+        return engine_graph._cgm_receipt(json.dumps(receipt).encode("utf-8"))
+
+    def test_phase_one_receipts_stay_valid_and_exact(self) -> None:
+        from agent_monitor.cgm import schema as cgm_schema
+
+        for receipt in self._schema_two_receipts():
+            with self.subTest(problem=receipt["problem_id"]):
+                self.assertEqual(receipt["schema_version"], 2)
+                self.assertIsNotNone(self._validate(receipt))
+                mutations = {
+                    "schema-3 call_order on schema 2": lambda r: r["workflow"].update(
+                        call_order=cgm_schema.CALL_ORDER
+                    ),
+                    "schema-3 concurrency on schema 2": lambda r: r["workflow"][
+                        "budgets"
+                    ].update(concurrency=1),
+                    "schema-3 policy on schema 2": lambda r: r["workflow"].update(
+                        verification_policy=cgm_schema.VERIFICATION_POLICY
+                    ),
+                    "level-wave schema-3 policy on schema 2": lambda r: r["workflow"].update(
+                        verification_policy="solved-first-level-waves-stop-on-target@2"
+                    ),
+                    "bumped without schema-3 fields": lambda r: r.update(schema_version=3),
+                    "unknown schema": lambda r: r.update(schema_version=4),
+                    "boolean schema": lambda r: r.update(schema_version=True),
+                }
+                for label, mutate in mutations.items():
+                    changed = json.loads(json.dumps(receipt))
+                    mutate(changed)
+                    self.assertIsNone(self._validate(changed), label)
+
+    def test_schema_three_shape_is_required_for_schema_three(self) -> None:
+        from agent_monitor.cgm import schema as cgm_schema
+
+        # A phase-1 receipt upgraded field by field becomes a valid schema-3
+        # receipt only with every schema-3 field (its sequential calls are
+        # already in canonical turn order).
+        receipt = self._schema_two_receipts()[0]
+        upgraded = json.loads(json.dumps(receipt))
+        upgraded["schema_version"] = 3
+        upgraded["workflow"]["call_order"] = cgm_schema.CALL_ORDER
+        upgraded["workflow"]["verification_policy"] = cgm_schema.VERIFICATION_POLICY
+        upgraded["workflow"]["budgets"]["concurrency"] = 3
+        self.assertIsNotNone(self._validate(upgraded))
+        for field in ("call_order", "verification_policy"):
+            with self.subTest(missing=field):
+                changed = json.loads(json.dumps(upgraded))
+                changed["workflow"].pop(field)
+                self.assertIsNone(self._validate(changed))
+        changed = json.loads(json.dumps(upgraded))
+        changed["workflow"]["budgets"].pop("concurrency")
+        self.assertIsNone(self._validate(changed))
+
+    def test_schema_three_policies(self) -> None:
+        from agent_monitor.cgm import schema as cgm_schema
+
+        receipt = self._schema_two_receipts()[0]
+        upgraded = json.loads(json.dumps(receipt))
+        upgraded["schema_version"] = 3
+        upgraded["workflow"]["call_order"] = cgm_schema.CALL_ORDER
+        upgraded["workflow"]["budgets"]["concurrency"] = 3
+        # The current writer's policy, and the level-wave policy of the first
+        # schema-3 writer (its receipts stay attested).
+        for policy in (
+            cgm_schema.VERIFICATION_POLICY,
+            "solved-first-level-waves-stop-on-target@2",
+        ):
+            with self.subTest(policy=policy):
+                upgraded["workflow"]["verification_policy"] = policy
+                self.assertIsNotNone(self._validate(upgraded))
+        for policy in (
+            cgm_schema.VERIFICATION_POLICIES[2],
+            "solved-first-level-waves-stop-on-target@3",
+            "",
+            None,
+            ["solved-first-topological-waves-stop-on-target@1"],
+        ):
+            with self.subTest(policy=policy):
+                upgraded["workflow"]["verification_policy"] = policy
+                self.assertIsNone(self._validate(upgraded))
 
 
 if __name__ == "__main__":

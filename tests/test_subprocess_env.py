@@ -37,6 +37,15 @@ def test_child_environment_removes_control_plane_secrets_after_overlay() -> None
     }
 
 
+def test_analyze_github_token_never_reaches_a_child_by_default() -> None:
+    # The Analyze runner gets it only when jobs.py adds it after this scrub.
+    env = child_process_env(
+        {"PATH": "/safe/bin", "AGENT_MONITOR_ANALYZE_GITHUB_TOKEN": "ghp_ambient"},
+        {"AGENT_MONITOR_ANALYZE_GITHUB_TOKEN": "ghp_overlay"},
+    )
+    assert env == {"PATH": "/safe/bin"}
+
+
 def test_provider_scrubber_removes_known_and_future_provider_names() -> None:
     env = {
         "PATH": "/safe/bin",

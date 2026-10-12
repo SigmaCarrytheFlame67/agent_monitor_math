@@ -24,7 +24,7 @@ class SponsoredKimiDefaultTests(unittest.TestCase):
             jobs._JOBS.clear()
             jobs._STOP_EVENTS.clear()
 
-    def test_password_registration_seeds_api_kimi_plain_defaults(self) -> None:
+    def test_password_registration_seeds_api_kimi_cgm_defaults(self) -> None:
         with (
             tempfile.TemporaryDirectory() as tmp,
             patch.object(auth, "DB_PATH", Path(tmp) / "users.db"),
@@ -40,7 +40,7 @@ class SponsoredKimiDefaultTests(unittest.TestCase):
                 "AGENT_MONITOR_USE_CODEX": "0",
                 "AGENT_MONITOR_USE_CLAUDE": "0",
                 "AGENT_MONITOR_MODEL": "kimi-k3",
-                "AGENT_MONITOR_ENGINE": "plain",
+                "AGENT_MONITOR_ENGINE": "kimi",
             },
         )
 
@@ -58,7 +58,7 @@ class SponsoredKimiDefaultTests(unittest.TestCase):
         self.assertEqual(result["account_runtime"], "api")
         self.assertTrue(result["runtime_ready"])
         self.assertEqual(result["default_model"], "kimi-k3")
-        self.assertEqual(result["default_engine"], "plain")
+        self.assertEqual(result["default_engine"], "kimi")
         self.assertIn("kimi-k3", result["models_by_runtime"]["api"])
         self.assertTrue(kimi["sponsored_available"])
         self.assertTrue(kimi["using_sponsored"])
@@ -161,7 +161,7 @@ class SponsoredKimiDefaultTests(unittest.TestCase):
                     engine="hermes",
                     problem_text="Prove it.",
                     model="kimi-k3",
-                    user={"id": 41},
+                    user={"id": 41, "is_admin": True},
                     auth_route="api_key",
                 )
         thread.assert_not_called()
@@ -220,7 +220,7 @@ class SponsoredKimiDefaultTests(unittest.TestCase):
                 engine="openclaude",
                 problem_text="Prove it.",
                 model="kimi-k3",
-                user={"id": 70},
+                user={"id": 70, "is_admin": True},
                 auth_route="api_key",
             )
 
@@ -266,7 +266,7 @@ class SponsoredKimiDefaultTests(unittest.TestCase):
                 },
                 engine="plain",
                 model="kimi-k3",
-                user={"id": 41},
+                user={"id": 41, "is_admin": True},
                 env=env,
             )
 

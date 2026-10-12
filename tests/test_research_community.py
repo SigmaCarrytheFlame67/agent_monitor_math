@@ -6,7 +6,7 @@ from http.server import ThreadingHTTPServer
 
 import pytest
 
-from agent_monitor import console_server as console, jobs, lean_verify, research, run_sharing
+from agent_monitor import auth, console_server as console, jobs, lean_verify, research, run_sharing
 
 
 @pytest.fixture(autouse=True)
@@ -15,6 +15,8 @@ def storage(tmp_path, monkeypatch):
     monkeypatch.setattr(run_sharing, "RUNS_DIR", tmp_path / "runs")
     monkeypatch.setattr(run_sharing, "CACHE_DIR", tmp_path / "cache")
     monkeypatch.delenv("LLM_DASHBOARD_CACHE", raising=False)
+    # Account 1 is the administrator; only its publications reach harness prompts.
+    monkeypatch.setattr(auth, "is_operator_account", lambda user_id: user_id == 1)
     (tmp_path / "runs").mkdir()
 
 
@@ -174,6 +176,12 @@ def test_harness_retrieves_matching_memory_older_than_latest_500():
     assert "Source run: run-0 |" in result
     assert "run-501" not in result
     assert "run-500" not in result
+
+
+def test_harness_context_ignores_memories_published_by_non_admin_accounts():
+    with research.connect() as db:
+        db.execute("INSERT INTO memories VALUES (?,?,?,?,?,?,?,?,?,?,?)", ("m", "stacks:0001", "Observation", "Automorphic representations have arithmetic structure.", "informal", "gpt-6", "Model result", "run-member", 2, 1, "digest"))
+    assert research.compose_context("automorphic arithmetic representations") == ""
 
 
 def test_research_api_rejects_non_object_payloads(api):

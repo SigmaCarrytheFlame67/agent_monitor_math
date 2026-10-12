@@ -18,6 +18,9 @@
   --vp-c-text-2: #4c5c70;
   --vp-c-text-3: #637186;
   --vp-nav-bg-color: var(--vp-c-bg);
+  /* Inline code in the darker brand blue, so small code text keeps 4.5:1 on the code background. */
+  --vp-code-color: var(--vp-c-brand-2);
+  --vp-c-tip-1: var(--vp-c-brand-2);
   --vp-home-hero-name-color: #2563eb;
   --vp-home-hero-name-background: none;
   --vp-home-hero-image-background-image: none;
@@ -55,6 +58,18 @@
   --atlas-map-label: #334155;
   --atlas-map-border: #dfe5ee;
   --atlas-map-link: #647b9a;
+  /* Problem categories. Green stays reserved for Lean's kernel; AI proposed is amber, never solved. */
+  --problem-solved: #17212f;
+  --problem-solved-text: #ffffff;
+  --problem-ai: #8a5300;
+  --problem-ai-soft: #fff4dc;
+  --problem-ai-line: #e5bf72;
+  --problem-partial: #5b34c9;
+  --problem-partial-soft: #f3efff;
+  --problem-partial-line: #cbbcf8;
+  --problem-open: #4c5c70;
+  --problem-open-line: #b8c4d4;
+  --problem-alert: #a33a2b;
 }
 
 .dark {
@@ -74,6 +89,8 @@
   --vp-c-text-2: #b9c2d0;
   --vp-c-text-3: #a0acbc;
   --vp-nav-bg-color: #111318;
+  --vp-code-color: var(--vp-c-brand-1);
+  --vp-c-tip-1: var(--vp-c-brand-1);
   --ansatz-label: #a7c8ff;
   --ansatz-focus: #82b1ff;
   --ansatz-hero-bg: #111318;
@@ -98,6 +115,17 @@
   --atlas-map-label: #dce7f7;
   --atlas-map-border: #4b5668;
   --atlas-map-link: #8da4c4;
+  --problem-solved: #eef2f8;
+  --problem-solved-text: #111318;
+  --problem-ai: #f0c36d;
+  --problem-ai-soft: rgba(240, 195, 109, 0.12);
+  --problem-ai-line: rgba(240, 195, 109, 0.45);
+  --problem-partial: #c7b8ff;
+  --problem-partial-soft: rgba(167, 139, 250, 0.15);
+  --problem-partial-line: rgba(167, 139, 250, 0.5);
+  --problem-open: #b9c2d0;
+  --problem-open-line: #5b6678;
+  --problem-alert: #f29b8b;
 }
 
 html {
@@ -693,6 +721,27 @@ h3,
   background: var(--ansatz-mint);
 }
 
+.ansatz-step:nth-child(4) > span {
+  color: #ffffff;
+  background: var(--ansatz-navy);
+  box-shadow: inset 0 0 0 1px var(--ansatz-feature-line);
+}
+
+.ansatz-attribution {
+  max-width: 760px;
+  margin: 0 0 clamp(64px, 8vw, 96px);
+  padding-top: 18px;
+  border-top: 1px solid var(--vp-c-divider);
+  color: var(--vp-c-text-2);
+  font-size: 13px;
+  line-height: 1.65;
+}
+
+.ansatz-attribution a {
+  color: var(--vp-c-brand-1);
+  font-weight: 600;
+}
+
 .ansatz-step strong {
   display: block;
   margin: 1px 0 7px;
@@ -782,6 +831,64 @@ h3,
 .excerpt-gradient-top,
 .excerpt-gradient-bottom {
   background: var(--vp-local-search-result-bg) !important;
+}
+
+/* Quickstart: numbered first-run steps. */
+.vp-doc .qs-steps {
+  display: grid;
+  gap: 10px;
+  margin: 24px 0 8px;
+  padding: 0;
+  list-style: none;
+  counter-reset: qs;
+}
+
+.vp-doc .qs-steps > li {
+  position: relative;
+  margin: 0;
+  padding: 16px 18px 16px 62px;
+  border: 1px solid var(--vp-c-divider);
+  border-radius: 12px;
+  background: var(--vp-c-bg-soft);
+  counter-increment: qs;
+}
+
+.vp-doc .qs-steps > li::before {
+  position: absolute;
+  top: 16px;
+  left: 18px;
+  display: grid;
+  width: 30px;
+  height: 30px;
+  place-items: center;
+  border-radius: 50%;
+  color: #ffffff;
+  background: var(--vp-c-brand-1);
+  font-size: 14px;
+  font-weight: 700;
+  content: counter(qs);
+}
+
+.dark .vp-doc .qs-steps > li::before {
+  color: #0b1220;
+}
+
+.vp-doc .qs-steps strong {
+  display: block;
+  color: var(--vp-c-text-1);
+  font-size: 16px;
+}
+
+.vp-doc .qs-steps p {
+  margin: 4px 0 0;
+  color: var(--vp-c-text-2);
+  font-size: 14.5px;
+  line-height: 1.65;
+}
+
+.vp-doc .qs-lean-code div[class*='language-'] {
+  max-height: 460px;
+  overflow: auto;
 }
 
 :where(
@@ -1020,6 +1127,18 @@ h3,
     grid-row: auto;
     grid-column: 1;
     margin-top: 0;
+  }
+}
+
+@media (max-width: 639px) {
+  .vp-doc .qs-steps > li {
+    padding: 14px 14px 14px 54px;
+  }
+
+  .vp-doc .qs-steps > li::before {
+    left: 14px;
+    width: 28px;
+    height: 28px;
   }
 }
 

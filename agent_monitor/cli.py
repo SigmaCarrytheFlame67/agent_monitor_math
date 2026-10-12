@@ -1,7 +1,9 @@
-"""agent-monitor CLI — serve dashboard, build cache, run engines."""
+"""agent-monitor CLI — serve dashboard, build cache, run engines, create the admin,
+purge old guest runs."""
 from __future__ import annotations
 
 import argparse
+import getpass
 import json
 import os
 import sys
@@ -263,6 +265,180 @@ def cmd_run(args: argparse.Namespace) -> None:
         sys.exit(1)
 
 
+# Exit status when an administrator already exists and --force-additional was
+# not given. Deployment scripts treat it as "nothing to do", not as a failure.
+ADMIN_EXISTS_EXIT = 3
+_MAX_PASSWORD_CHARS = 1024
+
+
+def _registered_admins() -> list[str]:
+    """Return the emails of existing non-guest administrator accounts."""
+    from contextlib import closing
+
+    from agent_monitor import auth
+
+    with closing(auth._conn()) as conn:
+        rows = conn.execute(
+            "SELECT email FROM users WHERE is_admin=1 AND is_guest=0"
+            " AND (password_hash IS NOT NULL OR google_sub IS NOT NULL)"
+            " ORDER BY id"
+        ).fetchall()
+    return [str(row["email"]) for row in rows]
+
+
+def _read_admin_password(args: argparse.Namespace) -> str:
+    if args.password_stdin:
+        raw = sys.stdin.read(_MAX_PASSWORD_CHARS + 2)
+        if raw.endswith("\n"):
+            raw = raw[:-1]
+        if raw.endswith("\r"):
+            raw = raw[:-1]
+        if "\n" in raw or "\r" in raw or len(raw) > _MAX_PASSWORD_CHARS:
+            raise ValueError("--password-stdin expects exactly one password line")
+        return raw
+    password = getpass.getpass("Admin password (at least 8 characters): ")
+    if getpass.getpass("Repeat the password: ") != password:
+        raise ValueError("The passwords do not match")
+    return password
+
+
+def cmd_set_password(args: argparse.Namespace) -> int:
+    """Set an account's password when emailed reset links are unavailable."""
+    from agent_monitor import auth
+
+    print(f"Account database: {auth.DB_PATH}")
+    try:
+        email = (args.email or input("Account email: ")).strip()
+        if args.password_stdin:
+            password = _read_admin_password(args)
+        else:
+            password = getpass.getpass("New password (at least 8 characters): ")
+            if getpass.getpass("Repeat the password: ") != password:
+                raise ValueError("The passwords do not match")
+        account = auth.set_password(email, password)
+    except (ValueError, EOFError) as exc:
+        print(f"error: {exc or 'no input'}", file=sys.stderr)
+        return 1
+    print(f"Password updated for {account['email']} (id {account['id']}); its sessions were signed out.")
+    return 0
+
+
+def cmd_create_admin(args: argparse.Namespace) -> int:
+    """Create the owner's administrator account without opening registration.
+
+    HTTP self-registration stays closed (``require_open=False`` is a local,
+    operator-only path).  The account database is the one selected by
+    ``AGENT_MONITOR_DATA_DIR``; run this as the console's service user so the
+    database keeps that owner.
+    """
+    from agent_monitor import DATA_DIR, ROOT, auth
+
+    print(f"Account database: {auth.DB_PATH}")
+    if DATA_DIR == (ROOT / "data").resolve():
+        print(
+            "Note: AGENT_MONITOR_DATA_DIR is unset, so this is the checkout's "
+            "development data directory, not a production one."
+        )
+    if args.password_stdin and not args.email:
+        print("error: --password-stdin requires --email", file=sys.stderr)
+        return 2
+    try:
+        existing = _registered_admins()
+    except Exception as exc:  # noqa: BLE001 - report without a traceback
+        print(f"error: cannot open the account database: {exc}", file=sys.stderr)
+        return 1
+    if existing and not args.force_additional:
+        print(
+            f"An administrator already exists ({len(existing)} account"
+            f"{'s' if len(existing) != 1 else ''}); nothing was changed. "
+            "Pass --force-additional to create another administrator."
+        )
+        return ADMIN_EXISTS_EXIT
+    try:
+        email = (args.email or input("Admin email: ")).strip()
+        password = _read_admin_password(args)
+        account = auth.register(email, password, name=args.name, require_open=False)
+    except (ValueError, EOFError) as exc:
+        print(f"error: {exc or 'no input'}", file=sys.stderr)
+        return 1
+    if not account.get("is_admin"):
+        # register() grants admin only to the first registered account.
+        from contextlib import closing
+
+        with closing(auth._conn()) as conn, conn:
+            conn.execute(
+                "UPDATE users SET is_admin=1 WHERE id=? AND is_guest=0",
+                (int(account["id"]),),
+            )
+    print(f"Created administrator {account['email']} (id {account['id']}).")
+    try:
+        encrypted = auth._dedicated_fernet() is not None or auth._legacy_fernet() is not None
+    except RuntimeError:
+        encrypted = False
+    if not encrypted:
+        print(
+            "No data key was available to this command, so the account's default "
+            "settings (public engine, model and runtime defaults, no secrets) were "
+            "stored unencrypted. A console that has the data key re-encrypts them "
+            "the first time the account is used, so no restart is needed (a "
+            "restart also re-encrypts them)."
+        )
+    return 0
+
+
+def _retention_days(raw: str) -> float:
+    try:
+        value = float(raw)
+    except ValueError:
+        raise argparse.ArgumentTypeError("must be a number of days") from None
+    if not value >= 1 or value > 36_500:
+        raise argparse.ArgumentTypeError("must be between 1 and 36500 days")
+    return value
+
+
+def cmd_purge_guest_runs(args: argparse.Namespace) -> int:
+    """List, or with ``--apply`` delete, finished guest runs older than N days.
+
+    Wraps :func:`agent_monitor.jobs.purge_guest_runs`: only terminal runs
+    recorded as anonymous-guest runs are selected, active runs are never
+    touched, and usage history is kept.  Without ``--apply`` nothing changes.
+    """
+    from agent_monitor import DATA_DIR, ROOT, jobs
+
+    print(f"Run data directory: {DATA_DIR}")
+    if DATA_DIR == (ROOT / "data").resolve():
+        print(
+            "Note: AGENT_MONITOR_DATA_DIR is unset, so this is the checkout's "
+            "development data directory, not a production one."
+        )
+    days = args.older_than_days
+    try:
+        selected = jobs.purge_guest_runs(older_than_days=days, dry_run=not args.apply)
+    except Exception as exc:  # noqa: BLE001 - report without a traceback
+        print(f"error: cannot purge guest runs: {exc}", file=sys.stderr)
+        return 1
+    plural = "s" if len(selected) != 1 else ""
+    age = f"{days:g} day{'s' if days != 1 else ''}"
+    if args.apply:
+        print(
+            f"Deleted {len(selected)} finished guest run{plural} older than "
+            f"{age} (usage history is kept)."
+        )
+    else:
+        print(
+            f"{len(selected)} finished guest run{plural} older than {age} "
+            "would be deleted. Nothing was changed; pass --apply to delete them."
+        )
+    for run_id in selected:
+        print(f"  {run_id}")
+    if args.apply and selected:
+        print(
+            "Run this while the console is idle or stopped: a running console "
+            "keeps its in-memory index of runs until it restarts."
+        )
+    return 0
+
+
 def main(argv: list[str] | None = None) -> None:
     _bootstrap()
     from agent_monitor import CACHE_DIR, ENGINES_DIR
@@ -300,6 +476,69 @@ def main(argv: list[str] | None = None) -> None:
     run_p.add_argument("--model", type=str, default="")
     run_p.add_argument("--max-iterations", type=int, default=60)
 
+    admin_p = sub.add_parser(
+        "create-admin",
+        help="Create the owner/administrator account (registration stays closed)",
+        description=(
+            "Create an administrator account in the database selected by "
+            "AGENT_MONITOR_DATA_DIR without enabling HTTP self-registration. "
+            "Refuses when an administrator already exists unless "
+            "--force-additional is given (exit status 3)."
+        ),
+    )
+    admin_p.add_argument("--email", type=str, default="", help="Account email (prompted when omitted)")
+    admin_p.add_argument("--name", type=str, default=None, help="Optional display name")
+    admin_p.add_argument(
+        "--password-stdin",
+        action="store_true",
+        help="Read the password as one line from standard input instead of prompting",
+    )
+    admin_p.add_argument(
+        "--force-additional",
+        action="store_true",
+        help="Create another administrator even if one already exists",
+    )
+
+    setpw_p = sub.add_parser(
+        "set-password",
+        help="Set an account's password (when emailed reset links are not configured)",
+        description=(
+            "Set the password of an existing account in the database selected by "
+            "AGENT_MONITOR_DATA_DIR and sign that account out everywhere. Run it as "
+            "the console's service user."
+        ),
+    )
+    setpw_p.add_argument("--email", type=str, default="", help="Account email (prompted when omitted)")
+    setpw_p.add_argument(
+        "--password-stdin",
+        action="store_true",
+        help="Read the password as one line from standard input instead of prompting",
+    )
+
+    purge_p = sub.add_parser(
+        "purge-guest-runs",
+        help="List (or with --apply delete) finished guest runs older than N days",
+        description=(
+            "Guest identities expire after 24 hours, but their run records and "
+            "workspaces stay in the data directory selected by "
+            "AGENT_MONITOR_DATA_DIR until removed. Lists finished anonymous-guest "
+            "runs older than --older-than-days; --apply deletes them (usage "
+            "history is kept). Run it as the console's service user while the "
+            "console is idle or stopped."
+        ),
+    )
+    purge_p.add_argument(
+        "--older-than-days",
+        type=_retention_days,
+        default=30.0,
+        help="Minimum age in days since the run's last update (default 30, at least 1)",
+    )
+    purge_p.add_argument(
+        "--apply",
+        action="store_true",
+        help="Delete the listed runs (default: only list them)",
+    )
+
     args = parser.parse_args(argv)
     if not args.command:
         parser.print_help()
@@ -313,6 +552,12 @@ def main(argv: list[str] | None = None) -> None:
         cmd_problems(args)
     elif args.command == "run":
         cmd_run(args)
+    elif args.command == "create-admin":
+        sys.exit(cmd_create_admin(args))
+    elif args.command == "set-password":
+        sys.exit(cmd_set_password(args))
+    elif args.command == "purge-guest-runs":
+        sys.exit(cmd_purge_guest_runs(args))
     else:
         parser.print_help()
         sys.exit(1)

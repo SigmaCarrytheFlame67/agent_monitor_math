@@ -12,3 +12,15 @@
   button[aria-pressed=true] { color:#111318; }
   #rv-canvas button[data-open=true] { border-top-color:#fbbf24; }
 }
+/* Analyze verdicts (model verifier; green stays reserved for Lean-kernel results). */
+#rv-canvas button[data-verdict=checked] { border-top-color:#2563eb; }
+#rv-canvas button[data-verdict=gap] { border-top-color:#b45309; }
+#rv-canvas button[data-verdict=error] { border-top-color:#b91c1c; }
+#rv-canvas button[data-verdict=unclear] { border-top-color:#6b7280; }
+#rv-canvas button[data-verdict=not_checked] { border-top:3px dashed var(--line); background:transparent; }
+@media(prefers-color-scheme:dark) {
+  #rv-canvas button[data-verdict=checked] { border-top-color:#82b1ff; }
+  #rv-canvas button[data-verdict=gap] { border-top-color:#fbbf24; }
+  #rv-canvas button[data-verdict=error] { border-top-color:#f87171; }
+  #rv-canvas button[data-verdict=unclear] { border-top-color:#9ca3af; }
+}

@@ -1,0 +1,21 @@
+{
+  "enabledMcpjsonServers": [
+    "cgm",
+    "write-paper",
+    "human-summary"
+  ],
+  "hooks": {
+    "SessionEnd": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"$CLAUDE_PROJECT_DIR/scripts/claude-transcript.py\" 2>/dev/null || true",
+            "timeout": 120,
+            "statusMessage": "Exporting session transcript to runtime/logs/claude-sessions"
+          }
+        ]
+      }
+    ]
+  }
+}

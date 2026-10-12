@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from functools import lru_cache
 from typing import Any
 
 EngineName = str
@@ -13,6 +14,22 @@ MATH_HARNESS_ARTIFACT_SCHEMA = "danus-project-v1"
 MATH_HARNESS_GRAPH_SCHEMA = "danus-fact+exploring-v1"
 
 
+ANALYZE_ENGINE_ID = "analyze"
+ANALYZE_ENGINE_IMPL = "ansatz-analyze"
+ANALYZE_ARTIFACT_SCHEMA = "ansatze-analyze-v1"
+ANALYZE_GRAPH_SCHEMA = "ansatze-analyze-graph-v1"
+
+
+@lru_cache(maxsize=1)
+def _analyze_prompt_pack() -> str:
+    """The Analyze prompt pack digest: the implementation version of a run."""
+    try:
+        from agent_monitor.analyze.prompts import PROMPT_PACK_SHA256
+    except Exception:  # noqa: BLE001 - provenance must never break a record
+        return "unknown"
+    return str(PROMPT_PACK_SHA256)
+
+
 def engine_provenance(engine: EngineName) -> dict[str, str]:
     """Immutable implementation identity attached to every new-format record."""
     if engine == MATH_HARNESS_ENGINE_ID:
@@ -21,6 +38,13 @@ def engine_provenance(engine: EngineName) -> dict[str, str]:
             "engine_impl_version": MATH_HARNESS_ENGINE_IMPL_VERSION,
             "artifact_schema": MATH_HARNESS_ARTIFACT_SCHEMA,
             "graph_schema": MATH_HARNESS_GRAPH_SCHEMA,
+        }
+    if engine == ANALYZE_ENGINE_ID:
+        return {
+            "engine_impl": ANALYZE_ENGINE_IMPL,
+            "engine_impl_version": _analyze_prompt_pack(),
+            "artifact_schema": ANALYZE_ARTIFACT_SCHEMA,
+            "graph_schema": ANALYZE_GRAPH_SCHEMA,
         }
     return {}
 

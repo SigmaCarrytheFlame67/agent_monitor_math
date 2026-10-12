@@ -18,6 +18,8 @@ from pathlib import Path
 from typing import Any  # noqa: F401 — used throughout
 
 from agent_monitor import CACHE_DIR, HERMES_HOME, PROBLEMS_DIR, RUNS_DIR
+from agent_monitor import account_policy
+from agent_monitor import cgm_max
 from agent_monitor import attachments as research_attachments
 from agent_monitor.research_audit import (
     reconciliation_complete,
@@ -27,7 +29,9 @@ from agent_monitor.schema import normalize_run
 from agent_monitor.proof_markdown import normalize_proof_markdown
 from agent_monitor import attachments as research_attachments
 
-_LOCK = threading.Lock()
+# Re-entrant: a chat message decides between joining the feedback queue and
+# claiming the run under one hold of it (see ``send_human_message``).
+_LOCK = threading.RLock()
 _JOBS: dict[str, dict[str, Any]] = {}
 _DELETED_RUNS: set[str] = set()
 _STOP_EVENTS: dict[str, threading.Event] = {}
@@ -41,11 +45,51 @@ _PROBLEM_ID_RE = re.compile(r"^[A-Za-z0-9_.()\[\]-]{1,128}$")
 
 # The tool-free Kimi harness speaks the same bounded chat-completions transport
 # as the Plain baseline, so it requests sponsored credentials under that name.
-_SPONSORED_TRANSPORT_ENGINES = {"kimi": "plain"}
+# Ansatz Analyze reuses the CGM response-only transport, so it requests the
+# ``math_harness`` scope (the broker allowlists need no new engine).
+_SPONSORED_TRANSPORT_ENGINES = {"kimi": "plain", "analyze": "math_harness"}
+
+# Engines that run the Ansatz CGM pipeline (math_harness_runner.run_pipeline).
+# ``kimi`` is its tool-free, guest-safe Kimi K3 entry point.
+_CGM_ENGINES = frozenset({"kimi", "math_harness"})
+# Ansatz Analyze (run_kind "analyze"): the only engine of the Analyze mode.
+_ANALYZE_ENGINE = "analyze"
+# Kimi reasoning tokens count against max_tokens; guest and sponsored CGM runs
+# get exactly this bounded ceiling (the sponsored gateway's default clamp).
+_CGM_BOUNDED_OUTPUT_TOKENS = 8192
+# Engines whose guest and sponsored runs get exactly that ceiling.
+_BOUNDED_OUTPUT_ENGINES = _CGM_ENGINES | {_ANALYZE_ENGINE}
+
+# Called once when an anonymous guest run finishes, so the console can start
+# the bounded derived Formal/DAG pipeline under its guest admission limits.
+_GUEST_COMPLETION_HOOK: Any = None
+
+
+def set_guest_completion_hook(hook: Any) -> None:
+    """Register ``hook(run_id, owner_id, workspace)`` for finished guest runs."""
+    global _GUEST_COMPLETION_HOOK
+    _GUEST_COMPLETION_HOOK = hook
+
+
+def _notify_guest_completion(run_id: str, owner_id: int | None, workspace: Path) -> None:
+    hook = _GUEST_COMPLETION_HOOK
+    if hook is None or owner_id is None:
+        return
+    try:
+        hook(run_id, owner_id, workspace)
+    except Exception as exc:  # noqa: BLE001 - derived views are best-effort
+        print(f"[agent-monitor] guest derived pipeline did not start: {type(exc).__name__}")
 
 
 def _sponsored_transport_engine(engine: str) -> str:
     return _SPONSORED_TRANSPORT_ENGINES.get(engine, engine)
+
+
+def _operator_kimi_base() -> str:
+    """Own-key Kimi endpoint chosen by the operator, never by an account."""
+    from agent_monitor.settings import operator_kimi_base_url
+
+    return operator_kimi_base_url()
 
 _RESEARCH_AUDIT_GATE_MARKER = "CANDIDATE AUDIT GATE:"
 _RESEARCH_AUDIT_RUNTIME_MARKER = "STRICT FILE-BACKED AUDIT CONTRACT:"
@@ -99,10 +143,13 @@ audit acceptance alone is never a solution. Before returning, list the
 artifact paths and both validator results.
 """.strip()
 
-# Guests may start only these two tool-free engines. A command override takes
-# the engine outside that built-in contract, so it disables it for guests.
-_GUEST_ENGINES = {"plain", "kimi"}
-_GUEST_COMMAND_OVERRIDES = {"plain": "PLAIN_CMD", "kimi": "KIMI_PROOF_CMD"}
+# Guests may start only these tool-free engines (Analyze behind its own guest
+# switch). A command override takes the engine outside that built-in
+# contract, so it disables it for guests.
+_GUEST_ENGINES = {"plain", "kimi", "analyze"}
+_GUEST_COMMAND_OVERRIDES = {
+    "plain": "PLAIN_CMD", "kimi": "KIMI_PROOF_CMD", "analyze": "ANALYZE_CMD",
+}
 
 # Engines that can consume the run owner's Codex/ChatGPT subscription. Some
 # use a native Codex runtime; the small Python harnesses use our codex-exec
@@ -120,7 +167,7 @@ _CODEX_SUBSCRIPTION_ENGINES = {
     "metaharness",
     "plain",
     "deepseek_harness",
-    "danus",
+    "analyze",
 }
 
 # Claude OAuth is intentionally exposed only through adapters that invoke the
@@ -128,9 +175,10 @@ _CODEX_SUBSCRIPTION_ENGINES = {
 # be copied into third-party provider clients.
 _CLAUDE_SUBSCRIPTION_ENGINES = {
     "claude", "improof", "math_harness", "openclaw", "deepagents",
-    "metaharness", "plain"
+    "metaharness", "plain", "analyze",
 }
-_AUTH_ROUTES = {"api_key", "codex_subscription", "claude_subscription"}
+# ``dual_subscription`` is Ansatz CGM Max: Claude Code and Codex together.
+_AUTH_ROUTES = {"api_key", "codex_subscription", "claude_subscription", cgm_max.ROUTE}
 
 
 _SPONSORED_KIMI_CLI_TIMEOUT_MAX = 6_600
@@ -175,7 +223,7 @@ def _apply_sponsored_kimi_route(
     """Bind Kimi to the isolated response-only service, never its provider key."""
     if not _is_kimi_model(model):
         return False
-    engine = "plain" if engine == "kimi" else engine
+    engine = _sponsored_transport_engine(engine)
     if force:
         for name in (
             "KIMI_API_KEY",
@@ -203,6 +251,93 @@ def _apply_sponsored_kimi_route(
     env["AGENT_MONITOR_SPONSORED_KIMI"] = "1"
     env["AGENT_MONITOR_SPONSORED_KIMI_URL"] = sponsored_kimi_client.endpoint()
     return True
+
+
+def _sponsored_broker_serves(engine: str, model: str | None) -> bool:
+    """Whether the healthy sponsored broker would carry this Kimi run."""
+    if not _is_kimi_model(model):
+        return False
+    from agent_monitor import sponsored_kimi_client
+
+    return sponsored_kimi_client.supports_engine(
+        _sponsored_transport_engine(engine)
+    ) and sponsored_kimi_client.configured()
+
+
+def _check_cgm_problem_size(engine: str, text: str) -> None:
+    """Refuse a problem the CGM pipeline would reject, before a run starts.
+
+    ``math_harness_runner`` bounds the canonical ``problem.txt`` in UTF-8
+    bytes; a character limit alone (the guest form) admits multibyte text
+    that would otherwise fail only after a run slot and credential were spent.
+    """
+    if engine not in _CGM_ENGINES:
+        return
+    from agent_monitor.runners.math_harness_runner import MAX_PROBLEM_BYTES
+
+    size = len(str(text or "").encode("utf-8"))
+    if size > MAX_PROBLEM_BYTES:
+        raise ValueError(
+            f"The Ansatz CGM engines accept problems up to {MAX_PROBLEM_BYTES:,} "
+            f"bytes of UTF-8 text (this one is {size:,} bytes); shorten the "
+            "problem statement"
+        )
+
+
+def _analyze_model(user: dict[str, Any] | None, model: str | None) -> str:
+    """The model of an Analyze run: Kimi K3 for guests (sponsored only), the
+    requested one, else the account's saved default, else Kimi K3."""
+    from agent_monitor.settings import GUEST_DEFAULT_MODEL
+
+    requested = str(model or "").strip()
+    if user is not None and user.get("guest"):
+        if requested and requested != GUEST_DEFAULT_MODEL:
+            raise ValueError(f"Guest analyses use {GUEST_DEFAULT_MODEL}")
+        return GUEST_DEFAULT_MODEL
+    if requested:
+        return requested
+    if account_policy.member_analyze_sponsored_only(user):
+        # Public mode: the saved default would be the server's (see
+        # account_policy.member_analyze_sponsored_only).
+        return GUEST_DEFAULT_MODEL
+    if user is not None:
+        from agent_monitor.settings import resolved_user_env
+
+        saved = str(resolved_user_env(user).get("AGENT_MONITOR_MODEL") or "").strip()
+        if saved and not cgm_max.is_max_model(saved):
+            return saved
+    return GUEST_DEFAULT_MODEL
+
+
+def _analyze_api_timeout(sponsored: bool) -> int:
+    """The Analyze runner's per-call API timeout (it reads the same variables)."""
+    from agent_monitor import kimi_k3
+
+    default = kimi_k3.SPONSORED_TIMEOUT_SECONDS if sponsored else 300
+    for name in ("AGENT_MONITOR_ANALYZE_API_TIMEOUT", "AGENT_MONITOR_CGM_API_TIMEOUT"):
+        raw = str(os.environ.get(name) or "").strip()
+        if raw:
+            try:
+                return max(60, min(int(raw), 900))
+            except ValueError:
+                break
+    return default
+
+
+def _apply_bounded_run_env(
+    env: dict[str, str], *, engine: str, guest: bool, sponsored: bool
+) -> None:
+    """Pin the guest/sponsored budget profile in a run's child environment.
+
+    Every guest run carries ``AGENT_MONITOR_GUEST=1`` (the CGM guest budget
+    profile keys on it even when a hosted guest key, not the broker, is used).
+    Guest and sponsored CGM runs get exactly the bounded output ceiling. Call
+    this after every user-derived overlay so neither can be relaxed.
+    """
+    if guest:
+        env["AGENT_MONITOR_GUEST"] = "1"
+    if engine in _BOUNDED_OUTPUT_ENGINES and (guest or sponsored):
+        env["AGENT_MONITOR_MAX_OUTPUT_TOKENS"] = str(_CGM_BOUNDED_OUTPUT_TOKENS)
 
 
 class StopRequested(Exception):
@@ -441,7 +576,7 @@ def _merge_continuation_run(
     old_totals = previous.get("totals") or {}
     new_totals = current.get("totals") or {}
     for key in (
-        "input_tokens", "output_tokens", "cached_input_tokens",
+        "input_tokens", "output_tokens", "cached_input_tokens", "cache_write_tokens",
         "reasoning_tokens", "cost_usd", "latency_s",
     ):
         values = [
@@ -503,7 +638,8 @@ def _write_run_locked(run: dict[str, Any]) -> Path:
     for k in (
         "owner_id", "owner", "created_at", "problem_id",
         "guest", "use_subagents", "subagent_model", "auth_route", "credential_source",
-        "model", "requested_model", "reasoning_effort", "speed_mode", "max_iterations",
+        "model", "requested_model", "reasoning_effort", "speed_mode", "max_iterations", "formalize",
+        "route_plan", "run_kind", "analyze",
         "engine_impl", "engine_impl_version", "artifact_schema", "graph_schema",
     ):
         if run.get(k) in (None, "", "continue") and old.get(k) not in (None, "", "continue"):
@@ -670,7 +806,13 @@ def _upsert_manifest(run: dict[str, Any]) -> None:
         "last_ts": run.get("updated_at") or _now(),
         "owner_id": run.get("owner_id"),
         "guest": bool(run.get("guest")),
+        "run_kind": str(run.get("run_kind") or "prove"),
     }
+    if isinstance(run.get("analyze"), dict):
+        # Lets a restart find re-checks whose worker it lost (the analysis
+        # itself is no longer "running").
+        recheck = run["analyze"].get("recheck")
+        entry["recheck_running"] = isinstance(recheck, dict) and recheck.get("status") == "running"
     if not entry["problem_preview"]:
         # Runner flushes don't carry problem_text_preview — keep the stored one.
         entry.pop("problem_preview")
@@ -681,7 +823,16 @@ def _upsert_manifest(run: dict[str, Any]) -> None:
 
 
 def _pipeline_for(engine: str) -> list[dict]:
-    if engine == "math_harness":
+    if engine == _ANALYZE_ENGINE:
+        # The Analyze runner reuses the CGM stage ids (cli_events trusts them).
+        return [
+            {"id": "scaffold", "label": "1 Ingest", "title": "Fetch or unpack the manuscript"},
+            {"id": "work", "label": "2 Segment", "title": "Statement DAG from the manuscript"},
+            {"id": "verify", "label": "3 Check", "title": "Model verifier, one result at a time"},
+            {"id": "curate", "label": "4 Roll-up", "title": "Verdicts with dependencies"},
+            {"id": "finalize", "label": "5 Report", "title": "Report and manuscript DAG"},
+        ]
+    if engine in _CGM_ENGINES:
         return [
             {"id": "scaffold", "label": "1 Scaffold", "title": "Project setup"},
             {"id": "work", "label": "2 Explore", "title": "Independent proof search"},
@@ -857,6 +1008,7 @@ def _route_from_record(run: dict[str, Any] | None) -> str | None:
         "chatgpt_subscription": "codex_subscription",
         "codex_subscription": "codex_subscription",
         "claude_subscription": "claude_subscription",
+        cgm_max.ROUTE: cgm_max.ROUTE,
     }.get(live_mode)
 
 
@@ -866,6 +1018,7 @@ def _live_auth_mode(route: str) -> str:
         "api_key": "api_key",
         "codex_subscription": "chatgpt_subscription",
         "claude_subscription": "claude_subscription",
+        cgm_max.ROUTE: cgm_max.ROUTE,
     }[route]
 
 
@@ -876,7 +1029,7 @@ def _configure_auth_route(
     user_id: int | None,
 ) -> dict[str, str]:
     """Apply exactly one account/API route to a child-process environment."""
-    from agent_monitor.subprocess_env import scrub_control_plane_env
+    from agent_monitor.subprocess_env import scrub_control_plane_env, server_elan_home
 
     if route not in _AUTH_ROUTES:
         raise ValueError(f"Unsupported authentication route: {route}")
@@ -887,12 +1040,17 @@ def _configure_auth_route(
     configured.pop("AGENT_MONITOR_CLAUDE_MODEL", None)
     configured.pop("CODEX_HOME", None)
     configured.pop("CLAUDE_CONFIG_DIR", None)
+    configured.pop(cgm_max.ROUTE_MODE_ENV, None)
+    configured.pop(cgm_max.CODEX_CALL_HOME_ENV, None)
     runtime = {
-        "api_key": "api", "codex_subscription": "codex", "claude_subscription": "claude"
+        "api_key": "api",
+        "codex_subscription": "codex",
+        "claude_subscription": "claude",
+        cgm_max.ROUTE: "max",
     }[route]
     configured["AGENT_MONITOR_ACCOUNT_RUNTIME"] = runtime
-    configured["AGENT_MONITOR_USE_CODEX"] = "1" if runtime == "codex" else "0"
-    configured["AGENT_MONITOR_USE_CLAUDE"] = "1" if runtime == "claude" else "0"
+    configured["AGENT_MONITOR_USE_CODEX"] = "1" if runtime in {"codex", "max"} else "0"
+    configured["AGENT_MONITOR_USE_CLAUDE"] = "1" if runtime in {"claude", "max"} else "0"
 
     if route == "api_key":
         configured["AGENT_MONITOR_AUTH_MODE"] = "api_key"
@@ -901,6 +1059,30 @@ def _configure_auth_route(
     _scrub_provider_route_env(configured)
     if user_id is None:
         raise ValueError("A signed-in ProvingConsole account is required for subscription mode")
+
+    if route == cgm_max.ROUTE:
+        from agent_monitor import claude_login, codex_login
+
+        codex_home = codex_login.account_home(int(user_id))
+        if not codex_login.account_login_ready(codex_home):
+            raise ValueError("Codex is not connected for this account; connect it in Settings")
+        claude_home = claude_login.account_home(int(user_id))
+        if not claude_login.account_login_ready(claude_home):
+            raise ValueError("Claude Code is not connected for this account; connect it in Settings")
+        # Claude moves HOME to its account home; Codex calls keep the original.
+        codex_call_home = str(configured.get("HOME") or Path.home())
+        # The Claude environment is rebuilt from a scrubbed copy, so the Codex
+        # account is added afterwards.
+        configured = claude_login.account_environment(claude_home, configured)
+        configured["CODEX_HOME"] = str(codex_home)
+        configured["AGENT_MONITOR_CODEX_SUBSCRIPTION"] = "1"
+        configured[cgm_max.CODEX_CALL_HOME_ENV] = codex_call_home
+        configured["ELAN_HOME"] = server_elan_home()
+        configured["AGENT_MONITOR_CLAUDE_SUBSCRIPTION"] = "1"
+        configured["AGENT_MONITOR_AUTH_MODE"] = cgm_max.ROUTE
+        configured[cgm_max.ROUTE_MODE_ENV] = "max"
+        scrub_control_plane_env(configured)
+        return configured
 
     if route == "codex_subscription":
         from agent_monitor import codex_login
@@ -911,6 +1093,7 @@ def _configure_auth_route(
         configured["CODEX_HOME"] = str(home)
         configured["AGENT_MONITOR_CODEX_SUBSCRIPTION"] = "1"
         configured["AGENT_MONITOR_AUTH_MODE"] = "chatgpt_subscription"
+        configured["ELAN_HOME"] = server_elan_home()
         scrub_control_plane_env(configured)
         return configured
 
@@ -920,6 +1103,8 @@ def _configure_auth_route(
     if not claude_login.account_login_ready(home):
         raise ValueError("Claude Code is not connected for this account; connect it in Settings")
     configured = claude_login.account_environment(home, configured)
+    # HOME is now the account home; Lean must keep using the server's elan.
+    configured["ELAN_HOME"] = server_elan_home()
     configured["AGENT_MONITOR_CLAUDE_SUBSCRIPTION"] = "1"
     configured["AGENT_MONITOR_AUTH_MODE"] = "claude_subscription"
     scrub_control_plane_env(configured)
@@ -1055,12 +1240,75 @@ def start_job(
     reasoning_effort: str | None = None,
     speed_mode: str | None = None,
     attachments: object = None,
+    formalize: bool | None = None,
+    run_kind: str | None = None,
+    source: object = None,
+    analyze: object = None,
 ) -> dict[str, Any]:
+    """Start one run (``run_kind`` ``"prove"``, the default, or ``"analyze"``).
+
+    An Analyze run takes ``engine="analyze"``, a ``source`` (``{"url"}`` or
+    ``{"text", "format"?}``) or manuscript ``attachments``, and ``analyze``
+    options (``{"max_nodes"?, "focus"?}``); ``formalize`` defaults to false for
+    it and to true for proofs.  See :mod:`agent_monitor.analyze_runs`.
+    """
     from agent_monitor.engines_registry import all_engine_ids, list_engines, supported_models
 
     is_guest = bool(user and user.get("guest"))
     if engine not in all_engine_ids():
         raise ValueError(f"Unsupported engine: {engine}")
+    kind = str(run_kind or ("analyze" if engine == _ANALYZE_ENGINE else "prove")).strip().lower()
+    if kind not in {"prove", "analyze"}:
+        raise ValueError('run_kind must be "prove" or "analyze"')
+    if engine == _ANALYZE_ENGINE and kind != "analyze":
+        raise ValueError(
+            "Ansatz Analyze runs in the Analyze mode; reload the console and choose Analyze"
+        )
+    analyze_request: dict[str, Any] | None = None
+    if kind == "analyze":
+        from agent_monitor import analyze_runs
+
+        refusal = analyze_runs.availability_error(user)
+        if refusal is not None:
+            raise refusal
+        analyze_request = analyze_runs.normalize_request(
+            {
+                "engine": engine,
+                "source": source,
+                "attachments": attachments,
+                "analyze": analyze,
+                "formalize": formalize if isinstance(formalize, bool) else None,
+            },
+            user,
+        )
+        formalize = analyze_request["formalize"]
+        # The manuscript is the source, never the run's problem text: the
+        # record shows "Analyze · <label>" (and the focus).
+        problem_id = f"analysis_{uuid.uuid4().hex[:8]}"
+        problem_text = analyze_runs.problem_text(
+            analyze_request["label"], analyze_request["focus"]
+        )
+        model = _analyze_model(user, model)
+        use_subagents = False
+        subagent_model = None
+    elif formalize is None:
+        formalize = True
+    max_plan: dict[str, Any] | None = None
+    if cgm_max.is_max_model(model) or str(auth_route or "").strip().lower() == cgm_max.ROUTE:
+        # Max: Claude Code leads and Codex works, on the run owner's two linked
+        # accounts, each on its most capable model at maximum effort.
+        if engine not in _CGM_ENGINES:
+            raise ValueError("Max is available only for Ansatz CGM")
+        max_plan = cgm_max.plan_for(user)
+        if not max_plan["available"]:
+            raise ValueError(max_plan["reason"])
+        engine = cgm_max.ENGINE
+        model = cgm_max.MODEL_ID
+        auth_route = cgm_max.ROUTE
+        reasoning_effort = cgm_max.EFFORT
+        speed_mode = cgm_max.SPEED
+        use_subagents = False
+        subagent_model = None
     # Guests run only the two tool-free engines, never a coding-agent CLI, and
     # never with subagents or a command override that escapes that contract.
     if is_guest:
@@ -1075,6 +1323,19 @@ def start_job(
             raise ValueError(
                 f"Guest {engine} is unavailable while {override} is overridden"
             )
+    elif account_policy.is_member(user):
+        # Self-registered accounts are untrusted: tool-free engines only,
+        # billed to their own key or the sponsored route, never a subscription
+        # (the own-key CGM harness never takes Kimi K3 or Max either).
+        model = account_policy.member_run_model(user, engine, model)
+        member_error = account_policy.member_run_error(
+            user, engine, model=model, auth_route=auth_route
+        )
+        if member_error:
+            raise ValueError(member_error)
+        use_subagents = False
+        subagent_model = None
+        auth_route = "api_key"
     if engine == "kimi":
         from agent_monitor.settings import GUEST_DEFAULT_MODEL
 
@@ -1091,20 +1352,31 @@ def start_job(
         except (TypeError, ValueError):
             output_limit = 4096
         output_limit = max(256, min(output_limit, 8192))
+        if engine in _BOUNDED_OUTPUT_ENGINES:
+            # Multi-lemma CGM replies (and Analyze verdicts) need the full
+            # bounded ceiling; Kimi's reasoning tokens count against it.
+            output_limit = _CGM_BOUNDED_OUTPUT_TOKENS
         extra_env = dict(extra_env)
         extra_env["AGENT_MONITOR_PLAIN_MAX_OUTPUT_TOKENS"] = str(output_limit)
         extra_env["AGENT_MONITOR_MAX_OUTPUT_TOKENS"] = str(output_limit)
     elif max_output_tokens:
         extra_env["AGENT_MONITOR_MAX_OUTPUT_TOKENS"] = str(int(max_output_tokens))
-    if is_guest and not extra_env.get("KIMI_API_KEY"):
+    if (
+        is_guest
+        and kind != "analyze"
+        and not extra_env.get("KIMI_API_KEY")
+        and not _sponsored_broker_serves(engine, model)
+    ):
         # Guests inherit no operator credentials, so the only key they may use
         # is the dedicated hosted guest one (when the operator configured it).
+        # A healthy sponsored broker always wins: the raw hosted key would skip
+        # its per-client and gateway call caps.
         from agent_monitor.settings import hosted_guest_kimi_key
 
         hosted_key = hosted_guest_kimi_key()
         if hosted_key:
             extra_env["KIMI_API_KEY"] = hosted_key
-            extra_env.setdefault("KIMI_BASE_URL", "https://api.moonshot.ai/v1")
+            extra_env["KIMI_BASE_URL"] = _operator_kimi_base()
     engine_info = next((item for item in list_engines() if item.get("id") == engine), {})
     if engine_info and not engine_info.get("available"):
         detail = engine_info.get("health_detail") or engine_info.get("hint") or "runtime unavailable"
@@ -1117,19 +1389,42 @@ def start_job(
     selected_kimi = _is_kimi_model(model)
     if is_guest and selected_kimi and not extra_env.get("KIMI_API_KEY") and os.environ.get("AGENT_MONITOR_GUEST_HOSTED_KIMI", "1").lower() in {"0", "false", "off", "no"}:
         raise ValueError("Hosted Kimi is disabled; add your own Kimi API key in Settings")
-    if engine == "kimi" and is_guest and not extra_env.get("KIMI_API_KEY"):
-        from agent_monitor.settings import hosted_guest_kimi_key
-        from agent_monitor import sponsored_kimi_client
-        if not sponsored_kimi_client.configured():
-            key = hosted_guest_kimi_key()
-            if key:
-                extra_env["KIMI_API_KEY"] = key
-    sponsored_kimi = _apply_sponsored_kimi_route(
-        extra_env, engine="plain" if engine == "kimi" else engine, model=model
+    sponsored_only = kind == "analyze" and (
+        is_guest or account_policy.member_analyze_sponsored_only(user)
     )
+    if sponsored_only:
+        # Guests analyze on the sponsored Kimi K3 route only: never a key of
+        # their own (or the hosted guest key, which would skip the broker's
+        # per-client and gateway caps).  So do members in public mode, whose
+        # "own" keys would be the server's.
+        try:
+            sponsored_kimi = _apply_sponsored_kimi_route(
+                extra_env, engine=engine, model=model, force=True
+            )
+        except ValueError:
+            sponsored_kimi = False
+        if not sponsored_kimi:
+            raise ValueError(
+                "Sponsored Kimi K3 is not available right now, so guests can't "
+                "start an analysis; try again later"
+                if is_guest
+                else "Sponsored Kimi K3 is not available right now, so analyses can't "
+                "start; try again later"
+            )
+    else:
+        sponsored_kimi = _apply_sponsored_kimi_route(
+            extra_env, engine="plain" if engine == "kimi" else engine, model=model
+        )
+    if engine == _ANALYZE_ENGINE and not sponsored_kimi and _is_kimi_model(model):
+        # Own-key Kimi analyses use the operator's endpoint, like the kimi engine.
+        extra_env["AGENT_MONITOR_KIMI_BASE_URL"] = _operator_kimi_base()
     if engine == "kimi" and not sponsored_kimi:
-        extra_env["KIMI_API_BASE"] = "https://api.moonshot.ai/v1"
-        extra_env["KIMI_BASE_URL"] = "https://api.moonshot.ai/v1"
+        # Own-key runs use the operator's endpoint; a user-settable
+        # KIMI_API_BASE must never choose where the key is sent.
+        operator_base = _operator_kimi_base()
+        extra_env["KIMI_API_BASE"] = operator_base
+        extra_env["KIMI_BASE_URL"] = operator_base
+        extra_env["AGENT_MONITOR_KIMI_BASE_URL"] = operator_base
     has_kimi_key = bool(str(extra_env.get("KIMI_API_KEY") or "").strip())
     if selected_kimi and not supports_api:
         raise ValueError(f"{engine_info.get('label') or engine} does not support API models")
@@ -1139,15 +1434,24 @@ def start_job(
         k.endswith("_API_KEY") and bool(str(v or "").strip())
         for k, v in extra_env.items()
     )
-    route, _route_was_explicit = _selected_auth_route(
-        requested=auth_route,
-        engine=engine,
-        model=model,
-        auth_modes=auth_modes,
-        user=user,
-        env=extra_env,
-    )
-    if route not in auth_modes:
+    if max_plan is not None:
+        # Max does not depend on the account runtime selection: it always uses
+        # both linked accounts, which plan_for has just checked.
+        if not {"claude_subscription", "codex_subscription"} <= auth_modes:
+            raise ValueError(f"{engine_info.get('label') or engine} cannot run Max")
+        route = cgm_max.ROUTE
+    else:
+        route, _route_was_explicit = _selected_auth_route(
+            requested=auth_route,
+            engine=engine,
+            model=model,
+            auth_modes=auth_modes,
+            user=user,
+            env=extra_env,
+            # A member's runtime is always the API route, whatever it stored.
+            enforce_account_runtime=not account_policy.is_member(user),
+        )
+    if route not in auth_modes and route != cgm_max.ROUTE:
         raise ValueError(
             f"{engine_info.get('label') or engine} does not support "
             f"{route.replace('_', ' ')}"
@@ -1202,6 +1506,8 @@ def start_job(
         route=route,
         user_id=(user or {}).get("id"),
     )
+    if max_plan is not None:
+        cgm_max.apply_models(extra_env, max_plan)
     # Carry the UI toggle into every external harness. Engines without an
     # internal delegation tool ignore it; DeepAgents uses it to remove `task`.
     extra_env["AGENT_MONITOR_USE_SUBAGENTS"] = "1" if use_subagents else "0"
@@ -1210,16 +1516,129 @@ def start_job(
     else:
         extra_env.pop("AGENT_MONITOR_SUBAGENT_MODEL", None)
 
-    attachment_batch = research_attachments.validate(attachments)
+    attachment_batch = (
+        research_attachments.validate(attachments, guest=is_guest, analyze=True)
+        if analyze_request is not None
+        else research_attachments.validate(attachments, guest=is_guest)
+    )
     if attachment_batch and not (problem_text or "").strip() and not problem_id:
         problem_text = (
             "Use the attached research findings to investigate the problem and "
             "develop a rigorous proof."
         )
     pid, text, path = resolve_problem(problem_id, problem_text)
+    _check_cgm_problem_size(engine, text)
 
     job_id = uuid.uuid4().hex[:10]
     run_id = f"{engine}_{pid}_{job_id}"
+    analyze_route = ""
+    analyze_caps: dict[str, int] = {}
+    gate_key: str | None = None
+    if analyze_request is not None:
+        from agent_monitor import analyze_runs
+
+        analyze_route = "sponsored_kimi" if sponsored_kimi else route
+        analyze_role = analyze_runs.role_of(user)
+        effective = analyze_runs.effective_caps(
+            analyze_role,
+            sponsored=sponsored_kimi,
+            subscription=route in {"codex_subscription", "claude_subscription"},
+            requested=analyze_runs.request_caps(
+                analyze_role, sponsored=sponsored_kimi, max_nodes=analyze_request["max_nodes"]
+            ),
+        )
+        # The request carries the effective caps (it may only lower the role
+        # caps, so the runner applies exactly these), and run["analyze"]
+        # shows them from the start.
+        analyze_caps = {
+            "max_nodes": effective.max_nodes,
+            "max_calls": effective.max_calls,
+            "max_seconds": effective.max_seconds,
+        }
+        extra_env[analyze_runs.WATCHDOG_ENV] = str(
+            analyze_runs.watchdog_seconds(
+                effective, sponsored=sponsored_kimi, api_timeout=_analyze_api_timeout(sponsored_kimi)
+            )
+        )
+        if not sponsored_kimi:
+            # A flag inherited from the account environment is not this run's
+            # route: the runner would otherwise expect a broker credential.
+            extra_env["AGENT_MONITOR_SPONSORED_KIMI"] = "0"
+            extra_env.pop("AGENT_MONITOR_SPONSORED_KIMI_URL", None)
+        if sponsored_kimi:
+            # Two sponsored analyses at a time and a daily cap (refusals are
+            # 429/403 with a plain message); released when the worker exits.
+            analyze_runs.GATE.reserve(run_id, run_id=run_id, guest=is_guest)
+            gate_key = run_id
+    # Until the worker starts, a failure returns the sponsored Analyze slot
+    # (and its daily count); afterwards the worker releases it on exit.
+    try:
+        return _start_job_launch(
+            engine=engine,
+            extra_env=extra_env,
+            is_guest=is_guest,
+            sponsored_kimi=sponsored_kimi,
+            run_id=run_id,
+            job_id=job_id,
+            user=user,
+            model=model,
+            route=route,
+            tuning=tuning,
+            text=text,
+            pid=pid,
+            path=path,
+            max_plan=max_plan,
+            max_iterations=max_iterations,
+            use_subagents=use_subagents,
+            subagent_model=subagent_model,
+            attachment_batch=attachment_batch,
+            formalize=formalize,
+            kind=kind,
+            analyze_request=analyze_request,
+            analyze_route=analyze_route,
+            analyze_caps=analyze_caps,
+        )
+    except BaseException:
+        if gate_key is not None:
+            from agent_monitor import analyze_runs
+
+            analyze_runs.GATE.release(gate_key, refund=True)
+        raise
+
+
+def _start_job_launch(
+    *,
+    engine: str,
+    extra_env: dict[str, str],
+    is_guest: bool,
+    sponsored_kimi: bool,
+    run_id: str,
+    job_id: str,
+    user: dict[str, Any] | None,
+    model: str | None,
+    route: str,
+    tuning: dict[str, str],
+    text: str,
+    pid: str,
+    path: Path | None,
+    max_plan: dict[str, Any] | None,
+    max_iterations: int,
+    use_subagents: bool,
+    subagent_model: str | None,
+    attachment_batch: list[Any],
+    formalize: bool,
+    kind: str,
+    analyze_request: dict[str, Any] | None,
+    analyze_route: str,
+    analyze_caps: dict[str, int],
+) -> dict[str, Any]:
+    """The launch half of :func:`start_job`: credentials, workspace, record,
+    worker thread and derived pipeline (everything validated already)."""
+    from agent_monitor import run_tuning
+
+    _apply_bounded_run_env(
+        extra_env, engine=engine, guest=is_guest, sponsored=sponsored_kimi
+    )
     if sponsored_kimi and engine != "plain":
         from agent_monitor import sponsored_kimi_client
 
@@ -1228,7 +1647,7 @@ def start_job(
                 engine=_sponsored_transport_engine(engine),
                 client_id=(user or {}).get("id"),
                 cache_key=run_id,
-                minimum_ttl_seconds=(600 if engine == "kimi" else _cli_timeout_seconds(engine, extra_env) + _SPONSORED_KIMI_TOKEN_MARGIN),
+                minimum_ttl_seconds=_cli_timeout_seconds(engine, extra_env) + _SPONSORED_KIMI_TOKEN_MARGIN,
             )
         )
         # The harness reads KIMI_BASE_URL; the broker issues KIMI_API_BASE.
@@ -1240,10 +1659,39 @@ def start_job(
         auth_route=route,
         **tuning,
     )
+    # Re-assert last: nothing user-controlled may relax the guest profile.
+    _apply_bounded_run_env(
+        extra_env, engine=engine, guest=is_guest, sponsored=sponsored_kimi
+    )
     _stop_event(run_id).clear()
     ws = workspace_dir(run_id)
     attached = research_attachments.save(ws, attachment_batch)
     (ws / "problem.txt").write_text(text, encoding="utf-8")
+    analyze_fields: dict[str, Any] = {}
+    if analyze_request is not None:
+        from agent_monitor import analyze_runs
+        from agent_monitor.analyze import record as analyze_record
+        from agent_monitor.analyze import request as analysis_request
+
+        analysis_source = dict(analyze_request["source"])
+        if analysis_source["kind"] == "upload":
+            analysis_source["attachments"] = [str(item["id"]) for item in attached]
+        analysis_request.write(
+            ws,
+            source=analysis_source,
+            caps=analyze_caps,
+            focus=analyze_request["focus"],
+            formalize=bool(formalize),
+            role=analyze_runs.role_of(user),
+            route=analyze_route,
+            model=str(model or ""),
+            reasoning_effort=str(tuning.get("reasoning_effort") or "default"),
+            sponsored=bool(sponsored_kimi),
+        )
+        analyze_fields = {
+            "run_kind": "analyze",
+            "analyze": analyze_record.run_block(ws) or {},
+        }
     run = normalize_run(
         {
             "run_id": run_id,
@@ -1262,7 +1710,11 @@ def start_job(
                     "role": "system",
                     "pipeline_stage": _pipeline_for(engine)[0]["id"],
                     "prompt": text[:4000],
-                    "output": f"Starting {engine} engine…",
+                    "output": (
+                        "Starting Ansatz Analyze…"
+                        if analyze_request is not None
+                        else f"Starting {engine} engine…"
+                    ),
                     "status": "running",
                 }
             ],
@@ -1277,7 +1729,6 @@ def start_job(
             "model": model,
             "requested_model": model,
             "max_iterations": max_iterations,
-            "guest": is_guest,
             "live": {
                 "model": model,
                 "model_requested": bool(model),
@@ -1289,6 +1740,19 @@ def start_job(
             **tuning,
             "auth_route": route,
             "credential_source": "sponsored_kimi" if sponsored_kimi else "user",
+            # False keeps the run informal: the derived pipeline skips Lean.
+            "formalize": bool(formalize),
+            **analyze_fields,
+            **(
+                {
+                    "route_plan": {
+                        "advisor": dict(max_plan["advisor"]),
+                        "worker": dict(max_plan["worker"]),
+                    }
+                }
+                if max_plan is not None
+                else {}
+            ),
         },
         engine=engine,  # type: ignore[arg-type]
     )
@@ -1313,10 +1777,12 @@ def start_job(
         "guest": is_guest,
         "use_subagents": use_subagents,
         "subagent_model": subagent_model,
+        "formalize": bool(formalize),
         **tuning,
         "auth_route": route,
         "credential_source": "sponsored_kimi" if sponsored_kimi else "user",
         "problem_preview": _problem_preview(text),
+        **({"run_kind": "analyze"} if analyze_request is not None else {}),
     }
     with _LOCK:
         _JOBS[job_id] = job
@@ -1339,6 +1805,7 @@ def start_job(
             **tuning,
             "owner_id": user.get("id") if user else None,
             "guest": is_guest,
+            "run_kind": kind,
         },
         daemon=True,
         name=f"engine-{engine}-{job_id}",
@@ -1361,7 +1828,8 @@ def start_job(
             run_id=run_id,
             workspace=ws,
             owner_id=user.get("id") if user else None,
-            model=model,
+            # Max derives Lean and graphs on its worker route (cgm_max.formal_view).
+            model=str(max_plan["worker"]["model"]) if max_plan is not None else model,
             engine=engine,
         )
     return dict(job)
@@ -1395,7 +1863,11 @@ def _user_extra_env(
         return dict(project_provider_env(env, requested_models))
     from agent_monitor.settings import resolved_user_env
 
-    env.update(resolved_user_env(user))
+    from agent_monitor.settings import restrict_account_base_urls
+
+    # SSRF guard: only the operator chooses where an account's runs send
+    # requests (a no-op for administrators).
+    env.update(restrict_account_base_urls(dict(resolved_user_env(user)), user))
     from agent_monitor.subprocess_env import project_provider_env
 
     requested_models = (
@@ -1432,7 +1904,10 @@ def _continuation_auth_environment(
         env=env,
         enforce_account_runtime=False,
     )
-    if route not in auth_modes:
+    if route == cgm_max.ROUTE:
+        if not {"claude_subscription", "codex_subscription"} <= auth_modes:
+            raise ValueError(f"This run used Max, which {engine} no longer supports")
+    elif route not in auth_modes:
         raise ValueError(
             f"This run used {route.replace('_', ' ')}, which {engine} no longer supports"
         )
@@ -1490,14 +1965,22 @@ def _continuation_auth_environment(
     if sponsored_run and _is_kimi_model(model) and engine != "plain":
         from agent_monitor import sponsored_kimi_client
 
+        _apply_bounded_run_env(
+            configured,
+            engine=engine,
+            guest=bool(run_data.get("guest")),
+            sponsored=True,
+        )
         configured.update(
             sponsored_kimi_client.issue_credentials(
                 engine=_sponsored_transport_engine(engine),
                 client_id=owner_id,
                 cache_key=str(run_data.get("run_id") or "continuation"),
-                minimum_ttl_seconds=(600 if engine == "kimi" else _cli_timeout_seconds(engine, configured) + _SPONSORED_KIMI_TOKEN_MARGIN),
+                minimum_ttl_seconds=_cli_timeout_seconds(engine, configured) + _SPONSORED_KIMI_TOKEN_MARGIN,
             )
         )
+    if route == cgm_max.ROUTE:
+        cgm_max.apply_models(configured, cgm_max.record_plan(run_data))
     from agent_monitor.run_tuning import from_record as apply_recorded_tuning
 
     apply_recorded_tuning(configured, run_data)
@@ -1549,14 +2032,23 @@ def _record_run_memory(
     problem_text: str,
     outcome: str,
     final_out: str,
+    owner_id: int | None = None,
 ) -> None:
-    """Best-effort shared-memory update for registered-account runs only.
+    """Best-effort shared-memory update for operator runs only.
 
-    Anonymous guest input and output must never mutate the operator's library.
+    The library is the operator's shared profile: anonymous guest input and
+    output never mutate it, and neither do other signed-in accounts (the same
+    operator-only rule as the library write routes).  ``owner_id`` ``None`` is
+    the local, sign-in-free operator.
     """
     if guest:
         return
     try:
+        if owner_id is not None:
+            from agent_monitor.auth import is_operator_account
+
+            if not is_operator_account(int(owner_id)):
+                return
         from agent_monitor import library as user_library
 
         user_library.record_run_memory(
@@ -1592,10 +2084,53 @@ def _execute_job(
     speed_mode: str = "standard",
     owner_id: int | None = None,
     guest: bool = False,
+    run_kind: str = "prove",
 ) -> None:
     started = time.time()
     ws = Path(workspace)
     extra_env = dict(extra_env or {})
+    analyze_run = run_kind == "analyze" or engine == _ANALYZE_ENGINE
+    try:
+        _execute_job_body(
+            job_id=job_id, run_id=run_id, engine=engine, problem_id=problem_id,
+            problem_text=problem_text, problem_path=problem_path, model=model,
+            max_iterations=max_iterations, workspace=workspace, extra_env=extra_env,
+            use_subagents=use_subagents, subagent_model=subagent_model,
+            reasoning_effort=reasoning_effort, speed_mode=speed_mode,
+            owner_id=owner_id, guest=guest, analyze_run=analyze_run,
+            started=started, ws=ws,
+        )
+    finally:
+        if analyze_run:
+            # Every exit path (finished, failed, stopped, crashed) frees the
+            # sponsored Analyze slot; a server restart starts with none held.
+            from agent_monitor import analyze_runs
+
+            analyze_runs.GATE.release(run_id)
+
+
+def _execute_job_body(
+    *,
+    job_id: str,
+    run_id: str,
+    engine: str,
+    problem_id: str,
+    problem_text: str,
+    problem_path: str | None,
+    model: str | None,
+    max_iterations: int,
+    workspace: str,
+    extra_env: dict[str, str],
+    use_subagents: bool,
+    subagent_model: str | None,
+    reasoning_effort: str,
+    speed_mode: str,
+    owner_id: int | None,
+    guest: bool,
+    analyze_run: bool,
+    started: float,
+    ws: Path,
+) -> None:
     public_kimi_runtime = (
         os.environ.get("AGENT_MONITOR_PUBLIC_KIMI", "").strip() == "1"
     )
@@ -1613,7 +2148,9 @@ def _execute_job(
         "enabled_tools": [],
         "persistent_skill_mutation": False,
     }
-    if not guest:
+    if not guest and not analyze_run:
+        # An analysis checks someone else's manuscript with a fixed prompt
+        # pack: neither the user library nor published DAG memory applies.
         try:
             if public_kimi_runtime or sponsored_kimi_runtime:
                 raise LookupError("user library disabled for isolated Kimi service")
@@ -1661,7 +2198,7 @@ def _execute_job(
             _append_chat(run_id, "system", f"profile skill materialization unavailable: {exc}")
     # Only explicitly published, provenance-gated DAG results are retrievable;
     # community discussions never become executable harness instructions.
-    if not guest and not public_kimi_runtime and not sponsored_kimi_runtime:
+    if not guest and not analyze_run and not public_kimi_runtime and not sponsored_kimi_runtime:
         try:
             from agent_monitor.research import compose_context as dag_context
 
@@ -1673,7 +2210,8 @@ def _execute_job(
         except (OSError, ValueError, sqlite3.Error):
             pass
     engine_problem_text = (lib_ctx + "\n" + problem_text) if lib_ctx else problem_text
-    attachment_context = research_attachments.context(ws)
+    # The Analyze runner reads its uploads from analysis/request.json.
+    attachment_context = "" if analyze_run else research_attachments.context(ws)
     if attachment_context:
         engine_problem_text += "\n\n" + attachment_context
     engine_problem_text = _augment_research_audit_prompt(engine_problem_text)
@@ -1805,12 +2343,16 @@ def _execute_job(
                 requested_model=model,
                 max_iterations=max_iterations,
                 owner_id=owner_id,
-                include_persona=not guest,
+                include_persona=not guest and not analyze_run,
             )
 
         if _stop_event(run_id).is_set():
             result_run["status"] = "stopped"
-        if (extra_env or {}).get("AGENT_MONITOR_CLAUDE_SUBSCRIPTION") == "1":
+        max_run = (extra_env or {}).get(cgm_max.ROUTE_MODE_ENV) == "max"
+        if max_run:
+            result_run.setdefault("live", {})["auth_mode"] = cgm_max.ROUTE
+            final_route = cgm_max.ROUTE
+        elif (extra_env or {}).get("AGENT_MONITOR_CLAUDE_SUBSCRIPTION") == "1":
             result_run.setdefault("live", {})["auth_mode"] = "claude_subscription"
             final_route = "claude_subscription"
         elif (extra_env or {}).get("AGENT_MONITOR_CODEX_SUBSCRIPTION") == "1":
@@ -1819,7 +2361,9 @@ def _execute_job(
         else:
             final_route = "api_key"
         effective_result_model = str(
-            (result_run.get("live") or {}).get("model") or model or ""
+            cgm_max.MODEL_ID
+            if max_run
+            else (result_run.get("live") or {}).get("model") or model or ""
         ).strip()
         if effective_result_model:
             result_run["model"] = effective_result_model
@@ -1827,7 +2371,8 @@ def _execute_job(
                 "model", effective_result_model
             )
             if model:
-                result_run.setdefault("live", {})["model_requested"] = True
+                # A Max run names its mode; route_plan names both models.
+                result_run.setdefault("live", {})["model_requested"] = not max_run
         if model:
             # Provider telemetry may be a resolved Claude name that is useful
             # for attestation but invalid as a future account-model selector.
@@ -1852,6 +2397,8 @@ def _execute_job(
         result_run["runtime_library"] = runtime_library
         result_run = normalize_run(result_run, engine=engine)
         _attach_analysis(result_run, ws)
+        if analyze_run:
+            _finalize_analyze_record(result_run, ws)
         result_run["updated_at"] = _now()
         _write_run(result_run)
         status = result_run.get("status") or "finished"
@@ -1886,10 +2433,19 @@ def _execute_job(
                 engine=engine,
                 problem_id=problem_id,
                 status=status,
-                problem_text=problem_text,
+                problem_text=(
+                    _analyze_memory_label(result_run) if analyze_run else problem_text
+                ),
                 outcome=summary,
-                final_out=final_out,
+                # Manuscript text is untrusted: an analysis adds its label and
+                # outcome to the operator's memory, never report excerpts.
+                final_out="" if analyze_run else final_out,
+                owner_id=owner_id,
             )
+        if guest and status == "finished" and not public_kimi_runtime:
+            # Guests get the bounded derived Formal/DAG pipeline as soon as the
+            # proof exists; opening the run later remains a fallback.
+            _notify_guest_completion(run_id, owner_id, ws)
     except StopRequested:
         stopped_run = _load_run_record(run_id)
         stopped_run["status"] = "stopped"
@@ -1918,6 +2474,7 @@ def _execute_job(
                 "reasoning_effort": reasoning_effort,
                 "speed_mode": speed_mode,
                 "max_iterations": max_iterations,
+                **({"run_kind": "analyze"} if analyze_run else {}),
                 "agents": [
                     {
                         "trace_id": f"{run_id}::error",
@@ -1989,7 +2546,7 @@ def _estimate_cost(
         return round(cost, 6) if cost > 0 else None
     except Exception:  # noqa: BLE001
         # Last-resort static rates (gpt-4o-ish).
-        cost = (input_tokens + cache_read) * 2.5 / 1_000_000 + output_tokens * 10 / 1_000_000
+        cost = (input_tokens + cache_read + cache_write) * 2.5 / 1_000_000 + output_tokens * 10 / 1_000_000
         return round(cost, 6) if cost > 0 else None
 
 
@@ -2304,7 +2861,15 @@ def _normalize_terminal_kimi_outcome(
     # Mutating that proof during generic Kimi cleanup would invalidate the
     # otherwise valid receipt and make the Engine DAG fail closed.  Its critic
     # verdict remains explicit in the receipt/UI instead of this legacy footer.
+    # The ``kimi`` engine delegates to the same pipeline, so the receipt
+    # itself (not the engine id) decides.
     if str(run.get("engine") or "").strip().lower() == "math_harness":
+        return False
+    try:
+        receipt = workspace / "math_harness" / "project" / "engine_receipt.json"
+        if receipt.exists() or receipt.is_symlink():
+            return False
+    except OSError:
         return False
     live = run.get("live") if isinstance(run.get("live"), dict) else {}
     model = str(run.get("model") or live.get("model") or "").strip()
@@ -2336,8 +2901,16 @@ def _normalize_terminal_kimi_outcome(
 
 
 def _attach_analysis(run: dict[str, Any], workspace: Path | None) -> dict[str, Any]:
-    """Add the Run Analysis / Agent Flow block the dashboard renders."""
-    _normalize_terminal_kimi_outcome(run, workspace)
+    """Add the Run Analysis / Agent Flow block the dashboard renders.
+
+    (The Monitor's ``run["analysis"]`` block; an Analyze run's results are
+    ``run["analyze"]``.)  An Analyze run has no proof: its workspace holds a
+    third-party manuscript under ``analysis/source``, so no proof file is
+    looked for, rewritten or attributed.
+    """
+    analyze_run = str(run.get("engine") or "") == _ANALYZE_ENGINE
+    if not analyze_run:
+        _normalize_terminal_kimi_outcome(run, workspace)
     try:
         from harness_dashboard.analysis import compute_run_analysis
 
@@ -2350,10 +2923,62 @@ def _attach_analysis(run: dict[str, Any], workspace: Path | None) -> dict[str, A
         )
     except Exception:  # noqa: BLE001 — analysis is best-effort
         pass
-    if run.get("status") in {"finished", "failed", "stopped"}:
+    if run.get("status") in {"finished", "failed", "stopped"} and not analyze_run:
         _attach_proof_provenance(run.get("agents") or [], workspace)
         _attach_final_latex(run)
     return run
+
+
+def _analyze_title(block: dict[str, Any] | None) -> str:
+    from agent_monitor.analyze.titles import plain_title
+
+    source = (block or {}).get("source") or {}
+    return plain_title(source.get("title"), 160)
+
+
+def _finalize_analyze_record(run: dict[str, Any], workspace: Path) -> None:
+    """Store ``run["analyze"]`` (never ``run["analysis"]``) and the run-list
+    label "Analyze · <title>" once the runner has exited."""
+    from agent_monitor.analyze import record as analyze_record
+
+    run["run_kind"] = "analyze"
+    try:
+        block = analyze_record.run_block(workspace)
+    except Exception:  # noqa: BLE001 - a damaged artifact must not lose the run
+        block = None
+    if block is None:
+        try:
+            block = dict(_load_run_record(str(run.get("run_id"))).get("analyze") or {})
+        except (FileNotFoundError, json.JSONDecodeError, OSError):
+            block = {}
+    run["analyze"] = block
+    title = _analyze_title(block)
+    if not title:
+        return
+    focus = str(block.get("focus") or "")
+    from agent_monitor.analyze_runs import problem_text as analyze_problem_text
+
+    text = analyze_problem_text(title, focus)
+    run["problem_text"] = text
+    run["problem_text_preview"] = text[:500]
+    run["problems"] = _seed_problems(text, source="initial")
+    try:
+        (workspace / "problem.txt").write_text(text, encoding="utf-8")
+    except OSError:
+        pass
+
+
+def _analyze_memory_label(run: dict[str, Any]) -> str:
+    """The operator-memory line of an analysis: its label and verdict counts."""
+    block = run.get("analyze") or {}
+    title = _analyze_title(block) or "manuscript"
+    summary = block.get("summary") or {}
+    counts = ", ".join(
+        f"{summary.get(key, 0)} {label}"
+        for key, label in (("checked", "checked"), ("gap", "gap"), ("error", "error"),
+                           ("unclear", "unclear"), ("not_checked", "not checked"))
+    ) if summary else "no verdicts"
+    return f"Analyze · {title} ({counts}; checked by a model verifier — not a certificate)"
 
 
 def _artifact_agents(engine: str, workspace: Path, run_id: str) -> dict[str, Any] | None:
@@ -2550,6 +3175,8 @@ def _run_hermes(
             codex_home = candidate
     if ue.get("AGENT_MONITOR_CODEX_SUBSCRIPTION") == "1" and codex_home is None:
         raise RuntimeError("The selected Codex account is unavailable; reconnect Codex and retry.")
+    from agent_monitor.run_tuning import service_tier as run_service_tier
+
     agent = hermes_runner.create_agent(
         model=model or ue.get("AGENT_MONITOR_MODEL") or None,
         api_key=None if codex_home else direct_key,
@@ -2564,11 +3191,7 @@ def _run_hermes(
             if ue.get("AGENT_MONITOR_RUN_REASONING_EFFORT") in {None, "", "default"}
             else ue.get("AGENT_MONITOR_RUN_REASONING_EFFORT")
         ),
-        service_tier=(
-            "fast" if ue.get("AGENT_MONITOR_RUN_SPEED_MODE") == "fast"
-            else "default" if ue.get("AGENT_MONITOR_RUN_SPEED_MODE") == "standard"
-            else None
-        ),
+        service_tier=run_service_tier(ue.get("AGENT_MONITOR_RUN_SPEED_MODE")),
     )
     # The embedded Codex app-server must start inside this run's isolated
     # workspace; otherwise it sees the repository cwd and cannot write the
@@ -3004,6 +3627,7 @@ def _cli_failure_reason(
     timeout_s: int,
     proof_missing: bool,
     detail: str | None = None,
+    artifact: str = "proof artifact",
 ) -> str:
     if timed_out:
         return f"{label} timed out after {timeout_s}s"
@@ -3011,41 +3635,98 @@ def _cli_failure_reason(
         suffix = f": {detail.strip()}" if detail and detail.strip() else ""
         return f"{label} exited with code {returncode}{suffix}"
     if proof_missing:
-        return f"{label} exited successfully but produced no proof artifact"
-    return f"{label} failed before producing a proof artifact"
+        return f"{label} exited successfully but produced no {artifact}"
+    return f"{label} failed before producing a {artifact}"
+
+
+def _analysis_published(workspace: Path) -> bool:
+    """The Analyze runner's success artifacts: report and graph (no proof)."""
+    analysis = Path(workspace) / "analysis"
+    try:
+        return all(
+            (analysis / name).is_file() and not (analysis / name).is_symlink()
+            for name in ("report.md", "analysis_graph.json")
+        )
+    except OSError:
+        return False
+
+
+def _apply_analyze_runner_env(env: dict[str, str], extra_env: dict[str, str]) -> None:
+    """What only the Analyze runner receives, after the child-env scrub.
+
+    * the operator's optional GitHub token (child_process_env removes it
+      from every other child; the GitHub connector sends it only with its own
+      api.github.com calls);
+    * the console data directory, so arXiv requests share one 3-second
+      politeness slot with the console and the other runners;
+    * on an own-key route, an explicit "not sponsored" (an inherited flag
+      would make the runner expect a broker credential).
+    """
+    from agent_monitor import DATA_DIR
+
+    token = str(os.environ.get("AGENT_MONITOR_ANALYZE_GITHUB_TOKEN") or "").strip()
+    if token:
+        env["AGENT_MONITOR_ANALYZE_GITHUB_TOKEN"] = token
+    else:
+        env.pop("AGENT_MONITOR_ANALYZE_GITHUB_TOKEN", None)
+    env["AGENT_MONITOR_DATA_DIR"] = str(DATA_DIR)
+    if extra_env.get("AGENT_MONITOR_SPONSORED_KIMI") != "1":
+        env["AGENT_MONITOR_SPONSORED_KIMI"] = "0"
+        env.pop("AGENT_MONITOR_SPONSORED_KIMI_URL", None)
 
 
 def _cli_timeout_seconds(engine: str, env: dict[str, str]) -> int:
     """Resolve a bounded CLI timeout, including multi-stage harness budgets."""
     normalized = str(engine or "").strip().upper().replace("-", "_")
+    if normalized == "ANALYZE":
+        # start_job sets the watchdog from the run's own caps: its deadline,
+        # one in-flight call and publication.  Operator timeouts for other
+        # engines (AGENT_MONITOR_CLI_TIMEOUT) never cut an analysis short;
+        # the Analyze caps are the knob.  Without the variable (a re-check),
+        # the administrator ceiling applies.
+        try:
+            requested = int(str(env.get("AGENT_MONITOR_ANALYZE_WATCHDOG_SECONDS") or "").strip())
+        except ValueError:
+            requested = 14_400 + 900 + 300
+        bounded = max(60, min(requested, 86_400))
+        if env.get("AGENT_MONITOR_SPONSORED_KIMI") == "1":
+            bounded = min(bounded, _SPONSORED_KIMI_CLI_TIMEOUT_MAX)
+        return bounded
     if normalized == "DEEPAGENTS":
         default = 10_800
-    elif normalized == "MATH_HARNESS":
-        # The response-only workflow can make three candidate calls plus a
-        # planner, critic, and one revision. Keep its outer watchdog above the
-        # default per-stage Claude budgets so it cannot kill a healthy final
-        # stage just before that stage's own bounded timeout.
-        default = 7_200
-        if env.get("AGENT_MONITOR_CLAUDE_SUBSCRIPTION") == "1":
-            # Operator stage overrides can exceed the built-in profile. Derive
-            # a coherent outer default from the same bounded helpers, including
-            # the optional revision and a small publication/teardown margin.
-            try:
-                from agent_monitor.runners import math_harness_runner
+    elif normalized in {"MATH_HARNESS", "KIMI"}:
+        # Both engines run the CGM pipeline. Keep the outer watchdog above the
+        # pipeline's own bounded wall clock so it cannot kill a healthy final
+        # stage (or the publication step) just before the pipeline's own limit.
+        default = 7_200 if normalized == "MATH_HARNESS" else 3_600
+        try:
+            from agent_monitor.runners import math_harness_runner
 
-                candidates = math_harness_runner.candidate_count(env)
-                stage_budget = (
-                    math_harness_runner._claude_stage_timeout("planner", env)
-                    + candidates
-                    * math_harness_runner._claude_stage_timeout("candidate-1", env)
-                    + math_harness_runner._claude_stage_timeout("critic", env)
-                    + math_harness_runner._claude_stage_timeout("revision", env)
+            if (
+                normalized == "MATH_HARNESS"
+                and env.get("AGENT_MONITOR_CLAUDE_SUBSCRIPTION") == "1"
+            ):
+                # Every Claude call is bounded by its stage timeout; the helper
+                # already includes a publication/teardown margin.
+                default = max(
+                    default, math_harness_runner.claude_pipeline_budget_seconds(env)
                 )
-                default = max(default, int(stage_budget + 300))
-            except (ImportError, ValueError, RuntimeError):
-                # The runner will surface malformed stage configuration. Its
-                # outer process still receives the normal bounded default.
-                default = 7_200
+            else:
+                # API/Codex calls start only while max_seconds remains; the last
+                # one may run for one more API timeout, then publication.
+                budgets = math_harness_runner.Budgets.from_env(env)
+                api_timeout = math_harness_runner._bounded_int(
+                    env,
+                    ("AGENT_MONITOR_CGM_API_TIMEOUT",),
+                    default=300,
+                    minimum=60,
+                    maximum=900,
+                )
+                default = max(default, int(budgets.max_seconds + api_timeout + 300))
+        except (ImportError, ValueError, RuntimeError, AttributeError):
+            # The runner will surface malformed stage configuration. Its
+            # outer process still receives the normal bounded default.
+            pass
     elif normalized == "CLAUDE":
         # The direct Claude runner has its own inner provider deadline. Keep
         # the default outer watchdog above a valid configured inner deadline
@@ -3085,6 +3766,9 @@ def _apply_selected_model_env(
     """Route the UI model selection into the selected runner only."""
     requested = str(model or "").strip()
     if not requested:
+        return
+    if env.get(cgm_max.ROUTE_MODE_ENV) == "max":
+        # cgm_max.apply_models already chose the Claude and Codex models.
         return
     if env.get("AGENT_MONITOR_CLAUDE_SUBSCRIPTION") == "1":
         env["AGENT_MONITOR_SELECTED_MODEL"] = requested
@@ -3258,7 +3942,7 @@ def _apply_math_harness_iteration_env(
     problem_id: str | None = None,
 ) -> None:
     """Project the bounded UI iteration choice into the new adapter process."""
-    if engine != "math_harness" or max_iterations is None:
+    if engine not in _CGM_ENGINES or max_iterations is None:
         return
     bounded = max(1, min(int(max_iterations), 200))
     env["AGENT_MONITOR_MAX_ITERATIONS"] = str(bounded)
@@ -3308,10 +3992,16 @@ def _run_cli_engine(
         except Exception as exc:  # noqa: BLE001
             print(f"[agent-monitor] persona preamble unavailable: {exc}")
             preamble = ""
-    prompt = proof_prompt(
-        problem_text, workspace=workspace, preamble=preamble,
-        response_only=engine in {"kimi", "plain"},
-    )
+    analyze_run = engine == _ANALYZE_ENGINE
+    if analyze_run:
+        # The runner reads analysis/request.json; its command has no {prompt}.
+        # The record shows the run's label instead of a proof task prompt.
+        prompt = record_problem_text
+    else:
+        prompt = proof_prompt(
+            problem_text, workspace=workspace, preamble=preamble,
+            response_only=engine in {"kimi", "plain"},
+        )
     argv = build_cli_command(
         engine,
         prompt=prompt,
@@ -3350,7 +4040,7 @@ def _run_cli_engine(
 
     from agent_monitor.cli_events import CLIEventParser
 
-    parser = CLIEventParser(spec.get("parser_style") or engine)
+    parser = CLIEventParser(spec.get("parser_style") or engine, source_engine=engine)
 
     def _flush(
         output_tail: str,
@@ -3375,6 +4065,7 @@ def _run_cli_engine(
                     "latency_s": time.time() - started,
                     "model": u.get("model"),
                     "input_tokens": u.get("input_tokens") or None,
+                    "total_input_tokens": parser.total_input_tokens(),
                     "output_tokens": u.get("output_tokens") or None,
                     "cache_read_tokens": u.get("cache_read_tokens") or 0,
                     "cache_write_tokens": u.get("cache_write_tokens") or 0,
@@ -3405,6 +4096,11 @@ def _run_cli_engine(
                     "latency_s": time.time() - started,
                     "model": u.get("model"),
                     "input_tokens": _residual("input_tokens") or None,
+                    "total_input_tokens": parser.input_total(
+                        _residual("input_tokens"),
+                        _residual("cache_read_tokens"),
+                        _residual("cache_write_tokens"),
+                    ),
                     "output_tokens": _residual("output_tokens") or None,
                     "cache_read_tokens": _residual("cache_read_tokens"),
                     "cache_write_tokens": _residual("cache_write_tokens"),
@@ -3416,13 +4112,18 @@ def _run_cli_engine(
             {"from": a["trace_id"], "to": b["trace_id"]}
             for a, b in zip(agents, agents[1:])
         ]
-        # Fill missing per-node costs from tokens + LiteLLM pricing.
+        # Fill missing per-node costs from tokens + LiteLLM pricing.  Codex
+        # semantics (also used for projected Claude usage) count cache reads
+        # and writes inside input_tokens; only the uncached part is priced at
+        # the input rate so cached input is not charged twice.
         model = u.get("model")
         for a in agents:
             if a.get("cost_usd") is None and (a.get("input_tokens") or a.get("output_tokens")):
                 a["cost_usd"] = _estimate_cost(
                     model or a.get("model"),
-                    input_tokens=int(a.get("input_tokens") or 0),
+                    input_tokens=parser.uncached_input(
+                        a.get("input_tokens"), a.get("cache_read_tokens"), a.get("cache_write_tokens")
+                    ),
                     output_tokens=int(a.get("output_tokens") or 0),
                     cache_read=int(a.get("cache_read_tokens") or 0),
                     cache_write=int(a.get("cache_write_tokens") or 0),
@@ -3433,13 +4134,21 @@ def _run_cli_engine(
             if total_cost is None:
                 total_cost = _estimate_cost(
                     model,
-                    input_tokens=int(u.get("input_tokens") or 0),
+                    input_tokens=parser.uncached_input(
+                        u.get("input_tokens"), u.get("cache_read_tokens"), u.get("cache_write_tokens")
+                    ),
                     output_tokens=int(u.get("output_tokens") or 0),
                     cache_read=int(u.get("cache_read_tokens") or 0),
                     cache_write=int(u.get("cache_write_tokens") or 0),
                 )
         live = parser.live_state()
-        if (extra_env or {}).get("AGENT_MONITOR_CLAUDE_SUBSCRIPTION") == "1":
+        if (extra_env or {}).get(cgm_max.ROUTE_MODE_ENV) == "max":
+            # Both models answer in one Max run; the run shows the mode, and
+            # route_plan on the record names both models.
+            live["auth_mode"] = cgm_max.ROUTE
+            live["model"] = cgm_max.MODEL_ID
+            live["model_requested"] = False
+        elif (extra_env or {}).get("AGENT_MONITOR_CLAUDE_SUBSCRIPTION") == "1":
             live["auth_mode"] = "claude_subscription"
         elif (extra_env or {}).get("AGENT_MONITOR_CODEX_SUBSCRIPTION") == "1":
             live["auth_mode"] = "chatgpt_subscription"
@@ -3475,7 +4184,12 @@ def _run_cli_engine(
                 "totals": {
                     "latency_s": time.time() - started,
                     "cost_usd": total_cost,
-                    "input_tokens": u.get("input_tokens") or None,
+                    # All input the model read: Claude's cache reads/writes are
+                    # reported apart from input_tokens and would otherwise be
+                    # missing (Codex already counts cached input inside it).
+                    "input_tokens": parser.total_input_tokens() or None,
+                    "cached_input_tokens": int(u.get("cache_read_tokens") or 0) or None,
+                    "cache_write_tokens": int(u.get("cache_write_tokens") or 0) or None,
                     "output_tokens": u.get("output_tokens") or None,
                 },
                 "runner_result": {"command": argv},
@@ -3495,11 +4209,15 @@ def _run_cli_engine(
     from agent_monitor.subprocess_env import child_process_env
 
     env = child_process_env(extra=extra_env)
+    if analyze_run:
+        _apply_analyze_runner_env(env, extra_env or {})
     if engine == "kimi" and (extra_env or {}).get("AGENT_MONITOR_SPONSORED_KIMI") != "1":
         # Main-service availability flags are not authorization for this run.
-        # Personal-key Kimi runs use the fixed public endpoint independently.
+        # Personal-key Kimi runs use the operator's endpoint independently of
+        # any account-level base URL (starts and continuations alike).
         env["AGENT_MONITOR_SPONSORED_KIMI"] = "0"
         env.pop("AGENT_MONITOR_SPONSORED_KIMI_URL", None)
+        env["AGENT_MONITOR_KIMI_BASE_URL"] = _operator_kimi_base()
     _apply_math_harness_iteration_env(
         env,
         engine=engine,
@@ -3694,7 +4412,15 @@ def _run_cli_engine(
         parser.terminal_error = "CLI ended without a terminal completion event"
     ok = proc.returncode == 0 and not timed_out and not parser.terminal_error
     proof_missing = False
-    if ok and _promote_proof_artifact(workspace) is None:
+    if analyze_run:
+        # An analysis succeeds when the runner exits 0 having published its
+        # report and graph.  Its workspace has no proof, and a manuscript file
+        # named like one (analysis/source/**/proof.tex) must never be promoted.
+        if ok and not _analysis_published(workspace):
+            parser.lines.append("[agent-monitor] Analyze exited successfully but published no report and graph")
+            ok = False
+            proof_missing = True
+    elif ok and _promote_proof_artifact(workspace) is None:
         parser.lines.append("[agent-monitor] engine exited successfully but produced no proof.md or proof.tex")
         ok = False
         proof_missing = True
@@ -3708,6 +4434,7 @@ def _run_cli_engine(
             timeout_s=timeout_s,
             proof_missing=proof_missing,
             detail=parser.terminal_error,
+            artifact="analysis report" if analyze_run else "proof artifact",
         )
     return _flush(
         parser.output(),
@@ -4055,6 +4782,45 @@ def _run_is_active(run_id: str) -> dict[str, Any] | None:
     return None
 
 
+# Runs whose continuation is being prepared (route and credential checks) but
+# is not registered in _JOBS yet.  A second continue or chat request in that
+# window must not start a duplicate continuation.
+_LAUNCHING_RUNS: set[str] = set()
+
+
+def _claim_launch(run_id: str) -> bool:
+    """Reserve ``run_id`` for one new continuation; False while it is active."""
+    with _LOCK:
+        if run_id in _LAUNCHING_RUNS or any(
+            job.get("run_id") == run_id and job.get("status") == "running"
+            for job in _JOBS.values()
+        ):
+            return False
+        _LAUNCHING_RUNS.add(run_id)
+        return True
+
+
+def _release_launch(run_id: str) -> None:
+    """Drop a claim whose continuation did not start."""
+    with _LOCK:
+        _LAUNCHING_RUNS.discard(run_id)
+
+
+def _register_claimed_job(run_id: str, job: dict[str, Any]) -> None:
+    """Register a claimed run's continuation; its running job replaces the claim."""
+    with _LOCK:
+        _JOBS[job["job_id"]] = job
+        _LAUNCHING_RUNS.discard(run_id)
+
+
+def run_is_active(run_id: str) -> bool:
+    """Whether ``run_id`` is running or a continuation of it is starting."""
+    if _run_is_active(run_id):
+        return True
+    with _LOCK:
+        return run_id in _LAUNCHING_RUNS
+
+
 def _load_run_record(run_id: str) -> dict[str, Any]:
     for path in (_cache_dir() / f"{run_id}.json", RUNS_DIR / f"{run_id}.json"):
         if path.exists():
@@ -4110,7 +4876,7 @@ def reconcile_run_status(
                     auto_pipeline.reconcile_orphaned(workspace, reason)
                 except (OSError, ValueError):
                     pass
-            return run
+            return reconcile_recheck_state(run_id, run)
         if _record_age_seconds(run) < max(0.0, min_age_seconds):
             return run
 
@@ -4143,6 +4909,16 @@ def reconcile_run_status(
                 auto_pipeline.mark_interrupted(workspace, reason)
             except (OSError, ValueError):
                 pass
+        if run.get("run_kind") == "analyze" or run.get("engine") == _ANALYZE_ENGINE:
+            run["interruption"]["recoverable"] = False
+            _write_run(run)
+            _append_chat(
+                run_id,
+                "system",
+                "Analysis interrupted: its worker is no longer active (the server "
+                "may have restarted). Start a new analysis to run it again.",
+            )
+            return run
         _append_chat(
             run_id,
             "system",
@@ -4194,6 +4970,19 @@ def reconcile_stale_running_runs(*, min_age_seconds: float = 10.0) -> list[str]:
             if str(state.get("status") or "") == "running":
                 run_ids.append(state_path.parent.name)
 
+    # An analysis whose re-check worker was lost is "finished" with a re-check
+    # still "running": the manifest flags it, so a restart repairs it too.
+    if manifest_path.exists():
+        try:
+            entries = (json.loads(manifest_path.read_text(encoding="utf-8")) or {}).get("runs") or []
+            run_ids.extend(
+                str(entry.get("run_id") or "")
+                for entry in entries
+                if entry.get("run_id") and entry.get("recheck_running") is True
+            )
+        except (AttributeError, json.JSONDecodeError, OSError):
+            pass
+
     reconciled: list[str] = []
     for run_id in dict.fromkeys(run_ids):
         before = None
@@ -4226,6 +5015,9 @@ def _canonical_claude_continuation_model(value: object) -> str | None:
 def _continuation_model(run_data: dict[str, Any], requested: str | None) -> str | None:
     """Resolve the model a follow-up should display and actually reuse."""
     explicit = str(requested or "").strip()
+    if cgm_max.is_max_record(run_data):
+        # A Max run continues as Max; its two models come from the route plan.
+        return cgm_max.MODEL_ID
     if explicit:
         # Explicit input is validated against the recorded route below; never
         # reinterpret an invalid user selection as another account model.
@@ -4264,18 +5056,142 @@ def _continuation_model(run_data: dict[str, Any], requested: str | None) -> str 
     return None
 
 
-def _queue_human_feedback(workspace: Path, message: str) -> None:
-    """Durably append feedback that arrived while an engine was active."""
+def _member_continuation_model(
+    user: dict[str, Any] | None,
+    engine: str,
+    run_data: dict[str, Any],
+    requested: str | None,
+) -> str | None:
+    """The continuation's model, after refusing what a member may not run.
+
+    A member continues only on an engine and recorded route it may start
+    (never a subscription or Max).  The chat composer sends the launcher's
+    current model, which may belong to the other Ansatz CGM engine (Kimi K3,
+    or a model from the member's own keys); a model the member may not run on
+    this engine leaves the run on its recorded model.  For every other
+    account this is ``_continuation_model``.
+    """
+    route_error = account_policy.member_continuation_error(user, _route_from_record(run_data))
+    error = account_policy.member_engine_error(user, engine) or route_error
+    if error:
+        raise ValueError(error)
+    model = _continuation_model(run_data, requested)
+    if str(requested or "").strip() and account_policy.member_model_error(user, engine, model):
+        model = _continuation_model(run_data, None)
+    error = account_policy.member_model_error(user, engine, model)
+    if error:
+        raise ValueError(error)
+    return model
+
+
+def _owner_user(owner_id: int | None) -> dict[str, Any] | None:
+    """The account for a background follow-up, with its administrator role."""
+    if owner_id is None:
+        return None
+    from agent_monitor.auth import is_operator_account
+
+    return {"id": owner_id, "is_admin": is_operator_account(int(owner_id))}
+
+
+def _feedback_entries(raw: str) -> list[dict[str, Any]]:
+    """Parse queued feedback lines into ``content``/``author_id``/``ts`` entries."""
+    entries: list[dict[str, Any]] = []
+    for line in raw.splitlines():
+        try:
+            item = json.loads(line) or {}
+            content = str(item.get("content") or "").strip()
+            author = item.get("author_id")
+            stamp = item.get("ts")
+        except (AttributeError, json.JSONDecodeError):
+            content, author, stamp = line.strip(), None, None
+        if content:
+            entries.append({
+                "content": content,
+                # Feedback queued before authors were recorded has none.
+                "author_id": author if type(author) is int else None,
+                "ts": stamp or _now(),
+            })
+    return entries
+
+
+def _queue_human_feedback(
+    workspace: Path, message: str, *, author_id: int | None = None
+) -> bool:
+    """Durably append feedback that arrived while an engine was active.
+
+    Returns whether ``author_id`` already had feedback waiting, so this message
+    joins the follow-up that feedback booked rather than booking another.
+    """
     path = workspace / _PENDING_FEEDBACK_FILENAME
-    entry = {"content": message, "ts": _now()}
+    entry: dict[str, Any] = {"content": message, "ts": _now()}
+    if author_id is not None:
+        entry["author_id"] = author_id
     with _LOCK:
+        joined = False
+        if author_id is not None:
+            try:
+                waiting = _feedback_entries(path.read_text(encoding="utf-8"))
+            except OSError:
+                waiting = []
+            joined = any(item["author_id"] == author_id for item in waiting)
         with path.open("a", encoding="utf-8") as stream:
             stream.write(json.dumps(entry, ensure_ascii=False) + "\n")
+    return joined
 
 
-def _drain_human_feedback(workspace: Path) -> list[str]:
+def _requeue_human_feedback(workspace: Path, entries: list[dict[str, Any]]) -> None:
+    """Put drained feedback back at the head of the queue, in its order."""
+    if not entries:
+        return
+    path = workspace / _PENDING_FEEDBACK_FILENAME
+    lines = "".join(
+        json.dumps(
+            {key: entry[key] for key in ("content", "ts", "author_id") if entry.get(key) is not None},
+            ensure_ascii=False,
+        )
+        + "\n"
+        for entry in entries
+    )
+    with _LOCK:
+        try:
+            newer = path.read_text(encoding="utf-8")
+        except FileNotFoundError:
+            newer = ""
+        staged = path.with_name(f".{path.name}.{os.getpid()}.tmp")
+        staged.write_text(lines + newer, encoding="utf-8")
+        os.replace(staged, path)
+
+
+def feedback_pending(run_id: str) -> bool:
+    """Whether queued feedback already waits for the run's next continuation."""
+    return _pending_feedback_bytes(RUNS_DIR / "workspaces" / run_id) > 0
+
+
+def _pending_feedback_bytes(workspace: Path) -> int:
+    """Size of the feedback waiting for a run's next continuation."""
+    size = 0
+    with _LOCK:
+        for name in (_PENDING_FEEDBACK_FILENAME, "human_feedback_pending.txt"):
+            try:
+                size += (workspace / name).stat().st_size
+            except OSError:
+                continue
+    return size
+
+
+def _human_feedback_chars(run: dict[str, Any]) -> int:
+    """Characters of human feedback a run's session problems already carry."""
+    return sum(
+        len(_problem_item_text(item))
+        for item in run.get("problems") or []
+        if isinstance(item, dict)
+        and str(item.get("source") or "").strip().lower() in {"human", "hitl", "feedback"}
+    )
+
+
+def _drain_feedback_entries(workspace: Path) -> list[dict[str, Any]]:
     """Atomically consume queued feedback, including the legacy text file."""
-    queued: list[str] = []
+    queued: list[dict[str, Any]] = []
     with _LOCK:
         jsonl_path = workspace / _PENDING_FEEDBACK_FILENAME
         legacy_path = workspace / "human_feedback_pending.txt"
@@ -4289,48 +5205,94 @@ def _drain_human_feedback(workspace: Path) -> list[str]:
             if not raw:
                 continue
             if path == legacy_path:
-                queued.append(raw)
+                queued.append({"content": raw, "author_id": None, "ts": _now()})
                 continue
-            for line in raw.splitlines():
-                try:
-                    content = str((json.loads(line) or {}).get("content") or "").strip()
-                except (AttributeError, json.JSONDecodeError):
-                    content = line.strip()
-                if content:
-                    queued.append(content)
+            queued.extend(_feedback_entries(raw))
     return queued
 
 
+def _drain_human_feedback(workspace: Path) -> list[str]:
+    """Atomically consume the text of all queued feedback."""
+    return [entry["content"] for entry in _drain_feedback_entries(workspace)]
+
+
 def _launch_pending_feedback(
-    run_id: str, *, owner_id: int | None, model: str | None, max_iterations: int
+    run_id: str,
+    *,
+    owner_id: int | None,
+    model: str | None,
+    max_iterations: int,
+    reason: str = "now that the harness finished",
 ) -> dict[str, Any] | None:
-    """Start exactly one follow-up after the current engine reaches a terminal state."""
-    if _stop_event(run_id).is_set() or _run_is_active(run_id):
+    """Start exactly one follow-up once the run's engine reaches a terminal state.
+
+    Feedback continues as the account that wrote it (its keys, member policy
+    and role), oldest author first, never as the run owner or as whoever
+    started the finishing job: a project collaborator's message must not run
+    on the administrator's credentials, nor one member's on another's keys.
+    Other authors' feedback stays queued for the next follow-up.
+    ``owner_id`` stands in for feedback queued before authors were recorded.
+    """
+    if _stop_event(run_id).is_set() or run_is_active(run_id):
         return None
     workspace = RUNS_DIR / "workspaces" / run_id
-    queued = _drain_human_feedback(workspace)
-    if not queued:
+    entries = _drain_feedback_entries(workspace)
+    if not entries:
         return None
-    message = "\n\n".join(queued)
-    _append_chat(
-        run_id,
-        "system",
-        f"Applying {len(queued)} queued human message{'s' if len(queued) != 1 else ''} now that the harness finished.",
-    )
-    try:
-        return continue_run(
+    authors = [owner_id if entry["author_id"] is None else entry["author_id"] for entry in entries]
+    started: set[int] = set()
+    result: dict[str, Any] | None = None
+    for author in dict.fromkeys(authors):
+        batch = [index for index, item in enumerate(authors) if item == author]
+        _append_chat(
             run_id,
-            message=message,
-            model=model,
-            max_iterations=max_iterations,
-            user={"id": owner_id} if owner_id is not None else None,
-            problems_recorded=True,
+            "system",
+            f"Applying {len(batch)} queued human message{'s' if len(batch) != 1 else ''} {reason}.",
         )
-    except Exception as exc:  # noqa: BLE001
-        for item in queued:
-            _queue_human_feedback(workspace, item)
-        _append_chat(run_id, "system", f"Queued feedback could not start yet: {exc}")
-        return None
+        try:
+            result = continue_run(
+                run_id,
+                message="\n\n".join(entries[index]["content"] for index in batch),
+                model=model,
+                max_iterations=max_iterations,
+                # The author's real role: an administrator's follow-up is not
+                # subject to the member policy, and a member's never escapes it.
+                user=_owner_user(author),
+                problems_recorded=True,
+            )
+        except Exception as exc:  # noqa: BLE001
+            # This author's feedback waits; another author's may still start.
+            _append_chat(run_id, "system", f"Queued feedback could not start yet: {exc}")
+            continue
+        if result.get("ok"):
+            started.update(batch)
+        # Otherwise another continuation started first: all of it waits.
+        break
+    _requeue_human_feedback(
+        workspace, [entry for index, entry in enumerate(entries) if index not in started]
+    )
+    return result
+
+
+def _start_feedback_queued_behind(run_id: str, *, max_iterations: int) -> None:
+    """Start feedback queued behind a continuation that then failed to start.
+
+    Feedback that arrives while another request prepares a continuation waits
+    for that continuation; when the preparation fails no harness runs, and
+    nothing else would ever start the queue.
+    """
+    if not feedback_pending(run_id):
+        return
+    try:
+        _launch_pending_feedback(
+            run_id,
+            owner_id=run_owner(run_id),
+            model=None,
+            max_iterations=max_iterations,
+            reason="now that the other continuation did not start",
+        )
+    except Exception:  # noqa: BLE001 - the failed request reports its own error
+        return
 
 
 def send_human_message(
@@ -4342,14 +5304,41 @@ def send_human_message(
     user: dict[str, Any] | None = None,
     attachments: object = None,
 ) -> dict[str, Any]:
-    """Human-in-the-loop chat: queue feedback or continue a finished run."""
+    """Human-in-the-loop chat: queue feedback or continue a finished run.
+
+    A queued answer reports ``joined_follow_up``: whether the message joined
+    feedback its author already queued, so one follow-up carries both.
+    """
     message = (message or "").strip()
-    attachment_batch = research_attachments.validate(attachments)
+    attachment_batch = research_attachments.validate(
+        attachments, guest=bool(user and user.get("guest"))
+    )
     if not message and not attachment_batch:
         raise ValueError("empty message")
     ws = RUNS_DIR / "workspaces" / run_id
     if not ws.is_dir():
         raise FileNotFoundError("workspace not found")
+    try:
+        recorded = _load_run_record(run_id)
+    except FileNotFoundError:
+        recorded = {}
+    recorded_engine = str(recorded.get("engine") or run_id.split("_", 1)[0])
+    # Refuse before the message is recorded, so the chat shows nothing unsent.
+    from agent_monitor.engines_registry import retired_engine_error
+
+    retired_error = retired_engine_error(recorded_engine)
+    if retired_error:
+        raise ValueError(retired_error)
+    _refuse_analyze_continuation({**recorded, "engine": recorded_engine})
+    if account_policy.is_member(user):
+        model = _member_continuation_model(user, recorded_engine, recorded, model)
+        feedback_error = account_policy.member_feedback_error(
+            message,
+            run_feedback_chars=_human_feedback_chars(recorded),
+            queued_bytes=_pending_feedback_bytes(ws) if run_is_active(run_id) else 0,
+        )
+        if feedback_error:
+            raise ValueError(feedback_error)
 
     attached = research_attachments.save(ws, attachment_batch)
     display_message = message or (
@@ -4377,9 +5366,16 @@ def send_human_message(
     if run_data.get("run_id"):
         _write_run(run_data)
 
-    active = _run_is_active(run_id)
-    if active:
-        _queue_human_feedback(ws, message)
+    # One decision under the job lock: feedback for a running run, or for one
+    # whose continuation another request is preparing, waits for the next
+    # turn; otherwise this message claims the run and continues it now.
+    joined = False
+    with _LOCK:
+        active = _run_is_active(run_id)
+        claimed = not active and _claim_launch(run_id)
+        if not claimed:
+            joined = _queue_human_feedback(ws, message, author_id=(user or {}).get("id"))
+    if not claimed:
         _append_chat(
             run_id,
             "system",
@@ -4388,11 +5384,43 @@ def send_human_message(
         return {
             "ok": True,
             "status": "queued",
-            "job_id": active.get("job_id"),
+            "job_id": (active or {}).get("job_id"),
+            "joined_follow_up": joined,
             "messages": list_chat(run_id),
             "user": user_entry,
         }
+    try:
+        return _continue_with_message(
+            run_id,
+            message=message,
+            effective_model=effective_model,
+            max_iterations=max_iterations,
+            user=user,
+            run_data=run_data,
+            problems=problems,
+            ws=ws,
+            user_entry=user_entry,
+        )
+    except BaseException as exc:
+        _release_launch(run_id)
+        if isinstance(exc, Exception):
+            _start_feedback_queued_behind(run_id, max_iterations=max_iterations)
+        raise
 
+
+def _continue_with_message(
+    run_id: str,
+    *,
+    message: str,
+    effective_model: str | None,
+    max_iterations: int,
+    user: dict[str, Any] | None,
+    run_data: dict[str, Any],
+    problems: list[Any],
+    ws: Path,
+    user_entry: dict[str, Any],
+) -> dict[str, Any]:
+    """Start the chat continuation of a run claimed by ``send_human_message``."""
     # Do not expose queued feedback to the process that is still running. The
     # continuation writes the updated notebook at the start of
     # ``_execute_continue``; writing it before the active check lets the
@@ -4414,24 +5442,23 @@ def send_human_message(
         env=_user_extra_env(user, effective_model, run_data.get("subagent_model")),
     )
     job_id = uuid.uuid4().hex[:10]
-    with _LOCK:
-        _JOBS[job_id] = {
-            "job_id": job_id,
-            "run_id": run_id,
-            "engine": engine,
-            "problem_id": run_data.get("problem_id"),
-            "status": "running",
-            "created_at": _now(),
-            "updated_at": _now(),
-            "error": None,
-            "model": effective_model,
-            "kind": "continue",
-            "owner_id": continue_owner_id,
-            "auth_route": continued_route,
-            "reasoning_effort": run_data.get("reasoning_effort", "default"),
-            "speed_mode": run_data.get("speed_mode", "standard"),
-            "problem_preview": _session_title(problems, first_problem),
-        }
+    _register_claimed_job(run_id, {
+        "job_id": job_id,
+        "run_id": run_id,
+        "engine": engine,
+        "problem_id": run_data.get("problem_id"),
+        "status": "running",
+        "created_at": _now(),
+        "updated_at": _now(),
+        "error": None,
+        "model": effective_model,
+        "kind": "continue",
+        "owner_id": continue_owner_id,
+        "auth_route": continued_route,
+        "reasoning_effort": run_data.get("reasoning_effort", "default"),
+        "speed_mode": run_data.get("speed_mode", "standard"),
+        "problem_preview": _session_title(problems, first_problem),
+    })
 
     _append_chat(run_id, "system", "Continuing proof with your feedback…")
     continued_subagents = bool(run_data.get("use_subagents", True))
@@ -4640,7 +5667,7 @@ def _execute_continue(
                     run_id=run_id,
                     workspace=ws,
                     owner_id=owner_id,
-                    model=model,
+                    model=cgm_max.formal_model(_load_run_record(run_id), model),
                     engine=engine,
                 )
             except Exception as exc:  # noqa: BLE001 - derived views are best-effort
@@ -4737,16 +5764,533 @@ def _run_improof_continuation(
     )
 
 
+def _refuse_analyze_continuation(record: dict[str, Any] | None) -> None:
+    """Analyze runs are not conversations: no continuation, no chat turn."""
+    from agent_monitor import analyze_runs
+
+    if analyze_runs.is_analyze_record(record):
+        raise ValueError(analyze_runs.CONTINUE_REFUSAL)
+
+
+# One node of a finished analysis is re-checked by the runner itself
+# (``analyze_runner.py --recheck <node_id>``, at most 8 calls and 900 s) with
+# the run's own route environment; the outer watchdog adds one call and
+# publication.
+_RECHECK_GRACE_SECONDS = 180
+
+
+def _analyze_recheck_env(extra_env: dict[str, str], *, model: str | None) -> dict[str, str]:
+    """The re-check child environment (the run's route; tool-free runner)."""
+    from agent_monitor.engines_registry import engine_extra_path
+    from agent_monitor.subprocess_env import child_process_env
+
+    env = child_process_env(extra=extra_env)
+    _apply_analyze_runner_env(env, extra_env)
+    _apply_selected_model_env(env, engine=_ANALYZE_ENGINE, model=model)
+    if env.get("AGENT_MONITOR_CODEX_SUBSCRIPTION") == "1" or env.get("AGENT_MONITOR_CLAUDE_SUBSCRIPTION") == "1":
+        _scrub_provider_route_env(env)
+    env.setdefault("NO_COLOR", "1")
+    extra = engine_extra_path(_ANALYZE_ENGINE)
+    if extra:
+        env["PATH"] = os.pathsep.join([*extra, env.get("PATH", "")])
+    return env
+
+
+def start_analysis_recheck(
+    run_id: str,
+    node_id: str,
+    *,
+    user: dict[str, Any] | None,
+    on_exit: Any = None,
+) -> dict[str, Any]:
+    """Re-check one node of a finished analysis in the background.
+
+    Returns ``{"ok": True, "status": "rechecking", "run_id", "node_id",
+    "job_id"}`` at once; the outcome lands in ``run["analyze"]["recheck"]``
+    (and the refreshed summary in ``run["analyze"]``).  ``on_exit`` runs once
+    when the re-check is over or did not start (a guest's derived-action
+    slot).  Raises ``analyze_runs.AnalyzeRequestError`` (status 400, 403, 409
+    or 429), ``FileNotFoundError`` or ``ValueError``.
+    """
+    from agent_monitor import analyze_runs
+    from agent_monitor.analyze import graph as analysis_graph
+
+    handed_off = False
+    gate_key: str | None = None
+    claimed = False
+    state_written: tuple[str, str, str] | None = None
+    try:
+        record = _load_run_record(run_id)
+    except (FileNotFoundError, json.JSONDecodeError, OSError):
+        if callable(on_exit):
+            on_exit()
+        raise FileNotFoundError("run not found") from None
+    try:
+        if not analyze_runs.is_analyze_record(record):
+            raise analyze_runs.AnalyzeRequestError("Only Analyze runs have nodes to re-check")
+        refusal = analyze_runs.availability_error(user)
+        if refusal is not None:
+            raise refusal
+        if not isinstance(node_id, str) or not analysis_graph.NODE_ID_RE.fullmatch(node_id):
+            raise analyze_runs.AnalyzeRequestError("node_id must be a node of this analysis")
+        ws = workspace_dir(run_id)
+        graph = analysis_graph.load(ws)
+        if graph is None:
+            raise analyze_runs.AnalyzeRequestError(
+                "This analysis has no published graph to re-check yet", status=409
+            )
+        node = next((item for item in graph["nodes"] if item["id"] == node_id), None)
+        if node is None:
+            raise analyze_runs.AnalyzeRequestError("node_id must be a node of this analysis")
+        if not (node.get("meta") or {}).get("checkable"):
+            raise analyze_runs.AnalyzeRequestError(
+                "That result cannot be re-checked: it is not a result whose proof the parser located"
+            )
+        if str(record.get("status") or "") == "running" or run_is_active(run_id):
+            raise analyze_runs.AnalyzeRequestError(
+                "Wait for the analysis (or its current re-check) to finish", status=409
+            )
+        if not _claim_launch(run_id):
+            raise analyze_runs.AnalyzeRequestError(
+                "A re-check of this analysis is already starting", status=409
+            )
+        claimed = True
+        # A guest re-checks a bounded number of results per analysis (counted
+        # on the record, under the launch claim, so it holds across restarts).
+        requester_guest = bool(user and user.get("guest"))
+        if requester_guest:
+            try:
+                current = _load_run_record(run_id)
+            except (FileNotFoundError, json.JSONDecodeError, OSError):
+                current = record
+            if recheck_count(current) >= analyze_runs.GUEST_RECHECKS_PER_ANALYSIS:
+                raise analyze_runs.AnalyzeRequestError(
+                    analyze_runs.GUEST_RECHECK_LIMIT_MESSAGE.format(
+                        limit=analyze_runs.GUEST_RECHECKS_PER_ANALYSIS
+                    ),
+                    status=403,
+                )
+        # The model the analysis selected (an account route's selector, not
+        # the provider's resolved name), exactly as a continuation would.
+        model = _continuation_model(record, None)
+        sponsored = str(record.get("credential_source") or "") == "sponsored_kimi"
+        guest = bool(record.get("guest"))
+        if not sponsored and account_policy.member_analyze_sponsored_only(user):
+            raise analyze_runs.AnalyzeRequestError(
+                "This analysis ran on an API key, which members can't use on this site; "
+                "start a new analysis on the included Kimi K3",
+                status=403,
+            )
+        if sponsored:
+            gate_key = analyze_runs.recheck_key(run_id)
+            # The guests' share of the sponsored pool follows who asks.
+            analyze_runs.GATE.reserve(gate_key, run_id=run_id, guest=requester_guest)
+        configured, _route = _continuation_auth_environment(
+            run_data=record,
+            engine=_ANALYZE_ENGINE,
+            model=model,
+            user=user,
+            env=_user_extra_env(user, model),
+        )
+        _apply_bounded_run_env(configured, engine=_ANALYZE_ENGINE, guest=guest, sponsored=sponsored)
+        if not sponsored and _is_kimi_model(model):
+            configured["AGENT_MONITOR_KIMI_BASE_URL"] = _operator_kimi_base()
+        env = _analyze_recheck_env(configured, model=model)
+        from agent_monitor.runners import analyze_runner
+
+        timeout = analyze_runner.RECHECK_SECONDS + _analyze_api_timeout(sponsored) + _RECHECK_GRACE_SECONDS
+        job_id = uuid.uuid4().hex[:10]
+        label = str(node.get("label") or node_id)[:120]
+        started_at = _now()
+        _register_claimed_job(run_id, {
+            "job_id": job_id,
+            "run_id": run_id,
+            "engine": _ANALYZE_ENGINE,
+            "run_kind": "analyze",
+            "kind": "recheck",
+            "node_id": node_id,
+            "status": "running",
+            "created_at": started_at,
+            "updated_at": started_at,
+            "error": None,
+            "model": model,
+            "owner_id": record.get("owner_id"),
+            "guest": guest,
+            "auth_route": record.get("auth_route"),
+            "credential_source": record.get("credential_source"),
+            "problem_preview": f"Re-check · {label}",
+        })
+        claimed = False
+        _stop_event(run_id).clear()
+        _set_recheck_state(run_id, {"node_id": node_id, "label": label, "status": "running",
+                                    "job_id": job_id, "started_at": started_at}, started=True)
+        state_written = (job_id, label, started_at)
+        _append_chat(run_id, "system", f"Re-check · {label} · started (model verifier, one result)")
+        thread = threading.Thread(
+            target=_execute_recheck,
+            kwargs={
+                "run_id": run_id, "job_id": job_id, "node_id": node_id, "label": label,
+                "workspace": ws, "env": env, "timeout": timeout, "gate_key": gate_key,
+                "on_exit": on_exit, "started_at": started_at, "model": model,
+            },
+            daemon=True,
+            name=f"analyze-recheck-{job_id}",
+        )
+        thread.start()
+        handed_off = True
+        return {"ok": True, "status": "rechecking", "run_id": run_id, "node_id": node_id, "job_id": job_id}
+    finally:
+        if not handed_off:
+            if claimed:
+                _release_launch(run_id)
+            if gate_key is not None:
+                analyze_runs.GATE.release(gate_key, refund=True)
+            with _LOCK:
+                for job in _JOBS.values():
+                    if job.get("run_id") == run_id and job.get("kind") == "recheck" and job.get("status") == "running":
+                        job["status"] = "failed"
+            if state_written is not None:
+                job_id, label, started_at = state_written
+                _set_recheck_state(run_id, {
+                    "node_id": node_id, "label": label, "status": "failed", "job_id": job_id,
+                    "started_at": started_at, "finished_at": _now(),
+                    "error": "The re-check could not start",
+                })
+            if callable(on_exit):
+                on_exit()
+
+
+# Serializes every write of ``run["analyze"]["recheck"]`` (a re-check's own
+# updates and the repair of a re-check that a restart interrupted).
+_RECHECK_STATE_LOCK = threading.Lock()
+
+
+def recheck_count(record: dict[str, Any] | None) -> int:
+    """How many re-checks of this analysis were started (``rechecks.started``)."""
+    block = (record or {}).get("analyze")
+    tally = block.get("rechecks") if isinstance(block, dict) else None
+    try:
+        return max(0, int((tally or {}).get("started") or 0)) if isinstance(tally, dict) else 0
+    except (TypeError, ValueError):
+        return 0
+
+
+RECHECK_INTERRUPTED = (
+    "The re-check was interrupted (the server restarted); the previous verdict is kept"
+)
+
+
+def _recheck_worker_alive(run_id: str, job_id: object) -> bool:
+    """Whether this process runs (or is starting) work for ``run_id``."""
+    with _LOCK:
+        if run_id in _LAUNCHING_RUNS:
+            return True
+        job = _JOBS.get(str(job_id or ""))
+        if job is not None and job.get("run_id") == run_id and job.get("status") == "running":
+            return True
+        return any(
+            item.get("run_id") == run_id and item.get("status") == "running" for item in _JOBS.values()
+        )
+
+
+def reconcile_recheck_state(run_id: str, run: dict[str, Any] | None = None) -> dict[str, Any] | None:
+    """Repair a re-check that a lost worker left ``running``.
+
+    The re-check job lives in this process only: after a restart (or a crash
+    of its thread) the record would say "running" forever, with every node's
+    Re-check button disabled.  The state becomes ``interrupted`` (the runner
+    restores the node it was checking, or never got to change it, so the
+    previous verdict stands).  Returns the current record.
+    """
+    if run is None:
+        try:
+            run = _load_run_record(run_id)
+        except (FileNotFoundError, json.JSONDecodeError, OSError):
+            return None
+    block = run.get("analyze") if isinstance(run.get("analyze"), dict) else {}
+    recheck = block.get("recheck") if isinstance(block.get("recheck"), dict) else None
+    if not recheck or recheck.get("status") != "running" or _recheck_worker_alive(run_id, recheck.get("job_id")):
+        return run
+    with _RECHECK_STATE_LOCK:
+        try:
+            current = _load_run_record(run_id)
+        except (FileNotFoundError, json.JSONDecodeError, OSError):
+            return run
+        current_block = dict(current.get("analyze") or {})
+        state = current_block.get("recheck") if isinstance(current_block.get("recheck"), dict) else {}
+        if (
+            state.get("status") != "running"
+            or state.get("job_id") != recheck.get("job_id")
+            or _recheck_worker_alive(run_id, state.get("job_id"))
+        ):
+            return current
+        current_block["recheck"] = {**state, "status": "interrupted", "finished_at": _now(),
+                                    "error": RECHECK_INTERRUPTED}
+        current["analyze"] = current_block
+        current["updated_at"] = _now()
+        _write_run(current)
+    from agent_monitor import analyze_runs
+
+    # A slot held by a lost thread of this process is returned at once.
+    analyze_runs.GATE.release(analyze_runs.recheck_key(run_id))
+    label = str(state.get("label") or state.get("node_id") or "")
+    _append_chat(run_id, "system", f"Re-check · {label} · interrupted: {RECHECK_INTERRUPTED}")
+    return current
+
+
+def _set_recheck_state(
+    run_id: str,
+    state: dict[str, Any],
+    *,
+    refresh: bool = False,
+    started: bool = False,
+    usage: dict[str, Any] | None = None,
+) -> None:
+    """Record the latest re-check in ``run["analyze"]["recheck"]``.
+
+    ``run["analyze"]["rechecks"]`` keeps the running tally across refreshes:
+    re-checks ``started`` (``started=True`` counts one) and the model
+    ``calls`` and tokens they spent (``usage``).
+    """
+    with _RECHECK_STATE_LOCK:
+        try:
+            run = _load_run_record(run_id)
+        except (FileNotFoundError, json.JSONDecodeError, OSError):
+            return
+        block = dict(run.get("analyze") or {})
+        tally = dict(block.get("rechecks") or {}) if isinstance(block.get("rechecks"), dict) else {}
+        if refresh:
+            from agent_monitor.analyze import record as analyze_record
+
+            try:
+                fresh = analyze_record.run_block(workspace_dir(run_id))
+            except Exception:  # noqa: BLE001 - keep the stored block
+                fresh = None
+            if fresh:
+                block = fresh
+        if started:
+            tally["started"] = recheck_count({"analyze": {"rechecks": tally}}) + 1
+        for key, value in (usage or {}).items():
+            if isinstance(value, (int, float)) and not isinstance(value, bool) and value:
+                tally[key] = round(float(tally.get(key) or 0) + float(value), 6)
+                if key != "cost_usd":
+                    tally[key] = int(tally[key])
+        if tally:
+            block["rechecks"] = tally
+        block["recheck"] = state
+        run["analyze"] = block
+        run["updated_at"] = _now()
+        _write_run(run)
+
+
+def _recheck_outcome(output: str) -> tuple[dict[str, Any] | None, str]:
+    """The runner's ``analyze.recheck`` result, or its terminal error message."""
+    result: dict[str, Any] | None = None
+    error = ""
+    for line in output.splitlines():
+        line = line.strip()
+        if not line.startswith("{"):
+            continue
+        try:
+            event = json.loads(line)
+        except ValueError:
+            continue
+        if not isinstance(event, dict):
+            continue
+        if event.get("type") == "analyze.recheck" and isinstance(event.get("result"), dict):
+            result = event["result"]
+        item = event.get("item") if isinstance(event.get("item"), dict) else None
+        if item and item.get("type") == "error" and item.get("terminal") is True:
+            error = str(item.get("message") or "")[:600]
+    return result, error
+
+
+def _book_recheck_usage(run_id: str, output: str, *, model: str | None) -> dict[str, Any]:
+    """Book a re-check's model calls in the usage ledger (stage ``recheck``,
+    billed like the analysis) and return their tally.
+
+    The runner reports each call as a Codex-style ``turn.completed`` event,
+    exactly as for the analysis itself.  The analysis's own ``totals`` stay
+    its engine usage: like Lean and DAG calls, a re-check is booked apart
+    (adding it to ``totals`` would book it a second time, as engine usage).
+    """
+    from agent_monitor import usage_ledger
+
+    tally: dict[str, Any] = {"calls": 0, "input_tokens": 0, "output_tokens": 0, "cost_usd": 0.0}
+    for line in str(output or "").splitlines():
+        line = line.strip()
+        if not line.startswith("{"):
+            continue
+        try:
+            event = json.loads(line)
+        except ValueError:
+            continue
+        if not isinstance(event, dict) or event.get("type") != "turn.completed":
+            continue
+        raw = event.get("usage") if isinstance(event.get("usage"), dict) else {}
+        usage = usage_ledger.cli_usage(raw, input_includes_cache=raw.get("input_excludes_cache") is not True)
+        cost = None
+        try:
+            cached = int(usage.get("cached_input_tokens") or 0)
+            cost = _estimate_cost(
+                model,
+                input_tokens=max(0, int(usage.get("input_tokens") or 0) - cached),
+                output_tokens=int(usage.get("output_tokens") or 0),
+                cache_read=cached,
+            )
+        except Exception:  # noqa: BLE001 - a price estimate is best-effort
+            cost = None
+        usage_ledger.record_usage(model=model, usage=usage, cost_usd=cost or 0.0, stage="recheck", run_id=run_id)
+        tally["calls"] += 1
+        tally["input_tokens"] += int(usage.get("input_tokens") or 0)
+        tally["output_tokens"] += int(usage.get("output_tokens") or 0)
+        tally["cost_usd"] = round(float(tally["cost_usd"]) + float(cost or 0.0), 6)
+    return tally
+
+
+def _execute_recheck(
+    *,
+    run_id: str,
+    job_id: str,
+    node_id: str,
+    label: str,
+    workspace: Path,
+    env: dict[str, str],
+    timeout: int,
+    gate_key: str | None,
+    on_exit: Any,
+    started_at: str,
+    model: str | None = None,
+) -> None:
+    import subprocess
+
+    status = "failed"
+    result: dict[str, Any] | None = None
+    error = ""
+    spent: dict[str, Any] = {}
+    try:
+        runner = Path(__file__).resolve().parent / "runners" / "analyze_runner.py"
+        argv = [sys.executable, "-u", str(runner), "--recheck", node_id]
+        try:
+            proc = subprocess.Popen(
+                argv, cwd=str(workspace), env=env, stdin=subprocess.DEVNULL,
+                stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
+                start_new_session=True,
+            )
+        except OSError as exc:
+            error = f"The re-check could not start ({type(exc).__name__})"
+        else:
+            _register_proc(run_id, proc)
+            deadline = time.monotonic() + timeout
+            escalate_at: float | None = None
+            output = ""
+            try:
+                while True:
+                    try:
+                        output, _ = proc.communicate(timeout=1.0)
+                        break
+                    except subprocess.TimeoutExpired:
+                        now = time.monotonic()
+                        if escalate_at is None:
+                            if _stop_event(run_id).is_set():
+                                # Stop sent SIGTERM: the runner restores the node
+                                # and exits 143; the group is killed if it hangs.
+                                escalate_at = now + 30
+                            elif now > deadline:
+                                error = f"The re-check timed out after {timeout}s; the previous verdict is kept"
+                                _terminate_registered_proc(proc, force=False)
+                                escalate_at = now + 30
+                        elif now > escalate_at:
+                            _terminate_registered_proc(proc, force=True)
+                            escalate_at = now + 3600
+            finally:
+                _unregister_proc(run_id)
+            try:
+                # Every call the re-check made is spent, whatever its outcome.
+                spent = _book_recheck_usage(run_id, output or "", model=model)
+            except Exception:  # noqa: BLE001 - accounting must not lose the outcome
+                spent = {}
+            result, terminal = _recheck_outcome(output or "")
+            if proc.returncode == 0 and result is not None:
+                status = "done"
+            elif proc.returncode == 128 + int(signal.SIGTERM) or _stop_event(run_id).is_set():
+                status = "stopped"
+                error = error or "The re-check was stopped; nothing changed"
+            else:
+                error = error or terminal or f"The re-check exited with code {proc.returncode}"
+    except Exception as exc:  # noqa: BLE001 - the record must say what happened
+        error = f"The re-check failed ({type(exc).__name__})"
+    finally:
+        state: dict[str, Any] = {
+            "node_id": node_id, "label": label, "status": status, "job_id": job_id,
+            "started_at": started_at, "finished_at": _now(),
+        }
+        if result is not None:
+            state["result"] = {
+                key: result.get(key)
+                for key in ("ok", "node_id", "verdict", "closure", "main_closure", "calls", "reason")
+            }
+        if error:
+            state["error"] = error[:600]
+        if spent.get("calls"):
+            state["usage"] = {key: spent[key] for key in ("calls", "input_tokens", "output_tokens", "cost_usd")}
+        try:
+            _set_recheck_state(run_id, state, refresh=True, usage=spent or None)
+            if status == "done":
+                verdict = str((result or {}).get("verdict") or "")
+                text = {"checked": "checked by a model verifier", "not_checked": "not checked"}.get(verdict, verdict)
+                _append_chat(run_id, "system", f"Re-check · {label} · {text} — a model judgement, not a certificate")
+            else:
+                _append_chat(run_id, "system", f"Re-check · {label} · {status}: {error}")
+        except Exception:  # noqa: BLE001
+            pass
+        _update_job(job_id, status="finished" if status == "done" else status, error=error or None)
+        if gate_key is not None:
+            from agent_monitor import analyze_runs
+
+            analyze_runs.GATE.release(gate_key)
+        if callable(on_exit):
+            try:
+                on_exit()
+            except Exception:  # noqa: BLE001
+                pass
+
+
 def stop_run(run_id: str) -> dict[str, Any]:
-    """Stop a running job: signal the stop event and kill any subprocess."""
+    """Stop a running job: signal the stop event and kill any subprocess.
+
+    An Analyze runner (or re-check) gets SIGTERM first: it publishes the
+    results that had settled (a re-check restores the node) and exits 143;
+    the worker kills its group if it does not exit within 30 s.
+    """
     active = _run_is_active(run_id)
     _stop_event(run_id).set()
     with _LOCK:
         proc = _PROCS.get(run_id)
+    graceful = bool(active) and (
+        active.get("engine") == _ANALYZE_ENGINE or active.get("kind") == "recheck"
+    )
     if proc is not None:
-        _terminate_registered_proc(proc)
+        _terminate_registered_proc(proc, force=not graceful)
     if not active:
-        return {"ok": True, "status": "not_running", "run_id": run_id}
+        # Nothing runs here: a re-check left "running" by a lost worker is
+        # repaired so the analysis is usable again.
+        before = None
+        try:
+            before = ((_load_run_record(run_id).get("analyze") or {}).get("recheck") or {}).get("status")
+        except (FileNotFoundError, json.JSONDecodeError, OSError, AttributeError):
+            pass
+        after = ((reconcile_recheck_state(run_id) or {}).get("analyze") or {}).get("recheck") or {}
+        result = {"ok": True, "status": "not_running", "run_id": run_id}
+        if before == "running" and after.get("status") == "interrupted":
+            result["recheck"] = "interrupted"
+        return result
+    if active.get("kind") == "recheck":
+        # Stopping a re-check changes nothing: the analysis keeps its status
+        # and every verdict (the runner restores the node it was checking).
+        _update_job(active["job_id"], status="stopped")
+        return {"ok": True, "status": "stopped", "run_id": run_id, "job_id": active["job_id"],
+                "recheck": True}
     try:
         run_data = _load_run_record(run_id)
         run_data["status"] = "stopped"
@@ -4769,19 +6313,59 @@ def continue_run(
     problems_recorded: bool = False,
 ) -> dict[str, Any]:
     """Resume a stopped/finished/failed run, optionally with extra guidance."""
-    if _run_is_active(run_id):
+    try:
+        recorded = _load_run_record(run_id)
+    except (FileNotFoundError, json.JSONDecodeError, OSError):
+        recorded = {"engine": run_id.split("_", 1)[0]}
+    _refuse_analyze_continuation(recorded)
+    # Claim the run before the slow preparation (credential and account
+    # checks): a second request in that window must not start a duplicate.
+    if not _claim_launch(run_id):
         return {"ok": False, "status": "already_running", "run_id": run_id}
+    try:
+        return _continue_claimed_run(
+            run_id,
+            message=message,
+            model=model,
+            max_iterations=max_iterations,
+            user=user,
+            problems_recorded=problems_recorded,
+        )
+    except BaseException as exc:
+        _release_launch(run_id)
+        # Feedback queued behind this claim would wait for a harness that
+        # never runs.  A queued follow-up (problems_recorded) is that feedback
+        # itself, and _launch_pending_feedback puts it back.
+        if isinstance(exc, Exception) and not problems_recorded:
+            _start_feedback_queued_behind(run_id, max_iterations=max_iterations)
+        raise
+
+
+def _continue_claimed_run(
+    run_id: str,
+    *,
+    message: str | None,
+    model: str | None,
+    max_iterations: int,
+    user: dict[str, Any] | None,
+    problems_recorded: bool,
+) -> dict[str, Any]:
     _stop_event(run_id).clear()
 
     ws = RUNS_DIR / "workspaces" / run_id
     if not ws.is_dir():
         raise FileNotFoundError("workspace not found")
     run_data = _load_run_record(run_id)
-    effective_model = _continuation_model(run_data, model)
     # Stored engine identity is provenance, not a catalog alias. In particular,
     # an old UCLA continuation must stay on its explicit legacy path below and
     # must never be rewritten to ``math_harness``.
     engine = run_data.get("engine") or run_id.split("_", 1)[0]
+    from agent_monitor.engines_registry import retired_engine_error
+
+    retired_error = retired_engine_error(engine)
+    if retired_error:
+        raise ValueError(retired_error)
+    effective_model = _member_continuation_model(user, engine, run_data, model)
     problems = ensure_problems(run_data, run_id)
     first_problem = _problem_item_text(problems[0]) if problems else (
         run_data.get("problem_text") or ""
@@ -4807,24 +6391,23 @@ def continue_run(
         continue_env["AGENT_MONITOR_SUBAGENT_MODEL"] = str(continued_subagent_model)
     else:
         continue_env.pop("AGENT_MONITOR_SUBAGENT_MODEL", None)
-    with _LOCK:
-        _JOBS[job_id] = {
-            "job_id": job_id,
-            "run_id": run_id,
-            "engine": engine,
-            "problem_id": run_data.get("problem_id"),
-            "status": "running",
-            "created_at": _now(),
-            "updated_at": _now(),
-            "error": None,
-            "model": effective_model,
-            "kind": "continue",
-            "owner_id": continue_owner_id,
-            "auth_route": continued_route,
-            "reasoning_effort": run_data.get("reasoning_effort", "default"),
-            "speed_mode": run_data.get("speed_mode", "standard"),
-            "problem_preview": _session_title(problems, first_problem),
-        }
+    _register_claimed_job(run_id, {
+        "job_id": job_id,
+        "run_id": run_id,
+        "engine": engine,
+        "problem_id": run_data.get("problem_id"),
+        "status": "running",
+        "created_at": _now(),
+        "updated_at": _now(),
+        "error": None,
+        "model": effective_model,
+        "kind": "continue",
+        "owner_id": continue_owner_id,
+        "auth_route": continued_route,
+        "reasoning_effort": run_data.get("reasoning_effort", "default"),
+        "speed_mode": run_data.get("speed_mode", "standard"),
+        "problem_preview": _session_title(problems, first_problem),
+    })
     _append_chat(run_id, "system", "Continuing run…")
     thread = threading.Thread(
         target=_execute_continue,
@@ -4846,6 +6429,57 @@ def continue_run(
     )
     thread.start()
     return {"ok": True, "status": "continuing", "run_id": run_id, "job_id": job_id}
+
+
+_GUEST_PURGE_MAX_RECORD_BYTES = 8 * 1024 * 1024
+
+
+def purge_guest_runs(*, older_than_days: float, dry_run: bool = True) -> list[str]:
+    """Delete finished anonymous-guest runs older than ``older_than_days``.
+
+    Guest identities expire after 24 hours, but their run records and
+    workspaces stay on disk until removed. This operator retention helper
+    selects only terminal runs recorded as guest runs (or owned by a legacy
+    ``@public.local`` identity) whose last update is older than the cutoff,
+    and deletes each through :func:`delete_run`. Usage history is kept. With
+    ``dry_run`` (the default) it only reports the run ids it would delete.
+    """
+    cutoff = time.time() - max(1.0, float(older_than_days)) * 86_400
+    selected: list[str] = []
+    for path in sorted(_cache_dir().glob("*.json")):
+        if path.name == "manifest.json":
+            continue
+        try:
+            if path.is_symlink() or path.stat().st_size > _GUEST_PURGE_MAX_RECORD_BYTES:
+                continue
+            run = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, UnicodeError, json.JSONDecodeError):
+            continue
+        if not isinstance(run, dict):
+            continue
+        run_id = str(run.get("run_id") or "")
+        if run_id != path.stem or "/" in run_id or ".." in run_id:
+            continue
+        guest = run.get("guest") is True or str(run.get("owner") or "").strip().lower().endswith(
+            "@public.local"
+        )
+        if not guest or str(run.get("status") or "").lower() not in {
+            "finished", "failed", "stopped", "cancelled", "interrupted",
+        }:
+            continue
+        if _run_is_active(run_id):
+            continue
+        stamp = str(run.get("updated_at") or run.get("created_at") or "")
+        try:
+            updated = datetime.fromisoformat(stamp.replace("Z", "+00:00")).timestamp()
+        except ValueError:
+            continue
+        if updated >= cutoff:
+            continue
+        selected.append(run_id)
+        if not dry_run:
+            delete_run(run_id)
+    return selected
 
 
 def delete_run(run_id: str) -> dict[str, Any]:

@@ -21,6 +21,8 @@ class RuntimeRouteFailClosedTests(unittest.TestCase):
         with jobs._LOCK:
             jobs._JOBS.clear()
 
+    # Subscription runtimes belong to the site administrator; a member's
+    # settings always report the API route (tests/test_member_accounts.py).
     def test_claude_runtime_catalog_excludes_configured_api_models(self) -> None:
         env = {
             "AGENT_MONITOR_ACCOUNT_RUNTIME": "claude",
@@ -34,7 +36,7 @@ class RuntimeRouteFailClosedTests(unittest.TestCase):
             patch("agent_monitor.codex_login.available_models", return_value=["gpt-account"]),
             patch("agent_monitor.claude_login.account_login_ready", return_value=True),
         ):
-            result = settings.get_settings({"id": 17, "is_admin": False})
+            result = settings.get_settings({"id": 17, "is_admin": True})
 
         self.assertEqual(result["account_runtime"], "claude")
         self.assertEqual(result["model_presets"], result["claude_models"])
@@ -53,7 +55,7 @@ class RuntimeRouteFailClosedTests(unittest.TestCase):
             patch("agent_monitor.codex_login.account_login_ready", return_value=False),
             patch("agent_monitor.claude_login.account_login_ready", return_value=False),
         ):
-            result = settings.get_settings({"id": 17, "is_admin": False})
+            result = settings.get_settings({"id": 17, "is_admin": True})
 
         self.assertEqual(result["auth_mode"], "claude_subscription")
         self.assertFalse(result["runtime_ready"])
@@ -97,7 +99,7 @@ class RuntimeRouteFailClosedTests(unittest.TestCase):
                     engine="plain",
                     problem_text="Prove one equals one.",
                     model="kimi-k3",
-                    user={"id": 17},
+                    user={"id": 17, "is_admin": True},
                 )
         configure.assert_not_called()
         thread.assert_not_called()
@@ -122,7 +124,7 @@ class RuntimeRouteFailClosedTests(unittest.TestCase):
                     model="sonnet",
                     use_subagents=True,
                     subagent_model="kimi-k3",
-                    user={"id": 17},
+                    user={"id": 17, "is_admin": True},
                 )
         configure.assert_not_called()
         thread.assert_not_called()
@@ -146,7 +148,7 @@ class RuntimeRouteFailClosedTests(unittest.TestCase):
                     engine="plain",
                     problem_text="Prove one equals one.",
                     model="claude-api-model",
-                    user={"id": 17},
+                    user={"id": 17, "is_admin": True},
                 )
         configure.assert_not_called()
         thread.assert_not_called()
@@ -175,7 +177,7 @@ class RuntimeRouteFailClosedTests(unittest.TestCase):
                 jobs.start_job(
                     engine="ucla",
                     problem_text="Prove one equals one.",
-                    user={"id": 17},
+                    user={"id": 17, "is_admin": True},
                 )
         configure.assert_not_called()
 
@@ -186,7 +188,7 @@ class RuntimeRouteFailClosedTests(unittest.TestCase):
                 engine="plain",
                 model="sonnet",
                 auth_modes=set(_PLAIN["auth_modes"]),
-                user={"id": 17},
+                user={"id": 17, "is_admin": True},
                 env={"AGENT_MONITOR_ACCOUNT_RUNTIME": "claude"},
             )
 
@@ -197,7 +199,7 @@ class RuntimeRouteFailClosedTests(unittest.TestCase):
                 engine="plain",
                 model="sonnet",
                 auth_modes=set(_PLAIN["auth_modes"]),
-                user={"id": 17},
+                user={"id": 17, "is_admin": True},
                 env={
                     "AGENT_MONITOR_USE_CLAUDE": "1",
                     "AGENT_MONITOR_USE_CODEX": "0",
@@ -218,7 +220,7 @@ class RuntimeRouteFailClosedTests(unittest.TestCase):
                 result = proof_graph.generate(
                     workspace=workspace,
                     run_record={"auth_route": "codex_subscription", "owner_id": 17},
-                    user={"id": 17},
+                    user={"id": 17, "is_admin": True},
                     model=None,
                     allow_codex_fallback=False,
                 )

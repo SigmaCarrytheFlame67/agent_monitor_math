@@ -618,10 +618,6 @@ class LeanKgIntegrationTests(unittest.TestCase):
             "native_decide": (
                 "theorem main : (1 : Nat) = 1 := by native_decide\n"
             ),
-            "broad_mathlib": (
-                "import Mathlib\n"
-                "theorem main : True := by trivial\n"
-            ),
             "local_import": (
                 "import Local.Project\n"
                 "theorem main : True := by trivial\n"
@@ -642,6 +638,14 @@ def note : String :=
 theorem main : True := by trivial
 '''
         self.assertEqual(lean_kg._unsafe_source_reason(lexical_decoys), "")
+        # The whole library is now a supported import (8 GiB Mathlib broker
+        # profile); only non-library imports remain rejected.
+        self.assertEqual(
+            lean_kg._unsafe_source_reason(
+                "import Mathlib\ntheorem main : True := by trivial\n"
+            ),
+            "",
+        )
 
     def test_kg_adapter_contains_no_local_systemd_execution_path(self) -> None:
         module_source = Path(lean_kg.__file__).read_text(encoding="utf-8")
@@ -1081,7 +1085,9 @@ theorem main : True := by trivial
         with (
             patch("agent_monitor.settings.resolved_user_env", return_value={}),
             patch.object(lean_verify, "toolchain_status", return_value=self.tools),
-            patch.object(proof_graph, "_call_llm", side_effect=ValueError("no API")),
+            patch.object(
+                proof_graph, "_call_llm", side_effect=ValueError("no API")
+            ) as direct_api,
             patch.object(proof_graph, "_run_claude_prompt") as claude,
             patch.object(proof_graph, "_run_codex_prompt") as codex,
         ):
@@ -1094,8 +1100,21 @@ theorem main : True := by trivial
             )
         claude.assert_not_called()
         codex.assert_not_called()
-        self.assertEqual(result["model"], "lean-compiler")
-        self.assertEqual(result["graph"]["provenance"]["kind"], "lean-compiler")
+        # The deterministic declaration graph is primary (no model route at
+        # all); its edges are the compiler's exact dependencies, while the
+        # provenance-bearing graph feeds the Compiler-facts view.
+        direct_api.assert_not_called()
+        self.assertEqual(result["model"], "lean-parse")
+        self.assertNotIn("provenance", result["graph"])
+        self.assertEqual(
+            result["compiler_graph"]["provenance"]["kind"], "lean-compiler"
+        )
+        compiler_pairs = {
+            (edge["from"], edge["to"]) for edge in result["compiler_graph"]["edges"]
+        }
+        primary_pairs = {(edge["from"], edge["to"]) for edge in result["graph"]["edges"]}
+        self.assertEqual(primary_pairs, compiler_pairs)
+        self.assertEqual(result["knowledge_graph"]["status"], "ok")
 
 
 if __name__ == "__main__":

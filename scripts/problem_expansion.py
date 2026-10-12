@@ -275,18 +275,16 @@ def expand(data: dict, inputs: Path, catalog: Path) -> dict:
 
 
 def clay_records() -> list[dict]:
-    items = [
-        ("birch-and-swinnerton-dyer-conjecture", "Birch and Swinnerton-Dyer conjecture", ["number theory", "elliptic curves"], "Relate the rank of an elliptic curve over the rationals to its L-function at s = 1."),
-        ("hodge-conjecture", "Hodge conjecture", ["algebraic geometry", "topology"], "Determine which rational Hodge classes on smooth complex projective varieties arise from algebraic cycles."),
-        ("navier-stokes-equation", "Navier–Stokes existence and smoothness", ["analysis", "partial differential equations"], "Resolve global existence and smoothness, or breakdown, for the three-dimensional incompressible fluid equations in the official formulation."),
-        ("p-vs-np", "P versus NP", ["computer science", "complexity theory"], "Determine whether every decision problem with efficiently checkable certificates also has an efficient solving algorithm."),
-        ("riemann-hypothesis", "Riemann hypothesis", ["number theory", "analysis"], "Determine whether every nontrivial zero of the Riemann zeta function has real part one half."),
-        ("yang-mills-the-maths-gap", "Yang–Mills existence and mass gap", ["mathematical physics", "quantum field theory"], "Construct the four-dimensional quantum Yang–Mills theory required by the official problem and establish a positive mass gap."),
-    ]
+    """The six Millennium problems Clay listed as unsolved in September 2026 (archived expansion input).
+
+    The catalogue itself lists all seven, Poincaré as solved (agent_monitor/problem_catalogue.py).
+    """
+    from agent_monitor.problem_catalogue import CLAY_PROBLEMS
+
     return [{"id": f"clay-{slug}", "number": slug, "title": title, "summary": summary,
              "source": "clay", "source_url": f"https://www.claymath.org/millennium/{slug}/",
-             "source_locator": title, "topics": topics, "kind": "research-question", "prize": "$1,000,000",
+             "source_locator": title, "topics": list(topics), "kind": "research-question", "prize": "$1,000,000",
              "status": "source-open", "status_as_of": DATE, "source_status": "CMI unsolved problems list",
              "source_revision": f"CMI page observed {DATE}", "formal_status": "No proof asserted by this catalogue",
              "rating": score(1, "A broad foundational problem. Start with a sharply defined special case and specialist literature; the full problem is a long-term research direction.")}
-            for slug, title, topics, summary in items]
+            for slug, title, topics, summary, _ in CLAY_PROBLEMS if slug != "poincare-conjecture"]

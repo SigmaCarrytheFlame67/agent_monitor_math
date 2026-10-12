@@ -629,6 +629,19 @@ class LeanBrokerUnitInvariantTests(unittest.TestCase):
                 self.assertNotIn("systemd-run", text)
                 self.assertIn(f"--profile={profile}", text)
 
+    def test_mathlib_profile_has_headroom_for_the_full_library(self) -> None:
+        # `import Mathlib` maps ~4.4 GiB of .olean data; the Mathlib worker
+        # gets 8 GiB while the core profile keeps its 2 GiB bound.
+        limits = {}
+        for profile in ("core", "mathlib"):
+            text = (DEPLOY / f"agent-monitor-lean-{profile}@.service").read_text()
+            limits[profile] = int(text.split("MemoryMax=", 1)[1].split()[0])
+            self.assertIn("MemorySwapMax=0", text)
+        self.assertEqual(limits["core"], 2 * 1024**3)
+        self.assertEqual(limits["mathlib"], 8 * 1024**3)
+        smoke = (DEPLOY / "smoke_client.py").read_text()
+        self.assertIn('"import Mathlib\\n"', smoke)
+
     def test_socket_units_are_root_owned_group_gated_and_accept_one_worker(self) -> None:
         for profile in ("core", "mathlib"):
             text = (DEPLOY / f"agent-monitor-lean-{profile}.socket").read_text()

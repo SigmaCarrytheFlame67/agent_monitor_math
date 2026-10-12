@@ -32,6 +32,18 @@ _DROP_CHAT_FIELDS = frozenset(
 _MAX_REQUEST_BYTES = 64 * 1024 * 1024
 
 
+class _NoRedirect(urlrequest.HTTPRedirectHandler):
+    """Never follow an upstream redirect with the Authorization header."""
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):  # noqa: D102
+        return None
+
+
+# urllib's default opener re-sends every header except the body headers to the
+# host a 301/302/303 names; this hop carries a provider key or sponsor token.
+_UPSTREAM_OPENER = urlrequest.build_opener(_NoRedirect())
+
+
 def _reasoning_effort(value: object, fallback: str) -> str:
     normalized = str(value or "").strip().lower()
     if normalized in _ALLOWED_REASONING_EFFORTS:
@@ -182,7 +194,7 @@ class _ProxyHandler(BaseHTTPRequestHandler):
             method="POST",
         )
         try:
-            upstream = urlrequest.urlopen(request, timeout=900)
+            upstream = _UPSTREAM_OPENER.open(request, timeout=900)
         except urlerror.HTTPError as exc:
             upstream = exc
         except (OSError, urlerror.URLError):

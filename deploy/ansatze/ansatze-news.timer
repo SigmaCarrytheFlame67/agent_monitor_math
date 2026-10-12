@@ -1,0 +1,13 @@
+# Refresh the public news feed on the hour and half-hour (optional; see
+# ansatze-news.service).
+[Unit]
+Description=Refresh the Ansätze math news feed twice an hour
+Documentation=file:/home/repo/agent_monitor_math/deploy/ansatze/README.md
+
+[Timer]
+OnCalendar=*-*-* *:00,30:00
+RandomizedDelaySec=60
+Persistent=true
+
+[Install]
+WantedBy=timers.target

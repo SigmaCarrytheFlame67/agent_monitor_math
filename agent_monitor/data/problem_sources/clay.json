@@ -1,0 +1,22 @@
+{
+ "schema_version": 1,
+ "source": "Clay Mathematics Institute",
+ "url": "https://www.claymath.org/millennium-problems/",
+ "sha256": "ab269cb614b0e51db5ee7a57e17fc5c965f5d06723b3a2b22717ed429e7a3b5f",
+ "checked_at": "2026-10-11T00:27:00Z",
+ "sections": {
+  "active": [
+   "navier-stokes-equation"
+  ],
+  "unsolved": [
+   "birch-and-swinnerton-dyer-conjecture",
+   "hodge-conjecture",
+   "p-vs-np",
+   "riemann-hypothesis",
+   "yang-mills-the-maths-gap"
+  ],
+  "solved": [
+   "poincare-conjecture"
+  ]
+ }
+}

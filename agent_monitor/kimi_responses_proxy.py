@@ -22,6 +22,18 @@ from urllib import request as urlrequest
 from agent_monitor import kimi_k3
 
 
+class _NoRedirect(urlrequest.HTTPRedirectHandler):
+    """Never follow an upstream redirect with the Authorization header."""
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):  # noqa: D102
+        return None
+
+
+# urllib's default opener re-sends every header except the body headers to the
+# host a 301/302/303 names; this hop carries a provider key or sponsor token.
+_UPSTREAM_OPENER = urlrequest.build_opener(_NoRedirect())
+
+
 _DROP_RESPONSE_FIELDS = frozenset(
     {
         "client_metadata",
@@ -301,7 +313,7 @@ class _ProxyHandler(BaseHTTPRequestHandler):
             method=self.command,
         )
         try:
-            upstream = urlrequest.urlopen(
+            upstream = _UPSTREAM_OPENER.open(
                 request,
                 timeout=self.proxy_server.upstream_timeout,
             )

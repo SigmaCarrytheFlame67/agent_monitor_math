@@ -1,0 +1,5291 @@
+{
+ "schema_version": 1,
+ "source": "Wikipedia",
+ "page": "List of unsolved problems in mathematics",
+ "url": "https://en.wikipedia.org/wiki/List_of_unsolved_problems_in_mathematics",
+ "revision_id": 1379514120,
+ "revision_timestamp": "2026-10-10T12:20:03Z",
+ "permalink": "https://en.wikipedia.org/w/index.php?title=List_of_unsolved_problems_in_mathematics&oldid=1379514120",
+ "fetched_at": "2026-10-11T01:55:00Z",
+ "license": "CC BY-SA 4.0 page text is not stored: names, links and revision ids only",
+ "counts": {
+  "entries": 510,
+  "group_headers": 12,
+  "solved": 44
+ },
+ "entries": [
+  {
+   "wp_id": "wpu-000",
+   "name": "Birch–Tate conjecture",
+   "field": "Algebra",
+   "article_title": "Birch–Tate conjecture",
+   "article_url": "https://en.wikipedia.org/wiki/Birch%E2%80%93Tate_conjecture",
+   "article_revid": 1371132949,
+   "slug": "wiki-birch-tate-conjecture"
+  },
+  {
+   "wp_id": "wpu-001",
+   "name": "Casas-Alvero conjecture",
+   "field": "Algebra",
+   "article_title": "Casas-Alvero conjecture",
+   "article_url": "https://en.wikipedia.org/wiki/Casas-Alvero_conjecture",
+   "article_revid": 1369204510,
+   "slug": "wiki-casas-alvero-conjecture"
+  },
+  {
+   "wp_id": "wpu-002",
+   "name": "Connes embedding problem",
+   "field": "Algebra",
+   "article_title": "Connes embedding problem",
+   "article_url": "https://en.wikipedia.org/wiki/Connes_embedding_problem",
+   "article_revid": 1370392131,
+   "slug": "wiki-connes-embedding-problem"
+  },
+  {
+   "wp_id": "wpu-003",
+   "name": "Determinantal conjecture",
+   "field": "Algebra",
+   "article_title": "Determinantal conjecture",
+   "article_url": "https://en.wikipedia.org/wiki/Determinantal_conjecture",
+   "article_revid": 1293998216,
+   "slug": "wiki-determinantal-conjecture"
+  },
+  {
+   "wp_id": "wpu-004",
+   "name": "Eilenberg–Ganea conjecture",
+   "field": "Algebra",
+   "article_title": "Eilenberg–Ganea conjecture",
+   "article_url": "https://en.wikipedia.org/wiki/Eilenberg%E2%80%93Ganea_conjecture",
+   "article_revid": 1379125966,
+   "slug": "wiki-eilenberg-ganea-conjecture"
+  },
+  {
+   "wp_id": "wpu-005",
+   "name": "Farrell–Jones conjecture",
+   "field": "Algebra",
+   "article_title": "Farrell–Jones conjecture",
+   "article_url": "https://en.wikipedia.org/wiki/Farrell%E2%80%93Jones_conjecture",
+   "article_revid": 1370937006,
+   "slug": "wiki-farrell-jones-conjecture"
+  },
+  {
+   "wp_id": "wpu-006",
+   "name": "Bost conjecture",
+   "field": "Algebra",
+   "parent_id": "wpu-005",
+   "article_title": "Farrell–Jones conjecture",
+   "article_url": "https://en.wikipedia.org/wiki/Farrell%E2%80%93Jones_conjecture",
+   "article_revid": 1370937006,
+   "slug": "wiki-bost-conjecture"
+  },
+  {
+   "wp_id": "wpu-007",
+   "name": "Finite lattice representation problem",
+   "field": "Algebra",
+   "article_title": "Finite lattice representation problem",
+   "article_url": "https://en.wikipedia.org/wiki/Finite_lattice_representation_problem",
+   "article_revid": 1364856989,
+   "slug": "wiki-finite-lattice-representation-problem"
+  },
+  {
+   "wp_id": "wpu-008",
+   "name": "Goncharov conjecture",
+   "field": "Algebra",
+   "article_title": "Goncharov conjecture",
+   "article_url": "https://en.wikipedia.org/wiki/Goncharov_conjecture",
+   "article_revid": 1367914539,
+   "slug": "wiki-goncharov-conjecture"
+  },
+  {
+   "wp_id": "wpu-009",
+   "name": "Green's conjecture",
+   "field": "Algebra",
+   "article_title": "Clifford's theorem on special divisors",
+   "article_url": "https://en.wikipedia.org/wiki/Clifford's_theorem_on_special_divisors#Green%27s_conjecture",
+   "article_revid": 1261281395,
+   "slug": "wiki-greens-conjecture"
+  },
+  {
+   "wp_id": "wpu-010",
+   "name": "Grothendieck–Katz p-curvature conjecture",
+   "field": "Algebra",
+   "article_title": "Grothendieck–Katz p-curvature conjecture",
+   "article_url": "https://en.wikipedia.org/wiki/Grothendieck%E2%80%93Katz_p-curvature_conjecture",
+   "article_revid": 1364886808,
+   "slug": "wiki-grothendieck-katz-p-curvature-conjecture"
+  },
+  {
+   "wp_id": "wpu-011",
+   "name": "Hadamard conjecture",
+   "field": "Algebra",
+   "article_title": "Hadamard matrix",
+   "article_url": "https://en.wikipedia.org/wiki/Hadamard_matrix#Hadamard_conjecture",
+   "article_revid": 1376288636,
+   "slug": "wiki-hadamard-conjecture"
+  },
+  {
+   "wp_id": "wpu-012",
+   "name": "Williamson conjecture",
+   "field": "Algebra",
+   "parent_id": "wpu-011",
+   "article_title": "Williamson conjecture",
+   "article_url": "https://en.wikipedia.org/wiki/Williamson_conjecture",
+   "article_revid": 1370883441,
+   "slug": "wiki-williamson-conjecture"
+  },
+  {
+   "wp_id": "wpu-013",
+   "name": "Lander's conjecture",
+   "field": "Algebra",
+   "parent_id": "wpu-011",
+   "article_title": "Difference set",
+   "article_url": "https://en.wikipedia.org/wiki/Difference_set",
+   "article_revid": 1376475241,
+   "slug": "wiki-landers-conjecture"
+  },
+  {
+   "wp_id": "wpu-014",
+   "name": "Ryser's conjecture on circulant Hadamard matrices",
+   "field": "Algebra",
+   "parent_id": "wpu-011",
+   "article_title": "Ryser's conjecture on circulant Hadamard matrices",
+   "article_url": "https://en.wikipedia.org/wiki/Ryser's_conjecture_on_circulant_Hadamard_matrices",
+   "article_revid": 1369844038,
+   "slug": "wiki-rysers-conjecture-on-circulant-hadamard-matrices"
+  },
+  {
+   "wp_id": "wpu-015",
+   "name": "Barker sequence conjecture",
+   "field": "Algebra",
+   "parent_id": "wpu-014",
+   "article_title": "Barker code",
+   "article_url": "https://en.wikipedia.org/wiki/Barker_code",
+   "article_revid": 1373670622,
+   "slug": "wiki-barker-sequence-conjecture"
+  },
+  {
+   "wp_id": "wpu-016",
+   "name": "Hadamard's maximal determinant problem",
+   "field": "Algebra",
+   "article_title": "Hadamard's maximal determinant problem",
+   "article_url": "https://en.wikipedia.org/wiki/Hadamard's_maximal_determinant_problem",
+   "article_revid": 1374608854,
+   "slug": "wiki-hadamards-maximal-determinant-problem"
+  },
+  {
+   "wp_id": "wpu-017",
+   "name": "Hilbert's fifteenth problem",
+   "field": "Algebra",
+   "article_title": "Hilbert's fifteenth problem",
+   "article_url": "https://en.wikipedia.org/wiki/Hilbert's_fifteenth_problem",
+   "article_revid": 1366281517,
+   "slug": "wiki-hilberts-fifteenth-problem"
+  },
+  {
+   "wp_id": "wpu-018",
+   "name": "Hilbert's sixteenth problem",
+   "field": "Algebra",
+   "article_title": "Hilbert's sixteenth problem",
+   "article_url": "https://en.wikipedia.org/wiki/Hilbert's_sixteenth_problem",
+   "article_revid": 1379083169,
+   "slug": "wiki-hilberts-sixteenth-problem"
+  },
+  {
+   "wp_id": "wpu-019",
+   "name": "Homological conjectures in commutative algebra",
+   "field": "Algebra",
+   "article_title": "Homological conjectures in commutative algebra",
+   "article_url": "https://en.wikipedia.org/wiki/Homological_conjectures_in_commutative_algebra",
+   "article_revid": 1353719150,
+   "slug": "wiki-homological-conjectures-in-commutative-algebra"
+  },
+  {
+   "wp_id": "wpu-020",
+   "name": "Jacobson's conjecture",
+   "field": "Algebra",
+   "article_title": "Jacobson's conjecture",
+   "article_url": "https://en.wikipedia.org/wiki/Jacobson's_conjecture",
+   "article_revid": 1183348444,
+   "slug": "wiki-jacobsons-conjecture"
+  },
+  {
+   "wp_id": "wpu-021",
+   "name": "Kaplansky's conjectures",
+   "field": "Algebra",
+   "article_title": "Kaplansky's conjectures",
+   "article_url": "https://en.wikipedia.org/wiki/Kaplansky's_conjectures",
+   "article_revid": 1378989681,
+   "slug": "wiki-kaplanskys-conjectures"
+  },
+  {
+   "wp_id": "wpu-022",
+   "name": "Köthe conjecture",
+   "field": "Algebra",
+   "article_title": "Köthe conjecture",
+   "article_url": "https://en.wikipedia.org/wiki/K%C3%B6the_conjecture",
+   "article_revid": 1375878869,
+   "slug": "wiki-kothe-conjecture"
+  },
+  {
+   "wp_id": "wpu-023",
+   "name": "Monomial conjecture",
+   "field": "Algebra",
+   "article_title": "Monomial conjecture",
+   "article_url": "https://en.wikipedia.org/wiki/Monomial_conjecture",
+   "article_revid": 1293998642,
+   "slug": "wiki-monomial-conjecture"
+  },
+  {
+   "wp_id": "wpu-024",
+   "name": "Existence of perfect cuboids and associated cuboid conjectures",
+   "field": "Algebra",
+   "article_title": "Euler brick",
+   "article_url": "https://en.wikipedia.org/wiki/Euler_brick#Perfect_cuboid",
+   "article_revid": 1363084020,
+   "slug": "wiki-existence-of-perfect-cuboids-and-associated-cuboid"
+  },
+  {
+   "wp_id": "wpu-025",
+   "name": "Pierce–Birkhoff conjecture",
+   "field": "Algebra",
+   "article_title": "Pierce–Birkhoff conjecture",
+   "article_url": "https://en.wikipedia.org/wiki/Pierce%E2%80%93Birkhoff_conjecture",
+   "article_revid": 1338742548,
+   "slug": "wiki-pierce-birkhoff-conjecture"
+  },
+  {
+   "wp_id": "wpu-026",
+   "name": "Rota's basis conjecture",
+   "field": "Algebra",
+   "article_title": "Rota's basis conjecture",
+   "article_url": "https://en.wikipedia.org/wiki/Rota's_basis_conjecture",
+   "article_revid": 1370827579,
+   "slug": "wiki-rotas-basis-conjecture"
+  },
+  {
+   "wp_id": "wpu-027",
+   "name": "Serre's conjecture II",
+   "field": "Algebra",
+   "article_title": "Serre's conjecture II",
+   "article_url": "https://en.wikipedia.org/wiki/Serre's_conjecture_II",
+   "article_revid": 1376896895,
+   "slug": "wiki-serres-conjecture-ii"
+  },
+  {
+   "wp_id": "wpu-028",
+   "name": "Serre's positivity conjecture",
+   "field": "Algebra",
+   "article_title": "Serre's multiplicity conjectures",
+   "article_url": "https://en.wikipedia.org/wiki/Serre's_multiplicity_conjectures",
+   "article_revid": 1371068799,
+   "slug": "wiki-serres-positivity-conjecture"
+  },
+  {
+   "wp_id": "wpu-029",
+   "name": "Uniform boundedness conjecture for rational points",
+   "field": "Algebra",
+   "article_title": "Uniform boundedness conjecture for rational points",
+   "article_url": "https://en.wikipedia.org/wiki/Uniform_boundedness_conjecture_for_rational_points",
+   "article_revid": 1370970295,
+   "slug": "wiki-uniform-boundedness-conjecture-for-rational-points"
+  },
+  {
+   "wp_id": "wpu-030",
+   "name": "Wild problems",
+   "field": "Algebra",
+   "article_title": "Wild problem",
+   "article_url": "https://en.wikipedia.org/wiki/Wild_problem",
+   "article_revid": 1375351550,
+   "slug": "wiki-wild-problems"
+  },
+  {
+   "wp_id": "wpu-031",
+   "name": "Zariski–Lipman conjecture",
+   "field": "Algebra",
+   "article_title": "Nakai conjecture",
+   "article_url": "https://en.wikipedia.org/wiki/Nakai_conjecture",
+   "article_revid": 1223447811,
+   "slug": "wiki-zariski-lipman-conjecture"
+  },
+  {
+   "wp_id": "wpu-032",
+   "name": "Zauner's conjecture",
+   "field": "Algebra",
+   "article_title": "SIC-POVM",
+   "article_url": "https://en.wikipedia.org/wiki/SIC-POVM",
+   "article_revid": 1379514000,
+   "slug": "wiki-zauners-conjecture"
+  },
+  {
+   "wp_id": "wpu-033",
+   "name": "Andrews–Curtis conjecture",
+   "field": "Algebra",
+   "subfield": "Group theory",
+   "article_title": "Andrews–Curtis conjecture",
+   "article_url": "https://en.wikipedia.org/wiki/Andrews%E2%80%93Curtis_conjecture",
+   "article_revid": 1374825064,
+   "slug": "wiki-andrews-curtis-conjecture"
+  },
+  {
+   "wp_id": "wpu-034",
+   "name": "Bounded Burnside problem",
+   "field": "Algebra",
+   "subfield": "Group theory",
+   "article_title": "Burnside problem",
+   "article_url": "https://en.wikipedia.org/wiki/Burnside_problem",
+   "article_revid": 1363859290,
+   "slug": "wiki-bounded-burnside-problem"
+  },
+  {
+   "wp_id": "wpu-035",
+   "name": "Guralnick–Thompson conjecture",
+   "field": "Algebra",
+   "subfield": "Group theory",
+   "slug": "wiki-guralnick-thompson-conjecture"
+  },
+  {
+   "wp_id": "wpu-036",
+   "name": "Herzog–Schönheim conjecture",
+   "field": "Algebra",
+   "subfield": "Group theory",
+   "article_title": "Herzog–Schönheim conjecture",
+   "article_url": "https://en.wikipedia.org/wiki/Herzog%E2%80%93Sch%C3%B6nheim_conjecture",
+   "article_revid": 1357173515,
+   "slug": "wiki-herzog-schonheim-conjecture"
+  },
+  {
+   "wp_id": "wpu-037",
+   "name": "Inverse Galois problem",
+   "field": "Algebra",
+   "subfield": "Group theory",
+   "article_title": "Inverse Galois problem",
+   "article_url": "https://en.wikipedia.org/wiki/Inverse_Galois_problem",
+   "article_revid": 1372008347,
+   "slug": "wiki-inverse-galois-problem"
+  },
+  {
+   "wp_id": "wpu-038",
+   "name": "Isomorphism problem of Coxeter groups",
+   "field": "Algebra",
+   "subfield": "Group theory",
+   "article_title": "Isomorphism problem of Coxeter groups",
+   "article_url": "https://en.wikipedia.org/wiki/Isomorphism_problem_of_Coxeter_groups",
+   "article_revid": 1310333104,
+   "slug": "wiki-isomorphism-problem-of-coxeter-groups"
+  },
+  {
+   "wp_id": "wpu-039",
+   "field": "Algebra",
+   "subfield": "Group theory",
+   "article_title": "Leinster group",
+   "article_url": "https://en.wikipedia.org/wiki/Leinster_group",
+   "article_revid": 1368638587,
+   "slug": "wiki-leinster-group"
+  },
+  {
+   "wp_id": "wpu-040",
+   "field": "Algebra",
+   "subfield": "Group theory",
+   "article_title": "Monstrous moonshine",
+   "article_url": "https://en.wikipedia.org/wiki/Monstrous_moonshine",
+   "article_revid": 1369262254,
+   "slug": "wiki-monstrous-moonshine"
+  },
+  {
+   "wp_id": "wpu-041",
+   "field": "Algebra",
+   "subfield": "Group theory",
+   "article_title": "Presentation of a group",
+   "article_url": "https://en.wikipedia.org/wiki/Presentation_of_a_group#finitely_presented",
+   "article_revid": 1374309505,
+   "slug": "wiki-presentation-of-a-group"
+  },
+  {
+   "wp_id": "wpu-042",
+   "field": "Algebra",
+   "subfield": "Group theory",
+   "article_title": "Surjunctive group",
+   "article_url": "https://en.wikipedia.org/wiki/Surjunctive_group",
+   "article_revid": 1184854730,
+   "slug": "wiki-surjunctive-group"
+  },
+  {
+   "wp_id": "wpu-043",
+   "name": "Problems in loop theory and quasigroup theory",
+   "field": "Algebra",
+   "subfield": "Group theory",
+   "article_title": "List of problems in loop theory and quasigroup theory",
+   "article_url": "https://en.wikipedia.org/wiki/List_of_problems_in_loop_theory_and_quasigroup_theory",
+   "article_revid": 1373665394,
+   "slug": "wiki-problems-in-loop-theory-and-quasigroup-theory"
+  },
+  {
+   "wp_id": "wpu-044",
+   "name": "Arthur's conjectures",
+   "field": "Algebra",
+   "subfield": "Representation theory",
+   "article_title": "Arthur's conjectures",
+   "article_url": "https://en.wikipedia.org/wiki/Arthur's_conjectures",
+   "article_revid": 1366695476,
+   "slug": "wiki-arthurs-conjectures"
+  },
+  {
+   "wp_id": "wpu-045",
+   "name": "Dade's conjecture",
+   "field": "Algebra",
+   "subfield": "Representation theory",
+   "article_title": "Dade's conjecture",
+   "article_url": "https://en.wikipedia.org/wiki/Dade's_conjecture",
+   "article_revid": 1248349370,
+   "slug": "wiki-dades-conjecture"
+  },
+  {
+   "wp_id": "wpu-046",
+   "name": "Demazure conjecture",
+   "field": "Algebra",
+   "subfield": "Representation theory",
+   "article_title": "Demazure conjecture",
+   "article_url": "https://en.wikipedia.org/wiki/Demazure_conjecture",
+   "article_revid": 1378518380,
+   "slug": "wiki-demazure-conjecture"
+  },
+  {
+   "wp_id": "wpu-047",
+   "name": "Kazhdan–Lusztig conjectures",
+   "field": "Algebra",
+   "subfield": "Representation theory",
+   "article_title": "Kazhdan–Lusztig polynomial",
+   "article_url": "https://en.wikipedia.org/wiki/Kazhdan%E2%80%93Lusztig_polynomial",
+   "article_revid": 1368588081,
+   "slug": "wiki-kazhdan-lusztig-conjectures"
+  },
+  {
+   "wp_id": "wpu-048",
+   "name": "McKay conjecture",
+   "field": "Algebra",
+   "subfield": "Representation theory",
+   "article_title": "McKay conjecture",
+   "article_url": "https://en.wikipedia.org/wiki/McKay_conjecture",
+   "article_revid": 1309837504,
+   "slug": "wiki-mckay-conjecture"
+  },
+  {
+   "wp_id": "wpu-049",
+   "name": "Brennan conjecture",
+   "field": "Analysis",
+   "article_title": "Brennan conjecture",
+   "article_url": "https://en.wikipedia.org/wiki/Brennan_conjecture",
+   "article_revid": 1292985634,
+   "slug": "wiki-brennan-conjecture"
+  },
+  {
+   "wp_id": "wpu-050",
+   "name": "Fuglede's conjecture",
+   "field": "Analysis",
+   "article_title": "Fuglede's conjecture",
+   "article_url": "https://en.wikipedia.org/wiki/Fuglede's_conjecture",
+   "article_revid": 1367017359,
+   "slug": "wiki-fugledes-conjecture"
+  },
+  {
+   "wp_id": "wpu-051",
+   "name": "Goodman's conjecture",
+   "field": "Analysis",
+   "article_title": "Goodman's conjecture",
+   "article_url": "https://en.wikipedia.org/wiki/Goodman's_conjecture",
+   "article_revid": 1365934207,
+   "slug": "wiki-goodmans-conjecture"
+  },
+  {
+   "wp_id": "wpu-052",
+   "name": "Invariant subspace problem",
+   "field": "Analysis",
+   "article_title": "Invariant subspace problem",
+   "article_url": "https://en.wikipedia.org/wiki/Invariant_subspace_problem",
+   "article_revid": 1366674916,
+   "slug": "wiki-invariant-subspace-problem"
+  },
+  {
+   "wp_id": "wpu-053",
+   "name": "Kung–Traub conjecture",
+   "field": "Analysis",
+   "slug": "wiki-kung-traub-conjecture"
+  },
+  {
+   "wp_id": "wpu-054",
+   "name": "Lehmer's conjecture",
+   "field": "Analysis",
+   "article_title": "Lehmer's conjecture",
+   "article_url": "https://en.wikipedia.org/wiki/Lehmer's_conjecture",
+   "article_revid": 1358493814,
+   "slug": "wiki-lehmers-conjecture"
+  },
+  {
+   "wp_id": "wpu-055",
+   "name": "Mean value problem",
+   "field": "Analysis",
+   "article_title": "Mean value problem",
+   "article_url": "https://en.wikipedia.org/wiki/Mean_value_problem",
+   "article_revid": 1374678764,
+   "slug": "wiki-mean-value-problem"
+  },
+  {
+   "wp_id": "wpu-056",
+   "name": "Pompeiu problem",
+   "field": "Analysis",
+   "article_title": "Pompeiu problem",
+   "article_url": "https://en.wikipedia.org/wiki/Pompeiu_problem",
+   "article_revid": 1377625524,
+   "slug": "wiki-pompeiu-problem"
+  },
+  {
+   "wp_id": "wpu-057",
+   "name": "Vitushkin's conjecture",
+   "field": "Analysis",
+   "article_title": "Analytic capacity",
+   "article_url": "https://en.wikipedia.org/wiki/Analytic_capacity",
+   "article_revid": 1367565625,
+   "slug": "wiki-vitushkins-conjecture"
+  },
+  {
+   "wp_id": "wpu-058",
+   "field": "Analysis",
+   "article_title": "Bloch's theorem (complex analysis)",
+   "article_url": "https://en.wikipedia.org/wiki/Bloch's_theorem_(complex_analysis)",
+   "article_revid": 1348669907,
+   "slug": "wiki-blochs-theorem-complex-analysis"
+  },
+  {
+   "wp_id": "wpu-059",
+   "name": "Regularity of solutions of Euler equations",
+   "field": "Analysis",
+   "article_title": "Euler equations (fluid dynamics)",
+   "article_url": "https://en.wikipedia.org/wiki/Euler_equations_(fluid_dynamics)",
+   "article_revid": 1378371921,
+   "slug": "wiki-regularity-of-solutions-of-euler-equations"
+  },
+  {
+   "wp_id": "wpu-060",
+   "name": "Convergence of Flint Hills series",
+   "field": "Analysis",
+   "slug": "wiki-convergence-of-flint-hills-series"
+  },
+  {
+   "wp_id": "wpu-061",
+   "name": "Regularity of solutions of Vlasov–Maxwell equations",
+   "field": "Analysis",
+   "article_title": "Vlasov equation",
+   "article_url": "https://en.wikipedia.org/wiki/Vlasov_equation#The_Vlasov%E2%80%93Maxwell_system_of_equations_%28cgs_units%29",
+   "article_revid": 1373699368,
+   "slug": "wiki-regularity-of-solutions-of-vlasov-maxwell-equations"
+  },
+  {
+   "wp_id": "wpu-062",
+   "field": "Analysis",
+   "article_title": "Lehmer pair",
+   "article_url": "https://en.wikipedia.org/wiki/Lehmer_pair",
+   "article_revid": 1335846545,
+   "slug": "wiki-lehmer-pair"
+  },
+  {
+   "wp_id": "wpu-063",
+   "name": "1/3–2/3 conjecture",
+   "field": "Combinatorics",
+   "article_title": "1/3–2/3 conjecture",
+   "article_url": "https://en.wikipedia.org/wiki/1/3%E2%80%932/3_conjecture",
+   "article_revid": 1368808118,
+   "slug": "wiki-1-3-2-3-conjecture"
+  },
+  {
+   "wp_id": "wpu-064",
+   "name": "Dittert conjecture",
+   "field": "Combinatorics",
+   "article_title": "Dittert conjecture",
+   "article_url": "https://en.wikipedia.org/wiki/Dittert_conjecture",
+   "article_revid": 1332612042,
+   "slug": "wiki-dittert-conjecture"
+  },
+  {
+   "wp_id": "wpu-065",
+   "name": "Problems in Latin squares",
+   "field": "Combinatorics",
+   "article_title": "Problems in Latin squares",
+   "article_url": "https://en.wikipedia.org/wiki/Problems_in_Latin_squares",
+   "article_revid": 1233369739,
+   "slug": "wiki-problems-in-latin-squares"
+  },
+  {
+   "wp_id": "wpu-066",
+   "name": "Lonely runner conjecture",
+   "field": "Combinatorics",
+   "article_title": "Lonely runner conjecture",
+   "article_url": "https://en.wikipedia.org/wiki/Lonely_runner_conjecture",
+   "article_revid": 1371790914,
+   "slug": "wiki-lonely-runner-conjecture"
+  },
+  {
+   "wp_id": "wpu-067",
+   "name": "Superpermutations",
+   "field": "Combinatorics",
+   "article_title": "Superpermutation",
+   "article_url": "https://en.wikipedia.org/wiki/Superpermutation",
+   "article_revid": 1373775587,
+   "slug": "wiki-superpermutations"
+  },
+  {
+   "wp_id": "wpu-068",
+   "name": "Map folding",
+   "field": "Combinatorics",
+   "article_title": "Map folding",
+   "article_url": "https://en.wikipedia.org/wiki/Map_folding",
+   "article_revid": 1375383359,
+   "slug": "wiki-map-folding"
+  },
+  {
+   "wp_id": "wpu-069",
+   "name": "No-three-in-line problem",
+   "field": "Combinatorics",
+   "article_title": "No-three-in-line problem",
+   "article_url": "https://en.wikipedia.org/wiki/No-three-in-line_problem",
+   "article_revid": 1363328583,
+   "slug": "wiki-no-three-in-line-problem"
+  },
+  {
+   "wp_id": "wpu-070",
+   "name": "Rudin's conjecture",
+   "field": "Combinatorics",
+   "article_title": "Rudin's conjecture",
+   "article_url": "https://en.wikipedia.org/wiki/Rudin's_conjecture",
+   "article_revid": 1308188802,
+   "slug": "wiki-rudins-conjecture"
+  },
+  {
+   "wp_id": "wpu-071",
+   "name": "Sunflower conjecture",
+   "field": "Combinatorics",
+   "article_title": "Sunflower (mathematics)",
+   "article_url": "https://en.wikipedia.org/wiki/Sunflower_(mathematics)",
+   "article_revid": 1372848827,
+   "slug": "wiki-sunflower-conjecture"
+  },
+  {
+   "wp_id": "wpu-072",
+   "name": "Frankl's union-closed sets conjecture",
+   "field": "Combinatorics",
+   "article_title": "Union-closed sets conjecture",
+   "article_url": "https://en.wikipedia.org/wiki/Union-closed_sets_conjecture",
+   "article_revid": 1350313043,
+   "slug": "wiki-frankls-union-closed-sets-conjecture"
+  },
+  {
+   "wp_id": "wpu-073",
+   "name": "Give a combinatorial interpretation of the Kronecker coefficients",
+   "field": "Combinatorics",
+   "article_title": "Kronecker coefficient",
+   "article_url": "https://en.wikipedia.org/wiki/Kronecker_coefficient",
+   "article_revid": 1359843930,
+   "slug": "wiki-give-a-combinatorial-interpretation-of-the-kronecker"
+  },
+  {
+   "wp_id": "wpu-074",
+   "field": "Combinatorics",
+   "article_title": "Property B",
+   "article_url": "https://en.wikipedia.org/wiki/Property_B",
+   "article_revid": 1356844266,
+   "slug": "wiki-property-b"
+  },
+  {
+   "wp_id": "wpu-075",
+   "field": "Combinatorics",
+   "article_title": "Dedekind number",
+   "article_url": "https://en.wikipedia.org/wiki/Dedekind_number",
+   "article_revid": 1354081034,
+   "slug": "wiki-dedekind-number"
+  },
+  {
+   "wp_id": "wpu-076",
+   "name": "Values of the Ramsey numbers",
+   "field": "Combinatorics",
+   "article_title": "Ramsey's theorem",
+   "article_url": "https://en.wikipedia.org/wiki/Ramsey's_theorem#Ramsey_numbers",
+   "article_revid": 1373140603,
+   "slug": "wiki-values-of-the-ramsey-numbers"
+  },
+  {
+   "wp_id": "wpu-077",
+   "name": "Values of the Van der Waerden numbers",
+   "field": "Combinatorics",
+   "article_title": "Van der Waerden number",
+   "article_url": "https://en.wikipedia.org/wiki/Van_der_Waerden_number",
+   "article_revid": 1364033093,
+   "slug": "wiki-values-of-the-van-der-waerden-numbers"
+  },
+  {
+   "wp_id": "wpu-078",
+   "name": "Finding a function to model n-step self-avoiding walks",
+   "field": "Combinatorics",
+   "article_title": "Self-avoiding walk",
+   "article_url": "https://en.wikipedia.org/wiki/Self-avoiding_walk",
+   "article_revid": 1367355460,
+   "slug": "wiki-finding-a-function-to-model-n-step-self-avoiding-walks"
+  },
+  {
+   "wp_id": "wpu-079",
+   "name": "Arnold–Givental conjecture and Arnold conjecture",
+   "field": "Dynamical systems",
+   "article_title": "Arnold conjecture",
+   "article_url": "https://en.wikipedia.org/wiki/Arnold_conjecture#Arnold%E2%80%93Givental_conjecture",
+   "article_revid": 1378984647,
+   "slug": "wiki-arnold-givental-conjecture-and-arnold-conjecture"
+  },
+  {
+   "wp_id": "wpu-080",
+   "name": "Berry–Tabor conjecture",
+   "field": "Dynamical systems",
+   "article_title": "Quantum chaos",
+   "article_url": "https://en.wikipedia.org/wiki/Quantum_chaos",
+   "article_revid": 1373648914,
+   "slug": "wiki-berry-tabor-conjecture"
+  },
+  {
+   "wp_id": "wpu-081",
+   "name": "Banach's problem",
+   "field": "Dynamical systems",
+   "article_title": "Stefan Banach",
+   "article_url": "https://en.wikipedia.org/wiki/Stefan_Banach",
+   "article_revid": 1372780236,
+   "slug": "wiki-banachs-problem"
+  },
+  {
+   "wp_id": "wpu-082",
+   "name": "Birkhoff conjecture",
+   "field": "Dynamical systems",
+   "article_title": "George David Birkhoff",
+   "article_url": "https://en.wikipedia.org/wiki/George_David_Birkhoff",
+   "article_revid": 1378446283,
+   "slug": "wiki-birkhoff-conjecture"
+  },
+  {
+   "wp_id": "wpu-083",
+   "name": "Collatz conjecture",
+   "field": "Dynamical systems",
+   "article_title": "Collatz conjecture",
+   "article_url": "https://en.wikipedia.org/wiki/Collatz_conjecture",
+   "article_revid": 1379238755,
+   "slug": "wiki-collatz-conjecture"
+  },
+  {
+   "wp_id": "wpu-084",
+   "name": "Eden's conjecture",
+   "field": "Dynamical systems",
+   "article_title": "Eden's conjecture",
+   "article_url": "https://en.wikipedia.org/wiki/Eden's_conjecture",
+   "article_revid": 1372866622,
+   "slug": "wiki-edens-conjecture"
+  },
+  {
+   "wp_id": "wpu-085",
+   "name": "Fatou conjecture",
+   "field": "Dynamical systems",
+   "article_title": "Fatou conjecture",
+   "article_url": "https://en.wikipedia.org/wiki/Fatou_conjecture",
+   "article_revid": 1221118494,
+   "slug": "wiki-fatou-conjecture"
+  },
+  {
+   "wp_id": "wpu-086",
+   "name": "Furstenberg conjecture",
+   "field": "Dynamical systems",
+   "article_title": "Hillel Furstenberg",
+   "article_url": "https://en.wikipedia.org/wiki/Hillel_Furstenberg",
+   "article_revid": 1366941859,
+   "slug": "wiki-furstenberg-conjecture"
+  },
+  {
+   "wp_id": "wpu-087",
+   "name": "Kaplan–Yorke conjecture",
+   "field": "Dynamical systems",
+   "article_title": "Kaplan–Yorke conjecture",
+   "article_url": "https://en.wikipedia.org/wiki/Kaplan%E2%80%93Yorke_conjecture",
+   "article_revid": 1375036941,
+   "slug": "wiki-kaplan-yorke-conjecture"
+  },
+  {
+   "wp_id": "wpu-088",
+   "name": "Margulis conjecture",
+   "field": "Dynamical systems",
+   "article_title": "Grigory Margulis",
+   "article_url": "https://en.wikipedia.org/wiki/Grigory_Margulis",
+   "article_revid": 1372001401,
+   "slug": "wiki-margulis-conjecture"
+  },
+  {
+   "wp_id": "wpu-089",
+   "name": "Hilbert–Arnold problem",
+   "field": "Dynamical systems",
+   "article_title": "Hilbert–Arnold problem",
+   "article_url": "https://en.wikipedia.org/wiki/Hilbert%E2%80%93Arnold_problem",
+   "article_revid": 1349156932,
+   "slug": "wiki-hilbert-arnold-problem"
+  },
+  {
+   "wp_id": "wpu-090",
+   "name": "MLC conjecture",
+   "field": "Dynamical systems",
+   "article_title": "Mandelbrot set",
+   "article_url": "https://en.wikipedia.org/wiki/Mandelbrot_set#Local_connectivity",
+   "article_revid": 1378299469,
+   "slug": "wiki-mlc-conjecture"
+  },
+  {
+   "wp_id": "wpu-091",
+   "field": "Dynamical systems",
+   "article_title": "Outer billiards",
+   "article_url": "https://en.wikipedia.org/wiki/Outer_billiards",
+   "article_revid": 1376136236,
+   "slug": "wiki-outer-billiards"
+  },
+  {
+   "wp_id": "wpu-092",
+   "name": "Quantum unique ergodicity conjecture",
+   "field": "Dynamical systems",
+   "article_title": "Eigenfunction",
+   "article_url": "https://en.wikipedia.org/wiki/Eigenfunction",
+   "article_revid": 1321688598,
+   "slug": "wiki-quantum-unique-ergodicity-conjecture"
+  },
+  {
+   "wp_id": "wpu-093",
+   "name": "Rokhlin's multiple mixing problem",
+   "field": "Dynamical systems",
+   "article_title": "Vladimir Abramovich Rokhlin",
+   "article_url": "https://en.wikipedia.org/wiki/Vladimir_Abramovich_Rokhlin",
+   "article_revid": 1366088228,
+   "slug": "wiki-rokhlins-multiple-mixing-problem"
+  },
+  {
+   "wp_id": "wpu-094",
+   "name": "Triangular billiards",
+   "field": "Dynamical systems",
+   "article_title": "Triangular billiards",
+   "article_url": "https://en.wikipedia.org/wiki/Triangular_billiards",
+   "article_revid": 1376136513,
+   "slug": "wiki-triangular-billiards"
+  },
+  {
+   "wp_id": "wpu-095",
+   "name": "Weinstein conjecture",
+   "field": "Dynamical systems",
+   "article_title": "Weinstein conjecture",
+   "article_url": "https://en.wikipedia.org/wiki/Weinstein_conjecture",
+   "article_revid": 1367019679,
+   "slug": "wiki-weinstein-conjecture"
+  },
+  {
+   "wp_id": "wpu-096",
+   "field": "Dynamical systems",
+   "article_title": "Juggler sequence",
+   "article_url": "https://en.wikipedia.org/wiki/Juggler_sequence",
+   "article_revid": 1377670964,
+   "slug": "wiki-juggler-sequence"
+  },
+  {
+   "wp_id": "wpu-097",
+   "name": "Lyapunov function: Lyapunov's second method for stability",
+   "field": "Dynamical systems",
+   "article_title": "Lyapunov function",
+   "article_url": "https://en.wikipedia.org/wiki/Lyapunov_function",
+   "article_revid": 1353670715,
+   "slug": "wiki-lyapunov-function-lyapunovs-second-method-for-stability"
+  },
+  {
+   "wp_id": "wpu-098",
+   "field": "Dynamical systems",
+   "article_title": "Reversible cellular automaton",
+   "article_url": "https://en.wikipedia.org/wiki/Reversible_cellular_automaton",
+   "article_revid": 1324362557,
+   "slug": "wiki-reversible-cellular-automaton"
+  },
+  {
+   "wp_id": "wpu-099",
+   "name": "Sudoku",
+   "field": "Games and puzzles",
+   "subfield": "Combinatorial games",
+   "group_header": true,
+   "article_title": "Sudoku",
+   "article_url": "https://en.wikipedia.org/wiki/Sudoku",
+   "article_revid": 1379577964,
+   "slug": "wiki-sudoku"
+  },
+  {
+   "wp_id": "wpu-100",
+   "field": "Games and puzzles",
+   "subfield": "Combinatorial games",
+   "parent_id": "wpu-099",
+   "slug": "wiki-how-many-puzzles-have-exactly-one-solution"
+  },
+  {
+   "wp_id": "wpu-101",
+   "field": "Games and puzzles",
+   "subfield": "Combinatorial games",
+   "parent_id": "wpu-099",
+   "article_title": "Glossary of sudoku",
+   "article_url": "https://en.wikipedia.org/wiki/Glossary_of_sudoku",
+   "article_revid": 1379146625,
+   "slug": "wiki-glossary-of-sudoku"
+  },
+  {
+   "wp_id": "wpu-102",
+   "field": "Games and puzzles",
+   "subfield": "Combinatorial games",
+   "parent_id": "wpu-099",
+   "article_title": "Mathematics of sudoku",
+   "article_url": "https://en.wikipedia.org/wiki/Mathematics_of_sudoku",
+   "article_revid": 1379144912,
+   "slug": "wiki-mathematics-of-sudoku"
+  },
+  {
+   "wp_id": "wpu-103",
+   "name": "Tic-tac-toe variants",
+   "field": "Games and puzzles",
+   "subfield": "Combinatorial games",
+   "group_header": true,
+   "article_title": "Tic-tac-toe variants",
+   "article_url": "https://en.wikipedia.org/wiki/Tic-tac-toe_variants",
+   "article_revid": 1350574077,
+   "slug": "wiki-tic-tac-toe-variants"
+  },
+  {
+   "wp_id": "wpu-104",
+   "field": "Games and puzzles",
+   "subfield": "Combinatorial games",
+   "parent_id": "wpu-103",
+   "article_title": "Hales–Jewett theorem",
+   "article_url": "https://en.wikipedia.org/wiki/Hales%E2%80%93Jewett_theorem",
+   "article_revid": 1368717634,
+   "slug": "wiki-hales-jewett-theorem"
+  },
+  {
+   "wp_id": "wpu-105",
+   "name": "Chess",
+   "field": "Games and puzzles",
+   "subfield": "Combinatorial games",
+   "group_header": true,
+   "article_title": "Chess",
+   "article_url": "https://en.wikipedia.org/wiki/Chess",
+   "article_revid": 1379113904,
+   "slug": "wiki-chess"
+  },
+  {
+   "wp_id": "wpu-106",
+   "field": "Games and puzzles",
+   "subfield": "Combinatorial games",
+   "parent_id": "wpu-105",
+   "article_title": "First-move advantage in chess",
+   "article_url": "https://en.wikipedia.org/wiki/First-move_advantage_in_chess",
+   "article_revid": 1358527793,
+   "slug": "wiki-first-move-advantage-in-chess"
+  },
+  {
+   "wp_id": "wpu-107",
+   "name": "Go",
+   "field": "Games and puzzles",
+   "subfield": "Combinatorial games",
+   "group_header": true,
+   "article_title": "Go (game)",
+   "article_url": "https://en.wikipedia.org/wiki/Go_(game)",
+   "article_revid": 1377627768,
+   "slug": "wiki-go"
+  },
+  {
+   "wp_id": "wpu-108",
+   "field": "Games and puzzles",
+   "subfield": "Combinatorial games",
+   "parent_id": "wpu-107",
+   "article_title": "Komi (Go)",
+   "article_url": "https://en.wikipedia.org/wiki/Komi_(Go)",
+   "article_revid": 1375576390,
+   "slug": "wiki-komi-go"
+  },
+  {
+   "wp_id": "wpu-109",
+   "name": "Set",
+   "field": "Games and puzzles",
+   "subfield": "Combinatorial games",
+   "group_header": true,
+   "article_title": "Set (card game)",
+   "article_url": "https://en.wikipedia.org/wiki/Set_(card_game)",
+   "article_revid": 1376133770,
+   "slug": "wiki-set"
+  },
+  {
+   "wp_id": "wpu-110",
+   "field": "Games and puzzles",
+   "subfield": "Combinatorial games",
+   "parent_id": "wpu-109",
+   "article_title": "Cap set",
+   "article_url": "https://en.wikipedia.org/wiki/Cap_set",
+   "article_revid": 1376894769,
+   "slug": "wiki-cap-set"
+  },
+  {
+   "wp_id": "wpu-111",
+   "field": "Games and puzzles",
+   "subfield": "Combinatorial games",
+   "article_title": "Octal game",
+   "article_url": "https://en.wikipedia.org/wiki/Octal_game",
+   "article_revid": 1342989345,
+   "slug": "wiki-octal-game"
+  },
+  {
+   "wp_id": "wpu-112",
+   "field": "Games and puzzles",
+   "subfield": "Combinatorial games",
+   "article_title": "Grundy's game",
+   "article_url": "https://en.wikipedia.org/wiki/Grundy's_game",
+   "article_revid": 1343637813,
+   "slug": "wiki-grundys-game"
+  },
+  {
+   "wp_id": "wpu-113",
+   "name": "Rendezvous problem",
+   "field": "Games and puzzles",
+   "subfield": "Games with imperfect information",
+   "article_title": "Rendezvous problem",
+   "article_url": "https://en.wikipedia.org/wiki/Rendezvous_problem",
+   "article_revid": 1276797547,
+   "slug": "wiki-rendezvous-problem"
+  },
+  {
+   "wp_id": "wpu-114",
+   "name": "Abundance conjecture",
+   "field": "Geometry",
+   "subfield": "Algebraic geometry",
+   "article_title": "Abundance conjecture",
+   "article_url": "https://en.wikipedia.org/wiki/Abundance_conjecture",
+   "article_revid": 1371052942,
+   "slug": "wiki-abundance-conjecture"
+  },
+  {
+   "wp_id": "wpu-115",
+   "name": "Bass conjecture",
+   "field": "Geometry",
+   "subfield": "Algebraic geometry",
+   "article_title": "Bass conjecture",
+   "article_url": "https://en.wikipedia.org/wiki/Bass_conjecture",
+   "article_revid": 1374575340,
+   "slug": "wiki-bass-conjecture"
+  },
+  {
+   "wp_id": "wpu-116",
+   "name": "Bass–Quillen conjecture",
+   "field": "Geometry",
+   "subfield": "Algebraic geometry",
+   "article_title": "Bass–Quillen conjecture",
+   "article_url": "https://en.wikipedia.org/wiki/Bass%E2%80%93Quillen_conjecture",
+   "article_revid": 1350452411,
+   "slug": "wiki-bass-quillen-conjecture"
+  },
+  {
+   "wp_id": "wpu-117",
+   "name": "Deligne conjecture",
+   "field": "Geometry",
+   "subfield": "Algebraic geometry",
+   "article_title": "Pierre Deligne",
+   "article_url": "https://en.wikipedia.org/wiki/Pierre_Deligne#Concepts_named_after_Deligne",
+   "article_revid": 1361410508,
+   "slug": "wiki-deligne-conjecture"
+  },
+  {
+   "wp_id": "wpu-118",
+   "name": "Deligne's conjecture on Hochschild cohomology",
+   "field": "Geometry",
+   "subfield": "Algebraic geometry",
+   "parent_id": "wpu-117",
+   "article_title": "Deligne's conjecture on Hochschild cohomology",
+   "article_url": "https://en.wikipedia.org/wiki/Deligne's_conjecture_on_Hochschild_cohomology",
+   "article_revid": 1363647933,
+   "slug": "wiki-delignes-conjecture-on-hochschild-cohomology"
+  },
+  {
+   "wp_id": "wpu-119",
+   "name": "Dixmier conjecture",
+   "field": "Geometry",
+   "subfield": "Algebraic geometry",
+   "article_title": "Dixmier conjecture",
+   "article_url": "https://en.wikipedia.org/wiki/Dixmier_conjecture",
+   "article_revid": 1372312095,
+   "slug": "wiki-dixmier-conjecture"
+  },
+  {
+   "wp_id": "wpu-120",
+   "name": "Fröberg conjecture",
+   "field": "Geometry",
+   "subfield": "Algebraic geometry",
+   "article_title": "Fröberg conjecture",
+   "article_url": "https://en.wikipedia.org/wiki/Fr%C3%B6berg_conjecture",
+   "article_revid": 1296240328,
+   "slug": "wiki-froberg-conjecture"
+  },
+  {
+   "wp_id": "wpu-121",
+   "name": "Fujita conjecture",
+   "field": "Geometry",
+   "subfield": "Algebraic geometry",
+   "article_title": "Fujita conjecture",
+   "article_url": "https://en.wikipedia.org/wiki/Fujita_conjecture",
+   "article_revid": 1300094741,
+   "slug": "wiki-fujita-conjecture"
+  },
+  {
+   "wp_id": "wpu-122",
+   "name": "General elephant problem",
+   "field": "Geometry",
+   "subfield": "Algebraic geometry",
+   "article_title": "General elephant",
+   "article_url": "https://en.wikipedia.org/wiki/General_elephant",
+   "article_revid": 1348512556,
+   "slug": "wiki-general-elephant-problem"
+  },
+  {
+   "wp_id": "wpu-123",
+   "name": "Hartshorne's conjectures",
+   "field": "Geometry",
+   "subfield": "Algebraic geometry",
+   "slug": "wiki-hartshornes-conjectures"
+  },
+  {
+   "wp_id": "wpu-124",
+   "field": "Geometry",
+   "subfield": "Algebraic geometry",
+   "article_title": "Spherical geometry",
+   "article_url": "https://en.wikipedia.org/wiki/Spherical_geometry",
+   "article_revid": 1370875316,
+   "slug": "wiki-spherical-geometry"
+  },
+  {
+   "wp_id": "wpu-125",
+   "name": "Jacobian conjecture for two-dimensional spaces",
+   "field": "Geometry",
+   "subfield": "Algebraic geometry",
+   "article_title": "Jacobian conjecture",
+   "article_url": "https://en.wikipedia.org/wiki/Jacobian_conjecture",
+   "article_revid": 1379430084,
+   "slug": "wiki-jacobian-conjecture-for-two-dimensional-spaces"
+  },
+  {
+   "wp_id": "wpu-126",
+   "name": "Maulik–Nekrasov–Okounkov–Pandharipande conjecture",
+   "field": "Geometry",
+   "subfield": "Algebraic geometry",
+   "article_title": "Donaldson–Thomas theory",
+   "article_url": "https://en.wikipedia.org/wiki/Donaldson%E2%80%93Thomas_theory",
+   "article_revid": 1375785117,
+   "slug": "wiki-maulik-nekrasov-okounkov-pandharipande-conjecture"
+  },
+  {
+   "wp_id": "wpu-127",
+   "name": "Nagata's conjecture on curves",
+   "field": "Geometry",
+   "subfield": "Algebraic geometry",
+   "article_title": "Nagata's conjecture on curves",
+   "article_url": "https://en.wikipedia.org/wiki/Nagata's_conjecture_on_curves",
+   "article_revid": 1378926963,
+   "slug": "wiki-nagatas-conjecture-on-curves"
+  },
+  {
+   "wp_id": "wpu-128",
+   "name": "Nagata–Biran conjecture",
+   "field": "Geometry",
+   "subfield": "Algebraic geometry",
+   "article_title": "Nagata–Biran conjecture",
+   "article_url": "https://en.wikipedia.org/wiki/Nagata%E2%80%93Biran_conjecture",
+   "article_revid": 1375618158,
+   "slug": "wiki-nagata-biran-conjecture"
+  },
+  {
+   "wp_id": "wpu-129",
+   "name": "Nakai conjecture",
+   "field": "Geometry",
+   "subfield": "Algebraic geometry",
+   "article_title": "Nakai conjecture",
+   "article_url": "https://en.wikipedia.org/wiki/Nakai_conjecture",
+   "article_revid": 1223447811,
+   "slug": "wiki-nakai-conjecture"
+  },
+  {
+   "wp_id": "wpu-130",
+   "name": "Parshin's conjecture",
+   "field": "Geometry",
+   "subfield": "Algebraic geometry",
+   "article_title": "Parshin's conjecture",
+   "article_url": "https://en.wikipedia.org/wiki/Parshin's_conjecture",
+   "article_revid": 1354132876,
+   "slug": "wiki-parshins-conjecture"
+  },
+  {
+   "wp_id": "wpu-131",
+   "name": "Section conjecture",
+   "field": "Geometry",
+   "subfield": "Algebraic geometry",
+   "article_title": "Section conjecture",
+   "article_url": "https://en.wikipedia.org/wiki/Section_conjecture",
+   "article_revid": 1338006108,
+   "slug": "wiki-section-conjecture"
+  },
+  {
+   "wp_id": "wpu-132",
+   "name": "Standard conjectures",
+   "field": "Geometry",
+   "subfield": "Algebraic geometry",
+   "article_title": "Standard conjectures on algebraic cycles",
+   "article_url": "https://en.wikipedia.org/wiki/Standard_conjectures_on_algebraic_cycles",
+   "article_revid": 1379558873,
+   "slug": "wiki-standard-conjectures"
+  },
+  {
+   "wp_id": "wpu-133",
+   "name": "Tate conjecture",
+   "field": "Geometry",
+   "subfield": "Algebraic geometry",
+   "article_title": "Tate conjecture",
+   "article_url": "https://en.wikipedia.org/wiki/Tate_conjecture",
+   "article_revid": 1378962843,
+   "slug": "wiki-tate-conjecture"
+  },
+  {
+   "wp_id": "wpu-134",
+   "name": "Virasoro conjecture",
+   "field": "Geometry",
+   "subfield": "Algebraic geometry",
+   "article_title": "Virasoro conjecture",
+   "article_url": "https://en.wikipedia.org/wiki/Virasoro_conjecture",
+   "article_revid": 1335401680,
+   "slug": "wiki-virasoro-conjecture"
+  },
+  {
+   "wp_id": "wpu-135",
+   "name": "Zariski multiplicity conjecture",
+   "field": "Geometry",
+   "subfield": "Algebraic geometry",
+   "article_title": "Algebraic variety",
+   "article_url": "https://en.wikipedia.org/wiki/Algebraic_variety",
+   "article_revid": 1376836604,
+   "slug": "wiki-zariski-multiplicity-conjecture"
+  },
+  {
+   "wp_id": "wpu-136",
+   "field": "Geometry",
+   "subfield": "Algebraic geometry",
+   "article_title": "Flip (algebraic geometry)",
+   "article_url": "https://en.wikipedia.org/wiki/Flip_(algebraic_geometry)",
+   "article_revid": 1357666202,
+   "slug": "wiki-flip-algebraic-geometry"
+  },
+  {
+   "wp_id": "wpu-137",
+   "name": "Resolution of singularities",
+   "field": "Geometry",
+   "subfield": "Algebraic geometry",
+   "article_title": "Resolution of singularities",
+   "article_url": "https://en.wikipedia.org/wiki/Resolution_of_singularities",
+   "article_revid": 1376238550,
+   "slug": "wiki-resolution-of-singularities"
+  },
+  {
+   "wp_id": "wpu-138",
+   "name": "Borsuk's problem",
+   "field": "Geometry",
+   "subfield": "Covering and packing",
+   "article_title": "Borsuk's conjecture",
+   "article_url": "https://en.wikipedia.org/wiki/Borsuk's_conjecture",
+   "article_revid": 1379158716,
+   "slug": "wiki-borsuks-problem"
+  },
+  {
+   "wp_id": "wpu-139",
+   "name": "Covering problem of Rado",
+   "field": "Geometry",
+   "subfield": "Covering and packing",
+   "article_title": "Covering problem of Rado",
+   "article_url": "https://en.wikipedia.org/wiki/Covering_problem_of_Rado",
+   "article_revid": 1322896164,
+   "slug": "wiki-covering-problem-of-rado"
+  },
+  {
+   "wp_id": "wpu-140",
+   "name": "Erdős–Oler conjecture",
+   "field": "Geometry",
+   "subfield": "Covering and packing",
+   "article_title": "Circle packing in an equilateral triangle",
+   "article_url": "https://en.wikipedia.org/wiki/Circle_packing_in_an_equilateral_triangle",
+   "article_revid": 1341273930,
+   "slug": "wiki-erdos-oler-conjecture"
+  },
+  {
+   "wp_id": "wpu-141",
+   "name": "Disk covering problem",
+   "field": "Geometry",
+   "subfield": "Covering and packing",
+   "article_title": "Disk covering problem",
+   "article_url": "https://en.wikipedia.org/wiki/Disk_covering_problem",
+   "article_revid": 1378664539,
+   "slug": "wiki-disk-covering-problem"
+  },
+  {
+   "wp_id": "wpu-142",
+   "name": "Kissing number problem",
+   "field": "Geometry",
+   "subfield": "Covering and packing",
+   "article_title": "Kissing number",
+   "article_url": "https://en.wikipedia.org/wiki/Kissing_number",
+   "article_revid": 1379484959,
+   "slug": "wiki-kissing-number-problem"
+  },
+  {
+   "wp_id": "wpu-143",
+   "name": "Reinhardt's conjecture",
+   "field": "Geometry",
+   "subfield": "Covering and packing",
+   "article_title": "Smoothed octagon",
+   "article_url": "https://en.wikipedia.org/wiki/Smoothed_octagon#Reinhardt%27s_conjecture",
+   "article_revid": 1334443929,
+   "slug": "wiki-reinhardts-conjecture"
+  },
+  {
+   "wp_id": "wpu-144",
+   "name": "Sphere packing problems",
+   "field": "Geometry",
+   "subfield": "Covering and packing",
+   "article_title": "Sphere packing",
+   "article_url": "https://en.wikipedia.org/wiki/Sphere_packing",
+   "article_revid": 1375259008,
+   "slug": "wiki-sphere-packing-problems"
+  },
+  {
+   "wp_id": "wpu-145",
+   "name": "Square packing in a square",
+   "field": "Geometry",
+   "subfield": "Covering and packing",
+   "article_title": "Square packing",
+   "article_url": "https://en.wikipedia.org/wiki/Square_packing",
+   "article_revid": 1378993193,
+   "slug": "wiki-square-packing-in-a-square"
+  },
+  {
+   "wp_id": "wpu-146",
+   "name": "Ulam's packing conjecture",
+   "field": "Geometry",
+   "subfield": "Covering and packing",
+   "article_title": "Ulam's packing conjecture",
+   "article_url": "https://en.wikipedia.org/wiki/Ulam's_packing_conjecture",
+   "article_revid": 1314754857,
+   "slug": "wiki-ulams-packing-conjecture"
+  },
+  {
+   "wp_id": "wpu-147",
+   "name": "Tammes problem",
+   "field": "Geometry",
+   "subfield": "Covering and packing",
+   "article_title": "Tammes problem",
+   "article_url": "https://en.wikipedia.org/wiki/Tammes_problem",
+   "article_revid": 1324230947,
+   "slug": "wiki-tammes-problem"
+  },
+  {
+   "wp_id": "wpu-148",
+   "field": "Geometry",
+   "subfield": "Differential geometry",
+   "article_title": "Generalized Poincaré conjecture",
+   "article_url": "https://en.wikipedia.org/wiki/Generalized_Poincar%C3%A9_conjecture",
+   "article_revid": 1373755217,
+   "slug": "wiki-generalized-poincare-conjecture"
+  },
+  {
+   "wp_id": "wpu-149",
+   "name": "Spherical Bernstein's problem",
+   "field": "Geometry",
+   "subfield": "Differential geometry",
+   "article_title": "Bernstein's problem",
+   "article_url": "https://en.wikipedia.org/wiki/Bernstein's_problem",
+   "article_revid": 1321967637,
+   "slug": "wiki-spherical-bernsteins-problem"
+  },
+  {
+   "wp_id": "wpu-150",
+   "name": "Carathéodory conjecture",
+   "field": "Geometry",
+   "subfield": "Differential geometry",
+   "article_title": "Carathéodory conjecture",
+   "article_url": "https://en.wikipedia.org/wiki/Carath%C3%A9odory_conjecture",
+   "article_revid": 1372799597,
+   "slug": "wiki-caratheodory-conjecture"
+  },
+  {
+   "wp_id": "wpu-151",
+   "name": "Cartan–Hadamard conjecture",
+   "field": "Geometry",
+   "subfield": "Differential geometry",
+   "article_title": "Cartan–Hadamard conjecture",
+   "article_url": "https://en.wikipedia.org/wiki/Cartan%E2%80%93Hadamard_conjecture",
+   "article_revid": 1375873805,
+   "slug": "wiki-cartan-hadamard-conjecture"
+  },
+  {
+   "wp_id": "wpu-152",
+   "name": "Chern's conjecture (affine geometry)",
+   "field": "Geometry",
+   "subfield": "Differential geometry",
+   "article_title": "Chern's conjecture (affine geometry)",
+   "article_url": "https://en.wikipedia.org/wiki/Chern's_conjecture_(affine_geometry)",
+   "article_revid": 1363184191,
+   "slug": "wiki-cherns-conjecture-affine-geometry"
+  },
+  {
+   "wp_id": "wpu-153",
+   "name": "Chern's conjecture for hypersurfaces in spheres",
+   "field": "Geometry",
+   "subfield": "Differential geometry",
+   "article_title": "Chern's conjecture for hypersurfaces in spheres",
+   "article_url": "https://en.wikipedia.org/wiki/Chern's_conjecture_for_hypersurfaces_in_spheres",
+   "article_revid": 1364196160,
+   "slug": "wiki-cherns-conjecture-for-hypersurfaces-in-spheres"
+  },
+  {
+   "wp_id": "wpu-154",
+   "name": "Closed curve problem",
+   "field": "Geometry",
+   "subfield": "Differential geometry",
+   "slug": "wiki-closed-curve-problem"
+  },
+  {
+   "wp_id": "wpu-155",
+   "name": "Filling area conjecture",
+   "field": "Geometry",
+   "subfield": "Differential geometry",
+   "article_title": "Filling area conjecture",
+   "article_url": "https://en.wikipedia.org/wiki/Filling_area_conjecture",
+   "article_revid": 1374258679,
+   "slug": "wiki-filling-area-conjecture"
+  },
+  {
+   "wp_id": "wpu-156",
+   "name": "Hopf conjectures",
+   "field": "Geometry",
+   "subfield": "Differential geometry",
+   "article_title": "Hopf conjectures",
+   "article_url": "https://en.wikipedia.org/wiki/Hopf_conjectures",
+   "article_revid": 1372036697,
+   "slug": "wiki-hopf-conjectures"
+  },
+  {
+   "wp_id": "wpu-157",
+   "name": "Osserman conjecture",
+   "field": "Geometry",
+   "subfield": "Differential geometry",
+   "article_title": "Osserman manifold",
+   "article_url": "https://en.wikipedia.org/wiki/Osserman_manifold#Osserman_conjecture",
+   "article_revid": 1293529509,
+   "slug": "wiki-osserman-conjecture"
+  },
+  {
+   "wp_id": "wpu-158",
+   "name": "Yau's conjecture on the first eigenvalue",
+   "field": "Geometry",
+   "subfield": "Differential geometry",
+   "article_title": "Yau's conjecture on the first eigenvalue",
+   "article_url": "https://en.wikipedia.org/wiki/Yau's_conjecture_on_the_first_eigenvalue",
+   "article_revid": 1378648850,
+   "slug": "wiki-yaus-conjecture-on-the-first-eigenvalue"
+  },
+  {
+   "wp_id": "wpu-159",
+   "name": "Big-line-big-clique conjecture",
+   "field": "Geometry",
+   "subfield": "Discrete geometry",
+   "article_title": "Big-line-big-clique conjecture",
+   "article_url": "https://en.wikipedia.org/wiki/Big-line-big-clique_conjecture",
+   "article_revid": 1335432144,
+   "slug": "wiki-big-line-big-clique-conjecture"
+  },
+  {
+   "wp_id": "wpu-160",
+   "name": "Dirac–Motzkin conjecture",
+   "field": "Geometry",
+   "subfield": "Discrete geometry",
+   "article_title": "Sylvester–Gallai theorem",
+   "article_url": "https://en.wikipedia.org/wiki/Sylvester%E2%80%93Gallai_theorem",
+   "article_revid": 1309352088,
+   "slug": "wiki-dirac-motzkin-conjecture"
+  },
+  {
+   "wp_id": "wpu-161",
+   "name": "Hadwiger conjecture",
+   "field": "Geometry",
+   "subfield": "Discrete geometry",
+   "article_title": "Hadwiger conjecture (combinatorial geometry)",
+   "article_url": "https://en.wikipedia.org/wiki/Hadwiger_conjecture_(combinatorial_geometry)",
+   "article_revid": 1335638816,
+   "slug": "wiki-hadwiger-conjecture"
+  },
+  {
+   "wp_id": "wpu-162",
+   "name": "Solving the happy ending problem",
+   "field": "Geometry",
+   "subfield": "Discrete geometry",
+   "article_title": "Happy ending problem",
+   "article_url": "https://en.wikipedia.org/wiki/Happy_ending_problem",
+   "article_revid": 1368870559,
+   "slug": "wiki-solving-the-happy-ending-problem"
+  },
+  {
+   "wp_id": "wpu-163",
+   "name": "Improving lower and upper bounds for the Heilbronn triangle problem",
+   "field": "Geometry",
+   "subfield": "Discrete geometry",
+   "article_title": "Heilbronn triangle problem",
+   "article_url": "https://en.wikipedia.org/wiki/Heilbronn_triangle_problem",
+   "article_revid": 1378320720,
+   "slug": "wiki-improving-lower-and-upper-bounds-for-the-heilbronn-triangle"
+  },
+  {
+   "wp_id": "wpu-164",
+   "name": "Kalai's 3^d conjecture",
+   "field": "Geometry",
+   "subfield": "Discrete geometry",
+   "article_title": "Kalai's 3^d conjecture",
+   "article_url": "https://en.wikipedia.org/wiki/Kalai's_3%5Ed_conjecture",
+   "article_revid": 1364111300,
+   "slug": "wiki-kalais-3-d-conjecture"
+  },
+  {
+   "wp_id": "wpu-165",
+   "name": "Kobon triangle problem",
+   "field": "Geometry",
+   "subfield": "Discrete geometry",
+   "article_title": "Kobon triangle problem",
+   "article_url": "https://en.wikipedia.org/wiki/Kobon_triangle_problem",
+   "article_revid": 1374532508,
+   "slug": "wiki-kobon-triangle-problem"
+  },
+  {
+   "wp_id": "wpu-166",
+   "name": "Kusner conjecture",
+   "field": "Geometry",
+   "subfield": "Discrete geometry",
+   "article_title": "Equilateral dimension",
+   "article_url": "https://en.wikipedia.org/wiki/Equilateral_dimension",
+   "article_revid": 1376954482,
+   "slug": "wiki-kusner-conjecture"
+  },
+  {
+   "wp_id": "wpu-167",
+   "name": "McMullen problem",
+   "field": "Geometry",
+   "subfield": "Discrete geometry",
+   "article_title": "McMullen problem",
+   "article_url": "https://en.wikipedia.org/wiki/McMullen_problem",
+   "article_revid": 1329522108,
+   "slug": "wiki-mcmullen-problem"
+  },
+  {
+   "wp_id": "wpu-168",
+   "name": "Opaque forest problem",
+   "field": "Geometry",
+   "subfield": "Discrete geometry",
+   "article_title": "Opaque set",
+   "article_url": "https://en.wikipedia.org/wiki/Opaque_set",
+   "article_revid": 1373749341,
+   "slug": "wiki-opaque-forest-problem"
+  },
+  {
+   "wp_id": "wpu-169",
+   "name": "Orchard-planting problem",
+   "field": "Geometry",
+   "subfield": "Discrete geometry",
+   "article_title": "Orchard-planting problem",
+   "article_url": "https://en.wikipedia.org/wiki/Orchard-planting_problem",
+   "article_revid": 1322893419,
+   "slug": "wiki-orchard-planting-problem"
+  },
+  {
+   "wp_id": "wpu-170",
+   "field": "Geometry",
+   "subfield": "Discrete geometry",
+   "article_title": "Unit distance graph",
+   "article_url": "https://en.wikipedia.org/wiki/Unit_distance_graph",
+   "article_revid": 1368111232,
+   "slug": "wiki-unit-distance-graph"
+  },
+  {
+   "wp_id": "wpu-171",
+   "name": "Finding matching upper and lower bounds for k-sets and halving lines",
+   "field": "Geometry",
+   "subfield": "Discrete geometry",
+   "article_title": "K-set (geometry)",
+   "article_url": "https://en.wikipedia.org/wiki/K-set_(geometry)",
+   "article_revid": 1368661379,
+   "slug": "wiki-finding-matching-upper-and-lower-bounds-for-k-sets-and"
+  },
+  {
+   "wp_id": "wpu-172",
+   "field": "Geometry",
+   "subfield": "Discrete geometry",
+   "parent_id": "wpu-171",
+   "article_title": "Crossing number (graph theory)",
+   "article_url": "https://en.wikipedia.org/wiki/Crossing_number_(graph_theory)",
+   "article_revid": 1379058885,
+   "slug": "wiki-crossing-number-graph-theory"
+  },
+  {
+   "wp_id": "wpu-173",
+   "name": "Tripod packing",
+   "field": "Geometry",
+   "subfield": "Discrete geometry",
+   "article_title": "Tripod packing",
+   "article_url": "https://en.wikipedia.org/wiki/Tripod_packing",
+   "article_revid": 1360519102,
+   "slug": "wiki-tripod-packing"
+  },
+  {
+   "wp_id": "wpu-174",
+   "name": "Atiyah conjecture",
+   "field": "Geometry",
+   "subfield": "Euclidean geometry",
+   "article_title": "Atiyah conjecture on configurations",
+   "article_url": "https://en.wikipedia.org/wiki/Atiyah_conjecture_on_configurations",
+   "article_revid": 1121314069,
+   "slug": "wiki-atiyah-conjecture"
+  },
+  {
+   "wp_id": "wpu-175",
+   "name": "Bellman's lost-in-a-forest problem",
+   "field": "Geometry",
+   "subfield": "Euclidean geometry",
+   "article_title": "Bellman's lost-in-a-forest problem",
+   "article_url": "https://en.wikipedia.org/wiki/Bellman's_lost-in-a-forest_problem",
+   "article_revid": 1373753124,
+   "slug": "wiki-bellmans-lost-in-a-forest-problem"
+  },
+  {
+   "wp_id": "wpu-176",
+   "name": "Borromean rings",
+   "field": "Geometry",
+   "subfield": "Euclidean geometry",
+   "article_title": "Borromean rings",
+   "article_url": "https://en.wikipedia.org/wiki/Borromean_rings",
+   "article_revid": 1375480497,
+   "slug": "wiki-borromean-rings"
+  },
+  {
+   "wp_id": "wpu-177",
+   "name": "Connelly’s blooming conjecture",
+   "field": "Geometry",
+   "subfield": "Euclidean geometry",
+   "article_title": "Blooming (geometry)",
+   "article_url": "https://en.wikipedia.org/wiki/Blooming_(geometry)",
+   "article_revid": 1335996086,
+   "slug": "wiki-connellys-blooming-conjecture"
+  },
+  {
+   "wp_id": "wpu-178",
+   "name": "Danzer's problem and Conway's dead fly problem",
+   "field": "Geometry",
+   "subfield": "Euclidean geometry",
+   "article_title": "Danzer set",
+   "article_url": "https://en.wikipedia.org/wiki/Danzer_set",
+   "article_revid": 1360651561,
+   "slug": "wiki-danzers-problem-and-conways-dead-fly-problem"
+  },
+  {
+   "wp_id": "wpu-179",
+   "name": "Dissection into orthoschemes",
+   "field": "Geometry",
+   "subfield": "Euclidean geometry",
+   "article_title": "Dissection into orthoschemes",
+   "article_url": "https://en.wikipedia.org/wiki/Dissection_into_orthoschemes",
+   "article_revid": 1329655970,
+   "slug": "wiki-dissection-into-orthoschemes"
+  },
+  {
+   "wp_id": "wpu-180",
+   "name": "Ehrhart's volume conjecture",
+   "field": "Geometry",
+   "subfield": "Euclidean geometry",
+   "article_title": "Ehrhart's volume conjecture",
+   "article_url": "https://en.wikipedia.org/wiki/Ehrhart's_volume_conjecture",
+   "article_revid": 1374430435,
+   "slug": "wiki-ehrharts-volume-conjecture"
+  },
+  {
+   "wp_id": "wpu-181",
+   "name": "Falconer's conjecture",
+   "field": "Geometry",
+   "subfield": "Euclidean geometry",
+   "article_title": "Falconer's conjecture",
+   "article_url": "https://en.wikipedia.org/wiki/Falconer's_conjecture",
+   "article_revid": 1379072682,
+   "slug": "wiki-falconers-conjecture"
+  },
+  {
+   "wp_id": "wpu-182",
+   "name": "Values of the Hermite constants",
+   "field": "Geometry",
+   "subfield": "Euclidean geometry",
+   "article_title": "Hermite constant",
+   "article_url": "https://en.wikipedia.org/wiki/Hermite_constant",
+   "article_revid": 1342043669,
+   "slug": "wiki-values-of-the-hermite-constants"
+  },
+  {
+   "wp_id": "wpu-183",
+   "field": "Geometry",
+   "subfield": "Euclidean geometry",
+   "article_title": "Holyhedron",
+   "article_url": "https://en.wikipedia.org/wiki/Holyhedron",
+   "article_revid": 1346703793,
+   "slug": "wiki-holyhedron"
+  },
+  {
+   "wp_id": "wpu-184",
+   "name": "Inscribed square problem",
+   "field": "Geometry",
+   "subfield": "Euclidean geometry",
+   "article_title": "Inscribed square problem",
+   "article_url": "https://en.wikipedia.org/wiki/Inscribed_square_problem",
+   "article_revid": 1376615967,
+   "slug": "wiki-inscribed-square-problem"
+  },
+  {
+   "wp_id": "wpu-185",
+   "name": "Kakeya conjecture",
+   "field": "Geometry",
+   "subfield": "Euclidean geometry",
+   "article_title": "Kakeya set",
+   "article_url": "https://en.wikipedia.org/wiki/Kakeya_set#Kakeya_conjecture",
+   "article_revid": 1379482476,
+   "slug": "wiki-kakeya-conjecture"
+  },
+  {
+   "wp_id": "wpu-186",
+   "name": "Kelvin problem",
+   "field": "Geometry",
+   "subfield": "Euclidean geometry",
+   "article_title": "Weaire–Phelan structure",
+   "article_url": "https://en.wikipedia.org/wiki/Weaire%E2%80%93Phelan_structure",
+   "article_revid": 1333656150,
+   "slug": "wiki-kelvin-problem"
+  },
+  {
+   "wp_id": "wpu-187",
+   "name": "Lebesgue's universal covering problem",
+   "field": "Geometry",
+   "subfield": "Euclidean geometry",
+   "article_title": "Lebesgue's universal covering problem",
+   "article_url": "https://en.wikipedia.org/wiki/Lebesgue's_universal_covering_problem",
+   "article_revid": 1141604071,
+   "slug": "wiki-lebesgues-universal-covering-problem"
+  },
+  {
+   "wp_id": "wpu-188",
+   "name": "Mahler's conjecture",
+   "field": "Geometry",
+   "subfield": "Euclidean geometry",
+   "article_title": "Mahler volume",
+   "article_url": "https://en.wikipedia.org/wiki/Mahler_volume",
+   "article_revid": 1379058270,
+   "slug": "wiki-mahlers-conjecture"
+  },
+  {
+   "wp_id": "wpu-189",
+   "name": "Meissner body",
+   "field": "Geometry",
+   "subfield": "Euclidean geometry",
+   "group_header": true,
+   "article_title": "Reuleaux tetrahedron",
+   "article_url": "https://en.wikipedia.org/wiki/Reuleaux_tetrahedron#Meissner_bodies",
+   "article_revid": 1365179351,
+   "slug": "wiki-meissner-body"
+  },
+  {
+   "wp_id": "wpu-190",
+   "field": "Geometry",
+   "subfield": "Euclidean geometry",
+   "parent_id": "wpu-189",
+   "slug": "wiki-are-the-two-meissner-tetrahedra-the-minimum-volume-three"
+  },
+  {
+   "wp_id": "wpu-191",
+   "name": "Moser's worm problem",
+   "field": "Geometry",
+   "subfield": "Euclidean geometry",
+   "article_title": "Moser's worm problem",
+   "article_url": "https://en.wikipedia.org/wiki/Moser's_worm_problem",
+   "article_revid": 1346750331,
+   "slug": "wiki-mosers-worm-problem"
+  },
+  {
+   "wp_id": "wpu-192",
+   "name": "Moving sofa problem",
+   "field": "Geometry",
+   "subfield": "Euclidean geometry",
+   "article_title": "Moving sofa problem",
+   "article_url": "https://en.wikipedia.org/wiki/Moving_sofa_problem",
+   "article_revid": 1379459095,
+   "slug": "wiki-moving-sofa-problem"
+  },
+  {
+   "wp_id": "wpu-193",
+   "name": "Parallelohedron",
+   "field": "Geometry",
+   "subfield": "Euclidean geometry",
+   "group_header": true,
+   "article_title": "Parallelohedron",
+   "article_url": "https://en.wikipedia.org/wiki/Parallelohedron",
+   "article_revid": 1378326205,
+   "slug": "wiki-parallelohedron"
+  },
+  {
+   "wp_id": "wpu-194",
+   "field": "Geometry",
+   "subfield": "Euclidean geometry",
+   "parent_id": "wpu-193",
+   "slug": "wiki-can-every-spherical-non-convex-polyhedron-that-tiles-space"
+  },
+  {
+   "wp_id": "wpu-195",
+   "field": "Geometry",
+   "subfield": "Euclidean geometry",
+   "parent_id": "wpu-193",
+   "article_title": "Voronoi diagram",
+   "article_url": "https://en.wikipedia.org/wiki/Voronoi_diagram",
+   "article_revid": 1365615905,
+   "slug": "wiki-voronoi-diagram"
+  },
+  {
+   "wp_id": "wpu-196",
+   "name": "Ropelength problems",
+   "field": "Geometry",
+   "subfield": "Euclidean geometry",
+   "group_header": true,
+   "article_title": "Ropelength",
+   "article_url": "https://en.wikipedia.org/wiki/Ropelength",
+   "article_revid": 1361694627,
+   "slug": "wiki-ropelength-problems"
+  },
+  {
+   "wp_id": "wpu-197",
+   "field": "Geometry",
+   "subfield": "Euclidean geometry",
+   "parent_id": "wpu-196",
+   "slug": "wiki-is-there-a-general-expression-for-the-minimum"
+  },
+  {
+   "wp_id": "wpu-198",
+   "field": "Geometry",
+   "subfield": "Euclidean geometry",
+   "parent_id": "wpu-196",
+   "slug": "wiki-what-constant-1-1-a-leq-10-76-governs"
+  },
+  {
+   "wp_id": "wpu-199",
+   "field": "Geometry",
+   "subfield": "Euclidean geometry",
+   "parent_id": "wpu-196",
+   "slug": "wiki-is-the-upper-bound-of-a-closed-knots"
+  },
+  {
+   "wp_id": "wpu-200",
+   "field": "Geometry",
+   "subfield": "Euclidean geometry",
+   "parent_id": "wpu-196",
+   "slug": "wiki-is-there-a-general-expression-for-how-much"
+  },
+  {
+   "wp_id": "wpu-201",
+   "field": "Geometry",
+   "subfield": "Euclidean geometry",
+   "article_title": "Prince Rupert's cube",
+   "article_url": "https://en.wikipedia.org/wiki/Prince_Rupert's_cube",
+   "article_revid": 1377338845,
+   "slug": "wiki-prince-ruperts-cube"
+  },
+  {
+   "wp_id": "wpu-202",
+   "name": "Shephard's problem (a.k.a. Dürer's conjecture)",
+   "field": "Geometry",
+   "subfield": "Euclidean geometry",
+   "article_title": "Net (polyhedron)",
+   "article_url": "https://en.wikipedia.org/wiki/Net_(polyhedron)#Shephard%27s_conjecture",
+   "article_revid": 1374695204,
+   "slug": "wiki-shephards-problem-a-k-a-durers-conjecture"
+  },
+  {
+   "wp_id": "wpu-203",
+   "field": "Geometry",
+   "subfield": "Euclidean geometry",
+   "article_title": "Szilassi polyhedron",
+   "article_url": "https://en.wikipedia.org/wiki/Szilassi_polyhedron",
+   "article_revid": 1376137181,
+   "slug": "wiki-szilassi-polyhedron"
+  },
+  {
+   "wp_id": "wpu-204",
+   "name": "Thomson problem",
+   "field": "Geometry",
+   "subfield": "Euclidean geometry",
+   "article_title": "Thomson problem",
+   "article_url": "https://en.wikipedia.org/wiki/Thomson_problem",
+   "article_revid": 1377529509,
+   "slug": "wiki-thomson-problem"
+  },
+  {
+   "wp_id": "wpu-205",
+   "name": "Convex uniform 5-polytopes",
+   "field": "Geometry",
+   "subfield": "Euclidean geometry",
+   "article_title": "Uniform 5-polytope",
+   "article_url": "https://en.wikipedia.org/wiki/Uniform_5-polytope",
+   "article_revid": 1364056011,
+   "slug": "wiki-convex-uniform-5-polytopes"
+  },
+  {
+   "wp_id": "wpu-206",
+   "name": "Hilbert's third problem for non-Euclidean geometries",
+   "field": "Geometry",
+   "subfield": "Non-Euclidean geometry",
+   "duplicate_of": "wpu-124",
+   "article_title": "Hilbert's third problem",
+   "article_url": "https://en.wikipedia.org/wiki/Hilbert's_third_problem",
+   "article_revid": 1334861812,
+   "slug": "wiki-hilberts-third-problem-for-non-euclidean-geometries"
+  },
+  {
+   "wp_id": "wpu-207",
+   "name": "Babai's problem",
+   "field": "Graph theory",
+   "subfield": "Algebraic graph theory",
+   "article_title": "Babai's problem",
+   "article_url": "https://en.wikipedia.org/wiki/Babai's_problem",
+   "article_revid": 1222845732,
+   "slug": "wiki-babais-problem"
+  },
+  {
+   "wp_id": "wpu-208",
+   "name": "Brouwer's conjecture",
+   "field": "Graph theory",
+   "subfield": "Algebraic graph theory",
+   "article_title": "Brouwer's conjecture",
+   "article_url": "https://en.wikipedia.org/wiki/Brouwer's_conjecture",
+   "article_revid": 1336143317,
+   "slug": "wiki-brouwers-conjecture"
+  },
+  {
+   "wp_id": "wpu-209",
+   "name": "γ–θ conjecture",
+   "field": "Graph theory",
+   "subfield": "Games on graphs",
+   "article_title": "Eternal dominating set",
+   "article_url": "https://en.wikipedia.org/wiki/Eternal_dominating_set",
+   "article_revid": 1367549843,
+   "slug": "wiki-conjecture"
+  },
+  {
+   "wp_id": "wpu-210",
+   "name": "Graham's pebbling conjecture",
+   "field": "Graph theory",
+   "subfield": "Games on graphs",
+   "article_title": "Graph pebbling",
+   "article_url": "https://en.wikipedia.org/wiki/Graph_pebbling#Graham%27s_pebbling_conjecture",
+   "article_revid": 1329363560,
+   "slug": "wiki-grahams-pebbling-conjecture"
+  },
+  {
+   "wp_id": "wpu-211",
+   "name": "Meyniel's conjecture",
+   "field": "Graph theory",
+   "subfield": "Games on graphs",
+   "article_title": "Cop number",
+   "article_url": "https://en.wikipedia.org/wiki/Cop_number",
+   "article_revid": 1336683373,
+   "slug": "wiki-meyniels-conjecture"
+  },
+  {
+   "wp_id": "wpu-212",
+   "field": "Graph theory",
+   "subfield": "Games on graphs",
+   "article_title": "Graph coloring game",
+   "article_url": "https://en.wikipedia.org/wiki/Graph_coloring_game",
+   "article_revid": 1324354446,
+   "slug": "wiki-graph-coloring-game"
+  },
+  {
+   "wp_id": "wpu-213",
+   "name": "1-factorization conjecture",
+   "field": "Graph theory",
+   "subfield": "Graph coloring and labeling",
+   "article_title": "Graph factorization",
+   "article_url": "https://en.wikipedia.org/wiki/Graph_factorization",
+   "article_revid": 1344232031,
+   "slug": "wiki-1-factorization-conjecture"
+  },
+  {
+   "wp_id": "wpu-214",
+   "name": "Perfect 1-factorization conjecture",
+   "field": "Graph theory",
+   "subfield": "Graph coloring and labeling",
+   "parent_id": "wpu-213",
+   "article_title": "Graph factorization",
+   "article_url": "https://en.wikipedia.org/wiki/Graph_factorization",
+   "article_revid": 1344232031,
+   "slug": "wiki-perfect-1-factorization-conjecture"
+  },
+  {
+   "wp_id": "wpu-215",
+   "name": "Cereceda's conjecture",
+   "field": "Graph theory",
+   "subfield": "Graph coloring and labeling",
+   "article_title": "Cereceda's conjecture",
+   "article_url": "https://en.wikipedia.org/wiki/Cereceda's_conjecture",
+   "article_revid": 1349175963,
+   "slug": "wiki-cerecedas-conjecture"
+  },
+  {
+   "wp_id": "wpu-216",
+   "name": "Earth–Moon problem",
+   "field": "Graph theory",
+   "subfield": "Graph coloring and labeling",
+   "article_title": "Earth–Moon problem",
+   "article_url": "https://en.wikipedia.org/wiki/Earth%E2%80%93Moon_problem",
+   "article_revid": 1376086180,
+   "slug": "wiki-earth-moon-problem"
+  },
+  {
+   "wp_id": "wpu-217",
+   "name": "Erdős–Faber–Lovász conjecture",
+   "field": "Graph theory",
+   "subfield": "Graph coloring and labeling",
+   "article_title": "Erdős–Faber–Lovász conjecture",
+   "article_url": "https://en.wikipedia.org/wiki/Erd%C5%91s%E2%80%93Faber%E2%80%93Lov%C3%A1sz_conjecture",
+   "article_revid": 1333901339,
+   "slug": "wiki-erdos-faber-lovasz-conjecture"
+  },
+  {
+   "wp_id": "wpu-218",
+   "name": "Graceful tree conjecture",
+   "field": "Graph theory",
+   "subfield": "Graph coloring and labeling",
+   "article_title": "Graceful labeling",
+   "article_url": "https://en.wikipedia.org/wiki/Graceful_labeling",
+   "article_revid": 1365285331,
+   "slug": "wiki-graceful-tree-conjecture"
+  },
+  {
+   "wp_id": "wpu-219",
+   "name": "Rosa's conjecture",
+   "field": "Graph theory",
+   "subfield": "Graph coloring and labeling",
+   "parent_id": "wpu-218",
+   "article_title": "Graceful labeling",
+   "article_url": "https://en.wikipedia.org/wiki/Graceful_labeling",
+   "article_revid": 1365285331,
+   "slug": "wiki-rosas-conjecture"
+  },
+  {
+   "wp_id": "wpu-220",
+   "name": "Gyárfás–Sumner conjecture",
+   "field": "Graph theory",
+   "subfield": "Graph coloring and labeling",
+   "article_title": "Gyárfás–Sumner conjecture",
+   "article_url": "https://en.wikipedia.org/wiki/Gy%C3%A1rf%C3%A1s%E2%80%93Sumner_conjecture",
+   "article_revid": 1375508681,
+   "slug": "wiki-gyarfas-sumner-conjecture"
+  },
+  {
+   "wp_id": "wpu-221",
+   "name": "Hadwiger conjecture",
+   "field": "Graph theory",
+   "subfield": "Graph coloring and labeling",
+   "article_title": "Hadwiger conjecture (graph theory)",
+   "article_url": "https://en.wikipedia.org/wiki/Hadwiger_conjecture_(graph_theory)",
+   "article_revid": 1379366102,
+   "slug": "wiki-hadwiger-conjecture-2"
+  },
+  {
+   "wp_id": "wpu-222",
+   "name": "Hadwiger–Nelson problem",
+   "field": "Graph theory",
+   "subfield": "Graph coloring and labeling",
+   "article_title": "Hadwiger–Nelson problem",
+   "article_url": "https://en.wikipedia.org/wiki/Hadwiger%E2%80%93Nelson_problem",
+   "article_revid": 1379095548,
+   "slug": "wiki-hadwiger-nelson-problem"
+  },
+  {
+   "wp_id": "wpu-223",
+   "name": "Jaeger's Petersen-coloring conjecture",
+   "field": "Graph theory",
+   "subfield": "Graph coloring and labeling",
+   "article_title": "Petersen graph",
+   "article_url": "https://en.wikipedia.org/wiki/Petersen_graph",
+   "article_revid": 1377677344,
+   "slug": "wiki-jaegers-petersen-coloring-conjecture"
+  },
+  {
+   "wp_id": "wpu-224",
+   "name": "List coloring conjecture",
+   "field": "Graph theory",
+   "subfield": "Graph coloring and labeling",
+   "article_title": "List edge-coloring",
+   "article_url": "https://en.wikipedia.org/wiki/List_edge-coloring#List_coloring_conjecture",
+   "article_revid": 1365478980,
+   "slug": "wiki-list-coloring-conjecture"
+  },
+  {
+   "wp_id": "wpu-225",
+   "name": "Overfull conjecture",
+   "field": "Graph theory",
+   "subfield": "Graph coloring and labeling",
+   "article_title": "Overfull graph",
+   "article_url": "https://en.wikipedia.org/wiki/Overfull_graph",
+   "article_revid": 1317723716,
+   "slug": "wiki-overfull-conjecture"
+  },
+  {
+   "wp_id": "wpu-226",
+   "name": "Total coloring conjecture",
+   "field": "Graph theory",
+   "subfield": "Graph coloring and labeling",
+   "article_title": "Total coloring",
+   "article_url": "https://en.wikipedia.org/wiki/Total_coloring",
+   "article_revid": 1285190354,
+   "slug": "wiki-total-coloring-conjecture"
+  },
+  {
+   "wp_id": "wpu-227",
+   "name": "Albertson conjecture",
+   "field": "Graph theory",
+   "subfield": "Graph drawing and embedding",
+   "article_title": "Albertson conjecture",
+   "article_url": "https://en.wikipedia.org/wiki/Albertson_conjecture",
+   "article_revid": 1379426819,
+   "slug": "wiki-albertson-conjecture"
+  },
+  {
+   "wp_id": "wpu-228",
+   "name": "Conway's thrackle conjecture",
+   "field": "Graph theory",
+   "subfield": "Graph drawing and embedding",
+   "article_title": "Thrackle",
+   "article_url": "https://en.wikipedia.org/wiki/Thrackle",
+   "article_revid": 1354790670,
+   "slug": "wiki-conways-thrackle-conjecture"
+  },
+  {
+   "wp_id": "wpu-229",
+   "name": "GNRS conjecture",
+   "field": "Graph theory",
+   "subfield": "Graph drawing and embedding",
+   "article_title": "GNRS conjecture",
+   "article_url": "https://en.wikipedia.org/wiki/GNRS_conjecture",
+   "article_revid": 1329671212,
+   "slug": "wiki-gnrs-conjecture"
+  },
+  {
+   "wp_id": "wpu-230",
+   "name": "Harborth's conjecture",
+   "field": "Graph theory",
+   "subfield": "Graph drawing and embedding",
+   "article_title": "Harborth's conjecture",
+   "article_url": "https://en.wikipedia.org/wiki/Harborth's_conjecture",
+   "article_revid": 1375072585,
+   "slug": "wiki-harborths-conjecture"
+  },
+  {
+   "wp_id": "wpu-231",
+   "name": "Negami's conjecture",
+   "field": "Graph theory",
+   "subfield": "Graph drawing and embedding",
+   "article_title": "Planar cover",
+   "article_url": "https://en.wikipedia.org/wiki/Planar_cover#Negami%27s_conjecture",
+   "article_revid": 1302466035,
+   "slug": "wiki-negamis-conjecture"
+  },
+  {
+   "wp_id": "wpu-232",
+   "name": "Strong Papadimitriou–Ratajczak conjecture",
+   "field": "Graph theory",
+   "subfield": "Graph drawing and embedding",
+   "article_title": "Greedy embedding",
+   "article_url": "https://en.wikipedia.org/wiki/Greedy_embedding",
+   "article_revid": 1335683255,
+   "slug": "wiki-strong-papadimitriou-ratajczak-conjecture"
+  },
+  {
+   "wp_id": "wpu-233",
+   "name": "Turán's brick factory problem",
+   "field": "Graph theory",
+   "subfield": "Graph drawing and embedding",
+   "article_title": "Turán's brick factory problem",
+   "article_url": "https://en.wikipedia.org/wiki/Tur%C3%A1n's_brick_factory_problem",
+   "article_revid": 1379058802,
+   "slug": "wiki-turans-brick-factory-problem"
+  },
+  {
+   "wp_id": "wpu-234",
+   "name": "Guy's conjecture on the crossing number for complete graphs",
+   "field": "Graph theory",
+   "subfield": "Graph drawing and embedding",
+   "article_title": "Crossing number (graph theory)",
+   "article_url": "https://en.wikipedia.org/wiki/Crossing_number_(graph_theory)",
+   "article_revid": 1379058885,
+   "slug": "wiki-guys-conjecture-on-the-crossing-number-for-complete-graphs"
+  },
+  {
+   "wp_id": "wpu-235",
+   "name": "Universal point sets",
+   "field": "Graph theory",
+   "subfield": "Graph drawing and embedding",
+   "article_title": "Universal point set",
+   "article_url": "https://en.wikipedia.org/wiki/Universal_point_set",
+   "article_revid": 1346162400,
+   "slug": "wiki-universal-point-sets"
+  },
+  {
+   "wp_id": "wpu-236",
+   "field": "Graph theory",
+   "subfield": "Restriction of graph parameters",
+   "article_title": "Conference graph",
+   "article_url": "https://en.wikipedia.org/wiki/Conference_graph",
+   "article_revid": 1319329901,
+   "slug": "wiki-conference-graph"
+  },
+  {
+   "wp_id": "wpu-237",
+   "name": "Conway's 99-graph problem",
+   "field": "Graph theory",
+   "subfield": "Restriction of graph parameters",
+   "article_title": "Conway's 99-graph problem",
+   "article_url": "https://en.wikipedia.org/wiki/Conway's_99-graph_problem",
+   "article_revid": 1335643020,
+   "slug": "wiki-conways-99-graph-problem"
+  },
+  {
+   "wp_id": "wpu-238",
+   "name": "Degree diameter problem",
+   "field": "Graph theory",
+   "subfield": "Restriction of graph parameters",
+   "article_title": "Degree diameter problem",
+   "article_url": "https://en.wikipedia.org/wiki/Degree_diameter_problem",
+   "article_revid": 1375259210,
+   "slug": "wiki-degree-diameter-problem"
+  },
+  {
+   "wp_id": "wpu-239",
+   "name": "Jørgensen's conjecture",
+   "field": "Graph theory",
+   "subfield": "Restriction of graph parameters",
+   "article_title": "Apex graph",
+   "article_url": "https://en.wikipedia.org/wiki/Apex_graph",
+   "article_revid": 1350035304,
+   "slug": "wiki-jrgensens-conjecture"
+  },
+  {
+   "wp_id": "wpu-240",
+   "field": "Graph theory",
+   "subfield": "Restriction of graph parameters",
+   "article_title": "Moore graph",
+   "article_url": "https://en.wikipedia.org/wiki/Moore_graph",
+   "article_revid": 1374109900,
+   "slug": "wiki-moore-graph"
+  },
+  {
+   "wp_id": "wpu-241",
+   "field": "Graph theory",
+   "subfield": "Restriction of graph parameters",
+   "article_title": "Strongly regular graph",
+   "article_url": "https://en.wikipedia.org/wiki/Strongly_regular_graph",
+   "article_revid": 1363981900,
+   "slug": "wiki-strongly-regular-graph"
+  },
+  {
+   "wp_id": "wpu-242",
+   "name": "Barnette's conjecture",
+   "field": "Graph theory",
+   "subfield": "Subgraphs",
+   "article_title": "Barnette's conjecture",
+   "article_url": "https://en.wikipedia.org/wiki/Barnette's_conjecture",
+   "article_revid": 1379443459,
+   "slug": "wiki-barnettes-conjecture"
+  },
+  {
+   "wp_id": "wpu-243",
+   "name": "Gilbert–Pollak conjecture",
+   "field": "Graph theory",
+   "subfield": "Subgraphs",
+   "article_title": "Gilbert–Pollak conjecture",
+   "article_url": "https://en.wikipedia.org/wiki/Gilbert%E2%80%93Pollak_conjecture",
+   "article_revid": 1349723302,
+   "slug": "wiki-gilbert-pollak-conjecture"
+  },
+  {
+   "wp_id": "wpu-244",
+   "name": "Chvátal's toughness conjecture",
+   "field": "Graph theory",
+   "subfield": "Subgraphs",
+   "article_title": "Graph toughness",
+   "article_url": "https://en.wikipedia.org/wiki/Graph_toughness",
+   "article_revid": 1270701298,
+   "slug": "wiki-chvatals-toughness-conjecture"
+  },
+  {
+   "wp_id": "wpu-245",
+   "name": "Cycle double cover conjecture",
+   "field": "Graph theory",
+   "subfield": "Subgraphs",
+   "article_title": "Cycle double cover",
+   "article_url": "https://en.wikipedia.org/wiki/Cycle_double_cover",
+   "article_revid": 1365384326,
+   "slug": "wiki-cycle-double-cover-conjecture"
+  },
+  {
+   "wp_id": "wpu-246",
+   "name": "Erdős–Gyárfás conjecture",
+   "field": "Graph theory",
+   "subfield": "Subgraphs",
+   "article_title": "Erdős–Gyárfás conjecture",
+   "article_url": "https://en.wikipedia.org/wiki/Erd%C5%91s%E2%80%93Gy%C3%A1rf%C3%A1s_conjecture",
+   "article_revid": 1374287005,
+   "slug": "wiki-erdos-gyarfas-conjecture"
+  },
+  {
+   "wp_id": "wpu-247",
+   "name": "Erdős–Hajnal conjecture",
+   "field": "Graph theory",
+   "subfield": "Subgraphs",
+   "article_title": "Erdős–Hajnal conjecture",
+   "article_url": "https://en.wikipedia.org/wiki/Erd%C5%91s%E2%80%93Hajnal_conjecture",
+   "article_revid": 1320631222,
+   "slug": "wiki-erdos-hajnal-conjecture"
+  },
+  {
+   "wp_id": "wpu-248",
+   "name": "Grünbaum–Nash-Williams conjecture",
+   "field": "Graph theory",
+   "subfield": "Subgraphs",
+   "article_title": "Grünbaum–Nash-Williams conjecture",
+   "article_url": "https://en.wikipedia.org/wiki/Gr%C3%BCnbaum%E2%80%93Nash-Williams_conjecture",
+   "article_revid": 1329911205,
+   "slug": "wiki-grunbaum-nash-williams-conjecture"
+  },
+  {
+   "wp_id": "wpu-249",
+   "name": "Linear arboricity conjecture",
+   "field": "Graph theory",
+   "subfield": "Subgraphs",
+   "article_title": "Linear arboricity",
+   "article_url": "https://en.wikipedia.org/wiki/Linear_arboricity",
+   "article_revid": 1329508176,
+   "slug": "wiki-linear-arboricity-conjecture"
+  },
+  {
+   "wp_id": "wpu-250",
+   "name": "Lovász conjecture",
+   "field": "Graph theory",
+   "subfield": "Subgraphs",
+   "article_title": "Lovász conjecture",
+   "article_url": "https://en.wikipedia.org/wiki/Lov%C3%A1sz_conjecture",
+   "article_revid": 1280019921,
+   "slug": "wiki-lovasz-conjecture"
+  },
+  {
+   "wp_id": "wpu-251",
+   "name": "Oberwolfach problem",
+   "field": "Graph theory",
+   "subfield": "Subgraphs",
+   "article_title": "Oberwolfach problem",
+   "article_url": "https://en.wikipedia.org/wiki/Oberwolfach_problem",
+   "article_revid": 1349510998,
+   "slug": "wiki-oberwolfach-problem"
+  },
+  {
+   "wp_id": "wpu-252",
+   "field": "Graph theory",
+   "subfield": "Subgraphs",
+   "article_title": "Pathwidth",
+   "article_url": "https://en.wikipedia.org/wiki/Pathwidth",
+   "article_revid": 1369812266,
+   "slug": "wiki-pathwidth"
+  },
+  {
+   "wp_id": "wpu-253",
+   "name": "Reconstruction conjecture",
+   "field": "Graph theory",
+   "subfield": "Subgraphs",
+   "article_title": "Reconstruction conjecture",
+   "article_url": "https://en.wikipedia.org/wiki/Reconstruction_conjecture",
+   "article_revid": 1373189455,
+   "slug": "wiki-reconstruction-conjecture"
+  },
+  {
+   "wp_id": "wpu-254",
+   "name": "Snake-in-the-box problem",
+   "field": "Graph theory",
+   "subfield": "Subgraphs",
+   "article_title": "Snake-in-the-box",
+   "article_url": "https://en.wikipedia.org/wiki/Snake-in-the-box",
+   "article_revid": 1377834484,
+   "slug": "wiki-snake-in-the-box-problem"
+  },
+  {
+   "wp_id": "wpu-255",
+   "name": "Sumner's conjecture",
+   "field": "Graph theory",
+   "subfield": "Subgraphs",
+   "article_title": "Sumner's conjecture",
+   "article_url": "https://en.wikipedia.org/wiki/Sumner's_conjecture",
+   "article_revid": 1315922689,
+   "slug": "wiki-sumners-conjecture"
+  },
+  {
+   "wp_id": "wpu-256",
+   "name": "Szymanski's conjecture",
+   "field": "Graph theory",
+   "subfield": "Subgraphs",
+   "article_title": "Szymanski's conjecture",
+   "article_url": "https://en.wikipedia.org/wiki/Szymanski's_conjecture",
+   "article_revid": 1366108543,
+   "slug": "wiki-szymanskis-conjecture"
+  },
+  {
+   "wp_id": "wpu-257",
+   "name": "Tuza's conjecture",
+   "field": "Graph theory",
+   "subfield": "Subgraphs",
+   "article_title": "Tuza's conjecture",
+   "article_url": "https://en.wikipedia.org/wiki/Tuza's_conjecture",
+   "article_revid": 1363377674,
+   "slug": "wiki-tuzas-conjecture"
+  },
+  {
+   "wp_id": "wpu-258",
+   "name": "Unfriendly partition conjecture",
+   "field": "Graph theory",
+   "subfield": "Subgraphs",
+   "article_title": "Unfriendly partition",
+   "article_url": "https://en.wikipedia.org/wiki/Unfriendly_partition",
+   "article_revid": 1362335070,
+   "slug": "wiki-unfriendly-partition-conjecture"
+  },
+  {
+   "wp_id": "wpu-259",
+   "name": "Vizing's conjecture",
+   "field": "Graph theory",
+   "subfield": "Subgraphs",
+   "article_title": "Vizing's conjecture",
+   "article_url": "https://en.wikipedia.org/wiki/Vizing's_conjecture",
+   "article_revid": 1281219996,
+   "slug": "wiki-vizings-conjecture"
+  },
+  {
+   "wp_id": "wpu-260",
+   "name": "Walescki's theorem for hypergraphs",
+   "field": "Graph theory",
+   "subfield": "Subgraphs",
+   "article_title": "Hamiltonian decomposition",
+   "article_url": "https://en.wikipedia.org/wiki/Hamiltonian_decomposition",
+   "article_revid": 1360691131,
+   "slug": "wiki-walesckis-theorem-for-hypergraphs"
+  },
+  {
+   "wp_id": "wpu-261",
+   "name": "Zarankiewicz problem",
+   "field": "Graph theory",
+   "subfield": "Subgraphs",
+   "article_title": "Zarankiewicz problem",
+   "article_url": "https://en.wikipedia.org/wiki/Zarankiewicz_problem",
+   "article_revid": 1318637041,
+   "slug": "wiki-zarankiewicz-problem"
+  },
+  {
+   "wp_id": "wpu-262",
+   "field": "Graph theory",
+   "subfield": "Word-representation of graphs",
+   "article_title": "Word-representable graph",
+   "article_url": "https://en.wikipedia.org/wiki/Word-representable_graph",
+   "article_revid": 1368539799,
+   "slug": "wiki-word-representable-graph"
+  },
+  {
+   "wp_id": "wpu-263",
+   "name": "Characterise (non-)word-representable planar graphs",
+   "field": "Graph theory",
+   "subfield": "Word-representation of graphs",
+   "article_title": "Word-representable graph",
+   "article_url": "https://en.wikipedia.org/wiki/Word-representable_graph",
+   "article_revid": 1368539799,
+   "slug": "wiki-characterise-non-word-representable-planar-graphs"
+  },
+  {
+   "wp_id": "wpu-264",
+   "name": "Characterise word-representable graphs in terms of (induced) forbidden subgraphs",
+   "field": "Graph theory",
+   "subfield": "Word-representation of graphs",
+   "article_title": "Word-representable graph",
+   "article_url": "https://en.wikipedia.org/wiki/Word-representable_graph",
+   "article_revid": 1368539799,
+   "slug": "wiki-characterise-word-representable-graphs-in-terms-of-induced"
+  },
+  {
+   "wp_id": "wpu-265",
+   "field": "Graph theory",
+   "subfield": "Word-representation of graphs",
+   "article_title": "Word-representable graph",
+   "article_url": "https://en.wikipedia.org/wiki/Word-representable_graph",
+   "article_revid": 1368539799,
+   "slug": "wiki-word-representable-graph-2"
+  },
+  {
+   "wp_id": "wpu-266",
+   "field": "Graph theory",
+   "subfield": "Word-representation of graphs",
+   "article_title": "Word-representable graph",
+   "article_url": "https://en.wikipedia.org/wiki/Word-representable_graph",
+   "article_revid": 1368539799,
+   "slug": "wiki-word-representable-graph-3"
+  },
+  {
+   "wp_id": "wpu-267",
+   "field": "Graph theory",
+   "subfield": "Word-representation of graphs",
+   "article_title": "Bipartite graph",
+   "article_url": "https://en.wikipedia.org/wiki/Bipartite_graph",
+   "article_revid": 1368863674,
+   "slug": "wiki-bipartite-graph"
+  },
+  {
+   "wp_id": "wpu-268",
+   "field": "Graph theory",
+   "subfield": "Word-representation of graphs",
+   "article_title": "Line graph",
+   "article_url": "https://en.wikipedia.org/wiki/Line_graph",
+   "article_revid": 1362295874,
+   "slug": "wiki-line-graph"
+  },
+  {
+   "wp_id": "wpu-269",
+   "field": "Graph theory",
+   "subfield": "Word-representation of graphs",
+   "article_title": "Word-representable graph",
+   "article_url": "https://en.wikipedia.org/wiki/Word-representable_graph",
+   "article_revid": 1368539799,
+   "slug": "wiki-word-representable-graph-4"
+  },
+  {
+   "wp_id": "wpu-270",
+   "name": "Delta-conjecture (1978)",
+   "field": "Graph theory",
+   "subfield": "Miscellaneous graph theory",
+   "article_title": "Complete graph",
+   "article_url": "https://en.wikipedia.org/wiki/Complete_graph",
+   "article_revid": 1369234280,
+   "slug": "wiki-delta-conjecture-1978"
+  },
+  {
+   "wp_id": "wpu-271",
+   "name": "Imbalance conjecture",
+   "field": "Graph theory",
+   "subfield": "Miscellaneous graph theory",
+   "article_title": "Imbalance conjecture",
+   "article_url": "https://en.wikipedia.org/wiki/Imbalance_conjecture",
+   "article_revid": 1373950682,
+   "slug": "wiki-imbalance-conjecture"
+  },
+  {
+   "wp_id": "wpu-272",
+   "name": "Implicit graph conjecture",
+   "field": "Graph theory",
+   "subfield": "Miscellaneous graph theory",
+   "article_title": "Implicit graph",
+   "article_url": "https://en.wikipedia.org/wiki/Implicit_graph#The_implicit_graph_conjecture",
+   "article_revid": 1374825289,
+   "slug": "wiki-implicit-graph-conjecture"
+  },
+  {
+   "wp_id": "wpu-273",
+   "name": "Ryser's conjecture",
+   "field": "Graph theory",
+   "subfield": "Miscellaneous graph theory",
+   "article_title": "Ryser's conjecture",
+   "article_url": "https://en.wikipedia.org/wiki/Ryser's_conjecture",
+   "article_revid": 1366603686,
+   "slug": "wiki-rysers-conjecture"
+  },
+  {
+   "wp_id": "wpu-274",
+   "name": "Second neighborhood problem",
+   "field": "Graph theory",
+   "subfield": "Miscellaneous graph theory",
+   "article_title": "Second neighborhood problem",
+   "article_url": "https://en.wikipedia.org/wiki/Second_neighborhood_problem",
+   "article_revid": 1345329964,
+   "slug": "wiki-second-neighborhood-problem"
+  },
+  {
+   "wp_id": "wpu-275",
+   "name": "Sidorenko's conjecture",
+   "field": "Graph theory",
+   "subfield": "Miscellaneous graph theory",
+   "article_title": "Sidorenko's conjecture",
+   "article_url": "https://en.wikipedia.org/wiki/Sidorenko's_conjecture",
+   "article_revid": 1379204026,
+   "slug": "wiki-sidorenkos-conjecture"
+  },
+  {
+   "wp_id": "wpu-276",
+   "name": "Teschner's bondage number conjecture",
+   "field": "Graph theory",
+   "subfield": "Miscellaneous graph theory",
+   "article_title": "Bondage number",
+   "article_url": "https://en.wikipedia.org/wiki/Bondage_number",
+   "article_revid": 1372190470,
+   "slug": "wiki-teschners-bondage-number-conjecture"
+  },
+  {
+   "wp_id": "wpu-277",
+   "name": "Tutte's conjectures",
+   "field": "Graph theory",
+   "subfield": "Miscellaneous graph theory",
+   "group_header": true,
+   "slug": "wiki-tuttes-conjectures"
+  },
+  {
+   "wp_id": "wpu-278",
+   "name": "every bridgeless graph has a nowhere-zero 5-flow",
+   "field": "Graph theory",
+   "subfield": "Miscellaneous graph theory",
+   "parent_id": "wpu-277",
+   "article_title": "Nowhere-zero flow",
+   "article_url": "https://en.wikipedia.org/wiki/Nowhere-zero_flow",
+   "article_revid": 1373778551,
+   "slug": "wiki-every-bridgeless-graph-has-a-nowhere-zero-5-flow"
+  },
+  {
+   "wp_id": "wpu-279",
+   "name": "every Petersen-minor-free bridgeless graph has a nowhere-zero 4-flow",
+   "field": "Graph theory",
+   "subfield": "Miscellaneous graph theory",
+   "parent_id": "wpu-277",
+   "article_title": "Petersen graph",
+   "article_url": "https://en.wikipedia.org/wiki/Petersen_graph",
+   "article_revid": 1377677344,
+   "slug": "wiki-every-petersen-minor-free-bridgeless-graph-has-a-nowhere"
+  },
+  {
+   "wp_id": "wpu-280",
+   "name": "Woodall's conjecture",
+   "field": "Graph theory",
+   "subfield": "Miscellaneous graph theory",
+   "article_title": "Woodall's conjecture",
+   "article_url": "https://en.wikipedia.org/wiki/Woodall's_conjecture",
+   "article_revid": 1351708213,
+   "slug": "wiki-woodalls-conjecture"
+  },
+  {
+   "wp_id": "wpu-281",
+   "name": "Cherlin–Zilber conjecture",
+   "field": "Model theory and formal languages",
+   "article_title": "Stable group",
+   "article_url": "https://en.wikipedia.org/wiki/Stable_group",
+   "article_revid": 1186019069,
+   "slug": "wiki-cherlin-zilber-conjecture"
+  },
+  {
+   "wp_id": "wpu-282",
+   "name": "Generalized star height problem",
+   "field": "Model theory and formal languages",
+   "article_title": "Generalized star-height problem",
+   "article_url": "https://en.wikipedia.org/wiki/Generalized_star-height_problem",
+   "article_revid": 1371585137,
+   "slug": "wiki-generalized-star-height-problem"
+  },
+  {
+   "wp_id": "wpu-283",
+   "field": "Model theory and formal languages",
+   "article_title": "Hilbert's tenth problem",
+   "article_url": "https://en.wikipedia.org/wiki/Hilbert's_tenth_problem",
+   "article_revid": 1379368509,
+   "slug": "wiki-hilberts-tenth-problem"
+  },
+  {
+   "wp_id": "wpu-284",
+   "name": "Kueker's conjecture",
+   "field": "Model theory and formal languages",
+   "slug": "wiki-kuekers-conjecture"
+  },
+  {
+   "wp_id": "wpu-285",
+   "name": "Main gap conjecture",
+   "field": "Model theory and formal languages",
+   "article_title": "Theory (mathematical logic)",
+   "article_url": "https://en.wikipedia.org/wiki/Theory_(mathematical_logic)#First-order_theories",
+   "article_revid": 1374090027,
+   "slug": "wiki-main-gap-conjecture"
+  },
+  {
+   "wp_id": "wpu-286",
+   "field": "Model theory and formal languages",
+   "slug": "wiki-shelahs-categoricity-conjecture-for-l-omega-1-omega"
+  },
+  {
+   "wp_id": "wpu-287",
+   "name": "Shelah's eventual categoricity conjecture",
+   "field": "Model theory and formal languages",
+   "article_title": "Abstract elementary class",
+   "article_url": "https://en.wikipedia.org/wiki/Abstract_elementary_class",
+   "article_revid": 1373726617,
+   "slug": "wiki-shelahs-eventual-categoricity-conjecture"
+  },
+  {
+   "wp_id": "wpu-288",
+   "name": "Stable field conjecture",
+   "field": "Model theory and formal languages",
+   "article_title": "Stable theory",
+   "article_url": "https://en.wikipedia.org/wiki/Stable_theory",
+   "article_revid": 1370270287,
+   "slug": "wiki-stable-field-conjecture"
+  },
+  {
+   "wp_id": "wpu-289",
+   "name": "Stable forking conjecture",
+   "field": "Model theory and formal languages",
+   "slug": "wiki-stable-forking-conjecture"
+  },
+  {
+   "wp_id": "wpu-290",
+   "name": "Tarski's exponential function problem",
+   "field": "Model theory and formal languages",
+   "article_title": "Tarski's exponential function problem",
+   "article_url": "https://en.wikipedia.org/wiki/Tarski's_exponential_function_problem",
+   "article_revid": 1240187038,
+   "slug": "wiki-tarskis-exponential-function-problem"
+  },
+  {
+   "wp_id": "wpu-291",
+   "name": "Universality problem for C-free graphs",
+   "field": "Model theory and formal languages",
+   "slug": "wiki-universality-problem-for-c-free-graphs"
+  },
+  {
+   "wp_id": "wpu-292",
+   "name": "Universality spectrum problem",
+   "field": "Model theory and formal languages",
+   "slug": "wiki-universality-spectrum-problem"
+  },
+  {
+   "wp_id": "wpu-293",
+   "name": "Vaught conjecture",
+   "field": "Model theory and formal languages",
+   "article_title": "Vaught conjecture",
+   "article_url": "https://en.wikipedia.org/wiki/Vaught_conjecture",
+   "article_revid": 1296409660,
+   "slug": "wiki-vaught-conjecture"
+  },
+  {
+   "wp_id": "wpu-294",
+   "field": "Model theory and formal languages",
+   "article_title": "Type (model theory)",
+   "article_url": "https://en.wikipedia.org/wiki/Type_(model_theory)",
+   "article_revid": 1372879327,
+   "slug": "wiki-type-model-theory"
+  },
+  {
+   "wp_id": "wpu-295",
+   "field": "Model theory and formal languages",
+   "article_title": "Henson graph",
+   "article_url": "https://en.wikipedia.org/wiki/Henson_graph",
+   "article_revid": 1280021819,
+   "slug": "wiki-henson-graph"
+  },
+  {
+   "wp_id": "wpu-296",
+   "field": "Model theory and formal languages",
+   "article_title": "Reduct",
+   "article_url": "https://en.wikipedia.org/wiki/Reduct",
+   "article_revid": 1222971010,
+   "slug": "wiki-reduct"
+  },
+  {
+   "wp_id": "wpu-297",
+   "field": "Model theory and formal languages",
+   "article_title": "O-minimal theory",
+   "article_url": "https://en.wikipedia.org/wiki/O-minimal_theory",
+   "article_revid": 1377879318,
+   "slug": "wiki-o-minimal-theory"
+  },
+  {
+   "wp_id": "wpu-298",
+   "field": "Model theory and formal languages",
+   "article_title": "Categorical theory",
+   "article_url": "https://en.wikipedia.org/wiki/Categorical_theory",
+   "article_revid": 1352167347,
+   "slug": "wiki-categorical-theory"
+  },
+  {
+   "wp_id": "wpu-299",
+   "field": "Model theory and formal languages",
+   "article_title": "Algebraically closed field",
+   "article_url": "https://en.wikipedia.org/wiki/Algebraically_closed_field",
+   "article_revid": 1373109479,
+   "slug": "wiki-algebraically-closed-field"
+  },
+  {
+   "wp_id": "wpu-300",
+   "field": "Model theory and formal languages",
+   "slug": "wiki-is-the-borel-monadic-theory-of-the-real"
+  },
+  {
+   "wp_id": "wpu-301",
+   "field": "Model theory and formal languages",
+   "article_title": "Decidability (logic)",
+   "article_url": "https://en.wikipedia.org/wiki/Decidability_(logic)",
+   "article_revid": 1374823124,
+   "slug": "wiki-decidability-logic"
+  },
+  {
+   "wp_id": "wpu-302",
+   "field": "Model theory and formal languages",
+   "slug": "wiki-is-there-a-logic-l-which-satisfies-both"
+  },
+  {
+   "wp_id": "wpu-303",
+   "field": "Model theory and formal languages",
+   "slug": "wiki-determine-the-structure-of-keislers-order"
+  },
+  {
+   "wp_id": "wpu-304",
+   "field": "Model theory and formal languages",
+   "article_title": "Ordinal analysis",
+   "article_url": "https://en.wikipedia.org/wiki/Ordinal_analysis",
+   "article_revid": 1373685731,
+   "slug": "wiki-ordinal-analysis"
+  },
+  {
+   "wp_id": "wpu-305",
+   "name": "Ibragimov–Iosifescu conjecture for φ-mixing sequences",
+   "field": "Probability theory",
+   "article_title": "Ibragimov–Iosifescu conjecture for φ-mixing sequences",
+   "article_url": "https://en.wikipedia.org/wiki/Ibragimov%E2%80%93Iosifescu_conjecture_for_%CF%86-mixing_sequences",
+   "article_revid": 1375032614,
+   "slug": "wiki-ibragimov-iosifescu-conjecture-for-mixing-sequences"
+  },
+  {
+   "wp_id": "wpu-306",
+   "name": "Büchi's problem",
+   "field": "Number theory",
+   "subfield": "General",
+   "article_title": "Büchi's problem",
+   "article_url": "https://en.wikipedia.org/wiki/B%C3%BCchi's_problem",
+   "article_revid": 1369143975,
+   "slug": "wiki-buchis-problem"
+  },
+  {
+   "wp_id": "wpu-307",
+   "name": "Carmichael's totient function conjecture",
+   "field": "Number theory",
+   "subfield": "General",
+   "article_title": "Carmichael's totient function conjecture",
+   "article_url": "https://en.wikipedia.org/wiki/Carmichael's_totient_function_conjecture",
+   "article_revid": 1328820454,
+   "slug": "wiki-carmichaels-totient-function-conjecture"
+  },
+  {
+   "wp_id": "wpu-308",
+   "name": "Catalan–Dickson conjecture on aliquot sequences",
+   "field": "Number theory",
+   "subfield": "General",
+   "article_title": "Aliquot sequence",
+   "article_url": "https://en.wikipedia.org/wiki/Aliquot_sequence",
+   "article_revid": 1377805090,
+   "slug": "wiki-catalan-dickson-conjecture-on-aliquot-sequences"
+  },
+  {
+   "wp_id": "wpu-309",
+   "name": "Exponent pair conjecture",
+   "field": "Number theory",
+   "subfield": "General",
+   "article_title": "Van der Corput's method",
+   "article_url": "https://en.wikipedia.org/wiki/Van_der_Corput's_method",
+   "article_revid": 1367684547,
+   "slug": "wiki-exponent-pair-conjecture"
+  },
+  {
+   "wp_id": "wpu-310",
+   "name": "Gauss circle problem",
+   "field": "Number theory",
+   "subfield": "General",
+   "article_title": "Gauss circle problem",
+   "article_url": "https://en.wikipedia.org/wiki/Gauss_circle_problem",
+   "article_revid": 1369581427,
+   "slug": "wiki-gauss-circle-problem"
+  },
+  {
+   "wp_id": "wpu-311",
+   "name": "Grimm's conjecture",
+   "field": "Number theory",
+   "subfield": "General",
+   "article_title": "Grimm's conjecture",
+   "article_url": "https://en.wikipedia.org/wiki/Grimm's_conjecture",
+   "article_revid": 1379453404,
+   "slug": "wiki-grimms-conjecture"
+  },
+  {
+   "wp_id": "wpu-312",
+   "name": "Hall's conjecture",
+   "field": "Number theory",
+   "subfield": "General",
+   "article_title": "Hall's conjecture",
+   "article_url": "https://en.wikipedia.org/wiki/Hall's_conjecture",
+   "article_revid": 1368629833,
+   "slug": "wiki-halls-conjecture"
+  },
+  {
+   "wp_id": "wpu-313",
+   "name": "Lehmer's totient problem",
+   "field": "Number theory",
+   "subfield": "General",
+   "article_title": "Lehmer's totient problem",
+   "article_url": "https://en.wikipedia.org/wiki/Lehmer's_totient_problem",
+   "article_revid": 1360890839,
+   "slug": "wiki-lehmers-totient-problem"
+  },
+  {
+   "wp_id": "wpu-314",
+   "name": "Magic square of squares",
+   "field": "Number theory",
+   "subfield": "General",
+   "article_title": "Magic square of squares",
+   "article_url": "https://en.wikipedia.org/wiki/Magic_square_of_squares",
+   "article_revid": 1376351895,
+   "slug": "wiki-magic-square-of-squares"
+  },
+  {
+   "wp_id": "wpu-315",
+   "name": "Mahler's 3/2 problem",
+   "field": "Number theory",
+   "subfield": "General",
+   "article_title": "Mahler's 3/2 problem",
+   "article_url": "https://en.wikipedia.org/wiki/Mahler's_3/2_problem",
+   "article_revid": 1342825806,
+   "slug": "wiki-mahlers-3-2-problem"
+  },
+  {
+   "wp_id": "wpu-316",
+   "name": "Newman's conjecture",
+   "field": "Number theory",
+   "subfield": "General",
+   "article_title": "Newman's conjecture",
+   "article_url": "https://en.wikipedia.org/wiki/Newman's_conjecture",
+   "article_revid": 1356440442,
+   "slug": "wiki-newmans-conjecture"
+  },
+  {
+   "wp_id": "wpu-317",
+   "name": "Scholz conjecture",
+   "field": "Number theory",
+   "subfield": "General",
+   "article_title": "Scholz conjecture",
+   "article_url": "https://en.wikipedia.org/wiki/Scholz_conjecture",
+   "article_revid": 1286134739,
+   "slug": "wiki-scholz-conjecture"
+  },
+  {
+   "wp_id": "wpu-318",
+   "name": "Singmaster's conjecture",
+   "field": "Number theory",
+   "subfield": "General",
+   "article_title": "Singmaster's conjecture",
+   "article_url": "https://en.wikipedia.org/wiki/Singmaster's_conjecture",
+   "article_revid": 1371072537,
+   "slug": "wiki-singmasters-conjecture"
+  },
+  {
+   "wp_id": "wpu-319",
+   "name": "Sister Beiter conjecture",
+   "field": "Number theory",
+   "subfield": "General",
+   "article_title": "Sister Beiter conjecture",
+   "article_url": "https://en.wikipedia.org/wiki/Sister_Beiter_conjecture",
+   "article_revid": 1178264492,
+   "slug": "wiki-sister-beiter-conjecture"
+  },
+  {
+   "wp_id": "wpu-320",
+   "field": "Number theory",
+   "subfield": "General",
+   "article_title": "Perfect number",
+   "article_url": "https://en.wikipedia.org/wiki/Perfect_number",
+   "article_revid": 1378937800,
+   "slug": "wiki-perfect-number"
+  },
+  {
+   "wp_id": "wpu-321",
+   "field": "Number theory",
+   "subfield": "General",
+   "article_title": "Perfect number",
+   "article_url": "https://en.wikipedia.org/wiki/Perfect_number#Odd_perfect_numbers",
+   "article_revid": 1378937800,
+   "slug": "wiki-perfect-number-2"
+  },
+  {
+   "wp_id": "wpu-322",
+   "field": "Number theory",
+   "subfield": "General",
+   "article_title": "Quasiperfect number",
+   "article_url": "https://en.wikipedia.org/wiki/Quasiperfect_number",
+   "article_revid": 1312558748,
+   "slug": "wiki-quasiperfect-number"
+  },
+  {
+   "wp_id": "wpu-323",
+   "field": "Number theory",
+   "subfield": "General",
+   "article_title": "Almost perfect number",
+   "article_url": "https://en.wikipedia.org/wiki/Almost_perfect_number",
+   "article_revid": 1319829085,
+   "slug": "wiki-almost-perfect-number"
+  },
+  {
+   "wp_id": "wpu-324",
+   "field": "Number theory",
+   "subfield": "General",
+   "article_title": "Idoneal number",
+   "article_url": "https://en.wikipedia.org/wiki/Idoneal_number",
+   "article_revid": 1283811656,
+   "slug": "wiki-idoneal-number"
+  },
+  {
+   "wp_id": "wpu-325",
+   "field": "Number theory",
+   "subfield": "General",
+   "article_title": "Amicable numbers",
+   "article_url": "https://en.wikipedia.org/wiki/Amicable_numbers",
+   "article_revid": 1363371079,
+   "slug": "wiki-amicable-numbers"
+  },
+  {
+   "wp_id": "wpu-326",
+   "field": "Number theory",
+   "subfield": "General",
+   "article_title": "Betrothed numbers",
+   "article_url": "https://en.wikipedia.org/wiki/Betrothed_numbers",
+   "article_revid": 1343430299,
+   "slug": "wiki-betrothed-numbers"
+  },
+  {
+   "wp_id": "wpu-327",
+   "field": "Number theory",
+   "subfield": "General",
+   "article_title": "Coprime integers",
+   "article_url": "https://en.wikipedia.org/wiki/Coprime_integers",
+   "article_revid": 1379135914,
+   "slug": "wiki-coprime-integers"
+  },
+  {
+   "wp_id": "wpu-328",
+   "field": "Number theory",
+   "subfield": "General",
+   "article_title": "Amicable numbers",
+   "article_url": "https://en.wikipedia.org/wiki/Amicable_numbers",
+   "article_revid": 1363371079,
+   "slug": "wiki-amicable-numbers-2"
+  },
+  {
+   "wp_id": "wpu-329",
+   "field": "Number theory",
+   "subfield": "General",
+   "article_title": "Betrothed numbers",
+   "article_url": "https://en.wikipedia.org/wiki/Betrothed_numbers",
+   "article_revid": 1343430299,
+   "slug": "wiki-betrothed-numbers-2"
+  },
+  {
+   "wp_id": "wpu-330",
+   "field": "Number theory",
+   "subfield": "General",
+   "article_title": "Giuga number",
+   "article_url": "https://en.wikipedia.org/wiki/Giuga_number",
+   "article_revid": 1378676030,
+   "slug": "wiki-giuga-number"
+  },
+  {
+   "wp_id": "wpu-331",
+   "field": "Number theory",
+   "subfield": "General",
+   "article_title": "Lychrel number",
+   "article_url": "https://en.wikipedia.org/wiki/Lychrel_number",
+   "article_revid": 1376703229,
+   "slug": "wiki-lychrel-number"
+  },
+  {
+   "wp_id": "wpu-332",
+   "field": "Number theory",
+   "subfield": "General",
+   "article_title": "Noncototient",
+   "article_url": "https://en.wikipedia.org/wiki/Noncototient",
+   "article_revid": 1302520576,
+   "slug": "wiki-noncototient"
+  },
+  {
+   "wp_id": "wpu-333",
+   "field": "Number theory",
+   "subfield": "General",
+   "article_title": "Weird number",
+   "article_url": "https://en.wikipedia.org/wiki/Weird_number",
+   "article_revid": 1373975751,
+   "slug": "wiki-weird-number"
+  },
+  {
+   "wp_id": "wpu-334",
+   "field": "Number theory",
+   "subfield": "General",
+   "article_title": "Superperfect number",
+   "article_url": "https://en.wikipedia.org/wiki/Superperfect_number",
+   "article_revid": 1365374288,
+   "slug": "wiki-superperfect-number"
+  },
+  {
+   "wp_id": "wpu-335",
+   "field": "Number theory",
+   "subfield": "General",
+   "article_title": "Generalized taxicab number",
+   "article_url": "https://en.wikipedia.org/wiki/Generalized_taxicab_number",
+   "article_revid": 1373501556,
+   "slug": "wiki-generalized-taxicab-number"
+  },
+  {
+   "wp_id": "wpu-336",
+   "field": "Number theory",
+   "subfield": "General",
+   "article_title": "Covering system",
+   "article_url": "https://en.wikipedia.org/wiki/Covering_system",
+   "article_revid": 1373423930,
+   "slug": "wiki-covering-system"
+  },
+  {
+   "wp_id": "wpu-337",
+   "field": "Number theory",
+   "subfield": "General",
+   "article_title": "Normal number",
+   "article_url": "https://en.wikipedia.org/wiki/Normal_number",
+   "article_revid": 1377998971,
+   "slug": "wiki-normal-number"
+  },
+  {
+   "wp_id": "wpu-338",
+   "field": "Number theory",
+   "subfield": "General",
+   "article_title": "Irrational number",
+   "article_url": "https://en.wikipedia.org/wiki/Irrational_number",
+   "article_revid": 1376551134,
+   "slug": "wiki-irrational-number"
+  },
+  {
+   "wp_id": "wpu-339",
+   "field": "Number theory",
+   "subfield": "General",
+   "article_title": "Friendly number",
+   "article_url": "https://en.wikipedia.org/wiki/Friendly_number#Solitary_numbers",
+   "article_revid": 1361499529,
+   "slug": "wiki-friendly-number"
+  },
+  {
+   "wp_id": "wpu-340",
+   "name": "Erdős conjecture on arithmetic progressions",
+   "field": "Number theory",
+   "subfield": "Additive number theory",
+   "article_title": "Erdős conjecture on arithmetic progressions",
+   "article_url": "https://en.wikipedia.org/wiki/Erd%C5%91s_conjecture_on_arithmetic_progressions",
+   "article_revid": 1379142717,
+   "slug": "wiki-erdos-conjecture-on-arithmetic-progressions"
+  },
+  {
+   "wp_id": "wpu-341",
+   "name": "Erdős–Turán conjecture on additive bases",
+   "field": "Number theory",
+   "subfield": "Additive number theory",
+   "article_title": "Erdős–Turán conjecture on additive bases",
+   "article_url": "https://en.wikipedia.org/wiki/Erd%C5%91s%E2%80%93Tur%C3%A1n_conjecture_on_additive_bases",
+   "article_revid": 1352587850,
+   "slug": "wiki-erdos-turan-conjecture-on-additive-bases"
+  },
+  {
+   "wp_id": "wpu-342",
+   "name": "Gilbreath's conjecture",
+   "field": "Number theory",
+   "subfield": "Additive number theory",
+   "article_title": "Gilbreath's conjecture",
+   "article_url": "https://en.wikipedia.org/wiki/Gilbreath's_conjecture",
+   "article_revid": 1378328959,
+   "slug": "wiki-gilbreaths-conjecture"
+  },
+  {
+   "wp_id": "wpu-343",
+   "name": "Goldbach's conjecture",
+   "field": "Number theory",
+   "subfield": "Additive number theory",
+   "article_title": "Goldbach's conjecture",
+   "article_url": "https://en.wikipedia.org/wiki/Goldbach's_conjecture",
+   "article_revid": 1376998825,
+   "slug": "wiki-goldbachs-conjecture"
+  },
+  {
+   "wp_id": "wpu-344",
+   "name": "Lander, Parkin, and Selfridge conjecture",
+   "field": "Number theory",
+   "subfield": "Additive number theory",
+   "article_title": "Lander, Parkin, and Selfridge conjecture",
+   "article_url": "https://en.wikipedia.org/wiki/Lander,_Parkin,_and_Selfridge_conjecture",
+   "article_revid": 1374833637,
+   "slug": "wiki-lander-parkin-and-selfridge-conjecture"
+  },
+  {
+   "wp_id": "wpu-345",
+   "name": "Lemoine's conjecture",
+   "field": "Number theory",
+   "subfield": "Additive number theory",
+   "article_title": "Lemoine's conjecture",
+   "article_url": "https://en.wikipedia.org/wiki/Lemoine's_conjecture",
+   "article_revid": 1368580782,
+   "slug": "wiki-lemoines-conjecture"
+  },
+  {
+   "wp_id": "wpu-346",
+   "name": "Minimum overlap problem",
+   "field": "Number theory",
+   "subfield": "Additive number theory",
+   "article_title": "Minimum overlap problem",
+   "article_url": "https://en.wikipedia.org/wiki/Minimum_overlap_problem",
+   "article_revid": 1373751234,
+   "slug": "wiki-minimum-overlap-problem"
+  },
+  {
+   "wp_id": "wpu-347",
+   "name": "Pollock's conjectures",
+   "field": "Number theory",
+   "subfield": "Additive number theory",
+   "article_title": "Pollock's conjectures",
+   "article_url": "https://en.wikipedia.org/wiki/Pollock's_conjectures",
+   "article_revid": 1376238210,
+   "slug": "wiki-pollocks-conjectures"
+  },
+  {
+   "wp_id": "wpu-348",
+   "field": "Number theory",
+   "subfield": "Additive number theory",
+   "article_title": "Recamán's sequence",
+   "article_url": "https://en.wikipedia.org/wiki/Recam%C3%A1n's_sequence",
+   "article_revid": 1375243507,
+   "slug": "wiki-recamans-sequence"
+  },
+  {
+   "wp_id": "wpu-349",
+   "name": "Skolem problem",
+   "field": "Number theory",
+   "subfield": "Additive number theory",
+   "article_title": "Skolem problem",
+   "article_url": "https://en.wikipedia.org/wiki/Skolem_problem",
+   "article_revid": 1355948526,
+   "slug": "wiki-skolem-problem"
+  },
+  {
+   "wp_id": "wpu-350",
+   "name": "Values of g(k) and G(k) in Waring's problem",
+   "field": "Number theory",
+   "subfield": "Additive number theory",
+   "article_title": "Waring's problem",
+   "article_url": "https://en.wikipedia.org/wiki/Waring's_problem",
+   "article_revid": 1368657466,
+   "slug": "wiki-values-of-g-k-and-g-k-in-warings-problem"
+  },
+  {
+   "wp_id": "wpu-351",
+   "field": "Number theory",
+   "subfield": "Additive number theory",
+   "article_title": "Ulam number",
+   "article_url": "https://en.wikipedia.org/wiki/Ulam_number",
+   "article_revid": 1373752266,
+   "slug": "wiki-ulam-number"
+  },
+  {
+   "wp_id": "wpu-352",
+   "field": "Number theory",
+   "subfield": "Additive number theory",
+   "article_title": "Szemerédi's theorem",
+   "article_url": "https://en.wikipedia.org/wiki/Szemer%C3%A9di's_theorem",
+   "article_revid": 1351695479,
+   "slug": "wiki-szemeredis-theorem"
+  },
+  {
+   "wp_id": "wpu-353",
+   "name": "Class number problem",
+   "field": "Number theory",
+   "subfield": "Algebraic number theory",
+   "article_title": "Class number problem",
+   "article_url": "https://en.wikipedia.org/wiki/Class_number_problem",
+   "article_revid": 1365087599,
+   "slug": "wiki-class-number-problem"
+  },
+  {
+   "wp_id": "wpu-354",
+   "name": "Fontaine–Mazur conjecture",
+   "field": "Number theory",
+   "subfield": "Algebraic number theory",
+   "article_title": "Fontaine–Mazur conjecture",
+   "article_url": "https://en.wikipedia.org/wiki/Fontaine%E2%80%93Mazur_conjecture",
+   "article_revid": 1375897286,
+   "slug": "wiki-fontaine-mazur-conjecture"
+  },
+  {
+   "wp_id": "wpu-355",
+   "name": "Gan–Gross–Prasad conjecture",
+   "field": "Number theory",
+   "subfield": "Algebraic number theory",
+   "article_title": "Gan–Gross–Prasad conjecture",
+   "article_url": "https://en.wikipedia.org/wiki/Gan%E2%80%93Gross%E2%80%93Prasad_conjecture",
+   "article_revid": 1360759806,
+   "slug": "wiki-gan-gross-prasad-conjecture"
+  },
+  {
+   "wp_id": "wpu-356",
+   "name": "Greenberg's conjectures",
+   "field": "Number theory",
+   "subfield": "Algebraic number theory",
+   "article_title": "Greenberg's conjectures",
+   "article_url": "https://en.wikipedia.org/wiki/Greenberg's_conjectures",
+   "article_revid": 1378949720,
+   "slug": "wiki-greenbergs-conjectures"
+  },
+  {
+   "wp_id": "wpu-357",
+   "name": "Hermite's problem",
+   "field": "Number theory",
+   "subfield": "Algebraic number theory",
+   "article_title": "Hermite's problem",
+   "article_url": "https://en.wikipedia.org/wiki/Hermite's_problem",
+   "article_revid": 1377315046,
+   "slug": "wiki-hermites-problem"
+  },
+  {
+   "wp_id": "wpu-358",
+   "name": "Hilbert's 9th problem",
+   "field": "Number theory",
+   "subfield": "Algebraic number theory",
+   "article_title": "Hilbert's ninth problem",
+   "article_url": "https://en.wikipedia.org/wiki/Hilbert's_ninth_problem",
+   "article_revid": 1368310755,
+   "slug": "wiki-hilberts-9th-problem"
+  },
+  {
+   "wp_id": "wpu-359",
+   "name": "Hilbert's 12th problem",
+   "field": "Number theory",
+   "subfield": "Algebraic number theory",
+   "article_title": "Hilbert's twelfth problem",
+   "article_url": "https://en.wikipedia.org/wiki/Hilbert's_twelfth_problem",
+   "article_revid": 1348679341,
+   "slug": "wiki-hilberts-12th-problem"
+  },
+  {
+   "wp_id": "wpu-360",
+   "name": "Kummer–Vandiver conjecture",
+   "field": "Number theory",
+   "subfield": "Algebraic number theory",
+   "article_title": "Kummer–Vandiver conjecture",
+   "article_url": "https://en.wikipedia.org/wiki/Kummer%E2%80%93Vandiver_conjecture",
+   "article_revid": 1364925557,
+   "slug": "wiki-kummer-vandiver-conjecture"
+  },
+  {
+   "wp_id": "wpu-361",
+   "name": "Lang and Trotter's conjecture",
+   "field": "Number theory",
+   "subfield": "Algebraic number theory",
+   "article_title": "Supersingular prime (algebraic number theory)",
+   "article_url": "https://en.wikipedia.org/wiki/Supersingular_prime_(algebraic_number_theory)",
+   "article_revid": 1346640370,
+   "slug": "wiki-lang-and-trotters-conjecture"
+  },
+  {
+   "wp_id": "wpu-362",
+   "name": "Leopoldt's conjecture",
+   "field": "Number theory",
+   "subfield": "Algebraic number theory",
+   "article_title": "Leopoldt's conjecture",
+   "article_url": "https://en.wikipedia.org/wiki/Leopoldt's_conjecture",
+   "article_revid": 1365275565,
+   "slug": "wiki-leopoldts-conjecture"
+  },
+  {
+   "wp_id": "wpu-363",
+   "name": "Stark conjectures",
+   "field": "Number theory",
+   "subfield": "Algebraic number theory",
+   "article_title": "Stark conjectures",
+   "article_url": "https://en.wikipedia.org/wiki/Stark_conjectures",
+   "article_revid": 1365865648,
+   "slug": "wiki-stark-conjectures"
+  },
+  {
+   "wp_id": "wpu-364",
+   "name": "Characterize all algebraic number fields that have some power basis",
+   "field": "Number theory",
+   "subfield": "Algebraic number theory",
+   "article_title": "Algebraic number field",
+   "article_url": "https://en.wikipedia.org/wiki/Algebraic_number_field",
+   "article_revid": 1367779395,
+   "slug": "wiki-characterize-all-algebraic-number-fields-that-have-some"
+  },
+  {
+   "wp_id": "wpu-365",
+   "name": "Beilinson's conjectures",
+   "field": "Number theory",
+   "subfield": "Analytic number theory",
+   "article_title": "Special values of L-functions",
+   "article_url": "https://en.wikipedia.org/wiki/Special_values_of_L-functions",
+   "article_revid": 1372196557,
+   "slug": "wiki-beilinsons-conjectures"
+  },
+  {
+   "wp_id": "wpu-366",
+   "field": "Number theory",
+   "subfield": "Analytic number theory",
+   "article_title": "Siegel zero",
+   "article_url": "https://en.wikipedia.org/wiki/Siegel_zero",
+   "article_revid": 1379076524,
+   "slug": "wiki-siegel-zero"
+  },
+  {
+   "wp_id": "wpu-367",
+   "field": "Number theory",
+   "subfield": "Analytic number theory",
+   "article_title": "De Bruijn–Newman constant",
+   "article_url": "https://en.wikipedia.org/wiki/De_Bruijn%E2%80%93Newman_constant",
+   "article_revid": 1374894644,
+   "slug": "wiki-de-bruijn-newman-constant"
+  },
+  {
+   "wp_id": "wpu-368",
+   "field": "Number theory",
+   "subfield": "Analytic number theory",
+   "article_title": "Selberg class",
+   "article_url": "https://en.wikipedia.org/wiki/Selberg_class",
+   "article_revid": 1356892944,
+   "slug": "wiki-selberg-class"
+  },
+  {
+   "wp_id": "wpu-369",
+   "name": "Hardy–Littlewood zeta function conjectures",
+   "field": "Number theory",
+   "subfield": "Analytic number theory",
+   "article_title": "Hardy–Littlewood zeta function conjectures",
+   "article_url": "https://en.wikipedia.org/wiki/Hardy%E2%80%93Littlewood_zeta_function_conjectures",
+   "article_revid": 1229600719,
+   "slug": "wiki-hardy-littlewood-zeta-function-conjectures"
+  },
+  {
+   "wp_id": "wpu-370",
+   "name": "Keating–Snaith conjecture",
+   "field": "Number theory",
+   "subfield": "Analytic number theory",
+   "article_title": "Riemann zeta function",
+   "article_url": "https://en.wikipedia.org/wiki/Riemann_zeta_function",
+   "article_revid": 1379566884,
+   "slug": "wiki-keating-snaith-conjecture"
+  },
+  {
+   "wp_id": "wpu-371",
+   "name": "Hilbert–Pólya conjecture",
+   "field": "Number theory",
+   "subfield": "Analytic number theory",
+   "article_title": "Hilbert–Pólya conjecture",
+   "article_url": "https://en.wikipedia.org/wiki/Hilbert%E2%80%93P%C3%B3lya_conjecture",
+   "article_revid": 1374614024,
+   "slug": "wiki-hilbert-polya-conjecture"
+  },
+  {
+   "wp_id": "wpu-372",
+   "name": "Lindelöf hypothesis",
+   "field": "Number theory",
+   "subfield": "Analytic number theory",
+   "article_title": "Lindelöf hypothesis",
+   "article_url": "https://en.wikipedia.org/wiki/Lindel%C3%B6f_hypothesis",
+   "article_revid": 1361644445,
+   "slug": "wiki-lindelof-hypothesis"
+  },
+  {
+   "wp_id": "wpu-373",
+   "name": "Density hypothesis",
+   "field": "Number theory",
+   "subfield": "Analytic number theory",
+   "parent_id": "wpu-372",
+   "article_title": "Bombieri–Vinogradov theorem",
+   "article_url": "https://en.wikipedia.org/wiki/Bombieri%E2%80%93Vinogradov_theorem",
+   "article_revid": 1359670298,
+   "slug": "wiki-density-hypothesis"
+  },
+  {
+   "wp_id": "wpu-374",
+   "field": "Number theory",
+   "subfield": "Analytic number theory",
+   "group_header": true,
+   "slug": "wiki-location-of-nontrivial-zeros-of-l-functions-especially"
+  },
+  {
+   "wp_id": "wpu-375",
+   "name": "Grand Riemann hypothesis",
+   "field": "Number theory",
+   "subfield": "Analytic number theory",
+   "parent_id": "wpu-374",
+   "article_title": "Grand Riemann hypothesis",
+   "article_url": "https://en.wikipedia.org/wiki/Grand_Riemann_hypothesis",
+   "article_revid": 1341884628,
+   "slug": "wiki-grand-riemann-hypothesis"
+  },
+  {
+   "wp_id": "wpu-376",
+   "name": "Generalized Riemann hypothesis for Selberg class",
+   "field": "Number theory",
+   "subfield": "Analytic number theory",
+   "parent_id": "wpu-374",
+   "article_title": "Generalized Riemann hypothesis",
+   "article_url": "https://en.wikipedia.org/wiki/Generalized_Riemann_hypothesis",
+   "article_revid": 1378052002,
+   "slug": "wiki-generalized-riemann-hypothesis-for-selberg-class"
+  },
+  {
+   "wp_id": "wpu-377",
+   "name": "Extended Riemann Hypothesis",
+   "field": "Number theory",
+   "subfield": "Analytic number theory",
+   "parent_id": "wpu-374",
+   "article_title": "Generalized Riemann hypothesis",
+   "article_url": "https://en.wikipedia.org/wiki/Generalized_Riemann_hypothesis",
+   "article_revid": 1378052002,
+   "slug": "wiki-extended-riemann-hypothesis"
+  },
+  {
+   "wp_id": "wpu-378",
+   "name": "Generalized Riemann hypothesis",
+   "field": "Number theory",
+   "subfield": "Analytic number theory",
+   "parent_id": "wpu-374",
+   "article_title": "Generalized Riemann hypothesis",
+   "article_url": "https://en.wikipedia.org/wiki/Generalized_Riemann_hypothesis",
+   "article_revid": 1378052002,
+   "slug": "wiki-generalized-riemann-hypothesis"
+  },
+  {
+   "wp_id": "wpu-379",
+   "name": "Riemann hypothesis",
+   "field": "Number theory",
+   "subfield": "Analytic number theory",
+   "parent_id": "wpu-374",
+   "article_title": "Riemann hypothesis",
+   "article_url": "https://en.wikipedia.org/wiki/Riemann_hypothesis",
+   "article_revid": 1379571398,
+   "slug": "wiki-riemann-hypothesis"
+  },
+  {
+   "wp_id": "wpu-380",
+   "name": "Montgomery's pair correlation conjecture",
+   "field": "Number theory",
+   "subfield": "Analytic number theory",
+   "article_title": "Montgomery's pair correlation conjecture",
+   "article_url": "https://en.wikipedia.org/wiki/Montgomery's_pair_correlation_conjecture",
+   "article_revid": 1378671804,
+   "slug": "wiki-montgomerys-pair-correlation-conjecture"
+  },
+  {
+   "wp_id": "wpu-381",
+   "name": "Piltz divisor problem",
+   "field": "Number theory",
+   "subfield": "Analytic number theory",
+   "article_title": "Divisor summatory function",
+   "article_url": "https://en.wikipedia.org/wiki/Divisor_summatory_function",
+   "article_revid": 1340008726,
+   "slug": "wiki-piltz-divisor-problem"
+  },
+  {
+   "wp_id": "wpu-382",
+   "name": "Dirichlet's divisor problem",
+   "field": "Number theory",
+   "subfield": "Analytic number theory",
+   "parent_id": "wpu-381",
+   "article_title": "Divisor summatory function",
+   "article_url": "https://en.wikipedia.org/wiki/Divisor_summatory_function",
+   "article_revid": 1340008726,
+   "slug": "wiki-dirichlets-divisor-problem"
+  },
+  {
+   "wp_id": "wpu-383",
+   "name": "Ramanujan–Petersson conjecture",
+   "field": "Number theory",
+   "subfield": "Analytic number theory",
+   "article_title": "Ramanujan–Petersson conjecture",
+   "article_url": "https://en.wikipedia.org/wiki/Ramanujan%E2%80%93Petersson_conjecture",
+   "article_revid": 1369029052,
+   "slug": "wiki-ramanujan-petersson-conjecture"
+  },
+  {
+   "wp_id": "wpu-384",
+   "name": "Selberg's 1/4 conjecture",
+   "field": "Number theory",
+   "subfield": "Analytic number theory",
+   "article_title": "Selberg's 1/4 conjecture",
+   "article_url": "https://en.wikipedia.org/wiki/Selberg's_1/4_conjecture",
+   "article_revid": 1296407939,
+   "slug": "wiki-selbergs-1-4-conjecture"
+  },
+  {
+   "wp_id": "wpu-385",
+   "name": "Selberg's orthogonality conjecture",
+   "field": "Number theory",
+   "subfield": "Analytic number theory",
+   "article_title": "Selberg class",
+   "article_url": "https://en.wikipedia.org/wiki/Selberg_class",
+   "article_revid": 1356892944,
+   "slug": "wiki-selbergs-orthogonality-conjecture"
+  },
+  {
+   "wp_id": "wpu-386",
+   "name": "Bombieri–Lang conjecture",
+   "field": "Number theory",
+   "subfield": "Arithmetic geometry",
+   "article_title": "Bombieri–Lang conjecture",
+   "article_url": "https://en.wikipedia.org/wiki/Bombieri%E2%80%93Lang_conjecture",
+   "article_revid": 1353683814,
+   "slug": "wiki-bombieri-lang-conjecture"
+  },
+  {
+   "wp_id": "wpu-387",
+   "name": "Erdős–Ulam problem",
+   "field": "Number theory",
+   "subfield": "Arithmetic geometry",
+   "article_title": "Erdős–Ulam problem",
+   "article_url": "https://en.wikipedia.org/wiki/Erd%C5%91s%E2%80%93Ulam_problem",
+   "article_revid": 1335645810,
+   "slug": "wiki-erdos-ulam-problem"
+  },
+  {
+   "wp_id": "wpu-388",
+   "name": "Manin conjecture",
+   "field": "Number theory",
+   "subfield": "Arithmetic geometry",
+   "article_title": "Manin conjecture",
+   "article_url": "https://en.wikipedia.org/wiki/Manin_conjecture",
+   "article_revid": 1346170032,
+   "slug": "wiki-manin-conjecture"
+  },
+  {
+   "wp_id": "wpu-389",
+   "name": "Sato–Tate conjecture",
+   "field": "Number theory",
+   "subfield": "Arithmetic geometry",
+   "article_title": "Sato–Tate conjecture",
+   "article_url": "https://en.wikipedia.org/wiki/Sato%E2%80%93Tate_conjecture",
+   "article_revid": 1369410550,
+   "slug": "wiki-sato-tate-conjecture"
+  },
+  {
+   "wp_id": "wpu-390",
+   "name": "Unit square",
+   "field": "Number theory",
+   "subfield": "Arithmetic geometry",
+   "group_header": true,
+   "article_title": "Unit square",
+   "article_url": "https://en.wikipedia.org/wiki/Unit_square",
+   "article_revid": 1222143551,
+   "slug": "wiki-unit-square"
+  },
+  {
+   "wp_id": "wpu-391",
+   "name": "Rational dense problem",
+   "field": "Number theory",
+   "subfield": "Arithmetic geometry",
+   "parent_id": "wpu-390",
+   "article_title": "Unit square",
+   "article_url": "https://en.wikipedia.org/wiki/Unit_square",
+   "article_revid": 1222143551,
+   "slug": "wiki-rational-dense-problem"
+  },
+  {
+   "wp_id": "wpu-392",
+   "name": "Vojta's conjecture",
+   "field": "Number theory",
+   "subfield": "Arithmetic geometry",
+   "article_title": "Vojta's conjecture",
+   "article_url": "https://en.wikipedia.org/wiki/Vojta's_conjecture",
+   "article_revid": 1365060223,
+   "slug": "wiki-vojtas-conjecture"
+  },
+  {
+   "wp_id": "wpu-393",
+   "name": "n conjecture",
+   "field": "Number theory",
+   "subfield": "Arithmetic geometry",
+   "article_title": "N conjecture",
+   "article_url": "https://en.wikipedia.org/wiki/N_conjecture",
+   "article_revid": 1378050537,
+   "slug": "wiki-n-conjecture"
+  },
+  {
+   "wp_id": "wpu-394",
+   "name": "abc conjecture",
+   "field": "Number theory",
+   "subfield": "Arithmetic geometry",
+   "parent_id": "wpu-393",
+   "article_title": "Abc conjecture",
+   "article_url": "https://en.wikipedia.org/wiki/Abc_conjecture",
+   "article_revid": 1377150583,
+   "slug": "wiki-abc-conjecture"
+  },
+  {
+   "wp_id": "wpu-395",
+   "name": "Szpiro's conjecture",
+   "field": "Number theory",
+   "subfield": "Arithmetic geometry",
+   "parent_id": "wpu-393",
+   "article_title": "Szpiro's conjecture",
+   "article_url": "https://en.wikipedia.org/wiki/Szpiro's_conjecture",
+   "article_revid": 1376069537,
+   "slug": "wiki-szpiros-conjecture"
+  },
+  {
+   "wp_id": "wpu-396",
+   "name": "Zilber–Pink conjecture",
+   "field": "Number theory",
+   "subfield": "Arithmetic geometry",
+   "article_title": "Zilber–Pink conjecture",
+   "article_url": "https://en.wikipedia.org/wiki/Zilber%E2%80%93Pink_conjecture",
+   "article_revid": 1320970597,
+   "slug": "wiki-zilber-pink-conjecture"
+  },
+  {
+   "wp_id": "wpu-397",
+   "field": "Number theory",
+   "subfield": "Computational number theory",
+   "article_title": "Integer factorization",
+   "article_url": "https://en.wikipedia.org/wiki/Integer_factorization",
+   "article_revid": 1379031422,
+   "slug": "wiki-integer-factorization"
+  },
+  {
+   "wp_id": "wpu-398",
+   "field": "Number theory",
+   "subfield": "Computational number theory",
+   "article_title": "Discrete logarithm",
+   "article_url": "https://en.wikipedia.org/wiki/Discrete_logarithm",
+   "article_revid": 1374186946,
+   "slug": "wiki-discrete-logarithm"
+  },
+  {
+   "wp_id": "wpu-399",
+   "field": "Number theory",
+   "subfield": "Computational number theory",
+   "parent_id": "wpu-398",
+   "article_title": "Discrete logarithm",
+   "article_url": "https://en.wikipedia.org/wiki/Discrete_logarithm",
+   "article_revid": 1374186946,
+   "slug": "wiki-discrete-logarithm-2"
+  },
+  {
+   "wp_id": "wpu-400",
+   "field": "Number theory",
+   "subfield": "Computational number theory",
+   "article_title": "Rational number",
+   "article_url": "https://en.wikipedia.org/wiki/Rational_number",
+   "article_revid": 1357066562,
+   "slug": "wiki-rational-number"
+  },
+  {
+   "wp_id": "wpu-401",
+   "name": "Littlewood conjecture",
+   "field": "Number theory",
+   "subfield": "Diophantine approximation and transcendental number theory",
+   "article_title": "Littlewood conjecture",
+   "article_url": "https://en.wikipedia.org/wiki/Littlewood_conjecture",
+   "article_revid": 1378649270,
+   "slug": "wiki-littlewood-conjecture"
+  },
+  {
+   "wp_id": "wpu-402",
+   "name": "Schanuel's conjecture",
+   "field": "Number theory",
+   "subfield": "Diophantine approximation and transcendental number theory",
+   "article_title": "Schanuel's conjecture",
+   "article_url": "https://en.wikipedia.org/wiki/Schanuel's_conjecture",
+   "article_revid": 1375037872,
+   "slug": "wiki-schanuels-conjecture"
+  },
+  {
+   "wp_id": "wpu-403",
+   "name": "Four exponentials conjecture",
+   "field": "Number theory",
+   "subfield": "Diophantine approximation and transcendental number theory",
+   "article_title": "Four exponentials conjecture",
+   "article_url": "https://en.wikipedia.org/wiki/Four_exponentials_conjecture",
+   "article_revid": 1311761643,
+   "slug": "wiki-four-exponentials-conjecture"
+  },
+  {
+   "wp_id": "wpu-404",
+   "field": "Number theory",
+   "subfield": "Diophantine approximation and transcendental number theory",
+   "article_title": "Euler's constant",
+   "article_url": "https://en.wikipedia.org/wiki/Euler's_constant",
+   "article_revid": 1378444832,
+   "slug": "wiki-eulers-constant"
+  },
+  {
+   "wp_id": "wpu-405",
+   "field": "Number theory",
+   "subfield": "Diophantine approximation and transcendental number theory",
+   "article_title": "Period (number theory)",
+   "article_url": "https://en.wikipedia.org/wiki/Period_(number_theory)",
+   "article_revid": 1377199186,
+   "slug": "wiki-period-number-theory"
+  },
+  {
+   "wp_id": "wpu-406",
+   "field": "Number theory",
+   "subfield": "Diophantine approximation and transcendental number theory",
+   "article_title": "Quadratic equation",
+   "article_url": "https://en.wikipedia.org/wiki/Quadratic_equation",
+   "article_revid": 1378528157,
+   "slug": "wiki-quadratic-equation"
+  },
+  {
+   "wp_id": "wpu-407",
+   "field": "Number theory",
+   "subfield": "Diophantine approximation and transcendental number theory",
+   "article_title": "Simple continued fraction",
+   "article_url": "https://en.wikipedia.org/wiki/Simple_continued_fraction",
+   "article_revid": 1377314410,
+   "slug": "wiki-simple-continued-fraction"
+  },
+  {
+   "wp_id": "wpu-408",
+   "name": "Hartmanis–Stearns conjecture",
+   "field": "Number theory",
+   "subfield": "Diophantine approximation and transcendental number theory",
+   "article_title": "Hartmanis–Stearns conjecture",
+   "article_url": "https://en.wikipedia.org/wiki/Hartmanis%E2%80%93Stearns_conjecture",
+   "article_revid": 1302947231,
+   "slug": "wiki-hartmanis-stearns-conjecture"
+  },
+  {
+   "wp_id": "wpu-409",
+   "name": "Beal's conjecture",
+   "field": "Number theory",
+   "subfield": "Diophantine equations",
+   "article_title": "Beal conjecture",
+   "article_url": "https://en.wikipedia.org/wiki/Beal_conjecture",
+   "article_revid": 1372586282,
+   "slug": "wiki-beals-conjecture"
+  },
+  {
+   "wp_id": "wpu-410",
+   "name": "Brocard's problem",
+   "field": "Number theory",
+   "subfield": "Diophantine equations",
+   "article_title": "Brocard's problem",
+   "article_url": "https://en.wikipedia.org/wiki/Brocard's_problem",
+   "article_revid": 1374401182,
+   "slug": "wiki-brocards-problem"
+  },
+  {
+   "wp_id": "wpu-411",
+   "name": "Congruent number problem",
+   "field": "Number theory",
+   "subfield": "Diophantine equations",
+   "article_title": "Congruent number",
+   "article_url": "https://en.wikipedia.org/wiki/Congruent_number#Congruent_number_problem",
+   "article_revid": 1367469949,
+   "slug": "wiki-congruent-number-problem"
+  },
+  {
+   "wp_id": "wpu-412",
+   "name": "Erdős–Moser problem",
+   "field": "Number theory",
+   "subfield": "Diophantine equations",
+   "article_title": "Erdős–Moser equation",
+   "article_url": "https://en.wikipedia.org/wiki/Erd%C5%91s%E2%80%93Moser_equation",
+   "article_revid": 1329520664,
+   "slug": "wiki-erdos-moser-problem"
+  },
+  {
+   "wp_id": "wpu-413",
+   "name": "Erdős–Straus conjecture",
+   "field": "Number theory",
+   "subfield": "Diophantine equations",
+   "article_title": "Erdős–Straus conjecture",
+   "article_url": "https://en.wikipedia.org/wiki/Erd%C5%91s%E2%80%93Straus_conjecture",
+   "article_revid": 1367560126,
+   "slug": "wiki-erdos-straus-conjecture"
+  },
+  {
+   "wp_id": "wpu-414",
+   "name": "Fermat–Catalan conjecture",
+   "field": "Number theory",
+   "subfield": "Diophantine equations",
+   "article_title": "Fermat–Catalan conjecture",
+   "article_url": "https://en.wikipedia.org/wiki/Fermat%E2%80%93Catalan_conjecture",
+   "article_revid": 1357791543,
+   "slug": "wiki-fermat-catalan-conjecture"
+  },
+  {
+   "wp_id": "wpu-415",
+   "name": "Goormaghtigh conjecture",
+   "field": "Number theory",
+   "subfield": "Diophantine equations",
+   "article_title": "Goormaghtigh conjecture",
+   "article_url": "https://en.wikipedia.org/wiki/Goormaghtigh_conjecture",
+   "article_revid": 1374401321,
+   "slug": "wiki-goormaghtigh-conjecture"
+  },
+  {
+   "wp_id": "wpu-416",
+   "name": "Uniqueness conjecture",
+   "field": "Number theory",
+   "subfield": "Diophantine equations",
+   "article_title": "Markov number",
+   "article_url": "https://en.wikipedia.org/wiki/Markov_number",
+   "article_revid": 1379049455,
+   "slug": "wiki-uniqueness-conjecture"
+  },
+  {
+   "wp_id": "wpu-417",
+   "name": "Pillai's conjecture",
+   "field": "Number theory",
+   "subfield": "Diophantine equations",
+   "article_title": "Catalan's conjecture",
+   "article_url": "https://en.wikipedia.org/wiki/Catalan's_conjecture#Pillai%27s_conjecture",
+   "article_revid": 1378926881,
+   "slug": "wiki-pillais-conjecture"
+  },
+  {
+   "wp_id": "wpu-418",
+   "field": "Number theory",
+   "subfield": "Diophantine equations",
+   "article_title": "Sums of three cubes",
+   "article_url": "https://en.wikipedia.org/wiki/Sums_of_three_cubes",
+   "article_revid": 1374533187,
+   "slug": "wiki-sums-of-three-cubes"
+  },
+  {
+   "wp_id": "wpu-419",
+   "field": "Number theory",
+   "subfield": "Diophantine equations",
+   "article_title": "Sum of four cubes problem",
+   "article_url": "https://en.wikipedia.org/wiki/Sum_of_four_cubes_problem",
+   "article_revid": 1333139585,
+   "slug": "wiki-sum-of-four-cubes-problem"
+  },
+  {
+   "wp_id": "wpu-420",
+   "name": "Agoh–Giuga conjecture",
+   "field": "Number theory",
+   "subfield": "Prime numbers",
+   "article_title": "Agoh–Giuga conjecture",
+   "article_url": "https://en.wikipedia.org/wiki/Agoh%E2%80%93Giuga_conjecture",
+   "article_revid": 1367213894,
+   "slug": "wiki-agoh-giuga-conjecture"
+  },
+  {
+   "wp_id": "wpu-421",
+   "name": "Agrawal's conjecture",
+   "field": "Number theory",
+   "subfield": "Prime numbers",
+   "article_title": "Agrawal's conjecture",
+   "article_url": "https://en.wikipedia.org/wiki/Agrawal's_conjecture",
+   "article_revid": 1295268932,
+   "slug": "wiki-agrawals-conjecture"
+  },
+  {
+   "wp_id": "wpu-422",
+   "name": "Artin's conjecture on primitive roots",
+   "field": "Number theory",
+   "subfield": "Prime numbers",
+   "article_title": "Artin's conjecture on primitive roots",
+   "article_url": "https://en.wikipedia.org/wiki/Artin's_conjecture_on_primitive_roots",
+   "article_revid": 1379441938,
+   "slug": "wiki-artins-conjecture-on-primitive-roots"
+  },
+  {
+   "wp_id": "wpu-423",
+   "name": "Brocard's conjecture",
+   "field": "Number theory",
+   "subfield": "Prime numbers",
+   "article_title": "Brocard's conjecture",
+   "article_url": "https://en.wikipedia.org/wiki/Brocard's_conjecture",
+   "article_revid": 1367504125,
+   "slug": "wiki-brocards-conjecture"
+  },
+  {
+   "wp_id": "wpu-424",
+   "name": "Bunyakovsky conjecture",
+   "field": "Number theory",
+   "subfield": "Prime numbers",
+   "article_title": "Bunyakovsky conjecture",
+   "article_url": "https://en.wikipedia.org/wiki/Bunyakovsky_conjecture",
+   "article_revid": 1328429627,
+   "slug": "wiki-bunyakovsky-conjecture"
+  },
+  {
+   "wp_id": "wpu-425",
+   "name": "Catalan's Mersenne conjecture",
+   "field": "Number theory",
+   "subfield": "Prime numbers",
+   "article_title": "Double Mersenne number",
+   "article_url": "https://en.wikipedia.org/wiki/Double_Mersenne_number#Catalan%E2%80%93Mersenne_number_conjecture",
+   "article_revid": 1330715968,
+   "slug": "wiki-catalans-mersenne-conjecture"
+  },
+  {
+   "wp_id": "wpu-426",
+   "name": "Dickson's conjecture",
+   "field": "Number theory",
+   "subfield": "Prime numbers",
+   "article_title": "Dickson's conjecture",
+   "article_url": "https://en.wikipedia.org/wiki/Dickson's_conjecture",
+   "article_revid": 1379449872,
+   "slug": "wiki-dicksons-conjecture"
+  },
+  {
+   "wp_id": "wpu-427",
+   "name": "Dubner's conjecture",
+   "field": "Number theory",
+   "subfield": "Prime numbers",
+   "article_title": "Prime number",
+   "article_url": "https://en.wikipedia.org/wiki/Prime_number",
+   "article_revid": 1376977902,
+   "slug": "wiki-dubners-conjecture"
+  },
+  {
+   "wp_id": "wpu-428",
+   "name": "Elliott–Halberstam conjecture",
+   "field": "Number theory",
+   "subfield": "Prime numbers",
+   "article_title": "Elliott–Halberstam conjecture",
+   "article_url": "https://en.wikipedia.org/wiki/Elliott%E2%80%93Halberstam_conjecture",
+   "article_revid": 1373058525,
+   "slug": "wiki-elliott-halberstam-conjecture"
+  },
+  {
+   "wp_id": "wpu-429",
+   "name": "Erdős–Mollin–Walsh conjecture",
+   "field": "Number theory",
+   "subfield": "Prime numbers",
+   "article_title": "Powerful number",
+   "article_url": "https://en.wikipedia.org/wiki/Powerful_number",
+   "article_revid": 1321267819,
+   "slug": "wiki-erdos-mollin-walsh-conjecture"
+  },
+  {
+   "wp_id": "wpu-430",
+   "name": "Feit–Thompson conjecture",
+   "field": "Number theory",
+   "subfield": "Prime numbers",
+   "article_title": "Feit–Thompson conjecture",
+   "article_url": "https://en.wikipedia.org/wiki/Feit%E2%80%93Thompson_conjecture",
+   "article_revid": 1353413994,
+   "slug": "wiki-feit-thompson-conjecture"
+  },
+  {
+   "wp_id": "wpu-431",
+   "name": "Fortune's conjecture",
+   "field": "Number theory",
+   "subfield": "Prime numbers",
+   "article_title": "Fortunate number",
+   "article_url": "https://en.wikipedia.org/wiki/Fortunate_number",
+   "article_revid": 1371131968,
+   "slug": "wiki-fortunes-conjecture"
+  },
+  {
+   "wp_id": "wpu-432",
+   "name": "Gaussian moat problem",
+   "field": "Number theory",
+   "subfield": "Prime numbers",
+   "article_title": "Gaussian moat",
+   "article_url": "https://en.wikipedia.org/wiki/Gaussian_moat",
+   "article_revid": 1379557707,
+   "slug": "wiki-gaussian-moat-problem"
+  },
+  {
+   "wp_id": "wpu-433",
+   "name": "Gillies' conjecture",
+   "field": "Number theory",
+   "subfield": "Prime numbers",
+   "article_title": "Gillies' conjecture",
+   "article_url": "https://en.wikipedia.org/wiki/Gillies'_conjecture",
+   "article_revid": 1364886556,
+   "slug": "wiki-gillies-conjecture"
+  },
+  {
+   "wp_id": "wpu-434",
+   "name": "Landau's problems",
+   "field": "Number theory",
+   "subfield": "Prime numbers",
+   "group_header": true,
+   "article_title": "Landau's problems",
+   "article_url": "https://en.wikipedia.org/wiki/Landau's_problems",
+   "article_revid": 1357581813,
+   "slug": "wiki-landaus-problems"
+  },
+  {
+   "wp_id": "wpu-435",
+   "name": "Goldbach conjecture",
+   "field": "Number theory",
+   "subfield": "Prime numbers",
+   "parent_id": "wpu-434",
+   "duplicate_of": "wpu-343",
+   "article_title": "Goldbach's conjecture",
+   "article_url": "https://en.wikipedia.org/wiki/Goldbach's_conjecture",
+   "article_revid": 1376998825,
+   "slug": "wiki-goldbach-conjecture"
+  },
+  {
+   "wp_id": "wpu-436",
+   "name": "Legendre's conjecture",
+   "field": "Number theory",
+   "subfield": "Prime numbers",
+   "parent_id": "wpu-434",
+   "article_title": "Legendre's conjecture",
+   "article_url": "https://en.wikipedia.org/wiki/Legendre's_conjecture",
+   "article_revid": 1331535778,
+   "slug": "wiki-legendres-conjecture"
+  },
+  {
+   "wp_id": "wpu-437",
+   "name": "Twin prime conjecture",
+   "field": "Number theory",
+   "subfield": "Prime numbers",
+   "parent_id": "wpu-434",
+   "article_title": "Twin prime",
+   "article_url": "https://en.wikipedia.org/wiki/Twin_prime",
+   "article_revid": 1378441795,
+   "slug": "wiki-twin-prime-conjecture"
+  },
+  {
+   "wp_id": "wpu-438",
+   "field": "Number theory",
+   "subfield": "Prime numbers",
+   "parent_id": "wpu-434",
+   "slug": "wiki-are-there-infinitely-many-primes-of-the-form"
+  },
+  {
+   "wp_id": "wpu-439",
+   "name": "Problems associated to Linnik's theorem",
+   "field": "Number theory",
+   "subfield": "Prime numbers",
+   "article_title": "Linnik's theorem",
+   "article_url": "https://en.wikipedia.org/wiki/Linnik's_theorem",
+   "article_revid": 1378957862,
+   "slug": "wiki-problems-associated-to-linniks-theorem"
+  },
+  {
+   "wp_id": "wpu-440",
+   "name": "New Mersenne conjecture",
+   "field": "Number theory",
+   "subfield": "Prime numbers",
+   "article_title": "Mersenne conjectures",
+   "article_url": "https://en.wikipedia.org/wiki/Mersenne_conjectures",
+   "article_revid": 1375207868,
+   "slug": "wiki-new-mersenne-conjecture"
+  },
+  {
+   "wp_id": "wpu-441",
+   "name": "Polignac's conjecture",
+   "field": "Number theory",
+   "subfield": "Prime numbers",
+   "article_title": "Polignac's conjecture",
+   "article_url": "https://en.wikipedia.org/wiki/Polignac's_conjecture",
+   "article_revid": 1378654360,
+   "slug": "wiki-polignacs-conjecture"
+  },
+  {
+   "wp_id": "wpu-442",
+   "name": "Schinzel's hypothesis H",
+   "field": "Number theory",
+   "subfield": "Prime numbers",
+   "article_title": "Schinzel's hypothesis H",
+   "article_url": "https://en.wikipedia.org/wiki/Schinzel's_hypothesis_H",
+   "article_revid": 1379029091,
+   "slug": "wiki-schinzels-hypothesis-h"
+  },
+  {
+   "wp_id": "wpu-443",
+   "name": "Selfridge's conjecture",
+   "field": "Number theory",
+   "subfield": "Prime numbers",
+   "article_title": "Sierpiński number",
+   "article_url": "https://en.wikipedia.org/wiki/Sierpi%C5%84ski_number",
+   "article_revid": 1376976702,
+   "slug": "wiki-selfridges-conjecture"
+  },
+  {
+   "wp_id": "wpu-444",
+   "field": "Number theory",
+   "subfield": "Prime numbers",
+   "article_title": "Wolstenholme's theorem",
+   "article_url": "https://en.wikipedia.org/wiki/Wolstenholme's_theorem",
+   "article_revid": 1321323022,
+   "slug": "wiki-wolstenholmes-theorem"
+  },
+  {
+   "wp_id": "wpu-445",
+   "field": "Number theory",
+   "subfield": "Prime numbers",
+   "article_title": "Euclid number",
+   "article_url": "https://en.wikipedia.org/wiki/Euclid_number",
+   "article_revid": 1321323502,
+   "slug": "wiki-euclid-number"
+  },
+  {
+   "wp_id": "wpu-446",
+   "field": "Number theory",
+   "subfield": "Prime numbers",
+   "article_title": "Fermat number",
+   "article_url": "https://en.wikipedia.org/wiki/Fermat_number",
+   "article_revid": 1376030176,
+   "slug": "wiki-fermat-number"
+  },
+  {
+   "wp_id": "wpu-447",
+   "field": "Number theory",
+   "subfield": "Prime numbers",
+   "article_title": "Mersenne prime",
+   "article_url": "https://en.wikipedia.org/wiki/Mersenne_prime",
+   "article_revid": 1373929786,
+   "slug": "wiki-mersenne-prime"
+  },
+  {
+   "wp_id": "wpu-448",
+   "field": "Number theory",
+   "subfield": "Prime numbers",
+   "slug": "wiki-are-there-any-composite-c-satisfying-2-c"
+  },
+  {
+   "wp_id": "wpu-449",
+   "field": "Number theory",
+   "subfield": "Prime numbers",
+   "article_title": "Wall–Sun–Sun prime",
+   "article_url": "https://en.wikipedia.org/wiki/Wall%E2%80%93Sun%E2%80%93Sun_prime",
+   "article_revid": 1370481276,
+   "slug": "wiki-wall-sun-sun-prime"
+  },
+  {
+   "wp_id": "wpu-450",
+   "field": "Number theory",
+   "subfield": "Prime numbers",
+   "article_title": "Wieferich prime",
+   "article_url": "https://en.wikipedia.org/wiki/Wieferich_prime",
+   "article_revid": 1370481335,
+   "slug": "wiki-wieferich-prime"
+  },
+  {
+   "wp_id": "wpu-451",
+   "field": "Number theory",
+   "subfield": "Prime numbers",
+   "article_title": "Balanced prime",
+   "article_url": "https://en.wikipedia.org/wiki/Balanced_prime",
+   "article_revid": 1377809244,
+   "slug": "wiki-balanced-prime"
+  },
+  {
+   "wp_id": "wpu-452",
+   "field": "Number theory",
+   "subfield": "Prime numbers",
+   "article_title": "Cluster prime",
+   "article_url": "https://en.wikipedia.org/wiki/Cluster_prime",
+   "article_revid": 1377809312,
+   "slug": "wiki-cluster-prime"
+  },
+  {
+   "wp_id": "wpu-453",
+   "field": "Number theory",
+   "subfield": "Prime numbers",
+   "article_title": "Cousin prime",
+   "article_url": "https://en.wikipedia.org/wiki/Cousin_prime",
+   "article_revid": 1300177480,
+   "slug": "wiki-cousin-prime"
+  },
+  {
+   "wp_id": "wpu-454",
+   "field": "Number theory",
+   "subfield": "Prime numbers",
+   "article_title": "Cullen number",
+   "article_url": "https://en.wikipedia.org/wiki/Cullen_number",
+   "article_revid": 1350611124,
+   "slug": "wiki-cullen-number"
+  },
+  {
+   "wp_id": "wpu-455",
+   "field": "Number theory",
+   "subfield": "Prime numbers",
+   "article_title": "Euclid number",
+   "article_url": "https://en.wikipedia.org/wiki/Euclid_number",
+   "article_revid": 1321323502,
+   "slug": "wiki-euclid-number-2"
+  },
+  {
+   "wp_id": "wpu-456",
+   "field": "Number theory",
+   "subfield": "Prime numbers",
+   "article_title": "Fibonacci prime",
+   "article_url": "https://en.wikipedia.org/wiki/Fibonacci_prime",
+   "article_revid": 1350416485,
+   "slug": "wiki-fibonacci-prime"
+  },
+  {
+   "wp_id": "wpu-457",
+   "field": "Number theory",
+   "subfield": "Prime numbers",
+   "article_title": "Euclid number",
+   "article_url": "https://en.wikipedia.org/wiki/Euclid_number",
+   "article_revid": 1321323502,
+   "slug": "wiki-euclid-number-3"
+  },
+  {
+   "wp_id": "wpu-458",
+   "field": "Number theory",
+   "subfield": "Prime numbers",
+   "slug": "wiki-are-there-infinitely-many-kynea-primes"
+  },
+  {
+   "wp_id": "wpu-459",
+   "field": "Number theory",
+   "subfield": "Prime numbers",
+   "article_title": "Lucas number",
+   "article_url": "https://en.wikipedia.org/wiki/Lucas_number",
+   "article_revid": 1362026831,
+   "slug": "wiki-lucas-number"
+  },
+  {
+   "wp_id": "wpu-460",
+   "field": "Number theory",
+   "subfield": "Prime numbers",
+   "article_title": "Mersenne prime",
+   "article_url": "https://en.wikipedia.org/wiki/Mersenne_prime",
+   "article_revid": 1373929786,
+   "slug": "wiki-mersenne-prime-2"
+  },
+  {
+   "wp_id": "wpu-461",
+   "field": "Number theory",
+   "subfield": "Prime numbers",
+   "article_title": "Newman–Shanks–Williams prime",
+   "article_url": "https://en.wikipedia.org/wiki/Newman%E2%80%93Shanks%E2%80%93Williams_prime",
+   "article_revid": 1364924860,
+   "slug": "wiki-newman-shanks-williams-prime"
+  },
+  {
+   "wp_id": "wpu-462",
+   "field": "Number theory",
+   "subfield": "Prime numbers",
+   "article_title": "Palindromic prime",
+   "article_url": "https://en.wikipedia.org/wiki/Palindromic_prime",
+   "article_revid": 1379590106,
+   "slug": "wiki-palindromic-prime"
+  },
+  {
+   "wp_id": "wpu-463",
+   "field": "Number theory",
+   "subfield": "Prime numbers",
+   "article_title": "Pell number",
+   "article_url": "https://en.wikipedia.org/wiki/Pell_number",
+   "article_revid": 1374592550,
+   "slug": "wiki-pell-number"
+  },
+  {
+   "wp_id": "wpu-464",
+   "field": "Number theory",
+   "subfield": "Prime numbers",
+   "article_title": "Pierpont prime",
+   "article_url": "https://en.wikipedia.org/wiki/Pierpont_prime",
+   "article_revid": 1361678244,
+   "slug": "wiki-pierpont-prime"
+  },
+  {
+   "wp_id": "wpu-465",
+   "field": "Number theory",
+   "subfield": "Prime numbers",
+   "article_title": "Prime quadruplet",
+   "article_url": "https://en.wikipedia.org/wiki/Prime_quadruplet",
+   "article_revid": 1339423542,
+   "slug": "wiki-prime-quadruplet"
+  },
+  {
+   "wp_id": "wpu-466",
+   "field": "Number theory",
+   "subfield": "Prime numbers",
+   "article_title": "Prime triplet",
+   "article_url": "https://en.wikipedia.org/wiki/Prime_triplet",
+   "article_revid": 1246079392,
+   "slug": "wiki-prime-triplet"
+  },
+  {
+   "wp_id": "wpu-467",
+   "name": "Siegel's conjecture",
+   "field": "Number theory",
+   "subfield": "Prime numbers",
+   "article_title": "Regular prime",
+   "article_url": "https://en.wikipedia.org/wiki/Regular_prime",
+   "article_revid": 1365822533,
+   "slug": "wiki-siegels-conjecture"
+  },
+  {
+   "wp_id": "wpu-468",
+   "field": "Number theory",
+   "subfield": "Prime numbers",
+   "article_title": "Sexy primes",
+   "article_url": "https://en.wikipedia.org/wiki/Sexy_primes",
+   "article_revid": 1379054954,
+   "slug": "wiki-sexy-primes"
+  },
+  {
+   "wp_id": "wpu-469",
+   "field": "Number theory",
+   "subfield": "Prime numbers",
+   "article_title": "Safe and Sophie Germain primes",
+   "article_url": "https://en.wikipedia.org/wiki/Safe_and_Sophie_Germain_primes",
+   "article_revid": 1379028502,
+   "slug": "wiki-safe-and-sophie-germain-primes"
+  },
+  {
+   "wp_id": "wpu-470",
+   "field": "Number theory",
+   "subfield": "Prime numbers",
+   "article_title": "Wagstaff prime",
+   "article_url": "https://en.wikipedia.org/wiki/Wagstaff_prime",
+   "article_revid": 1366161998,
+   "slug": "wiki-wagstaff-prime"
+  },
+  {
+   "wp_id": "wpu-471",
+   "field": "Number theory",
+   "subfield": "Prime numbers",
+   "article_title": "Wieferich prime",
+   "article_url": "https://en.wikipedia.org/wiki/Wieferich_prime",
+   "article_revid": 1370481335,
+   "slug": "wiki-wieferich-prime-2"
+  },
+  {
+   "wp_id": "wpu-472",
+   "field": "Number theory",
+   "subfield": "Prime numbers",
+   "article_title": "Wilson prime",
+   "article_url": "https://en.wikipedia.org/wiki/Wilson_prime",
+   "article_revid": 1370502238,
+   "slug": "wiki-wilson-prime"
+  },
+  {
+   "wp_id": "wpu-473",
+   "field": "Number theory",
+   "subfield": "Prime numbers",
+   "article_title": "Wolstenholme prime",
+   "article_url": "https://en.wikipedia.org/wiki/Wolstenholme_prime",
+   "article_revid": 1370481351,
+   "slug": "wiki-wolstenholme-prime"
+  },
+  {
+   "wp_id": "wpu-474",
+   "field": "Number theory",
+   "subfield": "Prime numbers",
+   "article_title": "Woodall number",
+   "article_url": "https://en.wikipedia.org/wiki/Woodall_number",
+   "article_revid": 1350610988,
+   "slug": "wiki-woodall-number"
+  },
+  {
+   "wp_id": "wpu-475",
+   "field": "Number theory",
+   "subfield": "Prime numbers",
+   "slug": "wiki-can-a-prime-p-satisfy-2-p-1-equiv-1-pmod-p-2-and"
+  },
+  {
+   "wp_id": "wpu-476",
+   "field": "Number theory",
+   "subfield": "Prime numbers",
+   "article_title": "Euclid–Mullin sequence",
+   "article_url": "https://en.wikipedia.org/wiki/Euclid%E2%80%93Mullin_sequence",
+   "article_revid": 1227941465,
+   "slug": "wiki-euclid-mullin-sequence"
+  },
+  {
+   "wp_id": "wpu-477",
+   "field": "Number theory",
+   "subfield": "Prime numbers",
+   "article_title": "Skewes's number",
+   "article_url": "https://en.wikipedia.org/wiki/Skewes's_number",
+   "article_revid": 1370942184,
+   "slug": "wiki-skewess-number"
+  },
+  {
+   "wp_id": "wpu-478",
+   "field": "Number theory",
+   "subfield": "Prime numbers",
+   "article_title": "Wieferich prime",
+   "article_url": "https://en.wikipedia.org/wiki/Wieferich_prime#Lucas%E2%80%93Wieferich_primes",
+   "article_revid": 1370481335,
+   "slug": "wiki-wieferich-prime-3"
+  },
+  {
+   "wp_id": "wpu-479",
+   "field": "Number theory",
+   "subfield": "Prime numbers",
+   "slug": "wiki-for-any-given-integer-a-0-are"
+  },
+  {
+   "wp_id": "wpu-480",
+   "field": "Number theory",
+   "subfield": "Prime numbers",
+   "article_title": "Repunit",
+   "article_url": "https://en.wikipedia.org/wiki/Repunit",
+   "article_revid": 1363388346,
+   "slug": "wiki-repunit"
+  },
+  {
+   "wp_id": "wpu-481",
+   "field": "Number theory",
+   "subfield": "Prime numbers",
+   "slug": "wiki-for-any-given-integers-k-geq-1-b-geq-2"
+  },
+  {
+   "wp_id": "wpu-482",
+   "field": "Number theory",
+   "subfield": "Prime numbers",
+   "article_title": "Fermat number",
+   "article_url": "https://en.wikipedia.org/wiki/Fermat_number",
+   "article_revid": 1376030176,
+   "slug": "wiki-fermat-number-2"
+  },
+  {
+   "wp_id": "wpu-483",
+   "field": "Number theory",
+   "subfield": "Prime numbers",
+   "article_title": "Riesel number",
+   "article_url": "https://en.wikipedia.org/wiki/Riesel_number",
+   "article_revid": 1378745235,
+   "slug": "wiki-riesel-number"
+  },
+  {
+   "wp_id": "wpu-484",
+   "field": "Set theory",
+   "article_title": "Axiom of choice",
+   "article_url": "https://en.wikipedia.org/wiki/Axiom_of_choice",
+   "article_revid": 1379080484,
+   "slug": "wiki-axiom-of-choice"
+  },
+  {
+   "wp_id": "wpu-485",
+   "field": "Set theory",
+   "article_title": "W. Hugh Woodin",
+   "article_url": "https://en.wikipedia.org/wiki/W._Hugh_Woodin",
+   "article_revid": 1372845308,
+   "slug": "wiki-w-hugh-woodin"
+  },
+  {
+   "wp_id": "wpu-486",
+   "field": "Set theory",
+   "article_title": "Continuum hypothesis",
+   "article_url": "https://en.wikipedia.org/wiki/Continuum_hypothesis#Generalized_continuum_hypothesis",
+   "article_revid": 1376315189,
+   "slug": "wiki-continuum-hypothesis"
+  },
+  {
+   "wp_id": "wpu-487",
+   "field": "Set theory",
+   "article_title": "Continuum hypothesis",
+   "article_url": "https://en.wikipedia.org/wiki/Continuum_hypothesis#Generalized_continuum_hypothesis",
+   "article_revid": 1376315189,
+   "slug": "wiki-continuum-hypothesis-2"
+  },
+  {
+   "wp_id": "wpu-488",
+   "field": "Set theory",
+   "article_title": "Singular cardinals hypothesis",
+   "article_url": "https://en.wikipedia.org/wiki/Singular_cardinals_hypothesis",
+   "article_revid": 1349753131,
+   "slug": "wiki-singular-cardinals-hypothesis"
+  },
+  {
+   "wp_id": "wpu-489",
+   "name": "Problem of finding the ultimate core model, one that contains all large cardinals",
+   "field": "Set theory",
+   "article_title": "Core model",
+   "article_url": "https://en.wikipedia.org/wiki/Core_model",
+   "article_revid": 1333142995,
+   "slug": "wiki-problem-of-finding-the-ultimate-core-model-one-that"
+  },
+  {
+   "wp_id": "wpu-490",
+   "name": "Woodin's Ω-conjecture",
+   "field": "Set theory",
+   "article_title": "W. Hugh Woodin",
+   "article_url": "https://en.wikipedia.org/wiki/W._Hugh_Woodin",
+   "article_revid": 1372845308,
+   "slug": "wiki-woodins-conjecture"
+  },
+  {
+   "wp_id": "wpu-491",
+   "field": "Set theory",
+   "article_title": "Consistency",
+   "article_url": "https://en.wikipedia.org/wiki/Consistency",
+   "article_revid": 1369696261,
+   "slug": "wiki-consistency"
+  },
+  {
+   "wp_id": "wpu-492",
+   "field": "Set theory",
+   "article_title": "Jónsson cardinal",
+   "article_url": "https://en.wikipedia.org/wiki/J%C3%B3nsson_cardinal",
+   "article_revid": 1375757531,
+   "slug": "wiki-jonsson-cardinal"
+  },
+  {
+   "wp_id": "wpu-493",
+   "field": "Set theory",
+   "article_title": "Open coloring axiom",
+   "article_url": "https://en.wikipedia.org/wiki/Open_coloring_axiom",
+   "article_revid": 1356445427,
+   "slug": "wiki-open-coloring-axiom"
+  },
+  {
+   "wp_id": "wpu-494",
+   "name": "Reinhardt cardinals",
+   "field": "Set theory",
+   "article_title": "Reinhardt cardinal",
+   "article_url": "https://en.wikipedia.org/wiki/Reinhardt_cardinal",
+   "article_revid": 1373724236,
+   "slug": "wiki-reinhardt-cardinals"
+  },
+  {
+   "wp_id": "wpu-495",
+   "name": "Baum–Connes conjecture",
+   "field": "Topology",
+   "article_title": "Baum–Connes conjecture",
+   "article_url": "https://en.wikipedia.org/wiki/Baum%E2%80%93Connes_conjecture",
+   "article_revid": 1332178586,
+   "slug": "wiki-baum-connes-conjecture"
+  },
+  {
+   "wp_id": "wpu-496",
+   "name": "Berge conjecture",
+   "field": "Topology",
+   "article_title": "Berge knot",
+   "article_url": "https://en.wikipedia.org/wiki/Berge_knot",
+   "article_revid": 1100130558,
+   "slug": "wiki-berge-conjecture"
+  },
+  {
+   "wp_id": "wpu-497",
+   "name": "Bing–Borsuk conjecture",
+   "field": "Topology",
+   "article_title": "Bing–Borsuk conjecture",
+   "article_url": "https://en.wikipedia.org/wiki/Bing%E2%80%93Borsuk_conjecture",
+   "article_revid": 1299137183,
+   "slug": "wiki-bing-borsuk-conjecture"
+  },
+  {
+   "wp_id": "wpu-498",
+   "name": "Borel conjecture",
+   "field": "Topology",
+   "article_title": "Borel conjecture",
+   "article_url": "https://en.wikipedia.org/wiki/Borel_conjecture",
+   "article_revid": 1352659656,
+   "slug": "wiki-borel-conjecture"
+  },
+  {
+   "wp_id": "wpu-499",
+   "name": "Halperin conjecture",
+   "field": "Topology",
+   "article_title": "Halperin conjecture",
+   "article_url": "https://en.wikipedia.org/wiki/Halperin_conjecture",
+   "article_revid": 1282143871,
+   "slug": "wiki-halperin-conjecture"
+  },
+  {
+   "wp_id": "wpu-500",
+   "name": "Hilbert–Smith conjecture",
+   "field": "Topology",
+   "article_title": "Hilbert–Smith conjecture",
+   "article_url": "https://en.wikipedia.org/wiki/Hilbert%E2%80%93Smith_conjecture",
+   "article_revid": 1378984859,
+   "slug": "wiki-hilbert-smith-conjecture"
+  },
+  {
+   "wp_id": "wpu-501",
+   "name": "Mazur's conjectures",
+   "field": "Topology",
+   "slug": "wiki-mazurs-conjectures"
+  },
+  {
+   "wp_id": "wpu-502",
+   "name": "Novikov conjecture",
+   "field": "Topology",
+   "article_title": "Novikov conjecture",
+   "article_url": "https://en.wikipedia.org/wiki/Novikov_conjecture",
+   "article_revid": 1365437040,
+   "slug": "wiki-novikov-conjecture"
+  },
+  {
+   "wp_id": "wpu-503",
+   "name": "Quadrisecants of wild knots",
+   "field": "Topology",
+   "article_title": "Quadrisecant",
+   "article_url": "https://en.wikipedia.org/wiki/Quadrisecant",
+   "article_revid": 1350938227,
+   "slug": "wiki-quadrisecants-of-wild-knots"
+  },
+  {
+   "wp_id": "wpu-504",
+   "name": "Telescope conjecture",
+   "field": "Topology",
+   "article_title": "Ravenel's conjectures",
+   "article_url": "https://en.wikipedia.org/wiki/Ravenel's_conjectures",
+   "article_revid": 1373865173,
+   "slug": "wiki-telescope-conjecture"
+  },
+  {
+   "wp_id": "wpu-505",
+   "name": "Unknotting problem",
+   "field": "Topology",
+   "article_title": "Unknotting problem",
+   "article_url": "https://en.wikipedia.org/wiki/Unknotting_problem",
+   "article_revid": 1319444503,
+   "slug": "wiki-unknotting-problem"
+  },
+  {
+   "wp_id": "wpu-506",
+   "name": "Volume conjecture",
+   "field": "Topology",
+   "article_title": "Volume conjecture",
+   "article_url": "https://en.wikipedia.org/wiki/Volume_conjecture",
+   "article_revid": 1323104054,
+   "slug": "wiki-volume-conjecture"
+  },
+  {
+   "wp_id": "wpu-507",
+   "name": "Whitehead conjecture",
+   "field": "Topology",
+   "article_title": "Whitehead conjecture",
+   "article_url": "https://en.wikipedia.org/wiki/Whitehead_conjecture",
+   "article_revid": 1379499348,
+   "slug": "wiki-whitehead-conjecture"
+  },
+  {
+   "wp_id": "wpu-508",
+   "name": "Zeeman conjecture",
+   "field": "Topology",
+   "article_title": "Zeeman conjecture",
+   "article_url": "https://en.wikipedia.org/wiki/Zeeman_conjecture",
+   "article_revid": 1314394005,
+   "slug": "wiki-zeeman-conjecture"
+  },
+  {
+   "wp_id": "wpu-509",
+   "name": "Nearby Lagrangian conjecture",
+   "field": "Topology",
+   "article_title": "Nearby Lagrangian conjecture",
+   "article_url": "https://en.wikipedia.org/wiki/Nearby_Lagrangian_conjecture",
+   "article_revid": 1379563873,
+   "slug": "wiki-nearby-lagrangian-conjecture"
+  }
+ ],
+ "solved": [
+  {
+   "wp_id": "wps-000",
+   "name": "Jacobian conjecture for more than 2 dimensions",
+   "field": "Algebra",
+   "year": 2026,
+   "outcome": "disproved",
+   "ai_involved": true,
+   "article_title": "Jacobian conjecture",
+   "article_url": "https://en.wikipedia.org/wiki/Jacobian_conjecture",
+   "article_revid": 1379430084,
+   "slug": "solved-jacobian-conjecture-for-more-than-2-dimensions"
+  },
+  {
+   "wp_id": "wps-001",
+   "field": "Algebra",
+   "year": 2026,
+   "outcome": "disproved",
+   "ai_involved": true,
+   "article_title": "Dixmier conjecture",
+   "article_url": "https://en.wikipedia.org/wiki/Dixmier_conjecture",
+   "article_revid": 1372312095,
+   "slug": "solved-dixmier-conjecture"
+  },
+  {
+   "wp_id": "wps-002",
+   "name": "Mazur's conjecture B",
+   "field": "Algebra",
+   "year": 2020,
+   "outcome": "proved/solved",
+   "article_title": "Uniform boundedness conjecture for rational points",
+   "article_url": "https://en.wikipedia.org/wiki/Uniform_boundedness_conjecture_for_rational_points",
+   "article_revid": 1370970295,
+   "slug": "solved-mazurs-conjecture-b"
+  },
+  {
+   "wp_id": "wps-003",
+   "name": "Suita conjecture",
+   "field": "Algebra",
+   "year": 2015,
+   "outcome": "proved/solved",
+   "article_title": "Suita conjecture",
+   "article_url": "https://en.wikipedia.org/wiki/Suita_conjecture",
+   "article_revid": 1314675079,
+   "slug": "solved-suita-conjecture"
+  },
+  {
+   "wp_id": "wps-004",
+   "name": "Existence of a non-sofic, discrete, countable group",
+   "field": "Algebra",
+   "year": 2026,
+   "outcome": "existence established",
+   "ai_involved": true,
+   "article_title": "Sofic group",
+   "article_url": "https://en.wikipedia.org/wiki/Sofic_group",
+   "article_revid": 1379204069,
+   "slug": "solved-existence-of-a-non-sofic-discrete-countable-group"
+  },
+  {
+   "wp_id": "wps-005",
+   "name": "Umbral moonshine conjecture",
+   "field": "Algebra",
+   "year": 2015,
+   "outcome": "proved/solved",
+   "article_title": "Umbral moonshine",
+   "article_url": "https://en.wikipedia.org/wiki/Umbral_moonshine",
+   "article_revid": 1358752712,
+   "slug": "solved-umbral-moonshine-conjecture"
+  },
+  {
+   "wp_id": "wps-006",
+   "name": "Sendov's conjecture and Phelps–Rodriguez conjecture",
+   "field": "Analysis",
+   "year": 2026,
+   "outcome": "proved/solved",
+   "ai_involved": true,
+   "article_title": "Sendov's conjecture",
+   "article_url": "https://en.wikipedia.org/wiki/Sendov's_conjecture",
+   "article_revid": 1375438065,
+   "slug": "solved-sendovs-conjecture-and-phelps-rodriguez-conjecture"
+  },
+  {
+   "wp_id": "wps-007",
+   "name": "Crouzeix's conjecture",
+   "field": "Analysis",
+   "year": 2026,
+   "outcome": "proved/solved",
+   "ai_involved": true,
+   "article_title": "Crouzeix's conjecture",
+   "article_url": "https://en.wikipedia.org/wiki/Crouzeix's_conjecture",
+   "article_revid": 1375036072,
+   "slug": "solved-crouzeixs-conjecture"
+  },
+  {
+   "wp_id": "wps-008",
+   "name": "Heil–Ramanathan–Topiwala conjecture",
+   "field": "Analysis",
+   "year": 2026,
+   "outcome": "proved/solved",
+   "ai_involved": true,
+   "article_title": "Heil–Ramanathan–Topiwala conjecture",
+   "article_url": "https://en.wikipedia.org/wiki/Heil%E2%80%93Ramanathan%E2%80%93Topiwala_conjecture",
+   "slug": "solved-heil-ramanathan-topiwala-conjecture"
+  },
+  {
+   "wp_id": "wps-009",
+   "name": "Mizohata–Takeuchi conjecture",
+   "field": "Analysis",
+   "year": 2025,
+   "outcome": "proved/solved",
+   "article_title": "Mizohata–Takeuchi conjecture",
+   "article_url": "https://en.wikipedia.org/wiki/Mizohata%E2%80%93Takeuchi_conjecture",
+   "article_revid": 1355387383,
+   "slug": "solved-mizohata-takeuchi-conjecture"
+  },
+  {
+   "wp_id": "wps-010",
+   "name": "Erdős unit distance conjecture",
+   "field": "Combinatorics",
+   "year": 2026,
+   "outcome": "proved/solved",
+   "ai_involved": true,
+   "article_title": "Unit distance graph",
+   "article_url": "https://en.wikipedia.org/wiki/Unit_distance_graph",
+   "article_revid": 1368111232,
+   "slug": "solved-erdos-unit-distance-conjecture"
+  },
+  {
+   "wp_id": "wps-011",
+   "name": "Bunkbed conjecture",
+   "field": "Combinatorics",
+   "year": 2025,
+   "outcome": "proved/solved",
+   "article_title": "Bunkbed conjecture",
+   "article_url": "https://en.wikipedia.org/wiki/Bunkbed_conjecture",
+   "article_revid": 1371320901,
+   "slug": "solved-bunkbed-conjecture"
+  },
+  {
+   "wp_id": "wps-012",
+   "name": "Erdős sumset conjecture",
+   "field": "Combinatorics",
+   "year": 2018,
+   "outcome": "proved/solved",
+   "article_title": "Erdős sumset conjecture",
+   "article_url": "https://en.wikipedia.org/wiki/Erd%C5%91s_sumset_conjecture",
+   "article_revid": 1212046137,
+   "slug": "solved-erdos-sumset-conjecture"
+  },
+  {
+   "wp_id": "wps-013",
+   "field": "Combinatorics",
+   "year": 2018,
+   "outcome": "proved/solved",
+   "article_title": "Simplicial sphere",
+   "article_url": "https://en.wikipedia.org/wiki/Simplicial_sphere",
+   "article_revid": 1339183167,
+   "slug": "solved-simplicial-sphere"
+  },
+  {
+   "wp_id": "wps-014",
+   "name": "Upper bound for the cap set problem",
+   "field": "Combinatorics",
+   "year": 2016,
+   "outcome": "bound established",
+   "article_title": "Cap set",
+   "article_url": "https://en.wikipedia.org/wiki/Cap_set",
+   "article_revid": 1376894769,
+   "slug": "solved-upper-bound-for-the-cap-set-problem"
+  },
+  {
+   "wp_id": "wps-015",
+   "name": "Erdős discrepancy problem",
+   "field": "Combinatorics",
+   "year": 2015,
+   "outcome": "proved/solved",
+   "article_title": "Sign sequence",
+   "article_url": "https://en.wikipedia.org/wiki/Sign_sequence#Erd.C5.91s_discrepancy_problem",
+   "article_revid": 1359382743,
+   "slug": "solved-erdos-discrepancy-problem"
+  },
+  {
+   "wp_id": "wps-016",
+   "field": "Dynamical systems",
+   "year": 2025,
+   "outcome": "proved/solved",
+   "article_title": "Alexandre Eremenko",
+   "article_url": "https://en.wikipedia.org/wiki/Alexandre_Eremenko",
+   "article_revid": 1370883779,
+   "slug": "solved-alexandre-eremenko"
+  },
+  {
+   "wp_id": "wps-017",
+   "name": "Zimmer's conjecture",
+   "field": "Dynamical systems",
+   "year": 2017,
+   "outcome": "proved/solved",
+   "article_title": "Zimmer's conjecture",
+   "article_url": "https://en.wikipedia.org/wiki/Zimmer's_conjecture",
+   "article_revid": 1372966751,
+   "slug": "solved-zimmers-conjecture"
+  },
+  {
+   "wp_id": "wps-018",
+   "name": "Existence of a non-terminating game of beggar-my-neighbour",
+   "field": "Game theory",
+   "year": 2024,
+   "outcome": "existence established",
+   "article_title": "Beggar-my-neighbour",
+   "article_url": "https://en.wikipedia.org/wiki/Beggar-my-neighbour",
+   "article_revid": 1353100859,
+   "slug": "solved-existence-of-a-non-terminating-game-of-beggar-my-neighbour"
+  },
+  {
+   "wp_id": "wps-019",
+   "field": "Geometry",
+   "year": 2026,
+   "outcome": "existence established",
+   "ai_involved": true,
+   "slug": "solved-existence-of-a-complex-structure-on-s-6"
+  },
+  {
+   "wp_id": "wps-020",
+   "name": "Talagrand's convexity conjecture",
+   "field": "Geometry",
+   "year": 2026,
+   "outcome": "proved/solved",
+   "ai_involved": true,
+   "article_title": "Talagrand's convexity conjecture",
+   "article_url": "https://en.wikipedia.org/wiki/Talagrand's_convexity_conjecture",
+   "slug": "solved-talagrands-convexity-conjecture"
+  },
+  {
+   "wp_id": "wps-021",
+   "field": "Geometry",
+   "year": 2025,
+   "outcome": "proved/solved",
+   "article_title": "Carathéodory conjecture",
+   "article_url": "https://en.wikipedia.org/wiki/Carath%C3%A9odory_conjecture",
+   "article_revid": 1372799597,
+   "slug": "solved-caratheodory-conjecture"
+  },
+  {
+   "wp_id": "wps-022",
+   "name": "Einstein problem",
+   "field": "Geometry",
+   "year": 2024,
+   "outcome": "proved/solved",
+   "article_title": "Einstein problem",
+   "article_url": "https://en.wikipedia.org/wiki/Einstein_problem",
+   "article_revid": 1378693021,
+   "slug": "solved-einstein-problem"
+  },
+  {
+   "wp_id": "wps-023",
+   "name": "Egan conjecture",
+   "field": "Geometry",
+   "year": 2023,
+   "outcome": "proved/solved",
+   "article_title": "Egan conjecture",
+   "article_url": "https://en.wikipedia.org/wiki/Egan_conjecture",
+   "article_revid": 1267315539,
+   "slug": "solved-egan-conjecture"
+  },
+  {
+   "wp_id": "wps-024",
+   "name": "Keller's conjecture",
+   "field": "Geometry",
+   "year": 2019,
+   "outcome": "proved/solved",
+   "article_title": "Keller's conjecture",
+   "article_url": "https://en.wikipedia.org/wiki/Keller's_conjecture",
+   "article_revid": 1369045399,
+   "slug": "solved-kellers-conjecture"
+  },
+  {
+   "wp_id": "wps-025",
+   "name": "Maximal rank conjecture",
+   "field": "Geometry",
+   "year": 2018,
+   "outcome": "proved/solved",
+   "article_title": "Maximal rank conjecture",
+   "article_url": "https://en.wikipedia.org/wiki/Maximal_rank_conjecture",
+   "slug": "solved-maximal-rank-conjecture"
+  },
+  {
+   "wp_id": "wps-026",
+   "name": "Weibel's conjecture",
+   "field": "Geometry",
+   "year": 2018,
+   "outcome": "proved/solved",
+   "article_title": "Weibel's conjecture",
+   "article_url": "https://en.wikipedia.org/wiki/Weibel's_conjecture",
+   "article_revid": 1353225474,
+   "slug": "solved-weibels-conjecture"
+  },
+  {
+   "wp_id": "wps-027",
+   "name": "Yau's conjecture",
+   "field": "Geometry",
+   "year": 2018,
+   "outcome": "proved/solved",
+   "article_title": "Yau's conjecture",
+   "article_url": "https://en.wikipedia.org/wiki/Yau's_conjecture",
+   "article_revid": 1373962160,
+   "slug": "solved-yaus-conjecture"
+  },
+  {
+   "wp_id": "wps-028",
+   "name": "Pentagonal tiling",
+   "field": "Geometry",
+   "year": 2017,
+   "outcome": "proved/solved",
+   "article_title": "Pentagonal tiling",
+   "article_url": "https://en.wikipedia.org/wiki/Pentagonal_tiling",
+   "article_revid": 1375418007,
+   "slug": "solved-pentagonal-tiling"
+  },
+  {
+   "wp_id": "wps-029",
+   "name": "Dinitz–Garg–Goemans conjecture",
+   "field": "Graph theory",
+   "year": 2026,
+   "outcome": "proved/solved",
+   "ai_involved": true,
+   "article_title": "Dinitz–Garg–Goemans conjecture",
+   "article_url": "https://en.wikipedia.org/wiki/Dinitz%E2%80%93Garg%E2%80%93Goemans_conjecture",
+   "article_revid": 1367536285,
+   "slug": "solved-dinitz-garg-goemans-conjecture"
+  },
+  {
+   "wp_id": "wps-030",
+   "name": "Kahn–Kalai conjecture",
+   "field": "Graph theory",
+   "year": 2022,
+   "outcome": "proved/solved",
+   "article_title": "Kahn–Kalai conjecture",
+   "article_url": "https://en.wikipedia.org/wiki/Kahn%E2%80%93Kalai_conjecture",
+   "article_revid": 1277997931,
+   "slug": "solved-kahn-kalai-conjecture"
+  },
+  {
+   "wp_id": "wps-031",
+   "name": "Blankenship–Oporowski conjecture on the book thickness of subdivisions",
+   "field": "Graph theory",
+   "year": 2021,
+   "outcome": "proved/solved",
+   "article_title": "Book embedding",
+   "article_url": "https://en.wikipedia.org/wiki/Book_embedding#Behavior_under_subdivisions",
+   "article_revid": 1375441445,
+   "slug": "solved-blankenship-oporowski-conjecture-on-the-book-thickness-of"
+  },
+  {
+   "wp_id": "wps-032",
+   "field": "Graph theory",
+   "year": 2020,
+   "outcome": "proved/solved",
+   "article_title": "Graceful labeling",
+   "article_url": "https://en.wikipedia.org/wiki/Graceful_labeling",
+   "article_revid": 1365285331,
+   "slug": "solved-graceful-labeling"
+  },
+  {
+   "wp_id": "wps-033",
+   "name": "Hedetniemi's conjecture on the chromatic number of tensor products of graphs",
+   "field": "Graph theory",
+   "year": 2019,
+   "outcome": "disproved",
+   "article_title": "Hedetniemi's conjecture",
+   "article_url": "https://en.wikipedia.org/wiki/Hedetniemi's_conjecture",
+   "article_revid": 1377990813,
+   "slug": "solved-hedetniemis-conjecture-on-the-chromatic-number-of-tensor"
+  },
+  {
+   "wp_id": "wps-034",
+   "name": "Kelmans–Seymour conjecture",
+   "field": "Graph theory",
+   "year": 2020,
+   "outcome": "proved/solved",
+   "article_title": "Kelmans–Seymour conjecture",
+   "article_url": "https://en.wikipedia.org/wiki/Kelmans%E2%80%93Seymour_conjecture",
+   "article_revid": 1320301793,
+   "slug": "solved-kelmans-seymour-conjecture"
+  },
+  {
+   "wp_id": "wps-035",
+   "name": "Goldberg–Seymour conjecture",
+   "field": "Graph theory",
+   "year": 2019,
+   "outcome": "proved/solved",
+   "article_title": "Goldberg–Seymour conjecture",
+   "article_url": "https://en.wikipedia.org/wiki/Goldberg%E2%80%93Seymour_conjecture",
+   "article_revid": 1296447412,
+   "slug": "solved-goldberg-seymour-conjecture"
+  },
+  {
+   "wp_id": "wps-036",
+   "name": "Babai's problem",
+   "field": "Graph theory",
+   "year": 2015,
+   "outcome": "proved/solved",
+   "article_title": "Babai's problem",
+   "article_url": "https://en.wikipedia.org/wiki/Babai's_problem",
+   "article_revid": 1222845732,
+   "slug": "solved-babais-problem"
+  },
+  {
+   "wp_id": "wps-037",
+   "name": "André–Oort conjecture",
+   "field": "Number theory",
+   "year": 2021,
+   "outcome": "proved/solved",
+   "article_title": "André–Oort conjecture",
+   "article_url": "https://en.wikipedia.org/wiki/Andr%C3%A9%E2%80%93Oort_conjecture",
+   "article_revid": 1367211126,
+   "slug": "solved-andre-oort-conjecture"
+  },
+  {
+   "wp_id": "wps-038",
+   "name": "Duffin–Schaeffer theorem",
+   "field": "Number theory",
+   "year": 2019,
+   "outcome": "proved/solved",
+   "article_title": "Duffin–Schaeffer theorem",
+   "article_url": "https://en.wikipedia.org/wiki/Duffin%E2%80%93Schaeffer_theorem",
+   "article_revid": 1335309497,
+   "slug": "solved-duffin-schaeffer-theorem"
+  },
+  {
+   "wp_id": "wps-039",
+   "name": "Main conjecture in Vinogradov's mean-value theorem",
+   "field": "Number theory",
+   "year": 2015,
+   "outcome": "proved/solved",
+   "article_title": "Vinogradov's mean-value theorem",
+   "article_url": "https://en.wikipedia.org/wiki/Vinogradov's_mean-value_theorem",
+   "article_revid": 1369829733,
+   "slug": "solved-main-conjecture-in-vinogradovs-mean-value-theorem"
+  },
+  {
+   "wp_id": "wps-040",
+   "name": "Burr–Erdős conjecture",
+   "field": "Ramsey theory",
+   "year": 2017,
+   "outcome": "proved/solved",
+   "article_title": "Burr–Erdős conjecture",
+   "article_url": "https://en.wikipedia.org/wiki/Burr%E2%80%93Erd%C5%91s_conjecture",
+   "article_revid": 1374682312,
+   "slug": "solved-burr-erdos-conjecture"
+  },
+  {
+   "wp_id": "wps-041",
+   "name": "Boolean Pythagorean triples problem",
+   "field": "Ramsey theory",
+   "year": 2016,
+   "outcome": "proved/solved",
+   "article_title": "Boolean Pythagorean triples problem",
+   "article_url": "https://en.wikipedia.org/wiki/Boolean_Pythagorean_triples_problem",
+   "article_revid": 1374851553,
+   "slug": "solved-boolean-pythagorean-triples-problem"
+  },
+  {
+   "wp_id": "wps-042",
+   "name": "Sensitivity conjecture for Boolean functions",
+   "field": "Theoretical computer science",
+   "year": 2019,
+   "outcome": "proved/solved",
+   "article_title": "Sensitivity theorem",
+   "article_url": "https://en.wikipedia.org/wiki/Sensitivity_theorem",
+   "article_revid": 1376326715,
+   "slug": "solved-sensitivity-conjecture-for-boolean-functions"
+  },
+  {
+   "wp_id": "wps-043",
+   "name": "Deciding whether the Conway knot is a slice knot",
+   "field": "Topology",
+   "year": 2020,
+   "outcome": "decided",
+   "article_title": "Conway knot",
+   "article_url": "https://en.wikipedia.org/wiki/Conway_knot",
+   "article_revid": 1372593518,
+   "slug": "solved-deciding-whether-the-conway-knot-is-a-slice-knot"
+  }
+ ]
+}

@@ -1,0 +1,199 @@
+"""The composer's mode switch: "Informal only / Informal + formalization" (prove)
+and, when the server offers it, "Analyze" (run_kind "analyze")."""
+from __future__ import annotations
+
+import json
+from pathlib import Path
+import re
+import shutil
+import subprocess
+import unittest
+
+HTML = (
+    Path(__file__).parents[1] / "agent_monitor" / "web" / "console.html"
+).read_text(encoding="utf-8")
+SCRIPT = HTML.rsplit("<script>", 1)[1].split("</script>", 1)[0]
+NODE = shutil.which("node")
+if not NODE and Path("/home/ubuntu/.local/node24/bin/node").is_file():
+    NODE = "/home/ubuntu/.local/node24/bin/node"
+
+
+def _js_function(name: str) -> str:
+    start = SCRIPT.index(f"function {name}(")
+    opening = SCRIPT.index("{", start)
+    depth = 0
+    for index in range(opening, len(SCRIPT)):
+        if SCRIPT[index] == "{":
+            depth += 1
+        elif SCRIPT[index] == "}":
+            depth -= 1
+            if depth == 0:
+                return SCRIPT[start : index + 1]
+    raise AssertionError(f"unterminated JavaScript function: {name}")
+
+
+def _run(program: str) -> object:
+    result = subprocess.run([NODE, "-e", program], capture_output=True, text=True, check=False)
+    if result.returncode:
+        raise AssertionError(result.stderr)
+    return json.loads(result.stdout)
+
+
+# Elements are created on first use, so any id the code touches exists.
+_DOM = """
+const els={};
+const element=id=>els[id]||(els[id]={id,textContent:'',innerHTML:'',hidden:false,style:{width:''},classes:new Set(),
+  classList:{add(...c){c.forEach(x=>els[id].classes.add(x));},remove(...c){c.forEach(x=>els[id].classes.delete(x));}},
+  querySelectorAll:()=>[]});
+const $=element;
+"""
+
+
+class FormalizeSwitchTests(unittest.TestCase):
+    def test_switch_is_in_the_composer_and_new_runs_send_the_choice(self) -> None:
+        composer = HTML.split('<div class="prompt-shell">', 1)[1].split('<div class="choice-dock">', 1)[0]
+        self.assertIn('id="formalize-switch" role="radiogroup"', composer)
+        self.assertIn(">Informal only</button>", composer)
+        self.assertIn(">Informal + formalization</button>", composer)
+        # Tests and the video scripts click these selectors: they stay stable.
+        self.assertIn('data-formalize="0"', composer)
+        self.assertIn('data-formalize="1"', composer)
+        start = SCRIPT.index("const r=await fetch('/api/runs',{method:'POST'")
+        self.assertIn("formalize:formalizeChoice()", SCRIPT[start : SCRIPT.index("\n", start)])
+
+    def test_analyze_is_the_third_choice_and_starts_hidden(self) -> None:
+        switch = HTML.split('id="formalize-switch"', 1)[1].split("</div>", 1)[0]
+        radios = re.findall(r"<button[^>]*role=\"radio\"[^>]*>", switch)
+        self.assertEqual(len(radios), 3)
+        analyze = radios[2]
+        # Shown only once /api/engines advertises the analyze engine.
+        self.assertIn('data-run-kind="analyze"', analyze)
+        self.assertIn(" hidden", analyze)
+        self.assertIn('aria-checked="false"', analyze)
+        self.assertIn('tabindex="-1"', analyze)
+        self.assertIn('aria-label="Mode"', HTML.split('id="formalize-switch"', 1)[1].split(">", 1)[0])
+        self.assertIn("const RUN_KIND_KEY='proving-console-run-kind-v1';", SCRIPT)
+        composer = HTML.split('id="analyze-composer"', 1)[1].split('<div class="choice-dock">', 1)[0]
+        self.assertIn("Also formalize main statements in Lean (statements only)", composer)
+        self.assertIn('id="analyze-focus"', composer)
+        self.assertIn(
+            "Analyze sends the manuscript text to the selected model provider — sponsored Kimi K3 or your own "
+            "provider. Don't submit work you aren't allowed to share.",
+            composer,
+        )
+        self.assertIn("What would you like to analyze?".split(" analyze")[0], HTML)
+        self.assertIn("'Paste a link (arXiv, GitHub, openai/math, PDF/TeX URL) or paste a manuscript…'", SCRIPT)
+        # An analysis is its own request: run_kind, the analyze engine, one source.
+        start = SCRIPT.index("async function startAnalyzeRun(")
+        body = SCRIPT[start : SCRIPT.index("\n}\n", start)]
+        self.assertIn("run_kind:'analyze',engine:'analyze'", body)
+        self.assertIn("formalize:$('analyze-formalize').checked===true", body)
+        self.assertIn("request.source={url:source.url}", body)
+        self.assertIn("request.attachments=await initialAttachments.payload()", body)
+        self.assertIn("if(runKindChoice()==='analyze')return startAnalyzeRun();", SCRIPT)
+
+    @unittest.skipUnless(NODE, "node is unavailable")
+    def test_switch_defaults_to_formalization_and_remembers_informal_only(self) -> None:
+        key = SCRIPT.split("const FORMALIZE_KEY=", 1)[1].split(";", 1)[0]
+        source = "\n".join(
+            _js_function(name) for name in ("formalizeChoice", "renderFormalizeSwitch", "setFormalizeChoice")
+        )
+        # Without an advertised Analyze engine the switch is the old two-way one.
+        program = f"""
+const FORMALIZE_KEY={key};
+const store={{}};
+const localStorage={{getItem:k=>k in store?store[k]:null,setItem:(k,v)=>{{store[k]=String(v);}}}};
+const analyzeOffered=()=>false, runKindChoice=()=>'prove';
+const buttons=[{{formalize:'0'}},{{formalize:'1'}},{{runKind:'analyze'}}].map(dataset=>({{dataset,hidden:false,attrs:{{}},tabIndex:0,setAttribute(name,v){{this.attrs[name]=v;}}}}));
+const document={{querySelectorAll:()=>buttons}};
+{source}
+const checked=()=>buttons.filter(b=>b.attrs['aria-checked']==='true').map(b=>b.dataset.formalize||b.dataset.runKind);
+const out=[formalizeChoice()];
+renderFormalizeSwitch(); out.push(checked(),buttons[2].hidden);
+setFormalizeChoice(false); out.push(formalizeChoice(),checked(),Object.values(store));
+setFormalizeChoice(true); out.push(formalizeChoice(),checked());
+console.log(JSON.stringify(out));
+"""
+        self.assertEqual(_run(program), [True, ["1"], True, False, ["0"], ["0"], True, ["1"]])
+
+    @unittest.skipUnless(NODE, "node is unavailable")
+    def test_three_way_mode_keeps_the_proof_output_and_cycles_with_arrows(self) -> None:
+        keys = "\n".join(
+            SCRIPT.split(f"const {name}=", 1)[1].join([f"const {name}=", ""]).split(";", 1)[0] + ";"
+            for name in ("FORMALIZE_KEY", "RUN_KIND_KEY")
+        )
+        source = "\n".join(
+            _js_function(name)
+            for name in (
+                "formalizeChoice", "renderFormalizeSwitch", "setFormalizeChoice", "engineServesProve",
+                "analyzeEngineEntry", "analyzePolicy", "viewerIsAdmin", "analyzeOffered", "runKindChoice",
+                "modeRadios", "radioMode", "chooseMode", "nextModeRadio",
+            )
+        )
+        program = f"""
+{keys}
+const store={{}};
+const localStorage={{getItem:k=>k in store?store[k]:null,setItem:(k,v)=>{{store[k]=String(v);}}}};
+let ENGINES=[{{id:'kimi',modes:['prove']}},{{id:'analyze',modes:['analyze'],available:true,analyze:{{enabled:true}}}}];
+let CURRENT_USER={{guest:true}}, changes=0;
+const runKindChanged=()=>{{changes++;}};
+const buttons=[{{formalize:'0'}},{{formalize:'1'}},{{runKind:'analyze'}}].map(dataset=>({{dataset,hidden:dataset.runKind==='analyze',attrs:{{}},tabIndex:0,setAttribute(name,v){{this.attrs[name]=v;}}}}));
+const document={{querySelectorAll:()=>buttons}};
+{source}
+const checked=()=>buttons.filter(b=>b.attrs['aria-checked']==='true').map(b=>b.dataset.formalize||b.dataset.runKind);
+const out={{}};
+renderFormalizeSwitch(); out.offered=[buttons[2].hidden,checked()];
+chooseMode('analyze'); out.analyze=[runKindChoice(),checked(),formalizeChoice(),store[RUN_KIND_KEY],changes,buttons.map(b=>b.tabIndex)];
+chooseMode('informal'); out.informal=[runKindChoice(),checked(),formalizeChoice(),changes];
+chooseMode('formal'); out.formal=[runKindChoice(),checked(),formalizeChoice(),changes];
+out.keys=['ArrowRight','ArrowLeft','ArrowDown','ArrowUp','Home','End'].map(key=>radioMode(nextModeRadio(buttons[2],key)));
+// A saved Analyze choice falls back to Prove when the server stops offering it.
+chooseMode('analyze'); ENGINES=[{{id:'kimi',modes:['prove']}}]; renderFormalizeSwitch();
+out.withdrawn=[runKindChoice(),buttons[2].hidden,checked()];
+console.log(JSON.stringify(out));
+"""
+        out = _run(program)
+        self.assertEqual(out["offered"], [False, ["1"]])
+        # Analyze: only the Analyze radio is checked; the proof output is untouched.
+        self.assertEqual(out["analyze"], ["analyze", ["analyze"], True, "analyze", 1, [-1, -1, 0]])
+        self.assertEqual(out["informal"], ["prove", ["0"], False, 2])
+        self.assertEqual(out["formal"], ["prove", ["1"], True, 2])
+        # Arrows wrap through the three visible choices; Home and End jump.
+        self.assertEqual(out["keys"], ["informal", "formal", "informal", "formal", "informal", "analyze"])
+        self.assertEqual(out["withdrawn"], ["prove", True, ["1"]])
+
+    @unittest.skipUnless(NODE, "node is unavailable")
+    def test_stages_left_off_read_as_off_not_failed(self) -> None:
+        source = "\n".join(_js_function(name) for name in ("pipelineStageVisualStatus", "renderAutoPipeline"))
+        program = f"""
+{_DOM}
+const tabs={{lean:element('tab-lean'),dag:element('tab-dag')}};
+const document={{querySelector:selector=>selector.includes('"lean"')?tabs.lean:tabs.dag}};
+const escapeHtml=value=>String(value);
+let workspaceView='sandbox', autoPipelineKey='';
+const syncDagRebuild=()=>{{}}, refreshDagView=()=>{{}}, refreshLeanView=()=>{{}};
+{source}
+const off={{status:'off',outcome:'not_run',detail:'Formalization is off for this run'}};
+renderAutoPipeline({{status:'done',stages:{{informal_dag:{{status:'done',outcome:'success'}},lean:off,formal_dag:off,coverage:off}}}});
+const html=els['auto-pipeline-status'].innerHTML;
+console.log(JSON.stringify([(html.match(/pipeline-chip off/g)||[]).length,/pipeline-chip (skipped|error)/.test(html),[...tabs.lean.classes],[...tabs.dag.classes]]));
+"""
+        self.assertEqual(_run(program), [3, False, [], ["pipeline-done"]])
+
+    @unittest.skipUnless(NODE, "node is unavailable")
+    def test_lean_tab_explains_how_to_formalize_later(self) -> None:
+        source = "\n".join(
+            _js_function(name) for name in ("pipelineStageVisualStatus", "syncLeanPipelineEmptyState")
+        )
+        program = f"""
+{_DOM}
+const CURRENT_USER=null, setLeanBadge=()=>{{}}, leanStatus=()=>{{}};
+{source}
+const handled=syncLeanPipelineEmptyState({{stages:{{lean:{{status:'off',outcome:'not_run'}}}}}});
+console.log(JSON.stringify([handled,els['lean-progress-title'].textContent,els['lean-progress-detail'].textContent.includes('∎ Verify'),els['lean-progress-pct'].textContent]));
+"""
+        self.assertEqual(_run(program), [False, "Formalization is off for this run", True, "Off"])
+
+
+if __name__ == "__main__":
+    unittest.main()

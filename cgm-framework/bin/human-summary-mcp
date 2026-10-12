@@ -1,0 +1,12 @@
+#!/usr/bin/env bash
+# human-summary-mcp — launches the human-summary MCP service (role=main) for
+# Claude Code (.mcp.json) or any MCP client. Sources env so CGM_AGENTS_ROOT
+# etc. are set, and exports CGM_HUMAN_SUMMARY_SKILL_DIR so the assembler finds
+# the operator-editable fixed writer prompt (agents/skills/human-summary/REPORT_WRITER_PROMPT.md).
+set -euo pipefail
+HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+. "$HERE/../scripts/env.sh" >/dev/null 2>&1
+export CGM_ROLE="${CGM_ROLE:-main}"
+export CGM_AUTHOR="${CGM_AUTHOR:-main_agent}"
+export CGM_HUMAN_SUMMARY_SKILL_DIR="${CGM_HUMAN_SUMMARY_SKILL_DIR:-$CGM_ROOT/agents/skills/human-summary}"
+exec "$CGM_PY" -m cgm.human_summary "$@"

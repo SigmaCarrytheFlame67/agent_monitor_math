@@ -1,0 +1,7 @@
+interface:
+  display_name: "Generalize Problem"
+  short_description: "Prove a stronger statement that makes the goal a special case"
+  default_prompt: "Use $generalize-problem to formulate and prove a more general statement whose special case is the current goal, naming the mechanism that makes the generalization easier and verifying the specialization back to the original goal."
+
+policy:
+  allow_implicit_invocation: true

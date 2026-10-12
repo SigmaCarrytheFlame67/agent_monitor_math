@@ -1,7 +1,62 @@
 {
   "schema_version": 1,
-  "as_of": "2026-09-16",
+  "as_of": "2026-10-11",
   "items": [
+    {
+      "id": "openai-math-update-2026-10-07",
+      "title": "OpenAI withdraws three manuscripts and revises 14 in an update to openai/math",
+      "summary": "The October 7 update to OpenAI’s openai/math repository withdrew three manuscripts after a sign error in “Algebraicity of Weil classes on split abelian eightfolds” invalidated a stabilization-trace cancellation argument and the construction used by two dependent papers. It revised 14 other manuscripts, updated 13 more to cite the revisions, and added 6 formalizations and 5 supporting additions; the repository now reports 300 of 719 top-line results (about 42%) formalized.",
+      "url": "https://github.com/openai/math/blob/fd4aeeb2ee4fc729c18d98444fed42fd0529eeeb/history.md#october-7-2026",
+      "source": "openai-math",
+      "category": "mathematics",
+      "published_at": "2026-10-07T00:00:00Z",
+      "date_precision": "day",
+      "status": "Correction",
+      "importance": 3,
+      "topic": "ai-math-result",
+      "story_id": "openai-math",
+      "related_links": [
+        {
+          "label": "Commit 3014888 with these changes · October 8, 05:03 UTC",
+          "url": "https://github.com/openai/math/commit/301488868beec11bfd897168433b0a64f5258559"
+        },
+        {
+          "label": "Pull request #1 · merged October 8, 05:20 UTC",
+          "url": "https://github.com/openai/math/pull/1"
+        },
+        {
+          "label": "openai/math after the update · commit fd4aeeb",
+          "url": "https://github.com/openai/math/tree/fd4aeeb2ee4fc729c18d98444fed42fd0529eeeb"
+        }
+      ]
+    },
+    {
+      "id": "openai-math-release-2026-10-06",
+      "title": "OpenAI releases 722 manuscripts with AI-generated results on open problems",
+      "summary": "OpenAI published 722 mathematical manuscripts in 372 families in its openai/math repository, with Lean formalizations for part of them; 719 remain after the October 7 update. The repository says they were produced by an internal OpenAI model during evaluations on open research problems (the vast majority of results with an unreleased model and one fixed procedure), that the results are at different stages of verification, and that some unformalized results could have issues. The Association for Human Mathematics criticized the release.",
+      "url": "https://openai.com/index/sharing-ai-progress-in-mathematics",
+      "source": "openai",
+      "category": "mathematics",
+      "published_at": "2026-10-06T12:00:00Z",
+      "status": "Proof announced",
+      "importance": 3,
+      "topic": "ai-math-result",
+      "story_id": "openai-math",
+      "related_links": [
+        {
+          "label": "openai/math as released · commit adc7f12",
+          "url": "https://github.com/openai/math/tree/adc7f1241b42e322a6451854ab7e4b4c146bf78a"
+        },
+        {
+          "label": "Repository history · October 7 update (commit fd4aeeb)",
+          "url": "https://github.com/openai/math/blob/fd4aeeb2ee4fc729c18d98444fed42fd0529eeeb/history.md#october-7-2026"
+        },
+        {
+          "label": "Statement by the Association for Human Mathematics (guest post on Terence Tao’s blog)",
+          "url": "https://terrytao.wordpress.com/2026/10/07/ahm-statement-on-openais-october-6-release-of-mathematical-documents/"
+        }
+      ]
+    },
     {
       "id": "arxiv-zgcm-1-2026-09-11",
       "title": "ZGCM-1 publishes an open training recipe for math and search",
@@ -156,6 +211,6 @@
       ]
     }
   ],
-  "research_status": "complete; twelve reviewed records",
-  "date_note": "RSS timestamps are preserved where provided. The Anthropic newsroom provides September 1 as a calendar date only, represented at midnight UTC with date_precision=day. arXiv uses the first-submission timestamp, not its later feed announcement date."
+  "research_status": "complete; fourteen reviewed records",
+  "date_note": "RSS timestamps are preserved where provided. The Anthropic newsroom provides September 1 as a calendar date only, represented at midnight UTC with date_precision=day. arXiv uses the first-submission timestamp, not its later feed announcement date. The openai/math update uses the calendar date of its history.md section (October 7, 2026, date_precision=day); the commit is dated 2026-10-08T05:03:50Z. Repository links are pinned to commits: adc7f12 for the release state, fd4aeeb after the update."
 }

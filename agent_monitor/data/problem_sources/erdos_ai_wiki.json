@@ -1,0 +1,8917 @@
+{
+ "schema_version": 1,
+ "source": "teorth/erdosproblems wiki",
+ "page": "https://github.com/teorth/erdosproblems/wiki/AI-contributions-to-Erd%C5%91s-problems/c8ad4309d20120c67cb97faa86daa1443acee018",
+ "revision": "c8ad4309d20120c67cb97faa86daa1443acee018",
+ "url": "https://github.com/teorth/erdosproblems/wiki/AI-contributions-to-Erd%C5%91s-problems/c8ad4309d20120c67cb97faa86daa1443acee018/c8ad4309d20120c67cb97faa86daa1443acee018",
+ "sha256": "f74bb04c68431d7426f2546d7b8ae05e5c2191df7b2a1eac4d562ac5a686c988",
+ "fetched_at": "2026-10-11T01:55:00Z",
+ "frozen_on": "2026-06-30",
+ "colour_legend": {
+  "full": "🟢",
+  "partial": "🟡",
+  "incorrect": "🔴",
+  "unverified": "⚪"
+ },
+ "counts": {
+  "problems": 405,
+  "primary_problems": 207
+ },
+ "problems": {
+  "7": {
+   "rows": [
+    {
+     "section": "1(d)",
+     "outcome": "incorrect",
+     "systems": [
+      "Aristotle"
+     ],
+     "date": "2026-05-02"
+    }
+   ],
+   "best_primary": "incorrect",
+   "systems": [
+    "Aristotle"
+   ],
+   "last_primary_date": "2026-05-02",
+   "sections": [
+    "1(d)"
+   ]
+  },
+  "11": {
+   "rows": [
+    {
+     "section": "1(a)",
+     "outcome": "incorrect",
+     "systems": [
+      "Aristotle",
+      "GPT"
+     ],
+     "date": "2026-01-24"
+    }
+   ],
+   "best_primary": "incorrect",
+   "systems": [
+    "Aristotle",
+    "GPT"
+   ],
+   "last_primary_date": "2026-01-24",
+   "sections": [
+    "1(a)"
+   ]
+  },
+  "12": {
+   "rows": [
+    {
+     "section": "1(c)",
+     "outcome": "partial",
+     "lean": true,
+     "systems": [
+      "DeepMind prover agent"
+     ],
+     "date": "2026-04-07"
+    },
+    {
+     "section": "1(d)",
+     "outcome": "partial",
+     "systems": [
+      "GPT-5.4 Thinking"
+     ],
+     "date": "2026-04-07"
+    }
+   ],
+   "best_primary": "partial",
+   "partial_result": true,
+   "systems": [
+    "DeepMind prover agent",
+    "GPT-5.4 Thinking"
+   ],
+   "last_primary_date": "2026-04-07",
+   "sections": [
+    "1(c)",
+    "1(d)"
+   ]
+  },
+  "16": {
+   "rows": [
+    {
+     "section": "2(b)",
+     "outcome": "full",
+     "systems": [
+      "Antigravity",
+      "Gemini 3.1 Pro"
+     ],
+     "date": "2026-02-25"
+    }
+   ],
+   "sections": [
+    "2(b)"
+   ]
+  },
+  "21": {
+   "rows": [
+    {
+     "section": "1(d)",
+     "outcome": "partial",
+     "lean": true,
+     "systems": [
+      "Aristotle",
+      "GPT-5.5 Pro"
+     ],
+     "date": "2026-06-23"
+    }
+   ],
+   "best_primary": "partial",
+   "partial_result": true,
+   "systems": [
+    "Aristotle",
+    "GPT-5.5 Pro"
+   ],
+   "last_primary_date": "2026-06-23",
+   "sections": [
+    "1(d)"
+   ]
+  },
+  "24": {
+   "rows": [
+    {
+     "section": "2(b)",
+     "outcome": "full",
+     "systems": [
+      "Aristotle"
+     ],
+     "date": "2026-05-26"
+    }
+   ],
+   "sections": [
+    "2(b)"
+   ]
+  },
+  "25": {
+   "rows": [
+    {
+     "section": "1(d)",
+     "outcome": "partial",
+     "systems": [
+      "GPT-5.4 Pro"
+     ],
+     "date": "2026-03-19"
+    }
+   ],
+   "best_primary": "partial",
+   "partial_result": true,
+   "systems": [
+    "GPT-5.4 Pro"
+   ],
+   "last_primary_date": "2026-03-19",
+   "sections": [
+    "1(d)"
+   ]
+  },
+  "26": {
+   "rows": [
+    {
+     "section": "1(c)",
+     "outcome": "full",
+     "systems": [
+      "DeepMind prover agent"
+     ],
+     "date": "2026-04-06"
+    },
+    {
+     "section": "2(b)",
+     "outcome": "full",
+     "systems": [
+      "Aristotle"
+     ],
+     "date": "2025-12-28"
+    }
+   ],
+   "best_primary": "full",
+   "full_solution": true,
+   "systems": [
+    "DeepMind prover agent"
+   ],
+   "last_primary_date": "2026-04-06",
+   "sections": [
+    "1(c)",
+    "2(b)"
+   ]
+  },
+  "31": {
+   "rows": [
+    {
+     "section": "2(b)",
+     "outcome": "full",
+     "systems": [
+      "Aristotle",
+      "GPT"
+     ],
+     "date": "2025-11-24"
+    }
+   ],
+   "sections": [
+    "2(b)"
+   ]
+  },
+  "34": {
+   "rows": [
+    {
+     "section": "2(b)",
+     "outcome": "full",
+     "systems": [
+      "Aristotle"
+     ],
+     "date": "2026-02-05"
+    }
+   ],
+   "sections": [
+    "2(b)"
+   ]
+  },
+  "35": {
+   "rows": [
+    {
+     "section": "2(a)",
+     "outcome": "partial",
+     "systems": [
+      "GPT-5"
+     ],
+     "date": "2025-10-13"
+    }
+   ],
+   "sections": [
+    "2(a)"
+   ]
+  },
+  "36": {
+   "rows": [
+    {
+     "section": "1(a)",
+     "outcome": "unverified",
+     "systems": [
+      "GPT-5.5 Pro"
+     ],
+     "date": "2026-06-29"
+    },
+    {
+     "section": "1(c)",
+     "outcome": "partial",
+     "systems": [
+      "AlphaEvolve"
+     ],
+     "date": "2025-11-03"
+    }
+   ],
+   "best_primary": "partial",
+   "partial_result": true,
+   "systems": [
+    "AlphaEvolve",
+    "GPT-5.5 Pro"
+   ],
+   "last_primary_date": "2026-06-29",
+   "sections": [
+    "1(a)",
+    "1(c)"
+   ]
+  },
+  "38": {
+   "rows": [
+    {
+     "section": "1(a)",
+     "outcome": "full",
+     "systems": [
+      "GPT-5.5 Pro"
+     ],
+     "date": "2026-04-25"
+    },
+    {
+     "section": "2(b)",
+     "outcome": "full",
+     "systems": [
+      "Aristotle"
+     ],
+     "date": "2026-05-01"
+    }
+   ],
+   "best_primary": "full",
+   "full_solution": true,
+   "systems": [
+    "GPT-5.5 Pro"
+   ],
+   "last_primary_date": "2026-04-25",
+   "sections": [
+    "1(a)",
+    "2(b)"
+   ]
+  },
+  "42": {
+   "rows": [
+    {
+     "section": "1(a)",
+     "outcome": "partial",
+     "lean": true,
+     "systems": [
+      "Codex",
+      "GPT-5.2",
+      "GPT-5.2 Pro"
+     ],
+     "date": "2026-01-19"
+    },
+    {
+     "section": "1(d)",
+     "outcome": "full",
+     "systems": [
+      "GPT-5.5 Pro"
+     ],
+     "date": "2026-04-27"
+    },
+    {
+     "section": "2(b)",
+     "outcome": "full",
+     "systems": [
+      "Codex",
+      "GPT-5.5 Pro"
+     ],
+     "date": "2026-05-10"
+    }
+   ],
+   "best_primary": "full",
+   "full_solution": true,
+   "partial_result": true,
+   "systems": [
+    "Codex",
+    "GPT-5.2",
+    "GPT-5.2 Pro",
+    "GPT-5.5 Pro"
+   ],
+   "last_primary_date": "2026-04-27",
+   "sections": [
+    "1(a)",
+    "1(d)",
+    "2(b)"
+   ]
+  },
+  "43": {
+   "rows": [
+    {
+     "section": "1(c)",
+     "outcome": "partial",
+     "lean": true,
+     "new_proof": true,
+     "systems": [
+      "Aristotle"
+     ],
+     "date": "2025-12-04"
+    },
+    {
+     "section": "2(b)",
+     "outcome": "partial",
+     "systems": [
+      "Aristotle",
+      "Claude"
+     ],
+     "date": "2025-12-21"
+    }
+   ],
+   "best_primary": "partial",
+   "partial_result": true,
+   "systems": [
+    "Aristotle"
+   ],
+   "last_primary_date": "2025-12-04",
+   "sections": [
+    "1(c)",
+    "2(b)"
+   ]
+  },
+  "51": {
+   "rows": [
+    {
+     "section": "1(a)",
+     "outcome": "incorrect",
+     "systems": [
+      "ChatGPT free version"
+     ],
+     "date": "2026-01-11"
+    }
+   ],
+   "best_primary": "incorrect",
+   "systems": [
+    "ChatGPT free version"
+   ],
+   "last_primary_date": "2026-01-11",
+   "sections": [
+    "1(a)"
+   ]
+  },
+  "52": {
+   "rows": [
+    {
+     "section": "1(a)",
+     "outcome": "partial",
+     "variant": true,
+     "systems": [
+      "Claude Mythos"
+     ],
+     "date": "2026-06-03"
+    },
+    {
+     "section": "1(d)",
+     "outcome": "partial",
+     "variant": true,
+     "systems": [
+      "GPT-5.5 Pro"
+     ],
+     "date": "2026-05-28"
+    },
+    {
+     "section": "1(d)",
+     "outcome": "partial",
+     "variant": true,
+     "systems": [
+      "GPT-5.5"
+     ],
+     "date": "2026-05-28"
+    },
+    {
+     "section": "1(d)",
+     "outcome": "unverified",
+     "variant": true,
+     "systems": [
+      "GPT-5.5"
+     ],
+     "date": "2026-06-04"
+    }
+   ],
+   "best_primary": "partial",
+   "systems": [
+    "Claude Mythos",
+    "GPT-5.5",
+    "GPT-5.5 Pro"
+   ],
+   "last_primary_date": "2026-06-04",
+   "sections": [
+    "1(a)",
+    "1(d)"
+   ]
+  },
+  "56": {
+   "rows": [
+    {
+     "section": "2(b)",
+     "outcome": "full",
+     "systems": [
+      "Aristotle",
+      "GPT"
+     ],
+     "date": "2026-05-27"
+    }
+   ],
+   "sections": [
+    "2(b)"
+   ]
+  },
+  "66": {
+   "rows": [
+    {
+     "section": "2(a)",
+     "outcome": "partial",
+     "systems": [
+      "GPT-5"
+     ],
+     "date": "2025-10-13"
+    }
+   ],
+   "sections": [
+    "2(a)"
+   ]
+  },
+  "71": {
+   "rows": [
+    {
+     "section": "2(b)",
+     "outcome": "full",
+     "systems": [
+      "Aristotle",
+      "Claude Opus 4.7",
+      "GPT-5.5"
+     ],
+     "date": "2026-05-24"
+    }
+   ],
+   "sections": [
+    "2(b)"
+   ]
+  },
+  "75": {
+   "rows": [
+    {
+     "section": "1(a)",
+     "outcome": "partial",
+     "variant": true,
+     "systems": [
+      "Aletheia"
+     ],
+     "date": "2026-02-01"
+    },
+    {
+     "section": "1(c)",
+     "outcome": "partial",
+     "systems": [
+      "GPT-5.4 Pro"
+     ],
+     "date": "2026-04-12"
+    }
+   ],
+   "best_primary": "partial",
+   "partial_result": true,
+   "systems": [
+    "Aletheia",
+    "GPT-5.4 Pro"
+   ],
+   "last_primary_date": "2026-04-12",
+   "sections": [
+    "1(a)",
+    "1(c)"
+   ]
+  },
+  "81": {
+   "rows": [
+    {
+     "section": "1(d)",
+     "outcome": "partial",
+     "lean": true,
+     "systems": [
+      "Aristotle",
+      "GPT-5.5 Pro"
+     ],
+     "date": "2026-06-19"
+    }
+   ],
+   "best_primary": "partial",
+   "partial_result": true,
+   "systems": [
+    "Aristotle",
+    "GPT-5.5 Pro"
+   ],
+   "last_primary_date": "2026-06-19",
+   "sections": [
+    "1(d)"
+   ]
+  },
+  "90": {
+   "rows": [
+    {
+     "section": "1(a)",
+     "outcome": "full",
+     "systems": [
+      "OpenAI internal model"
+     ],
+     "date": "2026-05-20"
+    },
+    {
+     "section": "1(a)",
+     "outcome": "full",
+     "systems": [
+      "Claude Mythos"
+     ],
+     "date": "2026-05-26"
+    },
+    {
+     "section": "1(d)",
+     "outcome": "full",
+     "systems": [
+      "GPT-5.5 Pro"
+     ],
+     "date": "2026-06-09"
+    },
+    {
+     "section": "2(b)",
+     "outcome": "full",
+     "systems": [
+      "Aleph Prover"
+     ],
+     "date": "2026-06-12"
+    }
+   ],
+   "best_primary": "full",
+   "full_solution": true,
+   "systems": [
+    "Claude Mythos",
+    "GPT-5.5 Pro",
+    "OpenAI internal model"
+   ],
+   "last_primary_date": "2026-06-09",
+   "sections": [
+    "1(a)",
+    "1(d)",
+    "2(b)"
+   ]
+  },
+  "93": {
+   "rows": [
+    {
+     "section": "2(b)",
+     "outcome": "full",
+     "systems": [
+      "Aristotle",
+      "Claude Opus 4.5",
+      "Claude Opus 4.6",
+      "Gemini 3 Flash",
+      "Gemini 3 Pro",
+      "Numina Lean Agent"
+     ],
+     "date": "2026-02-17"
+    }
+   ],
+   "sections": [
+    "2(b)"
+   ]
+  },
+  "94": {
+   "rows": [
+    {
+     "section": "2(a)",
+     "outcome": "full",
+     "systems": [
+      "GPT-5"
+     ],
+     "date": "2025-11-02"
+    },
+    {
+     "section": "2(b)",
+     "outcome": "full",
+     "systems": [
+      "Codex",
+      "GPT-5.2 Thinking; Seed Prover"
+     ],
+     "date": "2026-01-15"
+    }
+   ],
+   "sections": [
+    "2(a)",
+    "2(b)"
+   ]
+  },
+  "105": {
+   "rows": [
+    {
+     "section": "2(b)",
+     "outcome": "full",
+     "systems": [
+      "Aristotle",
+      "GPT Pro"
+     ],
+     "date": "2025-11-17"
+    }
+   ],
+   "sections": [
+    "2(b)"
+   ]
+  },
+  "106": {
+   "rows": [
+    {
+     "section": "2(b)",
+     "outcome": "partial",
+     "systems": [
+      "Aristotle"
+     ],
+     "date": "2025-12-10"
+    }
+   ],
+   "sections": [
+    "2(b)"
+   ]
+  },
+  "115": {
+   "rows": [
+    {
+     "section": "2(b)",
+     "outcome": "full",
+     "systems": [
+      "Aristotle",
+      "Claude Opus 4.6",
+      "Claude Sonnet 4.6",
+      "Gemini 3 Flash",
+      "Gemini 3.1 Pro",
+      "ulam.ai scaffold with Gemini 3 Flash and Gemini 3.1 Pro"
+     ],
+     "date": "2026-03-03"
+    }
+   ],
+   "sections": [
+    "2(b)"
+   ]
+  },
+  "120": {
+   "rows": [
+    {
+     "section": "1(b)",
+     "outcome": "partial",
+     "lean": true,
+     "variant": true,
+     "systems": [
+      "DeepMind prover agent"
+     ],
+     "date": "2026-03-14"
+    },
+    {
+     "section": "2(a)",
+     "outcome": "full",
+     "variant": true,
+     "systems": [
+      "GPT-5.4 Thinking"
+     ],
+     "date": "2026-03-14"
+    }
+   ],
+   "best_primary": "partial",
+   "systems": [
+    "DeepMind prover agent"
+   ],
+   "last_primary_date": "2026-03-14",
+   "sections": [
+    "1(b)",
+    "2(a)"
+   ]
+  },
+  "124": {
+   "rows": [
+    {
+     "section": "1(a)",
+     "outcome": "partial",
+     "lean": true,
+     "systems": [
+      "Aristotle"
+     ],
+     "date": "2025-11-29"
+    }
+   ],
+   "best_primary": "partial",
+   "partial_result": true,
+   "systems": [
+    "Aristotle"
+   ],
+   "last_primary_date": "2025-11-29",
+   "sections": [
+    "1(a)"
+   ]
+  },
+  "125": {
+   "rows": [
+    {
+     "section": "1(a)",
+     "outcome": "partial",
+     "lean": true,
+     "variant": true,
+     "systems": [
+      "DeepMind prover agent"
+     ],
+     "date": "2026-02-21"
+    },
+    {
+     "section": "1(a)",
+     "outcome": "full",
+     "lean": true,
+     "systems": [
+      "DeepMind prover agent"
+     ],
+     "date": "2026-03-30"
+    }
+   ],
+   "best_primary": "full",
+   "full_solution": true,
+   "systems": [
+    "DeepMind prover agent"
+   ],
+   "last_primary_date": "2026-03-30",
+   "sections": [
+    "1(a)"
+   ]
+  },
+  "134": {
+   "rows": [
+    {
+     "section": "2(b)",
+     "outcome": "full",
+     "systems": [
+      "Aristotle"
+     ],
+     "date": "2026-02-07"
+    }
+   ],
+   "sections": [
+    "2(b)"
+   ]
+  },
+  "138": {
+   "rows": [
+    {
+     "section": "1(a)",
+     "outcome": "partial",
+     "lean": true,
+     "systems": [
+      "DeepMind prover agent"
+     ],
+     "date": "2026-04-10"
+    },
+    {
+     "section": "1(d)",
+     "outcome": "partial",
+     "variant": true,
+     "systems": [
+      "GPT-5.4 Thinking"
+     ],
+     "date": "2026-04-10"
+    }
+   ],
+   "best_primary": "partial",
+   "partial_result": true,
+   "systems": [
+    "DeepMind prover agent",
+    "GPT-5.4 Thinking"
+   ],
+   "last_primary_date": "2026-04-10",
+   "sections": [
+    "1(a)",
+    "1(d)"
+   ]
+  },
+  "150": {
+   "rows": [
+    {
+     "section": "2(b)",
+     "outcome": "full",
+     "systems": [
+      "Aristotle"
+     ],
+     "date": "2026-03-31"
+    }
+   ],
+   "sections": [
+    "2(b)"
+   ]
+  },
+  "152": {
+   "rows": [
+    {
+     "section": "1(b)",
+     "outcome": "full",
+     "lean": true,
+     "systems": [
+      "DeepMind prover agent"
+     ],
+     "date": "2026-04-03"
+    }
+   ],
+   "best_primary": "full",
+   "full_solution": true,
+   "systems": [
+    "DeepMind prover agent"
+   ],
+   "last_primary_date": "2026-04-03",
+   "sections": [
+    "1(b)"
+   ]
+  },
+  "154": {
+   "rows": [
+    {
+     "section": "2(b)",
+     "outcome": "full",
+     "systems": [
+      "Aristotle",
+      "GPT"
+     ],
+     "date": "2026-02-06"
+    }
+   ],
+   "sections": [
+    "2(b)"
+   ]
+  },
+  "164": {
+   "rows": [
+    {
+     "section": "2(b)",
+     "outcome": "full",
+     "systems": [
+      "Codex"
+     ],
+     "date": "2026-05-04"
+    }
+   ],
+   "sections": [
+    "2(b)"
+   ]
+  },
+  "165": {
+   "rows": [
+    {
+     "section": "2(b)",
+     "outcome": "partial",
+     "systems": [
+      "Trellis"
+     ],
+     "date": "2026-06-10"
+    }
+   ],
+   "sections": [
+    "2(b)"
+   ]
+  },
+  "167": {
+   "rows": [
+    {
+     "section": "2(a)",
+     "outcome": "partial",
+     "systems": [
+      "GPT-5"
+     ],
+     "date": "2025-10-12"
+    }
+   ],
+   "sections": [
+    "2(a)"
+   ]
+  },
+  "176": {
+   "rows": [
+    {
+     "section": "1(a)",
+     "outcome": "unverified",
+     "lean": true,
+     "systems": [
+      "Codex",
+      "GPT-5.5 Pro"
+     ],
+     "date": "2026-06-23"
+    },
+    {
+     "section": "1(b)",
+     "outcome": "partial",
+     "lean": true,
+     "systems": [
+      "Codex",
+      "GPT-5.5 Pro"
+     ],
+     "date": "2026-06-21"
+    }
+   ],
+   "best_primary": "partial",
+   "partial_result": true,
+   "systems": [
+    "Codex",
+    "GPT-5.5 Pro"
+   ],
+   "last_primary_date": "2026-06-23",
+   "sections": [
+    "1(a)",
+    "1(b)"
+   ]
+  },
+  "178": {
+   "rows": [
+    {
+     "section": "2(b)",
+     "outcome": "full",
+     "systems": [
+      "Aristotle"
+     ],
+     "date": "2026-04-21"
+    }
+   ],
+   "sections": [
+    "2(b)"
+   ]
+  },
+  "188": {
+   "rows": [
+    {
+     "section": "2(a)",
+     "outcome": "partial",
+     "systems": [
+      "GPT-5"
+     ],
+     "date": "2025-10-13"
+    }
+   ],
+   "sections": [
+    "2(a)"
+   ]
+  },
+  "189": {
+   "rows": [
+    {
+     "section": "2(b)",
+     "outcome": "full",
+     "systems": [
+      "Aristotle",
+      "Gemini 3 Pro"
+     ],
+     "date": "2025-12-17"
+    }
+   ],
+   "sections": [
+    "2(b)"
+   ]
+  },
+  "192": {
+   "rows": [
+    {
+     "section": "2(b)",
+     "outcome": "full",
+     "systems": [
+      "Aristotle"
+     ],
+     "date": "2026-05-10"
+    }
+   ],
+   "sections": [
+    "2(b)"
+   ]
+  },
+  "194": {
+   "rows": [
+    {
+     "section": "2(b)",
+     "outcome": "full",
+     "systems": [
+      "Aristotle"
+     ],
+     "date": "2026-04-15"
+    }
+   ],
+   "sections": [
+    "2(b)"
+   ]
+  },
+  "198": {
+   "rows": [
+    {
+     "section": "1(c)",
+     "outcome": "full",
+     "new_proof": true,
+     "systems": [
+      "AlphaProof"
+     ]
+    },
+    {
+     "section": "2(b)",
+     "outcome": "full",
+     "systems": [
+      "Aristotle",
+      "GPT"
+     ],
+     "date": "2025-11-24"
+    }
+   ],
+   "best_primary": "full",
+   "systems": [
+    "AlphaProof"
+   ],
+   "sections": [
+    "1(c)",
+    "2(b)"
+   ]
+  },
+  "199": {
+   "rows": [
+    {
+     "section": "2(b)",
+     "outcome": "full",
+     "systems": [
+      "Aristotle"
+     ],
+     "date": "2026-02-24"
+    }
+   ],
+   "sections": [
+    "2(b)"
+   ]
+  },
+  "202": {
+   "rows": [
+    {
+     "section": "1(d)",
+     "outcome": "full",
+     "systems": [
+      "GPT-5.4 Pro"
+     ],
+     "date": "2026-04-23"
+    },
+    {
+     "section": "1(d)",
+     "outcome": "unverified",
+     "systems": [
+      "GPT-5.5 Pro"
+     ],
+     "date": "2026-04-30"
+    },
+    {
+     "section": "2(b)",
+     "outcome": "full",
+     "systems": [
+      "Unspecified"
+     ],
+     "date": "2026-05-14"
+    }
+   ],
+   "best_primary": "full",
+   "full_solution": true,
+   "systems": [
+    "GPT-5.4 Pro",
+    "GPT-5.5 Pro"
+   ],
+   "last_primary_date": "2026-04-30",
+   "sections": [
+    "1(d)",
+    "2(b)"
+   ]
+  },
+  "204": {
+   "rows": [
+    {
+     "section": "2(b)",
+     "outcome": "full",
+     "systems": [
+      "Aristotle"
+     ],
+     "date": "2026-03-15"
+    }
+   ],
+   "sections": [
+    "2(b)"
+   ]
+  },
+  "205": {
+   "rows": [
+    {
+     "section": "1(a)",
+     "outcome": "full",
+     "lean": true,
+     "systems": [
+      "Aristotle",
+      "GPT-5.2 Thinking"
+     ],
+     "date": "2026-01-10"
+    }
+   ],
+   "best_primary": "full",
+   "full_solution": true,
+   "systems": [
+    "Aristotle",
+    "GPT-5.2 Thinking"
+   ],
+   "last_primary_date": "2026-01-10",
+   "sections": [
+    "1(a)"
+   ]
+  },
+  "206": {
+   "rows": [
+    {
+     "section": "2(b)",
+     "outcome": "full",
+     "systems": [
+      "Aristotle"
+     ],
+     "date": "2026-04-28"
+    }
+   ],
+   "sections": [
+    "2(b)"
+   ]
+  },
+  "209": {
+   "rows": [
+    {
+     "section": "2(b)",
+     "outcome": "full",
+     "systems": [
+      "AxiomProver"
+     ],
+     "date": "2026-06-19"
+    }
+   ],
+   "sections": [
+    "2(b)"
+   ]
+  },
+  "214": {
+   "rows": [
+    {
+     "section": "2(a)",
+     "outcome": "partial",
+     "systems": [
+      "ChatGPT Deep research",
+      "Gemini Deep Research"
+     ],
+     "date": "2026-02-20"
+    },
+    {
+     "section": "2(b)",
+     "outcome": "full",
+     "systems": [
+      "Aristotle"
+     ],
+     "date": "2026-03-02"
+    }
+   ],
+   "sections": [
+    "2(a)",
+    "2(b)"
+   ]
+  },
+  "218": {
+   "rows": [
+    {
+     "section": "1(b)",
+     "outcome": "partial",
+     "systems": [
+      "GPT"
+     ],
+     "date": "2026-01-28"
+    }
+   ],
+   "best_primary": "partial",
+   "partial_result": true,
+   "systems": [
+    "GPT"
+   ],
+   "last_primary_date": "2026-01-28",
+   "sections": [
+    "1(b)"
+   ]
+  },
+  "221": {
+   "rows": [
+    {
+     "section": "2(b)",
+     "outcome": "full",
+     "systems": [
+      "Aristotle"
+     ],
+     "date": "2026-01-31"
+    }
+   ],
+   "sections": [
+    "2(b)"
+   ]
+  },
+  "223": {
+   "rows": [
+    {
+     "section": "2(a)",
+     "outcome": "full",
+     "systems": [
+      "GPT-5"
+     ],
+     "date": "2025-10-13"
+    }
+   ],
+   "sections": [
+    "2(a)"
+   ]
+  },
+  "224": {
+   "rows": [
+    {
+     "section": "1(c)",
+     "outcome": "full",
+     "lean": true,
+     "new_proof": true,
+     "systems": [
+      "Codex",
+      "GPT-5.2 Thinking"
+     ],
+     "date": "2026-01-14"
+    }
+   ],
+   "best_primary": "full",
+   "systems": [
+    "Codex",
+    "GPT-5.2 Thinking"
+   ],
+   "last_primary_date": "2026-01-14",
+   "sections": [
+    "1(c)"
+   ]
+  },
+  "226": {
+   "rows": [
+    {
+     "section": "2(b)",
+     "outcome": "full",
+     "systems": [
+      "Aristotle"
+     ],
+     "date": "2025-12-29"
+    }
+   ],
+   "sections": [
+    "2(b)"
+   ]
+  },
+  "229": {
+   "rows": [
+    {
+     "section": "2(b)",
+     "outcome": "full",
+     "systems": [
+      "Aristotle"
+     ],
+     "date": "2025-12-28"
+    }
+   ],
+   "sections": [
+    "2(b)"
+   ]
+  },
+  "231": {
+   "rows": [
+    {
+     "section": "2(b)",
+     "outcome": "full",
+     "systems": [
+      "Aristotle"
+     ],
+     "date": "2026-05-09"
+    }
+   ],
+   "sections": [
+    "2(b)"
+   ]
+  },
+  "233": {
+   "rows": [
+    {
+     "section": "1(a)",
+     "outcome": "incorrect",
+     "systems": [
+      "GPT-5.2 Pro"
+     ],
+     "date": "2026-01-18"
+    }
+   ],
+   "best_primary": "incorrect",
+   "systems": [
+    "GPT-5.2 Pro"
+   ],
+   "last_primary_date": "2026-01-18",
+   "sections": [
+    "1(a)"
+   ]
+  },
+  "237": {
+   "rows": [
+    {
+     "section": "2(b)",
+     "outcome": "full",
+     "systems": [
+      "Aristotle"
+     ],
+     "date": "2026-04-04"
+    }
+   ],
+   "sections": [
+    "2(b)"
+   ]
+  },
+  "246": {
+   "rows": [
+    {
+     "section": "2(b)",
+     "outcome": "full",
+     "systems": [
+      "Aristotle"
+     ],
+     "date": "2025-12-28"
+    }
+   ],
+   "sections": [
+    "2(b)"
+   ]
+  },
+  "251": {
+   "rows": [
+    {
+     "section": "1(a)",
+     "outcome": "partial",
+     "variant": true,
+     "systems": [
+      "GPT-5.4 Pro"
+     ],
+     "date": "2026-04-15"
+    }
+   ],
+   "best_primary": "partial",
+   "systems": [
+    "GPT-5.4 Pro"
+   ],
+   "last_primary_date": "2026-04-15",
+   "sections": [
+    "1(a)"
+   ]
+  },
+  "258": {
+   "rows": [
+    {
+     "section": "1(c)",
+     "outcome": "full",
+     "systems": [
+      "GPT-5.4 Pro"
+     ],
+     "date": "2026-04-14"
+    },
+    {
+     "section": "2(b)",
+     "outcome": "full",
+     "systems": [
+      "Aristotle"
+     ],
+     "date": "2026-04-14"
+    }
+   ],
+   "best_primary": "full",
+   "full_solution": true,
+   "systems": [
+    "GPT-5.4 Pro"
+   ],
+   "last_primary_date": "2026-04-14",
+   "sections": [
+    "1(c)",
+    "2(b)"
+   ]
+  },
+  "259": {
+   "rows": [
+    {
+     "section": "2(b)",
+     "outcome": "full",
+     "systems": [
+      "Aristotle"
+     ],
+     "date": "2026-04-21"
+    }
+   ],
+   "sections": [
+    "2(b)"
+   ]
+  },
+  "263": {
+   "rows": [
+    {
+     "section": "1(a)",
+     "outcome": "partial",
+     "lean": true,
+     "systems": [
+      "Aristotle",
+      "Claude Opus 4.7",
+      "GPT-5.5 Pro"
+     ],
+     "date": "2026-05-09"
+    }
+   ],
+   "best_primary": "partial",
+   "partial_result": true,
+   "systems": [
+    "Aristotle",
+    "Claude Opus 4.7",
+    "GPT-5.5 Pro"
+   ],
+   "last_primary_date": "2026-05-09",
+   "sections": [
+    "1(a)"
+   ]
+  },
+  "264": {
+   "rows": [
+    {
+     "section": "1(c)",
+     "outcome": "partial",
+     "lean": true,
+     "new_proof": true,
+     "systems": [
+      "Aristotle"
+     ],
+     "date": "2025-12-18"
+    }
+   ],
+   "best_primary": "partial",
+   "partial_result": true,
+   "systems": [
+    "Aristotle"
+   ],
+   "last_primary_date": "2025-12-18",
+   "sections": [
+    "1(c)"
+   ]
+  },
+  "268": {
+   "rows": [
+    {
+     "section": "2(b)",
+     "outcome": "full",
+     "systems": [
+      "Aristotle"
+     ],
+     "date": "2026-05-26"
+    }
+   ],
+   "sections": [
+    "2(b)"
+   ]
+  },
+  "275": {
+   "rows": [
+    {
+     "section": "2(b)",
+     "outcome": "full",
+     "systems": [
+      "Aristotle"
+     ],
+     "date": "2026-01-20"
+    }
+   ],
+   "sections": [
+    "2(b)"
+   ]
+  },
+  "280": {
+   "rows": [
+    {
+     "section": "2(b)",
+     "outcome": "full",
+     "systems": [
+      "Aristotle"
+     ],
+     "date": "2026-04-18"
+    }
+   ],
+   "sections": [
+    "2(b)"
+   ]
+  },
+  "281": {
+   "rows": [
+    {
+     "section": "1(b)",
+     "outcome": "full",
+     "systems": [
+      "GPT-5.2 Pro"
+     ],
+     "date": "2026-01-17"
+    },
+    {
+     "section": "2(b)",
+     "outcome": "full",
+     "systems": [
+      "Aristotle",
+      "Gemini 3 Flash"
+     ],
+     "date": "2026-01-19"
+    },
+    {
+     "section": "2(c)",
+     "outcome": "full",
+     "systems": [
+      "Gemini 3 Pro",
+      "GPT-5.2 Pro"
+     ],
+     "date": "2026-01-17"
+    }
+   ],
+   "best_primary": "full",
+   "full_solution": true,
+   "systems": [
+    "GPT-5.2 Pro"
+   ],
+   "last_primary_date": "2026-01-17",
+   "sections": [
+    "1(b)",
+    "2(b)",
+    "2(c)"
+   ]
+  },
+  "283": {
+   "rows": [
+    {
+     "section": "1(d)",
+     "outcome": "full",
+     "systems": [
+      "GPT-5.5 Pro"
+     ],
+     "date": "2026-05-03"
+    },
+    {
+     "section": "2(b)",
+     "outcome": "partial",
+     "systems": [
+      "Aristotle"
+     ],
+     "date": "2026-03-28"
+    },
+    {
+     "section": "2(b)",
+     "outcome": "full",
+     "systems": [
+      "Claude Opus 4.7",
+      "GPT-5.5 Pro"
+     ],
+     "date": "2026-05-06"
+    }
+   ],
+   "best_primary": "full",
+   "full_solution": true,
+   "systems": [
+    "GPT-5.5 Pro"
+   ],
+   "last_primary_date": "2026-05-03",
+   "sections": [
+    "1(d)",
+    "2(b)"
+   ]
+  },
+  "288": {
+   "rows": [
+    {
+     "section": "1(d)",
+     "outcome": "unverified",
+     "systems": [
+      "GPT-5.5 Thinking"
+     ],
+     "date": "2026-05-03"
+    }
+   ],
+   "best_primary": "unverified",
+   "systems": [
+    "GPT-5.5 Thinking"
+   ],
+   "last_primary_date": "2026-05-03",
+   "sections": [
+    "1(d)"
+   ]
+  },
+  "290": {
+   "rows": [
+    {
+     "section": "2(b)",
+     "outcome": "full",
+     "systems": [
+      "Aristotle"
+     ],
+     "date": "2026-01-14"
+    }
+   ],
+   "sections": [
+    "2(b)"
+   ]
+  },
+  "296": {
+   "rows": [
+    {
+     "section": "2(b)",
+     "outcome": "full",
+     "systems": [
+      "Aristotle"
+     ],
+     "date": "2026-05-26"
+    }
+   ],
+   "sections": [
+    "2(b)"
+   ]
+  },
+  "303": {
+   "rows": [
+    {
+     "section": "2(b)",
+     "outcome": "full",
+     "systems": [
+      "Seed Prover"
+     ],
+     "date": "2025-12-21"
+    }
+   ],
+   "sections": [
+    "2(b)"
+   ]
+  },
+  "306": {
+   "rows": [
+    {
+     "section": "1(d)",
+     "outcome": "partial",
+     "lean": true,
+     "systems": [
+      "Claude",
+      "Claude Code"
+     ],
+     "date": "2026-06-17"
+    },
+    {
+     "section": "1(d)",
+     "outcome": "unverified",
+     "lean": true,
+     "systems": [
+      "Unspecified"
+     ],
+     "date": "2026-06-19"
+    },
+    {
+     "section": "2(a)",
+     "outcome": "partial",
+     "systems": [
+      "GPT-5.2 Thinking"
+     ],
+     "date": "2026-02-25"
+    }
+   ],
+   "best_primary": "partial",
+   "partial_result": true,
+   "systems": [
+    "Claude",
+    "Claude Code",
+    "Unspecified"
+   ],
+   "last_primary_date": "2026-06-19",
+   "sections": [
+    "1(d)",
+    "2(a)"
+   ]
+  },
+  "314": {
+   "rows": [
+    {
+     "section": "2(b)",
+     "outcome": "full",
+     "systems": [
+      "Aristotle"
+     ],
+     "date": "2026-04-01"
+    }
+   ],
+   "sections": [
+    "2(b)"
+   ]
+  },
+  "315": {
+   "rows": [
+    {
+     "section": "2(b)",
+     "outcome": "full",
+     "systems": [
+      "Aristotle"
+     ],
+     "date": "2026-01-31"
+    }
+   ],
+   "sections": [
+    "2(b)"
+   ]
+  },
+  "325": {
+   "rows": [
+    {
+     "section": "2(a)",
+     "outcome": "partial",
+     "systems": [
+      "ChatGPT Deep research"
+     ],
+     "date": "2026-03-09"
+    }
+   ],
+   "sections": [
+    "2(a)"
+   ]
+  },
+  "326": {
+   "rows": [
+    {
+     "section": "1(d)",
+     "outcome": "full",
+     "lean": true,
+     "systems": [
+      "Aristotle",
+      "Codex",
+      "GPT-5.5"
+     ],
+     "date": "2026-06-14"
+    }
+   ],
+   "best_primary": "full",
+   "full_solution": true,
+   "systems": [
+    "Aristotle",
+    "Codex",
+    "GPT-5.5"
+   ],
+   "last_primary_date": "2026-06-14",
+   "sections": [
+    "1(d)"
+   ]
+  },
+  "327": {
+   "rows": [
+    {
+     "section": "1(d)",
+     "outcome": "unverified",
+     "systems": [
+      "GPT-5.5",
+      "Rethlas"
+     ],
+     "date": "2026-05-13"
+    }
+   ],
+   "best_primary": "unverified",
+   "systems": [
+    "GPT-5.5",
+    "Rethlas"
+   ],
+   "last_primary_date": "2026-05-13",
+   "sections": [
+    "1(d)"
+   ]
+  },
+  "328": {
+   "rows": [
+    {
+     "section": "2(b)",
+     "outcome": "full",
+     "systems": [
+      "AxiomProver"
+     ],
+     "date": "2026-06-19"
+    }
+   ],
+   "sections": [
+    "2(b)"
+   ]
+  },
+  "330": {
+   "rows": [
+    {
+     "section": "1(d)",
+     "outcome": "full",
+     "systems": [
+      "GPT-5.5 Pro"
+     ],
+     "date": "2026-04-24"
+    },
+    {
+     "section": "2(a)",
+     "outcome": "incorrect",
+     "systems": [
+      "ChatGPT Deep research",
+      "Claude",
+      "Gemini Deep Research"
+     ],
+     "date": "2025-12-19"
+    },
+    {
+     "section": "2(b)",
+     "outcome": "full",
+     "systems": [
+      "Codex",
+      "GPT-5.5 Pro"
+     ],
+     "date": "2026-05-05"
+    }
+   ],
+   "best_primary": "full",
+   "full_solution": true,
+   "systems": [
+    "GPT-5.5 Pro"
+   ],
+   "last_primary_date": "2026-04-24",
+   "sections": [
+    "1(d)",
+    "2(a)",
+    "2(b)"
+   ]
+  },
+  "331": {
+   "rows": [
+    {
+     "section": "2(b)",
+     "outcome": "full",
+     "systems": [
+      "Aristotle"
+     ],
+     "date": "2026-01-31"
+    }
+   ],
+   "sections": [
+    "2(b)"
+   ]
+  },
+  "333": {
+   "rows": [
+    {
+     "section": "1(b)",
+     "outcome": "full",
+     "lean": true,
+     "systems": [
+      "Claude Opus 4.5",
+      "GPT-5.2 Pro"
+     ],
+     "date": "2025-12-25"
+    },
+    {
+     "section": "2(a)",
+     "outcome": "incorrect",
+     "systems": [
+      "GPT-5.2 Pro"
+     ],
+     "date": "2025-12-25"
+    },
+    {
+     "section": "2(a)",
+     "outcome": "full",
+     "systems": [
+      "Aletheia"
+     ],
+     "date": "2026-02-01"
+    }
+   ],
+   "best_primary": "full",
+   "full_solution": true,
+   "systems": [
+    "Claude Opus 4.5",
+    "GPT-5.2 Pro"
+   ],
+   "last_primary_date": "2025-12-25",
+   "sections": [
+    "1(b)",
+    "2(a)"
+   ]
+  },
+  "337": {
+   "rows": [
+    {
+     "section": "2(b)",
+     "outcome": "full",
+     "systems": [
+      "Aristotle"
+     ],
+     "date": "2025-12-10"
+    }
+   ],
+   "sections": [
+    "2(b)"
+   ]
+  },
+  "339": {
+   "rows": [
+    {
+     "section": "2(a)",
+     "outcome": "full",
+     "systems": [
+      "GPT-5"
+     ],
+     "date": "2025-10-11"
+    }
+   ],
+   "sections": [
+    "2(a)"
+   ]
+  },
+  "342": {
+   "rows": [
+    {
+     "section": "1(d)",
+     "outcome": "partial",
+     "systems": [
+      "GPT-5.2 Pro",
+      "GPT-5.4 Pro"
+     ],
+     "date": "2026-03-23"
+    }
+   ],
+   "best_primary": "partial",
+   "partial_result": true,
+   "systems": [
+    "GPT-5.2 Pro",
+    "GPT-5.4 Pro"
+   ],
+   "last_primary_date": "2026-03-23",
+   "sections": [
+    "1(d)"
+   ]
+  },
+  "345": {
+   "rows": [
+    {
+     "section": "1(d)",
+     "outcome": "partial",
+     "lean": true,
+     "systems": [
+      "Aristotle",
+      "GPT"
+     ],
+     "date": "2026-05-16"
+    }
+   ],
+   "best_primary": "partial",
+   "partial_result": true,
+   "systems": [
+    "Aristotle",
+    "GPT"
+   ],
+   "last_primary_date": "2026-05-16",
+   "sections": [
+    "1(d)"
+   ]
+  },
+  "346": {
+   "rows": [
+    {
+     "section": "1(b)",
+     "outcome": "partial",
+     "lean": true,
+     "variant": true,
+     "systems": [
+      "Codex",
+      "GPT-5.5 Pro"
+     ],
+     "date": "2026-06-19"
+    },
+    {
+     "section": "1(d)",
+     "outcome": "full",
+     "lean": true,
+     "systems": [
+      "Codex",
+      "GPT"
+     ],
+     "date": "2026-06-21"
+    }
+   ],
+   "best_primary": "full",
+   "full_solution": true,
+   "systems": [
+    "Codex",
+    "GPT",
+    "GPT-5.5 Pro"
+   ],
+   "last_primary_date": "2026-06-21",
+   "sections": [
+    "1(b)",
+    "1(d)"
+   ]
+  },
+  "347": {
+   "rows": [
+    {
+     "section": "1(d)",
+     "outcome": "full",
+     "lean": true,
+     "systems": [
+      "Aristotle",
+      "Claude Opus",
+      "Codex",
+      "GPT"
+     ],
+     "date": "2026-02-04"
+    },
+    {
+     "section": "2(a)",
+     "outcome": "partial",
+     "systems": [
+      "ChatGPT Deep research"
+     ],
+     "date": "2025-10-25"
+    }
+   ],
+   "best_primary": "full",
+   "full_solution": true,
+   "systems": [
+    "Aristotle",
+    "Claude Opus",
+    "Codex",
+    "GPT"
+   ],
+   "last_primary_date": "2026-02-04",
+   "sections": [
+    "1(d)",
+    "2(a)"
+   ]
+  },
+  "349": {
+   "rows": [
+    {
+     "section": "1(c)",
+     "outcome": "partial",
+     "systems": [
+      "GPT-5.2 Thinking"
+     ],
+     "date": "2026-03-09"
+    }
+   ],
+   "best_primary": "partial",
+   "partial_result": true,
+   "systems": [
+    "GPT-5.2 Thinking"
+   ],
+   "last_primary_date": "2026-03-09",
+   "sections": [
+    "1(c)"
+   ]
+  },
+  "350": {
+   "rows": [
+    {
+     "section": "2(b)",
+     "outcome": "full",
+     "systems": [
+      "Aristotle",
+      "GPT"
+     ],
+     "date": "2025-11-25"
+    }
+   ],
+   "sections": [
+    "2(b)"
+   ]
+  },
+  "351": {
+   "rows": [
+    {
+     "section": "1(d)",
+     "outcome": "full",
+     "systems": [
+      "GPT-5.5 Pro"
+     ],
+     "date": "2026-05-03"
+    },
+    {
+     "section": "2(b)",
+     "outcome": "full",
+     "systems": [
+      "Claude Opus 4.7",
+      "GPT-5.5 Pro"
+     ],
+     "date": "2026-05-06"
+    }
+   ],
+   "best_primary": "full",
+   "full_solution": true,
+   "systems": [
+    "GPT-5.5 Pro"
+   ],
+   "last_primary_date": "2026-05-03",
+   "sections": [
+    "1(d)",
+    "2(b)"
+   ]
+  },
+  "352": {
+   "rows": [
+    {
+     "section": "1(d)",
+     "outcome": "partial",
+     "variant": true,
+     "systems": [
+      "GPT-5.4 Pro",
+      "GPT-5.5 Pro"
+     ],
+     "date": "2026-05-29"
+    }
+   ],
+   "best_primary": "partial",
+   "systems": [
+    "GPT-5.4 Pro",
+    "GPT-5.5 Pro"
+   ],
+   "last_primary_date": "2026-05-29",
+   "sections": [
+    "1(d)"
+   ]
+  },
+  "353": {
+   "rows": [
+    {
+     "section": "2(b)",
+     "outcome": "full",
+     "systems": [
+      "Aristotle"
+     ],
+     "date": "2026-06-20"
+    }
+   ],
+   "sections": [
+    "2(b)"
+   ]
+  },
+  "354": {
+   "rows": [
+    {
+     "section": "2(a)",
+     "outcome": "partial",
+     "systems": [
+      "ChatGPT Deep research"
+     ],
+     "date": "2025-10-19"
+    }
+   ],
+   "sections": [
+    "2(a)"
+   ]
+  },
+  "355": {
+   "rows": [
+    {
+     "section": "2(b)",
+     "outcome": "full",
+     "systems": [
+      "Aristotle",
+      "Gemini 3"
+     ],
+     "date": "2026-03-13"
+    }
+   ],
+   "sections": [
+    "2(b)"
+   ]
+  },
+  "358": {
+   "rows": [
+    {
+     "section": "1(a)",
+     "outcome": "incorrect",
+     "systems": [
+      "GPT-5.2 Pro"
+     ],
+     "date": "2026-02-11"
+    },
+    {
+     "section": "1(d)",
+     "outcome": "incorrect",
+     "systems": [
+      "GPT-5.2 Thinking"
+     ],
+     "date": "2026-02-20"
+    }
+   ],
+   "best_primary": "incorrect",
+   "systems": [
+    "GPT-5.2 Pro",
+    "GPT-5.2 Thinking"
+   ],
+   "last_primary_date": "2026-02-20",
+   "sections": [
+    "1(a)",
+    "1(d)"
+   ]
+  },
+  "363": {
+   "rows": [
+    {
+     "section": "2(b)",
+     "outcome": "full",
+     "systems": [
+      "Aristotle"
+     ],
+     "date": "2026-03-10"
+    }
+   ],
+   "sections": [
+    "2(b)"
+   ]
+  },
+  "366": {
+   "rows": [
+    {
+     "section": "1(b)",
+     "outcome": "partial",
+     "systems": [
+      "Automated research pipeline"
+     ],
+     "date": "2026-04-14"
+    }
+   ],
+   "best_primary": "partial",
+   "partial_result": true,
+   "systems": [
+    "Automated research pipeline"
+   ],
+   "last_primary_date": "2026-04-14",
+   "sections": [
+    "1(b)"
+   ]
+  },
+  "367": {
+   "rows": [
+    {
+     "section": "1(d)",
+     "outcome": "partial",
+     "systems": [
+      "Aristotle",
+      "Gemini Deep Think"
+     ],
+     "date": "2025-11-22"
+    },
+    {
+     "section": "2(b)",
+     "outcome": "partial",
+     "systems": [
+      "Aristotle"
+     ],
+     "date": "2025-11-22"
+    }
+   ],
+   "best_primary": "partial",
+   "partial_result": true,
+   "systems": [
+    "Aristotle",
+    "Gemini Deep Think"
+   ],
+   "last_primary_date": "2025-11-22",
+   "sections": [
+    "1(d)",
+    "2(b)"
+   ]
+  },
+  "368": {
+   "rows": [
+    {
+     "section": "2(b)",
+     "outcome": "partial",
+     "systems": [
+      "Aristotle"
+     ],
+     "date": "2026-02-17"
+    }
+   ],
+   "sections": [
+    "2(b)"
+   ]
+  },
+  "369": {
+   "rows": [
+    {
+     "section": "1(d)",
+     "outcome": "full",
+     "systems": [
+      "GPT"
+     ],
+     "date": "2026-03-26"
+    },
+    {
+     "section": "2(b)",
+     "outcome": "full",
+     "systems": [
+      "Aristotle"
+     ],
+     "date": "2026-03-27"
+    }
+   ],
+   "best_primary": "full",
+   "full_solution": true,
+   "systems": [
+    "GPT"
+   ],
+   "last_primary_date": "2026-03-26",
+   "sections": [
+    "1(d)",
+    "2(b)"
+   ]
+  },
+  "370": {
+   "rows": [
+    {
+     "section": "2(a)",
+     "outcome": "partial",
+     "variant": true,
+     "systems": [
+      "ChatGPT Deep research",
+      "Gemini",
+      "Gemini Deep Research"
+     ],
+     "date": "2025-10-17"
+    },
+    {
+     "section": "2(b)",
+     "outcome": "full",
+     "systems": [
+      "Aristotle",
+      "GPT"
+     ],
+     "date": "2025-11-24"
+    }
+   ],
+   "sections": [
+    "2(a)",
+    "2(b)"
+   ]
+  },
+  "374": {
+   "rows": [
+    {
+     "section": "1(d)",
+     "outcome": "partial",
+     "systems": [
+      "GPT-5.4 Pro"
+     ],
+     "date": "2026-03-31"
+    }
+   ],
+   "best_primary": "partial",
+   "partial_result": true,
+   "systems": [
+    "GPT-5.4 Pro"
+   ],
+   "last_primary_date": "2026-03-31",
+   "sections": [
+    "1(d)"
+   ]
+  },
+  "379": {
+   "rows": [
+    {
+     "section": "1(c)",
+     "outcome": "full",
+     "new_proof": true,
+     "systems": [
+      "Seed Prover 1.5"
+     ],
+     "date": "2025-12-21"
+    }
+   ],
+   "best_primary": "full",
+   "systems": [
+    "Seed Prover 1.5"
+   ],
+   "last_primary_date": "2025-12-21",
+   "sections": [
+    "1(c)"
+   ]
+  },
+  "380": {
+   "rows": [
+    {
+     "section": "1(d)",
+     "outcome": "full",
+     "systems": [
+      "GPT-5.4 Pro"
+     ],
+     "date": "2026-03-31"
+    }
+   ],
+   "best_primary": "full",
+   "full_solution": true,
+   "systems": [
+    "GPT-5.4 Pro"
+   ],
+   "last_primary_date": "2026-03-31",
+   "sections": [
+    "1(d)"
+   ]
+  },
+  "387": {
+   "rows": [
+    {
+     "section": "2(a)",
+     "outcome": "partial",
+     "systems": [
+      "ChatGPT Deep research"
+     ],
+     "date": "2025-11-01"
+    }
+   ],
+   "sections": [
+    "2(a)"
+   ]
+  },
+  "388": {
+   "rows": [
+    {
+     "section": "1(d)",
+     "outcome": "incorrect",
+     "systems": [
+      "Claude",
+      "Gemini",
+      "GPT-5.4"
+     ],
+     "date": "2026-03-15"
+    }
+   ],
+   "best_primary": "incorrect",
+   "systems": [
+    "Claude",
+    "GPT-5.4",
+    "Gemini"
+   ],
+   "last_primary_date": "2026-03-15",
+   "sections": [
+    "1(d)"
+   ]
+  },
+  "390": {
+   "rows": [
+    {
+     "section": "1(d)",
+     "outcome": "unverified",
+     "systems": [
+      "GPT-5.5 Pro"
+     ],
+     "date": "2026-05-02"
+    }
+   ],
+   "best_primary": "unverified",
+   "systems": [
+    "GPT-5.5 Pro"
+   ],
+   "last_primary_date": "2026-05-02",
+   "sections": [
+    "1(d)"
+   ]
+  },
+  "392": {
+   "rows": [
+    {
+     "section": "2(b)",
+     "outcome": "full",
+     "systems": [
+      "Various"
+     ],
+     "date": "2026-02-23"
+    },
+    {
+     "section": "2(c)",
+     "outcome": "full",
+     "systems": [
+      "GPT-5.2 Thinking"
+     ],
+     "date": "2026-02-27"
+    }
+   ],
+   "sections": [
+    "2(b)",
+    "2(c)"
+   ]
+  },
+  "393": {
+   "rows": [
+    {
+     "section": "1(d)",
+     "outcome": "partial",
+     "systems": [
+      "GPT-5.5 Pro"
+     ],
+     "date": "2026-05-03"
+    }
+   ],
+   "best_primary": "partial",
+   "partial_result": true,
+   "systems": [
+    "GPT-5.5 Pro"
+   ],
+   "last_primary_date": "2026-05-03",
+   "sections": [
+    "1(d)"
+   ]
+  },
+  "396": {
+   "rows": [
+    {
+     "section": "1(d)",
+     "outcome": "partial",
+     "systems": [
+      "Claude",
+      "Codex",
+      "GPT"
+     ],
+     "date": "2026-03-15"
+    },
+    {
+     "section": "1(d)",
+     "outcome": "partial",
+     "variant": true,
+     "systems": [
+      "GPT-5.4 Pro",
+      "GPT-5.4 Thinking"
+     ],
+     "date": "2026-04-07"
+    },
+    {
+     "section": "2(d)",
+     "systems": [
+      "Claude Opus 4.6",
+      "Gemini 3.1 Deep Think",
+      "GPT-5.4 Pro"
+     ],
+     "date": "2026-04-04"
+    }
+   ],
+   "best_primary": "partial",
+   "partial_result": true,
+   "systems": [
+    "Claude",
+    "Codex",
+    "GPT",
+    "GPT-5.4 Pro",
+    "GPT-5.4 Thinking"
+   ],
+   "last_primary_date": "2026-04-07",
+   "sections": [
+    "1(d)",
+    "2(d)"
+   ]
+  },
+  "397": {
+   "rows": [
+    {
+     "section": "1(b)",
+     "outcome": "full",
+     "lean": true,
+     "systems": [
+      "Aristotle",
+      "GPT-5.2 Pro"
+     ],
+     "date": "2026-01-10"
+    },
+    {
+     "section": "1(b)",
+     "outcome": "full",
+     "systems": [
+      "Aletheia"
+     ],
+     "date": "2026-02-02"
+    },
+    {
+     "section": "2(a)",
+     "outcome": "full",
+     "systems": [
+      "ChatGPT Deep research"
+     ],
+     "date": "2026-01-10"
+    }
+   ],
+   "best_primary": "full",
+   "full_solution": true,
+   "systems": [
+    "Aletheia",
+    "Aristotle",
+    "GPT-5.2 Pro"
+   ],
+   "last_primary_date": "2026-02-02",
+   "sections": [
+    "1(b)",
+    "2(a)"
+   ]
+  },
+  "399": {
+   "rows": [
+    {
+     "section": "2(b)",
+     "outcome": "full",
+     "systems": [
+      "Codex"
+     ]
+    }
+   ],
+   "sections": [
+    "2(b)"
+   ]
+  },
+  "400": {
+   "rows": [
+    {
+     "section": "1(d)",
+     "outcome": "unverified",
+     "systems": [
+      "GPT"
+     ],
+     "date": "2026-06-22"
+    }
+   ],
+   "best_primary": "unverified",
+   "systems": [
+    "GPT"
+   ],
+   "last_primary_date": "2026-06-22",
+   "sections": [
+    "1(d)"
+   ]
+  },
+  "401": {
+   "rows": [
+    {
+     "section": "1(d)",
+     "outcome": "full",
+     "lean": true,
+     "variant": true,
+     "systems": [
+      "Aristotle",
+      "GPT-5.2 Pro"
+     ],
+     "date": "2026-01-11"
+    }
+   ],
+   "best_primary": "full",
+   "systems": [
+    "Aristotle",
+    "GPT-5.2 Pro"
+   ],
+   "last_primary_date": "2026-01-11",
+   "sections": [
+    "1(d)"
+   ]
+  },
+  "403": {
+   "rows": [
+    {
+     "section": "2(b)",
+     "outcome": "full",
+     "systems": [
+      "AxiomProver"
+     ],
+     "date": "2026-06-19"
+    }
+   ],
+   "sections": [
+    "2(b)"
+   ]
+  },
+  "411": {
+   "rows": [
+    {
+     "section": "1(d)",
+     "outcome": "incorrect",
+     "systems": [
+      "Claude"
+     ],
+     "date": "2026-04-03"
+    }
+   ],
+   "best_primary": "incorrect",
+   "systems": [
+    "Claude"
+   ],
+   "last_primary_date": "2026-04-03",
+   "sections": [
+    "1(d)"
+   ]
+  },
+  "415": {
+   "rows": [
+    {
+     "section": "1(d)",
+     "outcome": "partial",
+     "systems": [
+      "GPT-5.4 Pro"
+     ],
+     "date": "2026-04-19"
+    }
+   ],
+   "best_primary": "partial",
+   "partial_result": true,
+   "systems": [
+    "GPT-5.4 Pro"
+   ],
+   "last_primary_date": "2026-04-19",
+   "sections": [
+    "1(d)"
+   ]
+  },
+  "418": {
+   "rows": [
+    {
+     "section": "2(b)",
+     "outcome": "full",
+     "systems": [
+      "Aristotle",
+      "GPT"
+     ],
+     "date": "2025-11-22"
+    }
+   ],
+   "sections": [
+    "2(b)"
+   ]
+  },
+  "419": {
+   "rows": [
+    {
+     "section": "2(b)",
+     "outcome": "full",
+     "systems": [
+      "Aristotle"
+     ],
+     "date": "2026-01-31"
+    }
+   ],
+   "sections": [
+    "2(b)"
+   ]
+  },
+  "423": {
+   "rows": [
+    {
+     "section": "1(d)",
+     "outcome": "partial",
+     "systems": [
+      "GPT-5.2 Thinking",
+      "GPT-5.4 Thinking"
+     ],
+     "date": "2026-03-12"
+    }
+   ],
+   "best_primary": "partial",
+   "partial_result": true,
+   "systems": [
+    "GPT-5.2 Thinking",
+    "GPT-5.4 Thinking"
+   ],
+   "last_primary_date": "2026-03-12",
+   "sections": [
+    "1(d)"
+   ]
+  },
+  "425": {
+   "rows": [
+    {
+     "section": "2(b)",
+     "outcome": "full",
+     "systems": [
+      "Aristotle",
+      "GPT"
+     ],
+     "date": "2026-05-17"
+    }
+   ],
+   "sections": [
+    "2(b)"
+   ]
+  },
+  "426": {
+   "rows": [
+    {
+     "section": "2(b)",
+     "outcome": "full",
+     "systems": [
+      "Aristotle"
+     ],
+     "date": "2026-04-20"
+    }
+   ],
+   "sections": [
+    "2(b)"
+   ]
+  },
+  "427": {
+   "rows": [
+    {
+     "section": "2(b)",
+     "outcome": "full",
+     "systems": [
+      "Aristotle"
+     ],
+     "date": "2026-04-26"
+    }
+   ],
+   "sections": [
+    "2(b)"
+   ]
+  },
+  "429": {
+   "rows": [
+    {
+     "section": "2(b)",
+     "outcome": "full",
+     "systems": [
+      "Aristotle"
+     ],
+     "date": "2026-01-29"
+    }
+   ],
+   "sections": [
+    "2(b)"
+   ]
+  },
+  "432": {
+   "rows": [
+    {
+     "section": "1(d)",
+     "outcome": "unverified",
+     "systems": [
+      "GPT-5.5 Pro"
+     ],
+     "date": "2026-06-23"
+    }
+   ],
+   "best_primary": "unverified",
+   "systems": [
+    "GPT-5.5 Pro"
+   ],
+   "last_primary_date": "2026-06-23",
+   "sections": [
+    "1(d)"
+   ]
+  },
+  "433": {
+   "rows": [
+    {
+     "section": "2(b)",
+     "outcome": "full",
+     "systems": [
+      "Aristotle",
+      "Claude Opus 4.8",
+      "Claude Sonnet 4.6",
+      "Gemini 3 Flash",
+      "Gemini 3.1 Pro",
+      "Project Numina"
+     ],
+     "date": "2026-05-29"
+    }
+   ],
+   "sections": [
+    "2(b)"
+   ]
+  },
+  "434": {
+   "rows": [
+    {
+     "section": "2(b)",
+     "outcome": "full",
+     "systems": [
+      "Aristotle",
+      "Claude Opus 4.8"
+     ],
+     "date": "2026-05-29"
+    }
+   ],
+   "sections": [
+    "2(b)"
+   ]
+  },
+  "435": {
+   "rows": [
+    {
+     "section": "2(b)",
+     "outcome": "full",
+     "systems": [
+      "Aristotle"
+     ],
+     "date": "2026-02-04"
+    }
+   ],
+   "sections": [
+    "2(b)"
+   ]
+  },
+  "441": {
+   "rows": [
+    {
+     "section": "2(b)",
+     "outcome": "partial",
+     "systems": [
+      "AxiomProver"
+     ],
+     "date": "2026-06-19"
+    }
+   ],
+   "sections": [
+    "2(b)"
+   ]
+  },
+  "443": {
+   "rows": [
+    {
+     "section": "2(b)",
+     "outcome": "full",
+     "systems": [
+      "Aristotle"
+     ],
+     "date": "2026-02-04"
+    }
+   ],
+   "sections": [
+    "2(b)"
+   ]
+  },
+  "447": {
+   "rows": [
+    {
+     "section": "2(b)",
+     "outcome": "full",
+     "systems": [
+      "Aristotle"
+     ],
+     "date": "2026-02-10"
+    }
+   ],
+   "sections": [
+    "2(b)"
+   ]
+  },
+  "451": {
+   "rows": [
+    {
+     "section": "1(d)",
+     "outcome": "partial",
+     "lean": true,
+     "systems": [
+      "Aristotle",
+      "GPT-5.5 Pro"
+     ],
+     "date": "2026-06-19"
+    }
+   ],
+   "best_primary": "partial",
+   "partial_result": true,
+   "systems": [
+    "Aristotle",
+    "GPT-5.5 Pro"
+   ],
+   "last_primary_date": "2026-06-19",
+   "sections": [
+    "1(d)"
+   ]
+  },
+  "453": {
+   "rows": [
+    {
+     "section": "2(b)",
+     "outcome": "full",
+     "systems": [
+      "Aristotle"
+     ],
+     "date": "2026-01-31"
+    }
+   ],
+   "sections": [
+    "2(b)"
+   ]
+  },
+  "456": {
+   "rows": [
+    {
+     "section": "1(d)",
+     "outcome": "unverified",
+     "systems": [
+      "GPT-5.5 Pro"
+     ],
+     "date": "2026-05-04"
+    }
+   ],
+   "best_primary": "unverified",
+   "systems": [
+    "GPT-5.5 Pro"
+   ],
+   "last_primary_date": "2026-05-04",
+   "sections": [
+    "1(d)"
+   ]
+  },
+  "457": {
+   "rows": [
+    {
+     "section": "1(a)",
+     "outcome": "full",
+     "lean": true,
+     "systems": [
+      "Aristotle",
+      "GPT-5.2 Pro"
+     ],
+     "date": "2026-03-02"
+    },
+    {
+     "section": "2(c)",
+     "outcome": "full",
+     "systems": [
+      "GPT-5.2 Thinking"
+     ],
+     "date": "2026-03-03"
+    }
+   ],
+   "best_primary": "full",
+   "full_solution": true,
+   "systems": [
+    "Aristotle",
+    "GPT-5.2 Pro"
+   ],
+   "last_primary_date": "2026-03-02",
+   "sections": [
+    "1(a)",
+    "2(c)"
+   ]
+  },
+  "459": {
+   "rows": [
+    {
+     "section": "2(b)",
+     "outcome": "full",
+     "systems": [
+      "Aristotle"
+     ],
+     "date": "2026-03-11"
+    }
+   ],
+   "sections": [
+    "2(b)"
+   ]
+  },
+  "460": {
+   "rows": [
+    {
+     "section": "1(d)",
+     "outcome": "partial",
+     "systems": [
+      "GPT-5.2"
+     ],
+     "date": "2026-01-13"
+    }
+   ],
+   "best_primary": "partial",
+   "partial_result": true,
+   "systems": [
+    "GPT-5.2"
+   ],
+   "last_primary_date": "2026-01-13",
+   "sections": [
+    "1(d)"
+   ]
+  },
+  "464": {
+   "rows": [
+    {
+     "section": "2(b)",
+     "outcome": "full",
+     "systems": [
+      "Aristotle"
+     ],
+     "date": "2026-06-21"
+    }
+   ],
+   "sections": [
+    "2(b)"
+   ]
+  },
+  "476": {
+   "rows": [
+    {
+     "section": "2(b)",
+     "outcome": "full",
+     "systems": [
+      "Aristotle"
+     ],
+     "date": "2025-12-31"
+    }
+   ],
+   "sections": [
+    "2(b)"
+   ]
+  },
+  "477": {
+   "rows": [
+    {
+     "section": "1(a)",
+     "outcome": "partial",
+     "lean": true,
+     "variant": true,
+     "systems": [
+      "AlphaProof"
+     ],
+     "date": "2026-01-07"
+    }
+   ],
+   "best_primary": "partial",
+   "systems": [
+    "AlphaProof"
+   ],
+   "last_primary_date": "2026-01-07",
+   "sections": [
+    "1(a)"
+   ]
+  },
+  "480": {
+   "rows": [
+    {
+     "section": "2(b)",
+     "outcome": "full",
+     "systems": [
+      "Aristotle"
+     ],
+     "date": "2025-11-28"
+    }
+   ],
+   "sections": [
+    "2(b)"
+   ]
+  },
+  "481": {
+   "rows": [
+    {
+     "section": "2(a)",
+     "outcome": "partial",
+     "systems": [
+      "ChatGPT Deep research",
+      "Gemini Deep Research"
+     ],
+     "date": "2025-12-01"
+    },
+    {
+     "section": "2(a)",
+     "outcome": "full",
+     "systems": [
+      "GPT"
+     ],
+     "date": "2025-12-03"
+    },
+    {
+     "section": "2(b)",
+     "outcome": "full",
+     "systems": [
+      "Aristotle",
+      "Claude"
+     ],
+     "date": "2025-12-01"
+    }
+   ],
+   "sections": [
+    "2(a)",
+    "2(b)"
+   ]
+  },
+  "484": {
+   "rows": [
+    {
+     "section": "2(b)",
+     "outcome": "full",
+     "systems": [
+      "Aristotle"
+     ],
+     "date": "2026-04-15"
+    }
+   ],
+   "sections": [
+    "2(b)"
+   ]
+  },
+  "487": {
+   "rows": [
+    {
+     "section": "2(b)",
+     "outcome": "full",
+     "systems": [
+      "Aristotle"
+     ],
+     "date": "2026-02-16"
+    }
+   ],
+   "sections": [
+    "2(b)"
+   ]
+  },
+  "488": {
+   "rows": [
+    {
+     "section": "1(c)",
+     "outcome": "partial",
+     "lean": true,
+     "variant": true,
+     "systems": [
+      "Aristotle"
+     ],
+     "date": "2025-11-27"
+    },
+    {
+     "section": "1(d)",
+     "outcome": "partial",
+     "systems": [
+      "Aristotle",
+      "GPT-5.4"
+     ],
+     "date": "2026-03-20"
+    }
+   ],
+   "best_primary": "partial",
+   "partial_result": true,
+   "systems": [
+    "Aristotle",
+    "GPT-5.4"
+   ],
+   "last_primary_date": "2026-03-20",
+   "sections": [
+    "1(c)",
+    "1(d)"
+   ]
+  },
+  "490": {
+   "rows": [
+    {
+     "section": "2(b)",
+     "outcome": "full",
+     "systems": [
+      "Aristotle",
+      "GPT-5.5 Pro"
+     ],
+     "date": "2026-05-17"
+    }
+   ],
+   "sections": [
+    "2(b)"
+   ]
+  },
+  "493": {
+   "rows": [
+    {
+     "section": "1(c)",
+     "outcome": "full",
+     "lean": true,
+     "systems": [
+      "Aristotle",
+      "GPT",
+      "Seed Prover"
+     ]
+    }
+   ],
+   "best_primary": "full",
+   "full_solution": true,
+   "systems": [
+    "Aristotle",
+    "GPT",
+    "Seed Prover"
+   ],
+   "sections": [
+    "1(c)"
+   ]
+  },
+  "494": {
+   "rows": [
+    {
+     "section": "2(a)",
+     "outcome": "full",
+     "systems": [
+      "GPT-5"
+     ],
+     "date": "2025-10-13"
+    }
+   ],
+   "sections": [
+    "2(a)"
+   ]
+  },
+  "497": {
+   "rows": [
+    {
+     "section": "2(b)",
+     "outcome": "full",
+     "systems": [
+      "Aristotle"
+     ],
+     "date": "2026-02-04"
+    }
+   ],
+   "sections": [
+    "2(b)"
+   ]
+  },
+  "498": {
+   "rows": [
+    {
+     "section": "2(b)",
+     "outcome": "full",
+     "systems": [
+      "Aristotle",
+      "Claude Opus",
+      "Gemini Flash",
+      "Gemini Pro"
+     ]
+    }
+   ],
+   "sections": [
+    "2(b)"
+   ]
+  },
+  "499": {
+   "rows": [
+    {
+     "section": "2(b)",
+     "outcome": "full",
+     "systems": [
+      "Aristotle"
+     ],
+     "date": "2025-11-29"
+    }
+   ],
+   "sections": [
+    "2(b)"
+   ]
+  },
+  "501": {
+   "rows": [
+    {
+     "section": "1(d)",
+     "outcome": "unverified",
+     "systems": [
+      "GPT-5.5 Pro"
+     ],
+     "date": "2026-06-01"
+    }
+   ],
+   "best_primary": "unverified",
+   "systems": [
+    "GPT-5.5 Pro"
+   ],
+   "last_primary_date": "2026-06-01",
+   "sections": [
+    "1(d)"
+   ]
+  },
+  "502": {
+   "rows": [
+    {
+     "section": "2(b)",
+     "outcome": "full",
+     "systems": [
+      "Aristotle"
+     ],
+     "date": "2026-02-02"
+    }
+   ],
+   "sections": [
+    "2(b)"
+   ]
+  },
+  "503": {
+   "rows": [
+    {
+     "section": "1(d)",
+     "outcome": "incorrect",
+     "systems": [
+      "Aristotle",
+      "GPT-5.4 Pro"
+     ],
+     "date": "2026-04-22"
+    },
+    {
+     "section": "1(d)",
+     "outcome": "partial",
+     "systems": [
+      "GPT-5.5 Pro"
+     ],
+     "date": "2026-05-28"
+    }
+   ],
+   "best_primary": "partial",
+   "partial_result": true,
+   "systems": [
+    "Aristotle",
+    "GPT-5.4 Pro",
+    "GPT-5.5 Pro"
+   ],
+   "last_primary_date": "2026-05-28",
+   "sections": [
+    "1(d)"
+   ]
+  },
+  "505": {
+   "rows": [
+    {
+     "section": "2(b)",
+     "outcome": "full",
+     "systems": [
+      "Aristotle"
+     ],
+     "date": "2026-02-02"
+    }
+   ],
+   "sections": [
+    "2(b)"
+   ]
+  },
+  "507": {
+   "rows": [
+    {
+     "section": "1(c)",
+     "outcome": "partial",
+     "systems": [
+      "AlphaEvolve"
+     ],
+     "date": "2025-11-03"
+    }
+   ],
+   "best_primary": "partial",
+   "partial_result": true,
+   "systems": [
+    "AlphaEvolve"
+   ],
+   "last_primary_date": "2025-11-03",
+   "sections": [
+    "1(c)"
+   ]
+  },
+  "512": {
+   "rows": [
+    {
+     "section": "2(b)",
+     "outcome": "full",
+     "systems": [
+      "Aristotle"
+     ],
+     "date": "2026-06-22"
+    }
+   ],
+   "sections": [
+    "2(b)"
+   ]
+  },
+  "513": {
+   "rows": [
+    {
+     "section": "1(c)",
+     "outcome": "partial",
+     "systems": [
+      "GPT-5.2 Thinking"
+     ],
+     "date": "2026-03-01"
+    },
+    {
+     "section": "2(d)",
+     "systems": [
+      "GPT-5.2 Pro"
+     ],
+     "date": "2026-02-12"
+    }
+   ],
+   "best_primary": "partial",
+   "partial_result": true,
+   "systems": [
+    "GPT-5.2 Thinking"
+   ],
+   "last_primary_date": "2026-03-01",
+   "sections": [
+    "1(c)",
+    "2(d)"
+   ]
+  },
+  "514": {
+   "rows": [
+    {
+     "section": "1(d)",
+     "outcome": "partial",
+     "systems": [
+      "GPT-5.4 Pro"
+     ],
+     "date": "2026-04-20"
+    },
+    {
+     "section": "1(d)",
+     "outcome": "partial",
+     "lean": true,
+     "systems": [
+      "GPT-5.5 Pro"
+     ],
+     "date": "2026-04-28"
+    }
+   ],
+   "best_primary": "partial",
+   "partial_result": true,
+   "systems": [
+    "GPT-5.4 Pro",
+    "GPT-5.5 Pro"
+   ],
+   "last_primary_date": "2026-04-28",
+   "sections": [
+    "1(d)"
+   ]
+  },
+  "515": {
+   "rows": [
+    {
+     "section": "2(a)",
+     "outcome": "full",
+     "systems": [
+      "GPT-5"
+     ],
+     "date": "2025-10-15"
+    }
+   ],
+   "sections": [
+    "2(a)"
+   ]
+  },
+  "516": {
+   "rows": [
+    {
+     "section": "2(a)",
+     "outcome": "full",
+     "systems": [
+      "ChatGPT Deep research",
+      "Claude",
+      "Gemini Deep Research"
+     ],
+     "date": "2025-12-28"
+    }
+   ],
+   "sections": [
+    "2(a)"
+   ]
+  },
+  "519": {
+   "rows": [
+    {
+     "section": "2(b)",
+     "outcome": "full",
+     "systems": [
+      "Aristotle"
+     ],
+     "date": "2026-04-19"
+    }
+   ],
+   "sections": [
+    "2(b)"
+   ]
+  },
+  "521": {
+   "rows": [
+    {
+     "section": "1(d)",
+     "outcome": "partial",
+     "variant": true,
+     "systems": [
+      "GPT-5.5 Pro"
+     ],
+     "date": "2026-04-25"
+    },
+    {
+     "section": "1(d)",
+     "outcome": "unverified",
+     "systems": [
+      "GPT-5.5 Pro"
+     ],
+     "date": "2026-04-30"
+    }
+   ],
+   "best_primary": "partial",
+   "systems": [
+    "GPT-5.5 Pro"
+   ],
+   "last_primary_date": "2026-04-30",
+   "sections": [
+    "1(d)"
+   ]
+  },
+  "524": {
+   "rows": [
+    {
+     "section": "1(c)",
+     "outcome": "partial",
+     "systems": [
+      "Gemini",
+      "GPT-5.2",
+      "Grok"
+     ],
+     "date": "2026-01-30"
+    },
+    {
+     "section": "1(d)",
+     "outcome": "partial",
+     "systems": [
+      "GPT-5.4 Pro"
+     ],
+     "date": "2026-04-21"
+    },
+    {
+     "section": "2(a)",
+     "outcome": "partial",
+     "systems": [
+      "GPT-5.2 Pro"
+     ],
+     "date": "2025-12-27"
+    }
+   ],
+   "best_primary": "partial",
+   "partial_result": true,
+   "systems": [
+    "GPT-5.2",
+    "GPT-5.4 Pro",
+    "Gemini",
+    "Grok"
+   ],
+   "last_primary_date": "2026-04-21",
+   "sections": [
+    "1(c)",
+    "1(d)",
+    "2(a)"
+   ]
+  },
+  "533": {
+   "rows": [
+    {
+     "section": "2(a)",
+     "outcome": "full",
+     "systems": [
+      "GPT"
+     ],
+     "date": "2026-01-26"
+    }
+   ],
+   "sections": [
+    "2(a)"
+   ]
+  },
+  "535": {
+   "rows": [
+    {
+     "section": "1(d)",
+     "outcome": "partial",
+     "systems": [
+      "GPT-5.5 Thinking"
+     ],
+     "date": "2026-04-27"
+    }
+   ],
+   "best_primary": "partial",
+   "partial_result": true,
+   "systems": [
+    "GPT-5.5 Thinking"
+   ],
+   "last_primary_date": "2026-04-27",
+   "sections": [
+    "1(d)"
+   ]
+  },
+  "536": {
+   "rows": [
+    {
+     "section": "1(a)",
+     "outcome": "partial",
+     "lean": true,
+     "systems": [
+      "Codex",
+      "GPT-5.5 Pro"
+     ],
+     "date": "2026-06-22"
+    }
+   ],
+   "best_primary": "partial",
+   "partial_result": true,
+   "systems": [
+    "Codex",
+    "GPT-5.5 Pro"
+   ],
+   "last_primary_date": "2026-06-22",
+   "sections": [
+    "1(a)"
+   ]
+  },
+  "537": {
+   "rows": [
+    {
+     "section": "2(b)",
+     "outcome": "full",
+     "systems": [
+      "Aristotle"
+     ],
+     "date": "2026-02-06"
+    }
+   ],
+   "sections": [
+    "2(b)"
+   ]
+  },
+  "539": {
+   "rows": [
+    {
+     "section": "1(a)",
+     "outcome": "partial",
+     "lean": true,
+     "systems": [
+      "Codex",
+      "GPT-5.5",
+      "ProofCouncil"
+     ],
+     "date": "2026-06-10"
+    }
+   ],
+   "best_primary": "partial",
+   "partial_result": true,
+   "systems": [
+    "Codex",
+    "GPT-5.5",
+    "ProofCouncil"
+   ],
+   "last_primary_date": "2026-06-10",
+   "sections": [
+    "1(a)"
+   ]
+  },
+  "540": {
+   "rows": [
+    {
+     "section": "2(b)",
+     "outcome": "full",
+     "systems": [
+      "Aristotle"
+     ],
+     "date": "2026-04-15"
+    }
+   ],
+   "sections": [
+    "2(b)"
+   ]
+  },
+  "541": {
+   "rows": [
+    {
+     "section": "2(b)",
+     "outcome": "full",
+     "systems": [
+      "Aristotle",
+      "GPT"
+     ],
+     "date": "2025-12-30"
+    }
+   ],
+   "sections": [
+    "2(b)"
+   ]
+  },
+  "543": {
+   "rows": [
+    {
+     "section": "1(b)",
+     "outcome": "full",
+     "systems": [
+      "GPT-5.2 Pro"
+     ],
+     "date": "2026-01-21"
+    },
+    {
+     "section": "2(c)",
+     "outcome": "full",
+     "systems": [
+      "GPT-5.2 Thinking"
+     ],
+     "date": "2026-01-23"
+    }
+   ],
+   "best_primary": "full",
+   "full_solution": true,
+   "systems": [
+    "GPT-5.2 Pro"
+   ],
+   "last_primary_date": "2026-01-21",
+   "sections": [
+    "1(b)",
+    "2(c)"
+   ]
+  },
+  "550": {
+   "rows": [
+    {
+     "section": "1(a)",
+     "outcome": "unverified",
+     "systems": [
+      "GPT"
+     ],
+     "date": "2026-06-22"
+    }
+   ],
+   "best_primary": "unverified",
+   "systems": [
+    "GPT"
+   ],
+   "last_primary_date": "2026-06-22",
+   "sections": [
+    "1(a)"
+   ]
+  },
+  "559": {
+   "rows": [
+    {
+     "section": "2(a)",
+     "outcome": "partial",
+     "systems": [
+      "ChatGPT Deep research",
+      "Gemini Deep Research"
+     ],
+     "date": "2025-10-26"
+    }
+   ],
+   "sections": [
+    "2(a)"
+   ]
+  },
+  "574": {
+   "rows": [
+    {
+     "section": "2(a)",
+     "outcome": "full",
+     "systems": [
+      "GPT-5.4 Pro"
+     ],
+     "date": "2026-03-28"
+    }
+   ],
+   "sections": [
+    "2(a)"
+   ]
+  },
+  "575": {
+   "rows": [
+    {
+     "section": "2(a)",
+     "outcome": "partial",
+     "systems": [
+      "GPT"
+     ],
+     "date": "2026-01-14"
+    }
+   ],
+   "sections": [
+    "2(a)"
+   ]
+  },
+  "582": {
+   "rows": [
+    {
+     "section": "2(b)",
+     "outcome": "full",
+     "systems": [
+      "Aristotle"
+     ],
+     "date": "2026-02-05"
+    }
+   ],
+   "sections": [
+    "2(b)"
+   ]
+  },
+  "591": {
+   "rows": [
+    {
+     "section": "2(a)",
+     "outcome": "full",
+     "systems": [
+      "ChatGPT Deep research"
+     ],
+     "date": "2026-01-17"
+    },
+    {
+     "section": "2(a)",
+     "outcome": "full",
+     "systems": [
+      "Aletheia"
+     ],
+     "date": "2026-02-01"
+    }
+   ],
+   "sections": [
+    "2(a)"
+   ]
+  },
+  "593": {
+   "rows": [
+    {
+     "section": "1(d)",
+     "outcome": "unverified",
+     "systems": [
+      "GPT"
+     ],
+     "date": "2026-06-23"
+    }
+   ],
+   "best_primary": "unverified",
+   "systems": [
+    "GPT"
+   ],
+   "last_primary_date": "2026-06-23",
+   "sections": [
+    "1(d)"
+   ]
+  },
+  "598": {
+   "rows": [
+    {
+     "section": "1(d)",
+     "outcome": "unverified",
+     "systems": [
+      "Aristotle",
+      "GPT-5.4 Pro"
+     ],
+     "date": "2026-04-22"
+    }
+   ],
+   "best_primary": "unverified",
+   "systems": [
+    "Aristotle",
+    "GPT-5.4 Pro"
+   ],
+   "last_primary_date": "2026-04-22",
+   "sections": [
+    "1(d)"
+   ]
+  },
+  "602": {
+   "rows": [
+    {
+     "section": "2(a)",
+     "outcome": "partial",
+     "variant": true,
+     "systems": [
+      "GPT-5.4 Thinking"
+     ],
+     "date": "2026-04-20"
+    }
+   ],
+   "sections": [
+    "2(a)"
+   ]
+  },
+  "603": {
+   "rows": [
+    {
+     "section": "1(d)",
+     "outcome": "full",
+     "systems": [
+      "GPT-5.4 Pro"
+     ],
+     "date": "2026-04-21"
+    },
+    {
+     "section": "2(b)",
+     "outcome": "full",
+     "systems": [
+      "Codex",
+      "GPT-5.5"
+     ],
+     "date": "2026-05-17"
+    }
+   ],
+   "best_primary": "full",
+   "full_solution": true,
+   "systems": [
+    "GPT-5.4 Pro"
+   ],
+   "last_primary_date": "2026-04-21",
+   "sections": [
+    "1(d)",
+    "2(b)"
+   ]
+  },
+  "610": {
+   "rows": [
+    {
+     "section": "1(d)",
+     "outcome": "full",
+     "lean": true,
+     "systems": [
+      "Aristotle",
+      "GPT-5.4 Pro"
+     ],
+     "date": "2026-04-21"
+    }
+   ],
+   "best_primary": "full",
+   "full_solution": true,
+   "systems": [
+    "Aristotle",
+    "GPT-5.4 Pro"
+   ],
+   "last_primary_date": "2026-04-21",
+   "sections": [
+    "1(d)"
+   ]
+  },
+  "613": {
+   "rows": [
+    {
+     "section": "2(b)",
+     "outcome": "full",
+     "systems": [
+      "GPT Pro"
+     ],
+     "date": "2025-11-04"
+    }
+   ],
+   "sections": [
+    "2(b)"
+   ]
+  },
+  "616": {
+   "rows": [
+    {
+     "section": "1(a)",
+     "outcome": "incorrect",
+     "systems": [
+      "Claude Sonnet 4.5",
+      "Gemini 3 Pro",
+      "GPT-5.2 Pro"
+     ],
+     "date": "2026-01-18"
+    }
+   ],
+   "best_primary": "incorrect",
+   "systems": [
+    "Claude Sonnet 4.5",
+    "GPT-5.2 Pro",
+    "Gemini 3 Pro"
+   ],
+   "last_primary_date": "2026-01-18",
+   "sections": [
+    "1(a)"
+   ]
+  },
+  "618": {
+   "rows": [
+    {
+     "section": "2(b)",
+     "outcome": "full",
+     "systems": [
+      "Aristotle"
+     ],
+     "date": "2026-02-08"
+    }
+   ],
+   "sections": [
+    "2(b)"
+   ]
+  },
+  "619": {
+   "rows": [
+    {
+     "section": "1(a)",
+     "outcome": "full",
+     "lean": true,
+     "systems": [
+      "Claude Fable 5",
+      "Codex",
+      "GPT-5.5"
+     ],
+     "date": "2026-06-09"
+    }
+   ],
+   "best_primary": "full",
+   "full_solution": true,
+   "systems": [
+    "Claude Fable 5",
+    "Codex",
+    "GPT-5.5"
+   ],
+   "last_primary_date": "2026-06-09",
+   "sections": [
+    "1(a)"
+   ]
+  },
+  "621": {
+   "rows": [
+    {
+     "section": "2(a)",
+     "outcome": "full",
+     "systems": [
+      "GPT-5"
+     ],
+     "date": "2025-10-13"
+    },
+    {
+     "section": "2(b)",
+     "outcome": "full",
+     "systems": [
+      "Aristotle"
+     ],
+     "date": "2026-04-19"
+    }
+   ],
+   "sections": [
+    "2(a)",
+    "2(b)"
+   ]
+  },
+  "623": {
+   "rows": [
+    {
+     "section": "1(d)",
+     "outcome": "unverified",
+     "systems": [
+      "GPT-5.5 Pro"
+     ],
+     "date": "2026-06-04"
+    }
+   ],
+   "best_primary": "unverified",
+   "systems": [
+    "GPT-5.5 Pro"
+   ],
+   "last_primary_date": "2026-06-04",
+   "sections": [
+    "1(d)"
+   ]
+  },
+  "629": {
+   "rows": [
+    {
+     "section": "1(b)",
+     "outcome": "partial",
+     "systems": [
+      "Gemini 3.1 Pro",
+      "GPT-5.4 Thinking"
+     ],
+     "date": "2026-04-04"
+    }
+   ],
+   "best_primary": "partial",
+   "partial_result": true,
+   "systems": [
+    "GPT-5.4 Thinking",
+    "Gemini 3.1 Pro"
+   ],
+   "last_primary_date": "2026-04-04",
+   "sections": [
+    "1(b)"
+   ]
+  },
+  "635": {
+   "rows": [
+    {
+     "section": "1(b)",
+     "outcome": "partial",
+     "lean": true,
+     "systems": [
+      "Aristotle",
+      "GPT-5.2 Pro"
+     ],
+     "date": "2026-01-30"
+    }
+   ],
+   "best_primary": "partial",
+   "partial_result": true,
+   "systems": [
+    "Aristotle",
+    "GPT-5.2 Pro"
+   ],
+   "last_primary_date": "2026-01-30",
+   "sections": [
+    "1(b)"
+   ]
+  },
+  "639": {
+   "rows": [
+    {
+     "section": "2(b)",
+     "outcome": "full",
+     "systems": [
+      "Aristotle"
+     ],
+     "date": "2026-05-03"
+    }
+   ],
+   "sections": [
+    "2(b)"
+   ]
+  },
+  "645": {
+   "rows": [
+    {
+     "section": "2(a)",
+     "outcome": "full",
+     "systems": [
+      "GPT-5"
+     ],
+     "date": "2025-10-20"
+    },
+    {
+     "section": "2(b)",
+     "outcome": "full",
+     "systems": [
+      "Aristotle",
+      "GPT"
+     ],
+     "date": "2025-11-23"
+    }
+   ],
+   "sections": [
+    "2(a)",
+    "2(b)"
+   ]
+  },
+  "646": {
+   "rows": [
+    {
+     "section": "2(b)",
+     "outcome": "full",
+     "systems": [
+      "Aristotle"
+     ],
+     "date": "2026-02-27"
+    }
+   ],
+   "sections": [
+    "2(b)"
+   ]
+  },
+  "647": {
+   "rows": [
+    {
+     "section": "1(a)",
+     "outcome": "incorrect",
+     "systems": [
+      "ChatGPT Deep research",
+      "DeepSeek DeepThink",
+      "Gemini"
+     ],
+     "date": "2026-01-28"
+    }
+   ],
+   "best_primary": "incorrect",
+   "systems": [
+    "ChatGPT Deep research",
+    "DeepSeek DeepThink",
+    "Gemini"
+   ],
+   "last_primary_date": "2026-01-28",
+   "sections": [
+    "1(a)"
+   ]
+  },
+  "648": {
+   "rows": [
+    {
+     "section": "2(b)",
+     "outcome": "full",
+     "systems": [
+      "Aristotle"
+     ],
+     "date": "2026-02-04"
+    }
+   ],
+   "sections": [
+    "2(b)"
+   ]
+  },
+  "649": {
+   "rows": [
+    {
+     "section": "2(b)",
+     "outcome": "full",
+     "systems": [
+      "Aristotle",
+      "GPT"
+     ],
+     "date": "2026-06-01"
+    }
+   ],
+   "sections": [
+    "2(b)"
+   ]
+  },
+  "650": {
+   "rows": [
+    {
+     "section": "1(b)",
+     "outcome": "full",
+     "systems": [
+      "GPT-5.4 Pro"
+     ],
+     "date": "2026-03-07"
+    },
+    {
+     "section": "2(a)",
+     "outcome": "full",
+     "systems": [
+      "ChatGPT Deep research"
+     ],
+     "date": "2026-03-06"
+    },
+    {
+     "section": "2(b)",
+     "outcome": "full",
+     "systems": [
+      "Aristotle"
+     ],
+     "date": "2026-03-08"
+    },
+    {
+     "section": "2(d)",
+     "systems": [
+      "AlphaEvolve"
+     ],
+     "date": "2026-03-07"
+    }
+   ],
+   "best_primary": "full",
+   "full_solution": true,
+   "systems": [
+    "GPT-5.4 Pro"
+   ],
+   "last_primary_date": "2026-03-07",
+   "sections": [
+    "1(b)",
+    "2(a)",
+    "2(b)",
+    "2(d)"
+   ]
+  },
+  "652": {
+   "rows": [
+    {
+     "section": "2(a)",
+     "outcome": "full",
+     "systems": [
+      "GPT-5.2 Pro"
+     ],
+     "date": "2026-01-17"
+    },
+    {
+     "section": "2(a)",
+     "outcome": "full",
+     "systems": [
+      "Aletheia"
+     ],
+     "date": "2026-02-02"
+    }
+   ],
+   "sections": [
+    "2(a)"
+   ]
+  },
+  "654": {
+   "rows": [
+    {
+     "section": "1(a)",
+     "outcome": "partial",
+     "systems": [
+      "Aletheia"
+     ],
+     "date": "2026-02-01"
+    }
+   ],
+   "best_primary": "partial",
+   "partial_result": true,
+   "systems": [
+    "Aletheia"
+   ],
+   "last_primary_date": "2026-02-01",
+   "sections": [
+    "1(a)"
+   ]
+  },
+  "658": {
+   "rows": [
+    {
+     "section": "2(b)",
+     "outcome": "full",
+     "systems": [
+      "Aristotle"
+     ],
+     "date": "2026-04-20"
+    }
+   ],
+   "sections": [
+    "2(b)"
+   ]
+  },
+  "659": {
+   "rows": [
+    {
+     "section": "1(b)",
+     "outcome": "full",
+     "systems": [
+      "Aletheia"
+     ],
+     "date": "2026-02-02"
+    },
+    {
+     "section": "1(d)",
+     "outcome": "full",
+     "systems": [
+      "Gemini 3"
+     ],
+     "date": "2026-01-13"
+    },
+    {
+     "section": "2(a)",
+     "outcome": "partial",
+     "systems": [
+      "Gemini Deep Research"
+     ],
+     "date": "2026-01-13"
+    },
+    {
+     "section": "2(b)",
+     "outcome": "full",
+     "systems": [
+      "Aristotle"
+     ],
+     "date": "2026-01-14"
+    }
+   ],
+   "best_primary": "full",
+   "full_solution": true,
+   "systems": [
+    "Aletheia",
+    "Gemini 3"
+   ],
+   "last_primary_date": "2026-02-02",
+   "sections": [
+    "1(b)",
+    "1(d)",
+    "2(a)",
+    "2(b)"
+   ]
+  },
+  "666": {
+   "rows": [
+    {
+     "section": "2(b)",
+     "outcome": "full",
+     "systems": [
+      "Aristotle"
+     ],
+     "date": "2026-02-06"
+    }
+   ],
+   "sections": [
+    "2(b)"
+   ]
+  },
+  "671": {
+   "rows": [
+    {
+     "section": "1(a)",
+     "outcome": "unverified",
+     "lean": true,
+     "systems": [
+      "Codex",
+      "GPT-5.5 Pro"
+     ],
+     "date": "2026-06-22"
+    }
+   ],
+   "best_primary": "unverified",
+   "systems": [
+    "Codex",
+    "GPT-5.5 Pro"
+   ],
+   "last_primary_date": "2026-06-22",
+   "sections": [
+    "1(a)"
+   ]
+  },
+  "672": {
+   "rows": [
+    {
+     "section": "2(a)",
+     "outcome": "partial",
+     "systems": [
+      "GPT"
+     ],
+     "date": "2026-01-07"
+    }
+   ],
+   "sections": [
+    "2(a)"
+   ]
+  },
+  "675": {
+   "rows": [
+    {
+     "section": "1(d)",
+     "outcome": "partial",
+     "systems": [
+      "GPT-5.4 Pro"
+     ],
+     "date": "2026-04-18"
+    }
+   ],
+   "best_primary": "partial",
+   "partial_result": true,
+   "systems": [
+    "GPT-5.4 Pro"
+   ],
+   "last_primary_date": "2026-04-18",
+   "sections": [
+    "1(d)"
+   ]
+  },
+  "678": {
+   "rows": [
+    {
+     "section": "2(b)",
+     "outcome": "full",
+     "systems": [
+      "Aristotle"
+     ],
+     "date": "2026-01-07"
+    }
+   ],
+   "sections": [
+    "2(b)"
+   ]
+  },
+  "679": {
+   "rows": [
+    {
+     "section": "1(c)",
+     "outcome": "partial",
+     "systems": [
+      "Aristotle"
+     ],
+     "date": "2026-01-12"
+    }
+   ],
+   "best_primary": "partial",
+   "partial_result": true,
+   "systems": [
+    "Aristotle"
+   ],
+   "last_primary_date": "2026-01-12",
+   "sections": [
+    "1(c)"
+   ]
+  },
+  "684": {
+   "rows": [
+    {
+     "section": "1(a)",
+     "outcome": "partial",
+     "systems": [
+      "OpenAI internal model"
+     ],
+     "date": "2026-03-31"
+    },
+    {
+     "section": "1(d)",
+     "outcome": "partial",
+     "systems": [
+      "GPT-5.2 Thinking"
+     ],
+     "date": "2026-01-19"
+    },
+    {
+     "section": "1(d)",
+     "outcome": "partial",
+     "systems": [
+      "GPT-5.4 Thinking"
+     ],
+     "date": "2026-04-02"
+    }
+   ],
+   "best_primary": "partial",
+   "partial_result": true,
+   "systems": [
+    "GPT-5.2 Thinking",
+    "GPT-5.4 Thinking",
+    "OpenAI internal model"
+   ],
+   "last_primary_date": "2026-04-02",
+   "sections": [
+    "1(a)",
+    "1(d)"
+   ]
+  },
+  "686": {
+   "rows": [
+    {
+     "section": "1(d)",
+     "outcome": "partial",
+     "systems": [
+      "AlphaProof",
+      "Claude",
+      "Gemini Deep Think",
+      "GPT-5.2 Thinking",
+      "GPT-5.4 Thinking",
+      "Seed 2.0 Pro"
+     ],
+     "date": "2026-03-15"
+    }
+   ],
+   "best_primary": "partial",
+   "partial_result": true,
+   "systems": [
+    "AlphaProof",
+    "Claude",
+    "GPT-5.2 Thinking",
+    "GPT-5.4 Thinking",
+    "Gemini Deep Think",
+    "Seed 2.0 Pro"
+   ],
+   "last_primary_date": "2026-03-15",
+   "sections": [
+    "1(d)"
+   ]
+  },
+  "689": {
+   "rows": [
+    {
+     "section": "1(d)",
+     "outcome": "unverified",
+     "systems": [
+      "Codex",
+      "GPT-5.2",
+      "GPT-5.5 Pro"
+     ],
+     "date": "2026-06-02"
+    }
+   ],
+   "best_primary": "unverified",
+   "systems": [
+    "Codex",
+    "GPT-5.2",
+    "GPT-5.5 Pro"
+   ],
+   "last_primary_date": "2026-06-02",
+   "sections": [
+    "1(d)"
+   ]
+  },
+  "690": {
+   "rows": [
+    {
+     "section": "1(d)",
+     "outcome": "full",
+     "systems": [
+      "Multiscalar Fields System"
+     ],
+     "date": "2026-05-08"
+    }
+   ],
+   "best_primary": "full",
+   "full_solution": true,
+   "systems": [
+    "Multiscalar Fields System"
+   ],
+   "last_primary_date": "2026-05-08",
+   "sections": [
+    "1(d)"
+   ]
+  },
+  "692": {
+   "rows": [
+    {
+     "section": "2(b)",
+     "outcome": "full",
+     "systems": [
+      "Aristotle"
+     ],
+     "date": "2026-04-02"
+    }
+   ],
+   "sections": [
+    "2(b)"
+   ]
+  },
+  "694": {
+   "rows": [
+    {
+     "section": "1(a)",
+     "outcome": "full",
+     "systems": [
+      "GPT-5.5 Pro"
+     ],
+     "date": "2026-05-01"
+    },
+    {
+     "section": "2(b)",
+     "outcome": "full",
+     "systems": [
+      "Aristotle",
+      "Claude Code",
+      "Claude Opus 4.7",
+      "GPT-5.5 Pro"
+     ],
+     "date": "2026-06-05"
+    }
+   ],
+   "best_primary": "full",
+   "full_solution": true,
+   "systems": [
+    "GPT-5.5 Pro"
+   ],
+   "last_primary_date": "2026-05-01",
+   "sections": [
+    "1(a)",
+    "2(b)"
+   ]
+  },
+  "696": {
+   "rows": [
+    {
+     "section": "1(d)",
+     "outcome": "full",
+     "lean": true,
+     "systems": [
+      "Aristotle",
+      "Claude Code",
+      "Claude Opus 4.7",
+      "GPT-5.5 Pro"
+     ],
+     "date": "2026-06-05"
+    }
+   ],
+   "best_primary": "full",
+   "full_solution": true,
+   "systems": [
+    "Aristotle",
+    "Claude Code",
+    "Claude Opus 4.7",
+    "GPT-5.5 Pro"
+   ],
+   "last_primary_date": "2026-06-05",
+   "sections": [
+    "1(d)"
+   ]
+  },
+  "698": {
+   "rows": [
+    {
+     "section": "2(b)",
+     "outcome": "full",
+     "systems": [
+      "Aristotle"
+     ],
+     "date": "2026-01-16"
+    }
+   ],
+   "sections": [
+    "2(b)"
+   ]
+  },
+  "705": {
+   "rows": [
+    {
+     "section": "2(a)",
+     "outcome": "full",
+     "systems": [
+      "GPT"
+     ],
+     "date": "2026-01-26"
+    },
+    {
+     "section": "2(a)",
+     "outcome": "full",
+     "systems": [
+      "Aletheia"
+     ],
+     "date": "2026-02-01"
+    }
+   ],
+   "sections": [
+    "2(a)"
+   ]
+  },
+  "707": {
+   "rows": [
+    {
+     "section": "2(b)",
+     "outcome": "full",
+     "systems": [
+      "GPT"
+     ],
+     "date": "2025-11-23"
+    }
+   ],
+   "sections": [
+    "2(b)"
+   ]
+  },
+  "716": {
+   "rows": [
+    {
+     "section": "2(b)",
+     "outcome": "full",
+     "systems": [
+      "Aristotle"
+     ],
+     "date": "2026-06-20"
+    }
+   ],
+   "sections": [
+    "2(b)"
+   ]
+  },
+  "728": {
+   "rows": [
+    {
+     "section": "1(b)",
+     "outcome": "full",
+     "lean": true,
+     "systems": [
+      "Aristotle",
+      "GPT-5.2 Pro"
+     ],
+     "date": "2026-01-06"
+    },
+    {
+     "section": "2(b)",
+     "outcome": "full",
+     "systems": [
+      "Aristotle"
+     ],
+     "date": "2026-01-22"
+    },
+    {
+     "section": "2(c)",
+     "outcome": "full",
+     "systems": [
+      "Aristotle",
+      "GPT-5.2 Thinking"
+     ],
+     "date": "2026-01-07"
+    }
+   ],
+   "best_primary": "full",
+   "full_solution": true,
+   "systems": [
+    "Aristotle",
+    "GPT-5.2 Pro"
+   ],
+   "last_primary_date": "2026-01-06",
+   "sections": [
+    "1(b)",
+    "2(b)",
+    "2(c)"
+   ]
+  },
+  "729": {
+   "rows": [
+    {
+     "section": "1(c)",
+     "outcome": "full",
+     "lean": true,
+     "systems": [
+      "Aristotle",
+      "GPT-5.2 Pro"
+     ],
+     "date": "2026-01-10"
+    },
+    {
+     "section": "2(a)",
+     "outcome": "partial",
+     "variant": true,
+     "systems": [
+      "ChatGPT Deep research"
+     ]
+    }
+   ],
+   "best_primary": "full",
+   "full_solution": true,
+   "systems": [
+    "Aristotle",
+    "GPT-5.2 Pro"
+   ],
+   "last_primary_date": "2026-01-10",
+   "sections": [
+    "1(c)",
+    "2(a)"
+   ]
+  },
+  "730": {
+   "rows": [
+    {
+     "section": "1(a)",
+     "outcome": "unverified",
+     "systems": [
+      "GPT-5.5 Pro"
+     ],
+     "date": "2026-06-24"
+    }
+   ],
+   "best_primary": "unverified",
+   "systems": [
+    "GPT-5.5 Pro"
+   ],
+   "last_primary_date": "2026-06-24",
+   "sections": [
+    "1(a)"
+   ]
+  },
+  "731": {
+   "rows": [
+    {
+     "section": "1(d)",
+     "outcome": "unverified",
+     "systems": [
+      "GPT"
+     ],
+     "date": "2026-06-27"
+    }
+   ],
+   "best_primary": "unverified",
+   "systems": [
+    "GPT"
+   ],
+   "last_primary_date": "2026-06-27",
+   "sections": [
+    "1(d)"
+   ]
+  },
+  "737": {
+   "rows": [
+    {
+     "section": "2(a)",
+     "outcome": "full",
+     "systems": [
+      "GPT-5"
+     ],
+     "date": "2025-09-30"
+    }
+   ],
+   "sections": [
+    "2(a)"
+   ]
+  },
+  "741": {
+   "rows": [
+    {
+     "section": "1(a)",
+     "outcome": "partial",
+     "lean": true,
+     "variant": true,
+     "systems": [
+      "DeepMind prover agent"
+     ],
+     "date": "2026-03-31"
+    },
+    {
+     "section": "1(a)",
+     "outcome": "partial",
+     "systems": [
+      "OpenAI internal model"
+     ],
+     "date": "2026-03-31"
+    },
+    {
+     "section": "1(a)",
+     "outcome": "full",
+     "lean": true,
+     "systems": [
+      "DeepMind prover agent"
+     ],
+     "date": "2026-04-16"
+    }
+   ],
+   "best_primary": "full",
+   "full_solution": true,
+   "partial_result": true,
+   "systems": [
+    "DeepMind prover agent",
+    "OpenAI internal model"
+   ],
+   "last_primary_date": "2026-04-16",
+   "sections": [
+    "1(a)"
+   ]
+  },
+  "749": {
+   "rows": [
+    {
+     "section": "1(d)",
+     "outcome": "partial",
+     "variant": true,
+     "systems": [
+      "GPT-5.4 Thinking"
+     ],
+     "date": "2026-04-06"
+    },
+    {
+     "section": "2(a)",
+     "outcome": "partial",
+     "systems": [
+      "GPT-5.4 Thinking"
+     ],
+     "date": "2026-04-03"
+    }
+   ],
+   "best_primary": "partial",
+   "systems": [
+    "GPT-5.4 Thinking"
+   ],
+   "last_primary_date": "2026-04-06",
+   "sections": [
+    "1(d)",
+    "2(a)"
+   ]
+  },
+  "750": {
+   "rows": [
+    {
+     "section": "1(d)",
+     "outcome": "full",
+     "systems": [
+      "GPT-5.5 Pro"
+     ],
+     "date": "2026-05-03"
+    },
+    {
+     "section": "2(a)",
+     "outcome": "partial",
+     "systems": [
+      "GPT-5"
+     ],
+     "date": "2025-10-13"
+    },
+    {
+     "section": "2(b)",
+     "outcome": "full",
+     "systems": [
+      "Claude Code",
+      "Claude Opus 4.7",
+      "GPT-5.5 Pro"
+     ],
+     "date": "2026-05-04"
+    }
+   ],
+   "best_primary": "full",
+   "full_solution": true,
+   "systems": [
+    "GPT-5.5 Pro"
+   ],
+   "last_primary_date": "2026-05-03",
+   "sections": [
+    "1(d)",
+    "2(a)",
+    "2(b)"
+   ]
+  },
+  "751": {
+   "rows": [
+    {
+     "section": "2(b)",
+     "outcome": "full",
+     "systems": [
+      "GPT-5.2-Codex",
+      "GPT-5.2 Thinking"
+     ],
+     "date": "2026-01-27"
+    }
+   ],
+   "sections": [
+    "2(b)"
+   ]
+  },
+  "753": {
+   "rows": [
+    {
+     "section": "2(b)",
+     "outcome": "full",
+     "systems": [
+      "Aristotle"
+     ],
+     "date": "2026-04-14"
+    }
+   ],
+   "sections": [
+    "2(b)"
+   ]
+  },
+  "756": {
+   "rows": [
+    {
+     "section": "2(b)",
+     "outcome": "full",
+     "systems": [
+      "Aristotle"
+     ],
+     "date": "2026-03-15"
+    }
+   ],
+   "sections": [
+    "2(b)"
+   ]
+  },
+  "760": {
+   "rows": [
+    {
+     "section": "2(b)",
+     "outcome": "full",
+     "systems": [
+      "Aristotle"
+     ],
+     "date": "2026-06-02"
+    }
+   ],
+   "sections": [
+    "2(b)"
+   ]
+  },
+  "762": {
+   "rows": [
+    {
+     "section": "2(b)",
+     "outcome": "full",
+     "systems": [
+      "Aristotle",
+      "Claude Opus 4.7",
+      "GPT"
+     ],
+     "date": "2026-06-03"
+    }
+   ],
+   "sections": [
+    "2(b)"
+   ]
+  },
+  "765": {
+   "rows": [
+    {
+     "section": "2(b)",
+     "outcome": "full",
+     "systems": [
+      "Aristotle"
+     ],
+     "date": "2026-05-16"
+    }
+   ],
+   "sections": [
+    "2(b)"
+   ]
+  },
+  "768": {
+   "rows": [
+    {
+     "section": "1(d)",
+     "outcome": "unverified",
+     "systems": [
+      "GPT"
+     ],
+     "date": "2026-06-22"
+    }
+   ],
+   "best_primary": "unverified",
+   "systems": [
+    "GPT"
+   ],
+   "last_primary_date": "2026-06-22",
+   "sections": [
+    "1(d)"
+   ]
+  },
+  "775": {
+   "rows": [
+    {
+     "section": "2(b)",
+     "outcome": "full",
+     "systems": [
+      "Aristotle"
+     ],
+     "date": "2026-06-03"
+    }
+   ],
+   "sections": [
+    "2(b)"
+   ]
+  },
+  "776": {
+   "rows": [
+    {
+     "section": "1(d)",
+     "outcome": "partial",
+     "systems": [
+      "GPT-5.2 Thinking"
+     ],
+     "date": "2026-02-11"
+    }
+   ],
+   "best_primary": "partial",
+   "partial_result": true,
+   "systems": [
+    "GPT-5.2 Thinking"
+   ],
+   "last_primary_date": "2026-02-11",
+   "sections": [
+    "1(d)"
+   ]
+  },
+  "783": {
+   "rows": [
+    {
+     "section": "1(a)",
+     "outcome": "partial",
+     "systems": [
+      "GPT-5.2"
+     ],
+     "date": "2026-01-23"
+    },
+    {
+     "section": "2(c)",
+     "outcome": "partial",
+     "systems": [
+      "GPT-5.2 Thinking"
+     ],
+     "date": "2026-01-24"
+    },
+    {
+     "section": "2(c)",
+     "outcome": "partial",
+     "systems": [
+      "GPT-5.2 Thinking"
+     ],
+     "date": "2026-02-21"
+    }
+   ],
+   "best_primary": "partial",
+   "partial_result": true,
+   "systems": [
+    "GPT-5.2"
+   ],
+   "last_primary_date": "2026-01-23",
+   "sections": [
+    "1(a)",
+    "2(c)"
+   ]
+  },
+  "785": {
+   "rows": [
+    {
+     "section": "2(b)",
+     "outcome": "full",
+     "systems": [
+      "Aristotle"
+     ],
+     "date": "2026-03-06"
+    }
+   ],
+   "sections": [
+    "2(b)"
+   ]
+  },
+  "788": {
+   "rows": [
+    {
+     "section": "1(c)",
+     "outcome": "partial",
+     "systems": [
+      "GPT-5.2 Pro"
+     ],
+     "date": "2026-01-20"
+    },
+    {
+     "section": "2(a)",
+     "outcome": "partial",
+     "systems": [
+      "GPT-5"
+     ],
+     "date": "2025-10-14"
+    },
+    {
+     "section": "2(b)",
+     "outcome": "partial",
+     "systems": [
+      "Aristotle"
+     ],
+     "date": "2026-01-20"
+    }
+   ],
+   "best_primary": "partial",
+   "partial_result": true,
+   "systems": [
+    "GPT-5.2 Pro"
+   ],
+   "last_primary_date": "2026-01-20",
+   "sections": [
+    "1(c)",
+    "2(a)",
+    "2(b)"
+   ]
+  },
+  "793": {
+   "rows": [
+    {
+     "section": "2(a)",
+     "outcome": "partial",
+     "systems": [
+      "ChatGPT Deep research"
+     ],
+     "date": "2025-11-30"
+    }
+   ],
+   "sections": [
+    "2(a)"
+   ]
+  },
+  "794": {
+   "rows": [
+    {
+     "section": "2(b)",
+     "outcome": "full",
+     "systems": [
+      "Aristotle"
+     ],
+     "date": "2026-02-05"
+    }
+   ],
+   "sections": [
+    "2(b)"
+   ]
+  },
+  "798": {
+   "rows": [
+    {
+     "section": "2(b)",
+     "outcome": "full",
+     "systems": [
+      "Aristotle"
+     ],
+     "date": "2026-05-08"
+    }
+   ],
+   "sections": [
+    "2(b)"
+   ]
+  },
+  "811": {
+   "rows": [
+    {
+     "section": "2(a)",
+     "outcome": "partial",
+     "systems": [
+      "GPT-5"
+     ],
+     "date": "2025-10-13"
+    }
+   ],
+   "sections": [
+    "2(a)"
+   ]
+  },
+  "818": {
+   "rows": [
+    {
+     "section": "2(b)",
+     "outcome": "full",
+     "systems": [
+      "Aristotle"
+     ],
+     "date": "2026-04-25"
+    }
+   ],
+   "sections": [
+    "2(b)"
+   ]
+  },
+  "819": {
+   "rows": [
+    {
+     "section": "1(d)",
+     "outcome": "unverified",
+     "systems": [
+      "GPT-5.5",
+      "Rethlas"
+     ],
+     "date": "2026-05-15"
+    }
+   ],
+   "best_primary": "unverified",
+   "systems": [
+    "GPT-5.5",
+    "Rethlas"
+   ],
+   "last_primary_date": "2026-05-15",
+   "sections": [
+    "1(d)"
+   ]
+  },
+  "822": {
+   "rows": [
+    {
+     "section": "2(a)",
+     "outcome": "full",
+     "systems": [
+      "GPT-5"
+     ],
+     "date": "2025-10-13"
+    }
+   ],
+   "sections": [
+    "2(a)"
+   ]
+  },
+  "827": {
+   "rows": [
+    {
+     "section": "2(a)",
+     "outcome": "partial",
+     "systems": [
+      "GPT-5"
+     ],
+     "date": "2025-10-14"
+    }
+   ],
+   "sections": [
+    "2(a)"
+   ]
+  },
+  "829": {
+   "rows": [
+    {
+     "section": "2(a)",
+     "outcome": "partial",
+     "systems": [
+      "GPT-5"
+     ],
+     "date": "2025-10-13"
+    }
+   ],
+   "sections": [
+    "2(a)"
+   ]
+  },
+  "835": {
+   "rows": [
+    {
+     "section": "2(b)",
+     "outcome": "partial",
+     "systems": [
+      "AlphaProof"
+     ],
+     "date": "2025-12-26"
+    }
+   ],
+   "sections": [
+    "2(b)"
+   ]
+  },
+  "836": {
+   "rows": [
+    {
+     "section": "1(a)",
+     "outcome": "unverified",
+     "systems": [
+      "GPT-5.5 Pro"
+     ],
+     "date": "2026-04-27"
+    }
+   ],
+   "best_primary": "unverified",
+   "systems": [
+    "GPT-5.5 Pro"
+   ],
+   "last_primary_date": "2026-04-27",
+   "sections": [
+    "1(a)"
+   ]
+  },
+  "844": {
+   "rows": [
+    {
+     "section": "2(b)",
+     "outcome": "full",
+     "systems": [
+      "Aristotle"
+     ],
+     "date": "2026-04-26"
+    }
+   ],
+   "sections": [
+    "2(b)"
+   ]
+  },
+  "845": {
+   "rows": [
+    {
+     "section": "2(b)",
+     "outcome": "full",
+     "systems": [
+      "Aristotle"
+     ],
+     "date": "2026-01-21"
+    }
+   ],
+   "sections": [
+    "2(b)"
+   ]
+  },
+  "846": {
+   "rows": [
+    {
+     "section": "1(b)",
+     "outcome": "full",
+     "lean": true,
+     "systems": [
+      "DeepMind prover agent; OpenAI internal model (independently)"
+     ],
+     "date": "2026-02-25"
+    },
+    {
+     "section": "2(c)",
+     "outcome": "full",
+     "systems": [
+      "GPT-5.2 Thinking"
+     ],
+     "date": "2026-02-25"
+    }
+   ],
+   "best_primary": "full",
+   "full_solution": true,
+   "systems": [
+    "DeepMind prover agent; OpenAI internal model (independently)"
+   ],
+   "last_primary_date": "2026-02-25",
+   "sections": [
+    "1(b)",
+    "2(c)"
+   ]
+  },
+  "847": {
+   "rows": [
+    {
+     "section": "2(a)",
+     "outcome": "full",
+     "systems": [
+      "GPT-5.2 Pro"
+     ],
+     "date": "2026-01-19"
+    }
+   ],
+   "sections": [
+    "2(a)"
+   ]
+  },
+  "848": {
+   "rows": [
+    {
+     "section": "1(c)",
+     "outcome": "full",
+     "variant": true,
+     "systems": [
+      "Gemini 3.1 Pro",
+      "GPT-5.2 Thinking",
+      "GPT-5.4 Thinking"
+     ],
+     "date": "2026-03-23"
+    },
+    {
+     "section": "1(d)",
+     "outcome": "incorrect",
+     "systems": [
+      "Claude Opus 4.6",
+      "GPT-5.4"
+     ],
+     "date": "2026-03-15"
+    },
+    {
+     "section": "1(d)",
+     "outcome": "full",
+     "systems": [
+      "GPT-5"
+     ],
+     "date": "2025-11-20"
+    },
+    {
+     "section": "2(b)",
+     "outcome": "full",
+     "systems": [
+      "Aristotle",
+      "Claude",
+      "GPT-5.2"
+     ],
+     "date": "2026-01-28"
+    }
+   ],
+   "best_primary": "full",
+   "full_solution": true,
+   "systems": [
+    "Claude Opus 4.6",
+    "GPT-5",
+    "GPT-5.2 Thinking",
+    "GPT-5.4",
+    "GPT-5.4 Thinking",
+    "Gemini 3.1 Pro"
+   ],
+   "last_primary_date": "2026-03-23",
+   "sections": [
+    "1(c)",
+    "1(d)",
+    "2(b)"
+   ]
+  },
+  "851": {
+   "rows": [
+    {
+     "section": "1(b)",
+     "outcome": "full",
+     "systems": [
+      "GPT-5.2 Pro"
+     ]
+    },
+    {
+     "section": "2(a)",
+     "outcome": "partial",
+     "systems": [
+      "ChatGPT Deep research",
+      "Claude",
+      "Gemini Deep Research"
+     ],
+     "date": "2026-02-05"
+    }
+   ],
+   "best_primary": "full",
+   "full_solution": true,
+   "systems": [
+    "GPT-5.2 Pro"
+   ],
+   "sections": [
+    "1(b)",
+    "2(a)"
+   ]
+  },
+  "852": {
+   "rows": [
+    {
+     "section": "1(d)",
+     "outcome": "partial",
+     "systems": [
+      "GPT-5.4"
+     ],
+     "date": "2026-04-15"
+    },
+    {
+     "section": "1(d)",
+     "outcome": "unverified",
+     "systems": [
+      "GPT-5.5 Pro"
+     ],
+     "date": "2026-04-24"
+    }
+   ],
+   "best_primary": "partial",
+   "partial_result": true,
+   "systems": [
+    "GPT-5.4",
+    "GPT-5.5 Pro"
+   ],
+   "last_primary_date": "2026-04-24",
+   "sections": [
+    "1(d)"
+   ]
+  },
+  "856": {
+   "rows": [
+    {
+     "section": "1(d)",
+     "outcome": "unverified",
+     "systems": [
+      "GPT-5.4 Pro"
+     ],
+     "date": "2026-04-15"
+    }
+   ],
+   "best_primary": "unverified",
+   "systems": [
+    "GPT-5.4 Pro"
+   ],
+   "last_primary_date": "2026-04-15",
+   "sections": [
+    "1(d)"
+   ]
+  },
+  "858": {
+   "rows": [
+    {
+     "section": "1(d)",
+     "outcome": "full",
+     "systems": [
+      "GPT-5.4 Pro"
+     ],
+     "date": "2026-04-15"
+    }
+   ],
+   "best_primary": "full",
+   "full_solution": true,
+   "systems": [
+    "GPT-5.4 Pro"
+   ],
+   "last_primary_date": "2026-04-15",
+   "sections": [
+    "1(d)"
+   ]
+  },
+  "862": {
+   "rows": [
+    {
+     "section": "2(b)",
+     "outcome": "full",
+     "systems": [
+      "Aristotle"
+     ],
+     "date": "2026-01-21"
+    }
+   ],
+   "sections": [
+    "2(b)"
+   ]
+  },
+  "863": {
+   "rows": [
+    {
+     "section": "1(d)",
+     "outcome": "full",
+     "systems": [
+      "GPT-5.4 Pro"
+     ],
+     "date": "2026-04-22"
+    }
+   ],
+   "best_primary": "full",
+   "full_solution": true,
+   "systems": [
+    "GPT-5.4 Pro"
+   ],
+   "last_primary_date": "2026-04-22",
+   "sections": [
+    "1(d)"
+   ]
+  },
+  "865": {
+   "rows": [
+    {
+     "section": "1(d)",
+     "outcome": "full",
+     "systems": [
+      "GPT-5.5 Pro"
+     ],
+     "date": "2026-06-22"
+    }
+   ],
+   "best_primary": "full",
+   "full_solution": true,
+   "systems": [
+    "GPT-5.5 Pro"
+   ],
+   "last_primary_date": "2026-06-22",
+   "sections": [
+    "1(d)"
+   ]
+  },
+  "866": {
+   "rows": [
+    {
+     "section": "1(d)",
+     "outcome": "partial",
+     "lean": true,
+     "systems": [
+      "Aristotle",
+      "GPT-5.3 Instant"
+     ],
+     "date": "2026-05-04"
+    }
+   ],
+   "best_primary": "partial",
+   "partial_result": true,
+   "systems": [
+    "Aristotle",
+    "GPT-5.3 Instant"
+   ],
+   "last_primary_date": "2026-05-04",
+   "sections": [
+    "1(d)"
+   ]
+  },
+  "867": {
+   "rows": [
+    {
+     "section": "2(b)",
+     "outcome": "full",
+     "systems": [
+      "Aristotle"
+     ],
+     "date": "2026-04-07"
+    }
+   ],
+   "sections": [
+    "2(b)"
+   ]
+  },
+  "868": {
+   "rows": [
+    {
+     "section": "1(c)",
+     "outcome": "partial",
+     "systems": [
+      "GPT-5.2 multi-agent system"
+     ],
+     "date": "2026-01-13"
+    }
+   ],
+   "best_primary": "partial",
+   "partial_result": true,
+   "systems": [
+    "GPT-5.2 multi-agent system"
+   ],
+   "last_primary_date": "2026-01-13",
+   "sections": [
+    "1(c)"
+   ]
+  },
+  "870": {
+   "rows": [
+    {
+     "section": "1(d)",
+     "outcome": "unverified",
+     "systems": [
+      "GPT-5.4 Pro",
+      "GPT-5.5 Pro"
+     ]
+    }
+   ],
+   "best_primary": "unverified",
+   "systems": [
+    "GPT-5.4 Pro",
+    "GPT-5.5 Pro"
+   ],
+   "sections": [
+    "1(d)"
+   ]
+  },
+  "871": {
+   "rows": [
+    {
+     "section": "1(c)",
+     "outcome": "full",
+     "lean": true,
+     "systems": [
+      "Claude Opus 4.5",
+      "Gemini 3 Pro"
+     ],
+     "date": "2026-01-05"
+    },
+    {
+     "section": "2(a)",
+     "outcome": "partial",
+     "systems": [
+      "ChatGPT Deep research"
+     ],
+     "date": "2025-12-06"
+    }
+   ],
+   "best_primary": "full",
+   "full_solution": true,
+   "systems": [
+    "Claude Opus 4.5",
+    "Gemini 3 Pro"
+   ],
+   "last_primary_date": "2026-01-05",
+   "sections": [
+    "1(c)",
+    "2(a)"
+   ]
+  },
+  "872": {
+   "rows": [
+    {
+     "section": "1(a)",
+     "outcome": "partial",
+     "systems": [
+      "GPT-5.2 Pro"
+     ],
+     "date": "2026-02-16"
+    },
+    {
+     "section": "1(d)",
+     "outcome": "partial",
+     "systems": [
+      "GPT-5.4 Pro"
+     ],
+     "date": "2026-04-16"
+    },
+    {
+     "section": "1(d)",
+     "outcome": "unverified",
+     "systems": [
+      "GPT-5.5 Pro"
+     ],
+     "date": "2026-04-29"
+    }
+   ],
+   "best_primary": "partial",
+   "partial_result": true,
+   "systems": [
+    "GPT-5.2 Pro",
+    "GPT-5.4 Pro",
+    "GPT-5.5 Pro"
+   ],
+   "last_primary_date": "2026-04-29",
+   "sections": [
+    "1(a)",
+    "1(d)"
+   ]
+  },
+  "873": {
+   "rows": [
+    {
+     "section": "1(d)",
+     "outcome": "unverified",
+     "systems": [
+      "GPT-5.4 Thinking"
+     ],
+     "date": "2026-04-29"
+    },
+    {
+     "section": "1(d)",
+     "outcome": "unverified",
+     "systems": [
+      "GPT-5.5 Thinking"
+     ],
+     "date": "2026-04-30"
+    }
+   ],
+   "best_primary": "unverified",
+   "systems": [
+    "GPT-5.4 Thinking",
+    "GPT-5.5 Thinking"
+   ],
+   "last_primary_date": "2026-04-30",
+   "sections": [
+    "1(d)"
+   ]
+  },
+  "875": {
+   "rows": [
+    {
+     "section": "1(d)",
+     "outcome": "partial",
+     "lean": true,
+     "systems": [
+      "Codex",
+      "GPT-5.5 Pro"
+     ],
+     "date": "2026-05-07"
+    }
+   ],
+   "best_primary": "partial",
+   "partial_result": true,
+   "systems": [
+    "Codex",
+    "GPT-5.5 Pro"
+   ],
+   "last_primary_date": "2026-05-07",
+   "sections": [
+    "1(d)"
+   ]
+  },
+  "888": {
+   "rows": [
+    {
+     "section": "1(a)",
+     "outcome": "incorrect",
+     "systems": [
+      "Claude Opus 4.5",
+      "Gemini 3 Pro",
+      "GPT-5.2 Thinking"
+     ],
+     "date": "2026-01-18"
+    },
+    {
+     "section": "1(d)",
+     "outcome": "full",
+     "systems": [
+      "Aristotle",
+      "GPT-5.5 Pro"
+     ],
+     "date": "2026-04-25"
+    }
+   ],
+   "best_primary": "full",
+   "full_solution": true,
+   "systems": [
+    "Aristotle",
+    "Claude Opus 4.5",
+    "GPT-5.2 Thinking",
+    "GPT-5.5 Pro",
+    "Gemini 3 Pro"
+   ],
+   "last_primary_date": "2026-04-25",
+   "sections": [
+    "1(a)",
+    "1(d)"
+   ]
+  },
+  "896": {
+   "rows": [
+    {
+     "section": "1(d)",
+     "outcome": "full",
+     "systems": [
+      "GPT-5.5 Pro"
+     ],
+     "date": "2026-04-26"
+    }
+   ],
+   "best_primary": "full",
+   "full_solution": true,
+   "systems": [
+    "GPT-5.5 Pro"
+   ],
+   "last_primary_date": "2026-04-26",
+   "sections": [
+    "1(d)"
+   ]
+  },
+  "897": {
+   "rows": [
+    {
+     "section": "1(b)",
+     "outcome": "full",
+     "lean": true,
+     "systems": [
+      "Archivara",
+      "Aristotle"
+     ],
+     "date": "2025-12-26"
+    },
+    {
+     "section": "2(b)",
+     "outcome": "full",
+     "systems": [
+      "Aristotle"
+     ],
+     "date": "2025-11-27"
+    }
+   ],
+   "best_primary": "full",
+   "full_solution": true,
+   "systems": [
+    "Archivara",
+    "Aristotle"
+   ],
+   "last_primary_date": "2025-12-26",
+   "sections": [
+    "1(b)",
+    "2(b)"
+   ]
+  },
+  "898": {
+   "rows": [
+    {
+     "section": "2(b)",
+     "outcome": "full",
+     "systems": [
+      "Aristotle",
+      "Gemini 3 Flash"
+     ],
+     "date": "2026-01-28"
+    }
+   ],
+   "sections": [
+    "2(b)"
+   ]
+  },
+  "903": {
+   "rows": [
+    {
+     "section": "2(a)",
+     "outcome": "full",
+     "systems": [
+      "GPT-5"
+     ],
+     "date": "2025-10-14"
+    }
+   ],
+   "sections": [
+    "2(a)"
+   ]
+  },
+  "904": {
+   "rows": [
+    {
+     "section": "2(b)",
+     "outcome": "full",
+     "systems": [
+      "Aristotle"
+     ],
+     "date": "2026-04-18"
+    }
+   ],
+   "sections": [
+    "2(b)"
+   ]
+  },
+  "905": {
+   "rows": [
+    {
+     "section": "2(b)",
+     "outcome": "full",
+     "systems": [
+      "Aristotle",
+      "GPT-5.4"
+     ],
+     "date": "2026-04-07"
+    }
+   ],
+   "sections": [
+    "2(b)"
+   ]
+  },
+  "906": {
+   "rows": [
+    {
+     "section": "1(d)",
+     "outcome": "unverified",
+     "systems": [
+      "Unspecified"
+     ],
+     "date": "2026-04-25"
+    },
+    {
+     "section": "1(d)",
+     "outcome": "unverified",
+     "systems": [
+      "GPT-5.5 Pro"
+     ],
+     "date": "2026-04-25"
+    }
+   ],
+   "best_primary": "unverified",
+   "systems": [
+    "GPT-5.5 Pro",
+    "Unspecified"
+   ],
+   "last_primary_date": "2026-04-25",
+   "sections": [
+    "1(d)"
+   ]
+  },
+  "907": {
+   "rows": [
+    {
+     "section": "2(b)",
+     "outcome": "full",
+     "systems": [
+      "Aristotle"
+     ],
+     "date": "2026-04-07"
+    }
+   ],
+   "sections": [
+    "2(b)"
+   ]
+  },
+  "914": {
+   "rows": [
+    {
+     "section": "2(b)",
+     "outcome": "full",
+     "systems": [
+      "Aristotle"
+     ],
+     "date": "2026-04-15"
+    }
+   ],
+   "sections": [
+    "2(b)"
+   ]
+  },
+  "915": {
+   "rows": [
+    {
+     "section": "2(a)",
+     "outcome": "partial",
+     "systems": [
+      "ChatGPT Deep research"
+     ],
+     "date": "2025-10-26"
+    }
+   ],
+   "sections": [
+    "2(a)"
+   ]
+  },
+  "923": {
+   "rows": [
+    {
+     "section": "2(b)",
+     "outcome": "full",
+     "systems": [
+      "Aristotle"
+     ],
+     "date": "2026-04-20"
+    }
+   ],
+   "sections": [
+    "2(b)"
+   ]
+  },
+  "927": {
+   "rows": [
+    {
+     "section": "2(b)",
+     "outcome": "full",
+     "systems": [
+      "Aristotle"
+     ],
+     "date": "2026-06-05"
+    }
+   ],
+   "sections": [
+    "2(b)"
+   ]
+  },
+  "931": {
+   "rows": [
+    {
+     "section": "1(d)",
+     "outcome": "partial",
+     "systems": [
+      "Claude",
+      "GPT-5.4"
+     ],
+     "date": "2026-06-08"
+    }
+   ],
+   "best_primary": "partial",
+   "partial_result": true,
+   "systems": [
+    "Claude",
+    "GPT-5.4"
+   ],
+   "last_primary_date": "2026-06-08",
+   "sections": [
+    "1(d)"
+   ]
+  },
+  "935": {
+   "rows": [
+    {
+     "section": "1(b)",
+     "outcome": "partial",
+     "systems": [
+      "Aletheia"
+     ],
+     "date": "2026-02-01"
+    }
+   ],
+   "best_primary": "partial",
+   "partial_result": true,
+   "systems": [
+    "Aletheia"
+   ],
+   "last_primary_date": "2026-02-01",
+   "sections": [
+    "1(b)"
+   ]
+  },
+  "942": {
+   "rows": [
+    {
+     "section": "1(c)",
+     "outcome": "partial",
+     "new_proof": true,
+     "systems": [
+      "Gemini"
+     ],
+     "date": "2025-11-23"
+    },
+    {
+     "section": "1(d)",
+     "outcome": "partial",
+     "lean": true,
+     "systems": [
+      "Aristotle",
+      "Claude Opus 4.8",
+      "Codex",
+      "GPT-5.5"
+     ],
+     "date": "2026-06-14"
+    },
+    {
+     "section": "2(a)",
+     "outcome": "partial",
+     "systems": [
+      "ChatGPT Deep research"
+     ],
+     "date": "2025-11-23"
+    }
+   ],
+   "best_primary": "partial",
+   "partial_result": true,
+   "systems": [
+    "Aristotle",
+    "Claude Opus 4.8",
+    "Codex",
+    "GPT-5.5",
+    "Gemini"
+   ],
+   "last_primary_date": "2026-06-14",
+   "sections": [
+    "1(c)",
+    "1(d)",
+    "2(a)"
+   ]
+  },
+  "943": {
+   "rows": [
+    {
+     "section": "1(d)",
+     "outcome": "partial",
+     "systems": [
+      "GPT-5.4 Pro"
+     ],
+     "date": "2026-03-18"
+    }
+   ],
+   "best_primary": "partial",
+   "partial_result": true,
+   "systems": [
+    "GPT-5.4 Pro"
+   ],
+   "last_primary_date": "2026-03-18",
+   "sections": [
+    "1(d)"
+   ]
+  },
+  "947": {
+   "rows": [
+    {
+     "section": "2(b)",
+     "outcome": "full",
+     "systems": [
+      "Aristotle",
+      "GPT"
+     ],
+     "date": "2026-02-02"
+    }
+   ],
+   "sections": [
+    "2(b)"
+   ]
+  },
+  "948": {
+   "rows": [
+    {
+     "section": "1(c)",
+     "outcome": "full",
+     "lean": true,
+     "systems": [
+      "Aristotle",
+      "GPT-5.5 Pro"
+     ],
+     "date": "2026-06-21"
+    }
+   ],
+   "best_primary": "full",
+   "full_solution": true,
+   "systems": [
+    "Aristotle",
+    "GPT-5.5 Pro"
+   ],
+   "last_primary_date": "2026-06-21",
+   "sections": [
+    "1(c)"
+   ]
+  },
+  "949": {
+   "rows": [
+    {
+     "section": "1(a)",
+     "outcome": "partial",
+     "lean": true,
+     "variant": true,
+     "systems": [
+      "AlphaProof"
+     ],
+     "date": "2026-01-07"
+    }
+   ],
+   "best_primary": "partial",
+   "systems": [
+    "AlphaProof"
+   ],
+   "last_primary_date": "2026-01-07",
+   "sections": [
+    "1(a)"
+   ]
+  },
+  "951": {
+   "rows": [
+    {
+     "section": "1(a)",
+     "outcome": "partial",
+     "variant": true,
+     "systems": [
+      "GPT-5.2 Pro"
+     ],
+     "date": "2026-01-27"
+    },
+    {
+     "section": "1(c)",
+     "outcome": "partial",
+     "variant": true,
+     "systems": [
+      "AlphaEvolve"
+     ],
+     "date": "2026-01-28"
+    },
+    {
+     "section": "1(d)",
+     "outcome": "partial",
+     "variant": true,
+     "systems": [
+      "GPT-5.2 Thinking"
+     ],
+     "date": "2026-01-28"
+    }
+   ],
+   "best_primary": "partial",
+   "systems": [
+    "AlphaEvolve",
+    "GPT-5.2 Pro",
+    "GPT-5.2 Thinking"
+   ],
+   "last_primary_date": "2026-01-28",
+   "sections": [
+    "1(a)",
+    "1(c)",
+    "1(d)"
+   ]
+  },
+  "953": {
+   "rows": [
+    {
+     "section": "1(d)",
+     "outcome": "full",
+     "systems": [
+      "GPT-5.5 Pro"
+     ],
+     "date": "2026-04-27"
+    }
+   ],
+   "best_primary": "full",
+   "full_solution": true,
+   "systems": [
+    "GPT-5.5 Pro"
+   ],
+   "last_primary_date": "2026-04-27",
+   "sections": [
+    "1(d)"
+   ]
+  },
+  "956": {
+   "rows": [
+    {
+     "section": "1(d)",
+     "outcome": "unverified",
+     "systems": [
+      "Aristotle",
+      "GPT-5.5 Pro"
+     ],
+     "date": "2026-04-27"
+    }
+   ],
+   "best_primary": "unverified",
+   "systems": [
+    "Aristotle",
+    "GPT-5.5 Pro"
+   ],
+   "last_primary_date": "2026-04-27",
+   "sections": [
+    "1(d)"
+   ]
+  },
+  "958": {
+   "rows": [
+    {
+     "section": "1(c)",
+     "outcome": "full",
+     "lean": true,
+     "new_proof": true,
+     "systems": [
+      "Aristotle"
+     ],
+     "date": "2025-12-27"
+    },
+    {
+     "section": "2(b)",
+     "outcome": "full",
+     "systems": [
+      "Seed Prover 1.5"
+     ],
+     "date": "2025-12-19"
+    }
+   ],
+   "best_primary": "full",
+   "systems": [
+    "Aristotle"
+   ],
+   "last_primary_date": "2025-12-27",
+   "sections": [
+    "1(c)",
+    "2(b)"
+   ]
+  },
+  "960": {
+   "rows": [
+    {
+     "section": "1(a)",
+     "outcome": "full",
+     "systems": [
+      "OpenAI internal model"
+     ],
+     "date": "2026-04-09"
+    }
+   ],
+   "best_primary": "full",
+   "full_solution": true,
+   "systems": [
+    "OpenAI internal model"
+   ],
+   "last_primary_date": "2026-04-09",
+   "sections": [
+    "1(a)"
+   ]
+  },
+  "963": {
+   "rows": [
+    {
+     "section": "1(a)",
+     "outcome": "incorrect",
+     "systems": [
+      "Gemini 3 Pro"
+     ],
+     "date": "2026-01-22"
+    }
+   ],
+   "best_primary": "incorrect",
+   "systems": [
+    "Gemini 3 Pro"
+   ],
+   "last_primary_date": "2026-01-22",
+   "sections": [
+    "1(a)"
+   ]
+  },
+  "964": {
+   "rows": [
+    {
+     "section": "2(b)",
+     "outcome": "full",
+     "systems": [
+      "Antigravity",
+      "Aristotle",
+      "Gemini"
+     ],
+     "date": "2026-02-14"
+    }
+   ],
+   "sections": [
+    "2(b)"
+   ]
+  },
+  "965": {
+   "rows": [
+    {
+     "section": "2(a)",
+     "outcome": "full",
+     "systems": [
+      "GPT"
+     ],
+     "date": "2026-01-02"
+    }
+   ],
+   "sections": [
+    "2(a)"
+   ]
+  },
+  "966": {
+   "rows": [
+    {
+     "section": "1(c)",
+     "outcome": "full",
+     "lean": true,
+     "systems": [
+      "Aristotle"
+     ],
+     "date": "2026-02-25"
+    }
+   ],
+   "best_primary": "full",
+   "full_solution": true,
+   "systems": [
+    "Aristotle"
+   ],
+   "last_primary_date": "2026-02-25",
+   "sections": [
+    "1(c)"
+   ]
+  },
+  "967": {
+   "rows": [
+    {
+     "section": "2(b)",
+     "outcome": "full",
+     "systems": [
+      "Aristotle"
+     ],
+     "date": "2025-12-19"
+    }
+   ],
+   "sections": [
+    "2(b)"
+   ]
+  },
+  "971": {
+   "rows": [
+    {
+     "section": "2(a)",
+     "outcome": "partial",
+     "systems": [
+      "Claude"
+     ],
+     "date": "2026-01-31"
+    }
+   ],
+   "sections": [
+    "2(a)"
+   ]
+  },
+  "974": {
+   "rows": [
+    {
+     "section": "2(b)",
+     "outcome": "full",
+     "systems": [
+      "Aristotle"
+     ],
+     "date": "2026-04-27"
+    }
+   ],
+   "sections": [
+    "2(b)"
+   ]
+  },
+  "976": {
+   "rows": [
+    {
+     "section": "1(d)",
+     "outcome": "partial",
+     "systems": [
+      "GPT-5.4"
+     ],
+     "date": "2026-04-16"
+    }
+   ],
+   "best_primary": "partial",
+   "partial_result": true,
+   "systems": [
+    "GPT-5.4"
+   ],
+   "last_primary_date": "2026-04-16",
+   "sections": [
+    "1(d)"
+   ]
+  },
+  "983": {
+   "rows": [
+    {
+     "section": "1(b)",
+     "outcome": "partial",
+     "systems": [
+      "GPT-5.5 Pro"
+     ],
+     "date": "2026-04-30"
+    }
+   ],
+   "best_primary": "partial",
+   "partial_result": true,
+   "systems": [
+    "GPT-5.5 Pro"
+   ],
+   "last_primary_date": "2026-04-30",
+   "sections": [
+    "1(b)"
+   ]
+  },
+  "985": {
+   "rows": [
+    {
+     "section": "2(a)",
+     "outcome": "partial",
+     "systems": [
+      "GPT-5.4 Thinking"
+     ],
+     "date": "2026-03-06"
+    }
+   ],
+   "sections": [
+    "2(a)"
+   ]
+  },
+  "986": {
+   "rows": [
+    {
+     "section": "1(d)",
+     "outcome": "full",
+     "systems": [
+      "Claude",
+      "OpenAI internal model"
+     ],
+     "date": "2026-06-16"
+    },
+    {
+     "section": "2(b)",
+     "outcome": "partial",
+     "systems": [
+      "Trellis"
+     ],
+     "date": "2026-06-10"
+    }
+   ],
+   "best_primary": "full",
+   "full_solution": true,
+   "systems": [
+    "Claude",
+    "OpenAI internal model"
+   ],
+   "last_primary_date": "2026-06-16",
+   "sections": [
+    "1(d)",
+    "2(b)"
+   ]
+  },
+  "987": {
+   "rows": [
+    {
+     "section": "1(a)",
+     "outcome": "full",
+     "systems": [
+      "OpenAI internal model"
+     ],
+     "date": "2026-04-09"
+    }
+   ],
+   "best_primary": "full",
+   "full_solution": true,
+   "systems": [
+    "OpenAI internal model"
+   ],
+   "last_primary_date": "2026-04-09",
+   "sections": [
+    "1(a)"
+   ]
+  },
+  "990": {
+   "rows": [
+    {
+     "section": "1(a)",
+     "outcome": "full",
+     "systems": [
+      "OpenAI internal model"
+     ],
+     "date": "2026-04-09"
+    },
+    {
+     "section": "2(a)",
+     "outcome": "partial",
+     "systems": [
+      "ChatGPT Deep research",
+      "Gemini Deep Research"
+     ],
+     "date": "2025-10-20"
+    },
+    {
+     "section": "2(b)",
+     "outcome": "full",
+     "systems": [
+      "GPT-5.4 Pro"
+     ],
+     "date": "2026-04-10"
+    }
+   ],
+   "best_primary": "full",
+   "full_solution": true,
+   "systems": [
+    "OpenAI internal model"
+   ],
+   "last_primary_date": "2026-04-09",
+   "sections": [
+    "1(a)",
+    "2(a)",
+    "2(b)"
+   ]
+  },
+  "992": {
+   "rows": [
+    {
+     "section": "2(a)",
+     "outcome": "full",
+     "systems": [
+      "Aletheia"
+     ],
+     "date": "2026-02-01"
+    }
+   ],
+   "sections": [
+    "2(a)"
+   ]
+  },
+  "995": {
+   "rows": [
+    {
+     "section": "1(d)",
+     "outcome": "partial",
+     "systems": [
+      "GPT-5.4 Pro"
+     ],
+     "date": "2026-04-21"
+    }
+   ],
+   "best_primary": "partial",
+   "partial_result": true,
+   "systems": [
+    "GPT-5.4 Pro"
+   ],
+   "last_primary_date": "2026-04-21",
+   "sections": [
+    "1(d)"
+   ]
+  },
+  "996": {
+   "rows": [
+    {
+     "section": "1(d)",
+     "outcome": "full",
+     "systems": [
+      "GPT-5.4 Pro"
+     ],
+     "date": "2026-04-21"
+    }
+   ],
+   "best_primary": "full",
+   "full_solution": true,
+   "systems": [
+    "GPT-5.4 Pro"
+   ],
+   "last_primary_date": "2026-04-21",
+   "sections": [
+    "1(d)"
+   ]
+  },
+  "997": {
+   "rows": [
+    {
+     "section": "1(b)",
+     "outcome": "full",
+     "systems": [
+      "OpenAI internal model"
+     ],
+     "date": "2026-03-31"
+    },
+    {
+     "section": "2(b)",
+     "outcome": "full",
+     "systems": [
+      "Aristotle"
+     ],
+     "date": "2026-04-01"
+    }
+   ],
+   "best_primary": "full",
+   "full_solution": true,
+   "systems": [
+    "OpenAI internal model"
+   ],
+   "last_primary_date": "2026-03-31",
+   "sections": [
+    "1(b)",
+    "2(b)"
+   ]
+  },
+  "1000": {
+   "rows": [
+    {
+     "section": "2(b)",
+     "outcome": "full",
+     "systems": [
+      "Aristotle",
+      "GPT"
+     ],
+     "date": "2025-12-28"
+    }
+   ],
+   "sections": [
+    "2(b)"
+   ]
+  },
+  "1004": {
+   "rows": [
+    {
+     "section": "1(c)",
+     "outcome": "partial",
+     "systems": [
+      "GPT-5.5 Pro"
+     ],
+     "date": "2026-04-29"
+    }
+   ],
+   "best_primary": "partial",
+   "partial_result": true,
+   "systems": [
+    "GPT-5.5 Pro"
+   ],
+   "last_primary_date": "2026-04-29",
+   "sections": [
+    "1(c)"
+   ]
+  },
+  "1007": {
+   "rows": [
+    {
+     "section": "1(c)",
+     "outcome": "full",
+     "lean": true,
+     "new_proof": true,
+     "systems": [
+      "Aristotle"
+     ],
+     "date": "2026-01-19"
+    },
+    {
+     "section": "2(b)",
+     "outcome": "full",
+     "systems": [
+      "Aristotle"
+     ],
+     "date": "2026-01-19"
+    }
+   ],
+   "best_primary": "full",
+   "systems": [
+    "Aristotle"
+   ],
+   "last_primary_date": "2026-01-19",
+   "sections": [
+    "1(c)",
+    "2(b)"
+   ]
+  },
+  "1008": {
+   "rows": [
+    {
+     "section": "2(a)",
+     "outcome": "full",
+     "systems": [
+      "GPT-5"
+     ],
+     "date": "2025-09-29"
+    },
+    {
+     "section": "2(b)",
+     "outcome": "full",
+     "systems": [
+      "Aristotle"
+     ],
+     "date": "2026-01-17"
+    }
+   ],
+   "sections": [
+    "2(a)",
+    "2(b)"
+   ]
+  },
+  "1011": {
+   "rows": [
+    {
+     "section": "2(a)",
+     "outcome": "partial",
+     "systems": [
+      "GPT-5"
+     ],
+     "date": "2025-10-13"
+    }
+   ],
+   "sections": [
+    "2(a)"
+   ]
+  },
+  "1014": {
+   "rows": [
+    {
+     "section": "1(a)",
+     "outcome": "full",
+     "systems": [
+      "OpenAI internal model"
+     ],
+     "date": "2026-04-23"
+    }
+   ],
+   "best_primary": "full",
+   "full_solution": true,
+   "systems": [
+    "OpenAI internal model"
+   ],
+   "last_primary_date": "2026-04-23",
+   "sections": [
+    "1(a)"
+   ]
+  },
+  "1016": {
+   "rows": [
+    {
+     "section": "2(a)",
+     "outcome": "partial",
+     "systems": [
+      "ChatGPT Deep research",
+      "Gemini Deep Research"
+     ],
+     "date": "2025-10-18"
+    }
+   ],
+   "sections": [
+    "2(a)"
+   ]
+  },
+  "1019": {
+   "rows": [
+    {
+     "section": "2(a)",
+     "outcome": "partial",
+     "systems": [
+      "ChatGPT Deep research",
+      "Gemini Deep Research"
+     ],
+     "date": "2025-10-18"
+    }
+   ],
+   "sections": [
+    "2(a)"
+   ]
+  },
+  "1021": {
+   "rows": [
+    {
+     "section": "2(a)",
+     "outcome": "full",
+     "systems": [
+      "GPT"
+     ],
+     "date": "2026-01-21"
+    }
+   ],
+   "sections": [
+    "2(a)"
+   ]
+  },
+  "1022": {
+   "rows": [
+    {
+     "section": "2(b)",
+     "outcome": "full",
+     "systems": [
+      "Aristotle"
+     ],
+     "date": "2026-01-22"
+    }
+   ],
+   "sections": [
+    "2(b)"
+   ]
+  },
+  "1023": {
+   "rows": [
+    {
+     "section": "2(b)",
+     "outcome": "full",
+     "systems": [
+      "Aristotle"
+     ],
+     "date": "2026-02-10"
+    }
+   ],
+   "sections": [
+    "2(b)"
+   ]
+  },
+  "1026": {
+   "rows": [
+    {
+     "section": "1(b)",
+     "outcome": "full",
+     "lean": true,
+     "systems": [
+      "Aristotle"
+     ],
+     "date": "2025-12-07"
+    },
+    {
+     "section": "1(d)",
+     "outcome": "full",
+     "lean": true,
+     "systems": [
+      "AlphaEvolve",
+      "Aristotle",
+      "Gemini",
+      "GPT"
+     ],
+     "date": "2025-12-08"
+    }
+   ],
+   "best_primary": "full",
+   "full_solution": true,
+   "systems": [
+    "AlphaEvolve",
+    "Aristotle",
+    "GPT",
+    "Gemini"
+   ],
+   "last_primary_date": "2025-12-08",
+   "sections": [
+    "1(b)",
+    "1(d)"
+   ]
+  },
+  "1028": {
+   "rows": [
+    {
+     "section": "2(b)",
+     "outcome": "full",
+     "systems": [
+      "Aristotle"
+     ],
+     "date": "2026-01-19"
+    }
+   ],
+   "sections": [
+    "2(b)"
+   ]
+  },
+  "1032": {
+   "rows": [
+    {
+     "section": "1(c)",
+     "outcome": "partial",
+     "lean": true,
+     "systems": [
+      "Codex",
+      "GPT-5.5 Pro"
+     ],
+     "date": "2026-05-07"
+    }
+   ],
+   "best_primary": "partial",
+   "partial_result": true,
+   "systems": [
+    "Codex",
+    "GPT-5.5 Pro"
+   ],
+   "last_primary_date": "2026-05-07",
+   "sections": [
+    "1(c)"
+   ]
+  },
+  "1033": {
+   "rows": [
+    {
+     "section": "1(a)",
+     "outcome": "unverified",
+     "systems": [
+      "GPT-5.5 Pro"
+     ],
+     "date": "2026-06-27"
+    }
+   ],
+   "best_primary": "unverified",
+   "systems": [
+    "GPT-5.5 Pro"
+   ],
+   "last_primary_date": "2026-06-27",
+   "sections": [
+    "1(a)"
+   ]
+  },
+  "1034": {
+   "rows": [
+    {
+     "section": "2(b)",
+     "outcome": "full",
+     "systems": [
+      "Aristotle"
+     ],
+     "date": "2025-12-04"
+    }
+   ],
+   "sections": [
+    "2(b)"
+   ]
+  },
+  "1036": {
+   "rows": [
+    {
+     "section": "2(b)",
+     "outcome": "full",
+     "systems": [
+      "Aristotle"
+     ],
+     "date": "2026-01-20"
+    }
+   ],
+   "sections": [
+    "2(b)"
+   ]
+  },
+  "1037": {
+   "rows": [
+    {
+     "section": "2(b)",
+     "outcome": "full",
+     "systems": [
+      "Aristotle"
+     ],
+     "date": "2026-01-19"
+    }
+   ],
+   "sections": [
+    "2(b)"
+   ]
+  },
+  "1038": {
+   "rows": [
+    {
+     "section": "1(d)",
+     "outcome": "partial",
+     "systems": [
+      "AlphaEvolve",
+      "Claude Fable 5",
+      "Codex",
+      "GPT-5.2 Thinking",
+      "GPT-5.4 Thinking",
+      "GPT-5.5"
+     ],
+     "date": "2026-06-10"
+    }
+   ],
+   "best_primary": "partial",
+   "partial_result": true,
+   "systems": [
+    "AlphaEvolve",
+    "Claude Fable 5",
+    "Codex",
+    "GPT-5.2 Thinking",
+    "GPT-5.4 Thinking",
+    "GPT-5.5"
+   ],
+   "last_primary_date": "2026-06-10",
+   "sections": [
+    "1(d)"
+   ]
+  },
+  "1039": {
+   "rows": [
+    {
+     "section": "1(a)",
+     "outcome": "partial",
+     "systems": [
+      "GPT-5.5 Pro"
+     ],
+     "date": "2026-05-07"
+    },
+    {
+     "section": "1(d)",
+     "outcome": "partial",
+     "lean": true,
+     "systems": [
+      "Aristotle",
+      "Claude Opus 4.6"
+     ],
+     "date": "2026-03-08"
+    },
+    {
+     "section": "2(b)",
+     "outcome": "partial",
+     "systems": [
+      "Codex",
+      "GPT-5.5"
+     ],
+     "date": "2026-05-15"
+    },
+    {
+     "section": "2(c)",
+     "outcome": "partial",
+     "systems": [
+      "GPT-5.5 Thinking"
+     ],
+     "date": "2026-05-08"
+    }
+   ],
+   "best_primary": "partial",
+   "partial_result": true,
+   "systems": [
+    "Aristotle",
+    "Claude Opus 4.6",
+    "GPT-5.5 Pro"
+   ],
+   "last_primary_date": "2026-05-07",
+   "sections": [
+    "1(a)",
+    "1(d)",
+    "2(b)",
+    "2(c)"
+   ]
+  },
+  "1040": {
+   "rows": [
+    {
+     "section": "1(a)",
+     "outcome": "partial",
+     "systems": [
+      "Aletheia"
+     ],
+     "date": "2026-02-01"
+    }
+   ],
+   "best_primary": "partial",
+   "partial_result": true,
+   "systems": [
+    "Aletheia"
+   ],
+   "last_primary_date": "2026-02-01",
+   "sections": [
+    "1(a)"
+   ]
+  },
+  "1041": {
+   "rows": [
+    {
+     "section": "1(a)",
+     "outcome": "incorrect",
+     "systems": [
+      "GPT-5.4 Thinking"
+     ],
+     "date": "2026-04-22"
+    },
+    {
+     "section": "1(d)",
+     "outcome": "incorrect",
+     "systems": [
+      "Claude Opus 4.6",
+      "Gemini 3.1 Pro",
+      "GPT-5.4"
+     ],
+     "date": "2026-03-24"
+    }
+   ],
+   "best_primary": "incorrect",
+   "systems": [
+    "Claude Opus 4.6",
+    "GPT-5.4",
+    "GPT-5.4 Thinking",
+    "Gemini 3.1 Pro"
+   ],
+   "last_primary_date": "2026-04-22",
+   "sections": [
+    "1(a)",
+    "1(d)"
+   ]
+  },
+  "1043": {
+   "rows": [
+    {
+     "section": "1(c)",
+     "outcome": "full",
+     "lean": true,
+     "new_proof": true,
+     "systems": [
+      "Aristotle"
+     ],
+     "date": "2025-12-28"
+    },
+    {
+     "section": "1(c)",
+     "outcome": "full",
+     "new_proof": true,
+     "systems": [
+      "GPT"
+     ],
+     "date": "2025-12-30"
+    },
+    {
+     "section": "2(a)",
+     "outcome": "full",
+     "systems": [
+      "GPT-5"
+     ],
+     "date": "2025-10-12"
+    }
+   ],
+   "best_primary": "full",
+   "systems": [
+    "Aristotle",
+    "GPT"
+   ],
+   "last_primary_date": "2025-12-30",
+   "sections": [
+    "1(c)",
+    "2(a)"
+   ]
+  },
+  "1044": {
+   "rows": [
+    {
+     "section": "1(a)",
+     "outcome": "incorrect",
+     "systems": [
+      "GPT-5.2 Pro"
+     ],
+     "date": "2026-01-05"
+    },
+    {
+     "section": "2(b)",
+     "outcome": "full",
+     "systems": [
+      "Aristotle"
+     ],
+     "date": "2026-04-28"
+    }
+   ],
+   "best_primary": "incorrect",
+   "systems": [
+    "GPT-5.2 Pro"
+   ],
+   "last_primary_date": "2026-01-05",
+   "sections": [
+    "1(a)",
+    "2(b)"
+   ]
+  },
+  "1047": {
+   "rows": [
+    {
+     "section": "1(c)",
+     "outcome": "full",
+     "lean": true,
+     "new_proof": true,
+     "systems": [
+      "Aristotle"
+     ],
+     "date": "2026-01-21"
+    }
+   ],
+   "best_primary": "full",
+   "systems": [
+    "Aristotle"
+   ],
+   "last_primary_date": "2026-01-21",
+   "sections": [
+    "1(c)"
+   ]
+  },
+  "1048": {
+   "rows": [
+    {
+     "section": "1(c)",
+     "outcome": "full",
+     "lean": true,
+     "systems": [
+      "Aristotle"
+     ],
+     "date": "2026-01-28"
+    },
+    {
+     "section": "2(b)",
+     "outcome": "full",
+     "systems": [
+      "Aristotle"
+     ],
+     "date": "2026-01-27"
+    }
+   ],
+   "best_primary": "full",
+   "full_solution": true,
+   "systems": [
+    "Aristotle"
+   ],
+   "last_primary_date": "2026-01-28",
+   "sections": [
+    "1(c)",
+    "2(b)"
+   ]
+  },
+  "1051": {
+   "rows": [
+    {
+     "section": "1(a)",
+     "outcome": "full",
+     "lean": true,
+     "systems": [
+      "Aletheia"
+     ],
+     "date": "2026-01-29"
+    }
+   ],
+   "best_primary": "full",
+   "full_solution": true,
+   "systems": [
+    "Aletheia"
+   ],
+   "last_primary_date": "2026-01-29",
+   "sections": [
+    "1(a)"
+   ]
+  },
+  "1054": {
+   "rows": [
+    {
+     "section": "1(a)",
+     "outcome": "partial",
+     "lean": true,
+     "systems": [
+      "Claude Opus 4.8",
+      "GPT-5.5 Pro",
+      "Principia Math"
+     ],
+     "date": "2026-06-23"
+    }
+   ],
+   "best_primary": "partial",
+   "partial_result": true,
+   "systems": [
+    "Claude Opus 4.8",
+    "GPT-5.5 Pro",
+    "Principia Math"
+   ],
+   "last_primary_date": "2026-06-23",
+   "sections": [
+    "1(a)"
+   ]
+  },
+  "1061": {
+   "rows": [
+    {
+     "section": "1(d)",
+     "outcome": "unverified",
+     "systems": [
+      "GPT"
+     ],
+     "date": "2026-06-24"
+    }
+   ],
+   "best_primary": "unverified",
+   "systems": [
+    "GPT"
+   ],
+   "last_primary_date": "2026-06-24",
+   "sections": [
+    "1(d)"
+   ]
+  },
+  "1062": {
+   "rows": [
+    {
+     "section": "1(d)",
+     "outcome": "partial",
+     "systems": [
+      "GPT-5.4 Pro"
+     ],
+     "date": "2026-04-19"
+    }
+   ],
+   "best_primary": "partial",
+   "partial_result": true,
+   "systems": [
+    "GPT-5.4 Pro"
+   ],
+   "last_primary_date": "2026-04-19",
+   "sections": [
+    "1(d)"
+   ]
+  },
+  "1067": {
+   "rows": [
+    {
+     "section": "2(b)",
+     "outcome": "full",
+     "systems": [
+      "Aleph Prover",
+      "Aristotle"
+     ],
+     "date": "2026-01-28"
+    }
+   ],
+   "sections": [
+    "2(b)"
+   ]
+  },
+  "1070": {
+   "rows": [
+    {
+     "section": "1(d)",
+     "outcome": "partial",
+     "systems": [
+      "Codex",
+      "GPT-5.5"
+     ],
+     "date": "2026-06-29"
+    }
+   ],
+   "best_primary": "partial",
+   "partial_result": true,
+   "systems": [
+    "Codex",
+    "GPT-5.5"
+   ],
+   "last_primary_date": "2026-06-29",
+   "sections": [
+    "1(d)"
+   ]
+  },
+  "1071": {
+   "rows": [
+    {
+     "section": "2(b)",
+     "outcome": "full",
+     "systems": [
+      "Aleph Prover",
+      "Aristotle",
+      "GPT"
+     ],
+     "date": "2026-02-12"
+    }
+   ],
+   "sections": [
+    "2(b)"
+   ]
+  },
+  "1079": {
+   "rows": [
+    {
+     "section": "2(a)",
+     "outcome": "full",
+     "systems": [
+      "GPT-5"
+     ],
+     "date": "2025-10-13"
+    }
+   ],
+   "sections": [
+    "2(a)"
+   ]
+  },
+  "1080": {
+   "rows": [
+    {
+     "section": "2(b)",
+     "outcome": "full",
+     "systems": [
+      "Aristotle"
+     ],
+     "date": "2025-12-28"
+    }
+   ],
+   "sections": [
+    "2(b)"
+   ]
+  },
+  "1082": {
+   "rows": [
+    {
+     "section": "1(b)",
+     "outcome": "partial",
+     "lean": true,
+     "systems": [
+      "DeepMind prover agent"
+     ],
+     "date": "2026-02-14"
+    }
+   ],
+   "best_primary": "partial",
+   "partial_result": true,
+   "systems": [
+    "DeepMind prover agent"
+   ],
+   "last_primary_date": "2026-02-14",
+   "sections": [
+    "1(b)"
+   ]
+  },
+  "1084": {
+   "rows": [
+    {
+     "section": "2(a)",
+     "outcome": "partial",
+     "systems": [
+      "GPT"
+     ],
+     "date": "2026-01-21"
+    }
+   ],
+   "sections": [
+    "2(a)"
+   ]
+  },
+  "1089": {
+   "rows": [
+    {
+     "section": "1(b)",
+     "outcome": "full",
+     "systems": [
+      "Aletheia"
+     ],
+     "date": "2026-02-01"
+    }
+   ],
+   "best_primary": "full",
+   "full_solution": true,
+   "systems": [
+    "Aletheia"
+   ],
+   "last_primary_date": "2026-02-01",
+   "sections": [
+    "1(b)"
+   ]
+  },
+  "1090": {
+   "rows": [
+    {
+     "section": "1(c)",
+     "outcome": "full",
+     "lean": true,
+     "systems": [
+      "Aristotle",
+      "Gemini 3 Flash"
+     ],
+     "date": "2026-02-27"
+    }
+   ],
+   "best_primary": "full",
+   "full_solution": true,
+   "systems": [
+    "Aristotle",
+    "Gemini 3 Flash"
+   ],
+   "last_primary_date": "2026-02-27",
+   "sections": [
+    "1(c)"
+   ]
+  },
+  "1091": {
+   "rows": [
+    {
+     "section": "1(a)",
+     "outcome": "full",
+     "systems": [
+      "OpenAI internal model"
+     ],
+     "date": "2026-04-09"
+    }
+   ],
+   "best_primary": "full",
+   "full_solution": true,
+   "systems": [
+    "OpenAI internal model"
+   ],
+   "last_primary_date": "2026-04-09",
+   "sections": [
+    "1(a)"
+   ]
+  },
+  "1092": {
+   "rows": [
+    {
+     "section": "1(d)",
+     "outcome": "full",
+     "systems": [
+      "GPT-5.5 Pro"
+     ],
+     "date": "2026-04-28"
+    }
+   ],
+   "best_primary": "full",
+   "full_solution": true,
+   "systems": [
+    "GPT-5.5 Pro"
+   ],
+   "last_primary_date": "2026-04-28",
+   "sections": [
+    "1(d)"
+   ]
+  },
+  "1095": {
+   "rows": [
+    {
+     "section": "1(c)",
+     "outcome": "partial",
+     "lean": true,
+     "new_proof": true,
+     "systems": [
+      "Aristotle"
+     ],
+     "date": "2025-12-30"
+    },
+    {
+     "section": "1(d)",
+     "outcome": "partial",
+     "systems": [
+      "Claude Opus 4.6",
+      "Gemini 3.1 Pro",
+      "GPT-5.4 Pro"
+     ],
+     "date": "2026-03-13"
+    },
+    {
+     "section": "2(b)",
+     "outcome": "partial",
+     "systems": [
+      "Aristotle"
+     ],
+     "date": "2026-06-20"
+    }
+   ],
+   "best_primary": "partial",
+   "partial_result": true,
+   "systems": [
+    "Aristotle",
+    "Claude Opus 4.6",
+    "GPT-5.4 Pro",
+    "Gemini 3.1 Pro"
+   ],
+   "last_primary_date": "2026-03-13",
+   "sections": [
+    "1(c)",
+    "1(d)",
+    "2(b)"
+   ]
+  },
+  "1097": {
+   "rows": [
+    {
+     "section": "1(c)",
+     "outcome": "partial",
+     "systems": [
+      "AlphaEvolve"
+     ],
+     "date": "2025-11-03"
+    }
+   ],
+   "best_primary": "partial",
+   "partial_result": true,
+   "systems": [
+    "AlphaEvolve"
+   ],
+   "last_primary_date": "2025-11-03",
+   "sections": [
+    "1(c)"
+   ]
+  },
+  "1098": {
+   "rows": [
+    {
+     "section": "2(b)",
+     "outcome": "full",
+     "systems": [
+      "Aristotle"
+     ],
+     "date": "2026-04-25"
+    }
+   ],
+   "sections": [
+    "2(b)"
+   ]
+  },
+  "1099": {
+   "rows": [
+    {
+     "section": "2(a)",
+     "outcome": "full",
+     "systems": [
+      "ChatGPT Deep research",
+      "Gemini",
+      "Gemini Deep Research"
+     ],
+     "date": "2025-10-19"
+    }
+   ],
+   "sections": [
+    "2(a)"
+   ]
+  },
+  "1101": {
+   "rows": [
+    {
+     "section": "1(a)",
+     "outcome": "unverified",
+     "systems": [
+      "GPT-5.5 Pro"
+     ],
+     "date": "2026-04-27"
+    }
+   ],
+   "best_primary": "unverified",
+   "systems": [
+    "GPT-5.5 Pro"
+   ],
+   "last_primary_date": "2026-04-27",
+   "sections": [
+    "1(a)"
+   ]
+  },
+  "1102": {
+   "rows": [
+    {
+     "section": "2(b)",
+     "outcome": "full",
+     "systems": [
+      "Aristotle"
+     ],
+     "date": "2026-02-23"
+    }
+   ],
+   "sections": [
+    "2(b)"
+   ]
+  },
+  "1105": {
+   "rows": [
+    {
+     "section": "2(a)",
+     "outcome": "partial",
+     "systems": [
+      "ChatGPT Deep research"
+     ],
+     "date": "2026-01-19"
+    },
+    {
+     "section": "2(a)",
+     "outcome": "full",
+     "systems": [
+      "Aletheia"
+     ],
+     "date": "2026-02-01"
+    }
+   ],
+   "sections": [
+    "2(a)"
+   ]
+  },
+  "1121": {
+   "rows": [
+    {
+     "section": "2(b)",
+     "outcome": "full",
+     "systems": [
+      "Aristotle"
+     ],
+     "date": "2026-04-16"
+    }
+   ],
+   "sections": [
+    "2(b)"
+   ]
+  },
+  "1123": {
+   "rows": [
+    {
+     "section": "2(a)",
+     "outcome": "full",
+     "systems": [
+      "Gemini Deep Research"
+     ],
+     "date": "2026-01-31"
+    }
+   ],
+   "sections": [
+    "2(a)"
+   ]
+  },
+  "1124": {
+   "rows": [
+    {
+     "section": "2(a)",
+     "outcome": "full",
+     "variant": true,
+     "systems": [
+      "GPT"
+     ],
+     "date": "2025-12-31"
+    }
+   ],
+   "sections": [
+    "2(a)"
+   ]
+  },
+  "1125": {
+   "rows": [
+    {
+     "section": "2(b)",
+     "outcome": "full",
+     "systems": [
+      "Aristotle"
+     ],
+     "date": "2026-04-11"
+    }
+   ],
+   "sections": [
+    "2(b)"
+   ]
+  },
+  "1126": {
+   "rows": [
+    {
+     "section": "2(b)",
+     "outcome": "full",
+     "systems": [
+      "Aristotle"
+     ],
+     "date": "2026-02-27"
+    }
+   ],
+   "sections": [
+    "2(b)"
+   ]
+  },
+  "1129": {
+   "rows": [
+    {
+     "section": "2(a)",
+     "outcome": "full",
+     "systems": [
+      "GPT-5.2 Pro"
+     ],
+     "date": "2026-01-17"
+    }
+   ],
+   "sections": [
+    "2(a)"
+   ]
+  },
+  "1130": {
+   "rows": [
+    {
+     "section": "2(a)",
+     "outcome": "full",
+     "systems": [
+      "GPT-5.2 Pro"
+     ],
+     "date": "2026-01-17"
+    }
+   ],
+   "sections": [
+    "2(a)"
+   ]
+  },
+  "1131": {
+   "rows": [
+    {
+     "section": "1(a)",
+     "outcome": "unverified",
+     "systems": [
+      "GPT-5.5 Pro"
+     ],
+     "date": "2026-04-26"
+    }
+   ],
+   "best_primary": "unverified",
+   "systems": [
+    "GPT-5.5 Pro"
+   ],
+   "last_primary_date": "2026-04-26",
+   "sections": [
+    "1(a)"
+   ]
+  },
+  "1132": {
+   "rows": [
+    {
+     "section": "1(d)",
+     "outcome": "partial",
+     "systems": [
+      "AlphaEvolve",
+      "Claude",
+      "Gemini Pro",
+      "GPT-5.4 Pro"
+     ],
+     "date": "2026-03-24"
+    }
+   ],
+   "best_primary": "partial",
+   "partial_result": true,
+   "systems": [
+    "AlphaEvolve",
+    "Claude",
+    "GPT-5.4 Pro",
+    "Gemini Pro"
+   ],
+   "last_primary_date": "2026-03-24",
+   "sections": [
+    "1(d)"
+   ]
+  },
+  "1133": {
+   "rows": [
+    {
+     "section": "1(d)",
+     "outcome": "unverified",
+     "systems": [
+      "GPT-5.5 Pro"
+     ],
+     "date": "2026-04-29"
+    }
+   ],
+   "best_primary": "unverified",
+   "systems": [
+    "GPT-5.5 Pro"
+   ],
+   "last_primary_date": "2026-04-29",
+   "sections": [
+    "1(d)"
+   ]
+  },
+  "1134": {
+   "rows": [
+    {
+     "section": "2(b)",
+     "outcome": "full",
+     "systems": [
+      "AxiomProver"
+     ],
+     "date": "2026-06-19"
+    }
+   ],
+   "sections": [
+    "2(b)"
+   ]
+  },
+  "1136": {
+   "rows": [
+    {
+     "section": "2(b)",
+     "outcome": "full",
+     "systems": [
+      "Aristotle"
+     ],
+     "date": "2026-04-19"
+    }
+   ],
+   "sections": [
+    "2(b)"
+   ]
+  },
+  "1138": {
+   "rows": [
+    {
+     "section": "1(d)",
+     "outcome": "full",
+     "systems": [
+      "GPT-5.5 Pro",
+      "GPT-5.5 Thinking"
+     ],
+     "date": "2026-04-25"
+    },
+    {
+     "section": "2(b)",
+     "outcome": "full",
+     "systems": [
+      "Aristotle"
+     ],
+     "date": "2026-05-04"
+    }
+   ],
+   "best_primary": "full",
+   "full_solution": true,
+   "systems": [
+    "GPT-5.5 Pro",
+    "GPT-5.5 Thinking"
+   ],
+   "last_primary_date": "2026-04-25",
+   "sections": [
+    "1(d)",
+    "2(b)"
+   ]
+  },
+  "1139": {
+   "rows": [
+    {
+     "section": "1(d)",
+     "outcome": "unverified",
+     "systems": [
+      "GPT-5.2 Pro",
+      "GPT-5.5 Pro"
+     ],
+     "date": "2026-06-19"
+    }
+   ],
+   "best_primary": "unverified",
+   "systems": [
+    "GPT-5.2 Pro",
+    "GPT-5.5 Pro"
+   ],
+   "last_primary_date": "2026-06-19",
+   "sections": [
+    "1(d)"
+   ]
+  },
+  "1141": {
+   "rows": [
+    {
+     "section": "1(a)",
+     "outcome": "full",
+     "systems": [
+      "OpenAI internal model"
+     ],
+     "date": "2026-04-09"
+    },
+    {
+     "section": "1(d)",
+     "outcome": "partial",
+     "variant": true,
+     "systems": [
+      "GPT-5.2 Pro",
+      "GPT-5.2 Thinking"
+     ],
+     "date": "2026-01-25"
+    },
+    {
+     "section": "2(b)",
+     "outcome": "full",
+     "systems": [
+      "GPT-5.4 Pro"
+     ],
+     "date": "2026-04-11"
+    }
+   ],
+   "best_primary": "full",
+   "full_solution": true,
+   "systems": [
+    "GPT-5.2 Pro",
+    "GPT-5.2 Thinking",
+    "OpenAI internal model"
+   ],
+   "last_primary_date": "2026-04-09",
+   "sections": [
+    "1(a)",
+    "1(d)",
+    "2(b)"
+   ]
+  },
+  "1143": {
+   "rows": [
+    {
+     "section": "1(d)",
+     "outcome": "partial",
+     "systems": [
+      "GPT-5.5 Pro"
+     ],
+     "date": "2026-04-29"
+    }
+   ],
+   "best_primary": "partial",
+   "partial_result": true,
+   "systems": [
+    "GPT-5.5 Pro"
+   ],
+   "last_primary_date": "2026-04-29",
+   "sections": [
+    "1(d)"
+   ]
+  },
+  "1147": {
+   "rows": [
+    {
+     "section": "2(a)",
+     "outcome": "full",
+     "systems": [
+      "GPT-5.2 Thinking"
+     ],
+     "date": "2026-01-26"
+    }
+   ],
+   "sections": [
+    "2(a)"
+   ]
+  },
+  "1148": {
+   "rows": [
+    {
+     "section": "1(d)",
+     "outcome": "full",
+     "systems": [
+      "Gemini 3 Pro",
+      "Gemini 3.1 Pro",
+      "GPT-5.2 Pro",
+      "GPT-5.2 Thinking",
+      "GPT-5.4 Pro"
+     ],
+     "date": "2026-03-16"
+    },
+    {
+     "section": "1(d)",
+     "outcome": "full",
+     "systems": [
+      "GPT-5.5 Pro"
+     ],
+     "date": "2026-05-19"
+    },
+    {
+     "section": "2(b)",
+     "outcome": "full",
+     "systems": [
+      "Claude Opus 4.6",
+      "Gemini 3.1",
+      "GPT-5.4",
+      "UlamAI Prover"
+     ],
+     "date": "2026-03-17"
+    }
+   ],
+   "best_primary": "full",
+   "full_solution": true,
+   "systems": [
+    "GPT-5.2 Pro",
+    "GPT-5.2 Thinking",
+    "GPT-5.4 Pro",
+    "GPT-5.5 Pro",
+    "Gemini 3 Pro",
+    "Gemini 3.1 Pro"
+   ],
+   "last_primary_date": "2026-05-19",
+   "sections": [
+    "1(d)",
+    "2(b)"
+   ]
+  },
+  "1150": {
+   "rows": [
+    {
+     "section": "2(a)",
+     "outcome": "partial",
+     "systems": [
+      "Gemini Deep Research"
+     ],
+     "date": "2026-02-04"
+    }
+   ],
+   "sections": [
+    "2(a)"
+   ]
+  },
+  "1151": {
+   "rows": [
+    {
+     "section": "1(d)",
+     "outcome": "full",
+     "systems": [
+      "GPT-5.5 Pro"
+     ],
+     "date": "2026-04-30"
+    },
+    {
+     "section": "2(b)",
+     "outcome": "full",
+     "systems": [
+      "Codex",
+      "GPT"
+     ],
+     "date": "2026-05-06"
+    }
+   ],
+   "best_primary": "full",
+   "full_solution": true,
+   "systems": [
+    "GPT-5.5 Pro"
+   ],
+   "last_primary_date": "2026-04-30",
+   "sections": [
+    "1(d)",
+    "2(b)"
+   ]
+  },
+  "1153": {
+   "rows": [
+    {
+     "section": "1(d)",
+     "outcome": "full",
+     "systems": [
+      "AlphaEvolve",
+      "Claude",
+      "Gemini Pro",
+      "GPT-5.2 Thinking",
+      "GPT-5.4 Pro"
+     ],
+     "date": "2026-03-24"
+    }
+   ],
+   "best_primary": "full",
+   "full_solution": true,
+   "systems": [
+    "AlphaEvolve",
+    "Claude",
+    "GPT-5.2 Thinking",
+    "GPT-5.4 Pro",
+    "Gemini Pro"
+   ],
+   "last_primary_date": "2026-03-24",
+   "sections": [
+    "1(d)"
+   ]
+  },
+  "1154": {
+   "rows": [
+    {
+     "section": "2(a)",
+     "outcome": "partial",
+     "systems": [
+      "GPT-5.2 Thinking"
+     ],
+     "date": "2026-01-24"
+    }
+   ],
+   "sections": [
+    "2(a)"
+   ]
+  },
+  "1161": {
+   "rows": [
+    {
+     "section": "2(a)",
+     "outcome": "full",
+     "systems": [
+      "GPT-5.2 Thinking"
+     ],
+     "date": "2026-01-24"
+    }
+   ],
+   "sections": [
+    "2(a)"
+   ]
+  },
+  "1177": {
+   "rows": [
+    {
+     "section": "1(d)",
+     "outcome": "unverified",
+     "systems": [
+      "GPT"
+     ],
+     "date": "2026-06-23"
+    }
+   ],
+   "best_primary": "unverified",
+   "systems": [
+    "GPT"
+   ],
+   "last_primary_date": "2026-06-23",
+   "sections": [
+    "1(d)"
+   ]
+  },
+  "1183": {
+   "rows": [
+    {
+     "section": "1(d)",
+     "outcome": "partial",
+     "systems": [
+      "GPT-5.4 Pro"
+     ],
+     "date": "2026-03-18"
+    }
+   ],
+   "best_primary": "partial",
+   "partial_result": true,
+   "systems": [
+    "GPT-5.4 Pro"
+   ],
+   "last_primary_date": "2026-03-18",
+   "sections": [
+    "1(d)"
+   ]
+  },
+  "1187": {
+   "rows": [
+    {
+     "section": "2(b)",
+     "outcome": "full",
+     "systems": [
+      "Codex",
+      "GPT-5.5"
+     ],
+     "date": "2026-05-12"
+    }
+   ],
+   "sections": [
+    "2(b)"
+   ]
+  },
+  "1190": {
+   "rows": [
+    {
+     "section": "1(d)",
+     "outcome": "full",
+     "systems": [
+      "GPT-5.4 Pro"
+     ],
+     "date": "2026-04-23"
+    },
+    {
+     "section": "1(d)",
+     "outcome": "unverified",
+     "systems": [
+      "GPT-5.5 Pro"
+     ],
+     "date": "2026-04-30"
+    },
+    {
+     "section": "2(b)",
+     "outcome": "full",
+     "systems": [
+      "Unspecified"
+     ],
+     "date": "2026-05-14"
+    }
+   ],
+   "best_primary": "full",
+   "full_solution": true,
+   "systems": [
+    "GPT-5.4 Pro",
+    "GPT-5.5 Pro"
+   ],
+   "last_primary_date": "2026-04-30",
+   "sections": [
+    "1(d)",
+    "2(b)"
+   ]
+  },
+  "1193": {
+   "rows": [
+    {
+     "section": "2(b)",
+     "outcome": "full",
+     "systems": [
+      "Aristotle"
+     ],
+     "date": "2026-04-13"
+    }
+   ],
+   "sections": [
+    "2(b)"
+   ]
+  },
+  "1194": {
+   "rows": [
+    {
+     "section": "1(a)",
+     "outcome": "partial",
+     "systems": [
+      "GPT-5.4 Pro"
+     ],
+     "date": "2026-04-23"
+    },
+    {
+     "section": "1(d)",
+     "outcome": "partial",
+     "lean": true,
+     "systems": [
+      "Codex",
+      "GPT-5.5 Pro"
+     ],
+     "date": "2026-05-02"
+    }
+   ],
+   "best_primary": "partial",
+   "partial_result": true,
+   "systems": [
+    "Codex",
+    "GPT-5.4 Pro",
+    "GPT-5.5 Pro"
+   ],
+   "last_primary_date": "2026-05-02",
+   "sections": [
+    "1(a)",
+    "1(d)"
+   ]
+  },
+  "1195": {
+   "rows": [
+    {
+     "section": "1(d)",
+     "outcome": "full",
+     "systems": [
+      "GPT-5.4 Pro"
+     ],
+     "date": "2026-04-19"
+    }
+   ],
+   "best_primary": "full",
+   "full_solution": true,
+   "systems": [
+    "GPT-5.4 Pro"
+   ],
+   "last_primary_date": "2026-04-19",
+   "sections": [
+    "1(d)"
+   ]
+  },
+  "1196": {
+   "rows": [
+    {
+     "section": "1(a)",
+     "outcome": "full",
+     "systems": [
+      "GPT-5.4 Pro"
+     ],
+     "date": "2026-04-13"
+    },
+    {
+     "section": "1(d)",
+     "outcome": "full",
+     "systems": [
+      "GPT-5.4 Thinking"
+     ],
+     "date": "2026-04-16"
+    },
+    {
+     "section": "2(b)",
+     "outcome": "full",
+     "systems": [
+      "Gauss"
+     ],
+     "date": "2026-04-16"
+    },
+    {
+     "section": "2(c)",
+     "outcome": "full",
+     "systems": [
+      "GPT-5.4 Thinking"
+     ],
+     "date": "2026-04-20"
+    }
+   ],
+   "best_primary": "full",
+   "full_solution": true,
+   "systems": [
+    "GPT-5.4 Pro",
+    "GPT-5.4 Thinking"
+   ],
+   "last_primary_date": "2026-04-16",
+   "sections": [
+    "1(a)",
+    "1(d)",
+    "2(b)",
+    "2(c)"
+   ]
+  },
+  "1197": {
+   "rows": [
+    {
+     "section": "1(c)",
+     "outcome": "full",
+     "lean": true,
+     "systems": [
+      "Aristotle",
+      "Claude Opus 4.7",
+      "GPT-5.4 Pro"
+     ],
+     "date": "2026-06-21"
+    }
+   ],
+   "best_primary": "full",
+   "full_solution": true,
+   "systems": [
+    "Aristotle",
+    "Claude Opus 4.7",
+    "GPT-5.4 Pro"
+   ],
+   "last_primary_date": "2026-06-21",
+   "sections": [
+    "1(c)"
+   ]
+  },
+  "1198": {
+   "rows": [
+    {
+     "section": "2(a)",
+     "outcome": "partial",
+     "systems": [
+      "GPT-5.4"
+     ],
+     "date": "2026-04-16"
+    }
+   ],
+   "sections": [
+    "2(a)"
+   ]
+  },
+  "1201": {
+   "rows": [
+    {
+     "section": "1(d)",
+     "outcome": "unverified",
+     "systems": [
+      "GPT-5.5 Pro"
+     ],
+     "date": "2026-04-30"
+    }
+   ],
+   "best_primary": "unverified",
+   "systems": [
+    "GPT-5.5 Pro"
+   ],
+   "last_primary_date": "2026-04-30",
+   "sections": [
+    "1(d)"
+   ]
+  },
+  "1202": {
+   "rows": [
+    {
+     "section": "1(a)",
+     "outcome": "full",
+     "systems": [
+      "GPT-5.4 Pro"
+     ],
+     "date": "2026-04-01"
+    }
+   ],
+   "best_primary": "full",
+   "full_solution": true,
+   "systems": [
+    "GPT-5.4 Pro"
+   ],
+   "last_primary_date": "2026-04-01",
+   "sections": [
+    "1(a)"
+   ]
+  },
+  "1208": {
+   "rows": [
+    {
+     "section": "1(d)",
+     "outcome": "unverified",
+     "systems": [
+      "GPT-5.5 Pro"
+     ],
+     "date": "2026-06-14"
+    }
+   ],
+   "best_primary": "unverified",
+   "systems": [
+    "GPT-5.5 Pro"
+   ],
+   "last_primary_date": "2026-06-14",
+   "sections": [
+    "1(d)"
+   ]
+  },
+  "1209": {
+   "rows": [
+    {
+     "section": "1(d)",
+     "outcome": "partial",
+     "lean": true,
+     "systems": [
+      "GPT-5.4 Pro"
+     ],
+     "date": "2026-04-15"
+    }
+   ],
+   "best_primary": "partial",
+   "partial_result": true,
+   "systems": [
+    "GPT-5.4 Pro"
+   ],
+   "last_primary_date": "2026-04-15",
+   "sections": [
+    "1(d)"
+   ]
+  },
+  "1216": {
+   "rows": [
+    {
+     "section": "2(a)",
+     "outcome": "full",
+     "systems": [
+      "ChatGPT Deep research"
+     ],
+     "date": "2026-03-10"
+    },
+    {
+     "section": "2(a)",
+     "outcome": "partial",
+     "variant": true,
+     "systems": [
+      "GPT-5.4 Thinking"
+     ],
+     "date": "2026-04-12"
+    }
+   ],
+   "sections": [
+    "2(a)"
+   ]
+  },
+  "1217": {
+   "rows": [
+    {
+     "section": "1(a)",
+     "outcome": "full",
+     "systems": [
+      "GPT-5.4 Pro"
+     ],
+     "date": "2026-04-16"
+    }
+   ],
+   "best_primary": "full",
+   "full_solution": true,
+   "systems": [
+    "GPT-5.4 Pro"
+   ],
+   "last_primary_date": "2026-04-16",
+   "sections": [
+    "1(a)"
+   ]
+  }
+ }
+}

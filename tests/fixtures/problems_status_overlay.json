@@ -1,0 +1,55 @@
+{
+  "schema_version": 1,
+  "catalogue_sha256": "3ac4880a6fd939612687da2b90f5c32160400ad8a468592e85232927a2b09e4a",
+  "generated_at": "2026-10-11T06:15:00Z",
+  "last_checked_at": "2026-10-11T06:15:00Z",
+  "last_successful_refresh_at": "2026-10-11T06:15:00Z",
+  "refresh_interval_minutes": 360,
+  "sources": [
+    {"id": "erdos", "revision": "48e0c21", "checked_at": "2026-10-11T06:14:00Z", "ok": true},
+    {"id": "kourovka", "revision": "v48", "checked_at": "2026-10-11T06:14:30Z", "ok": false},
+    {"id": "wikipedia", "revision": 1379514120, "checked_at": "2026-10-11T06:14:40Z", "ok": true}
+  ],
+  "entries": {
+    "erdos-0005": {"category": "solved", "category_rule": "S1", "status_headline": "Marked proved in the Erdős Problems database on October 10.",
+                   "badges_add": ["ai-assisted-solution", "invented"], "badges_remove": [],
+                   "evidence_add": [
+                     {"kind": "source-marker", "actor": "maintainer", "scope": "full", "date": "2026-10-10", "title": "Erdős Problems database: proved", "url": "https://github.com/teorth/erdosproblems/commit/abc1234", "acceptance": "accepted-by-maintainer"},
+                     {"kind": "claim", "actor": "ai", "scope": "full", "date": "2026-10-09", "title": "Credentials in the link", "url": "https://user:secret@example.org/claim", "acceptance": "preprint"}
+                   ],
+                   "changed_at": "2026-10-10T18:00:00Z", "change": "Erdős #5 marked proved in the database"},
+    "kourovka-20-003": {"category": "solved", "category_rule": "A1", "badges_remove": ["not-in-current-edition"], "changed_at": "2026-10-09T00:00:00Z", "change": "Kourovka 20.3 restored in an update"},
+    "erdos-0003": {"badges_add": ["withdrawn-claim"], "badges_remove": ["lean-pending"],
+                   "evidence_add": [{"kind": "withdrawal", "actor": "ai", "claimant": "OpenAI", "scope": "full", "date": "2026-10-08", "title": "openai/math history: family 159 withdrawn", "url": "https://github.com/openai/math/blob/main/history.md", "acceptance": "withdrawn"}],
+                   "category": "open", "category_rule": "O", "changed_at": "2026-10-08T12:00:00Z", "change": "Erdős #3: the AI-produced claim was withdrawn"},
+    "erdos-0242": {"category": "solved", "category_rule": "S1", "change": "No timestamp: ignored"},
+    "not-in-catalogue": {"category": "solved", "category_rule": "S1", "changed_at": "2026-10-10T00:00:00Z", "change": "Unknown ids never add rows",
+                         "evidence_add": [{"kind": "source-marker", "actor": "maintainer", "scope": "full", "date": "2026-10-10", "title": "A marker for a row that does not exist", "url": "https://example.org/marker", "acceptance": "accepted-by-maintainer"}]},
+    "Bad Id!": {"category": "solved", "category_rule": "S1", "changed_at": "2026-10-10T00:00:00Z", "change": "Invalid id"}
+  },
+  "signals": {
+    "clay-poincare-conjecture": [
+      {"title": "A survey of Ricci flow methods", "url": "https://arxiv.org/abs/2610.00001", "date": "2026-10-02", "relation": "mentions", "source": "arxiv", "matched_by": "kimi-k3",
+       "evidence_quote": "the Poincaré conjecture, proved by Perelman", "first_seen": "2026-10-03T00:00:00Z"},
+      {"title": "Not https", "url": "http://arxiv.org/abs/2610.00002", "date": "2026-10-02", "relation": "mentions", "source": "arxiv", "matched_by": "kimi-k3", "evidence_quote": "x", "first_seen": "2026-10-03T00:00:00Z"},
+      {"title": "Bad relation", "url": "https://arxiv.org/abs/2610.00003", "date": "2026-10-02", "relation": "solves", "source": "arxiv", "matched_by": "kimi-k3", "evidence_quote": "x", "first_seen": "2026-10-03T00:00:00Z"},
+      {"title": "Model-chosen source", "url": "https://arxiv.org/abs/2610.00004", "date": "2026-10-02", "relation": "mentions", "source": "a blog", "matched_by": "kimi-k3", "evidence_quote": "x", "first_seen": "2026-10-03T00:00:00Z"}
+    ],
+    "erdos-0242": [
+      {"title": "A counterexample search for the Erdős–Straus equation", "url": "https://arxiv.org/abs/2610.00005", "date": "2026-10-05", "relation": "claims-partial", "source": "arxiv", "matched_by": "deterministic",
+       "first_seen": "2026-10-06T00:00:00Z"}
+    ],
+    "not-in-catalogue": [
+      {"title": "Ignored", "url": "https://arxiv.org/abs/2610.00006", "date": "2026-10-05", "relation": "mentions", "source": "arxiv", "matched_by": "kimi-k3", "evidence_quote": "an unknown problem id", "first_seen": "2026-10-06T00:00:00Z"}
+    ]
+  },
+  "recent_changes": [
+    {"id": "erdos-0005", "date": "2026-10-10T18:00:00Z", "change": "Erdős #5 marked proved in the database", "source": "erdos"},
+    {"id": "erdos-0003", "date": "2026-10-08T12:00:00Z", "change": "Erdős #3: the AI-produced claim was withdrawn", "source": "openai-math"},
+    {"id": "not-in-catalogue", "date": "2026-10-07T00:00:00Z", "change": "Unknown ids are not listed", "source": "erdos"},
+    {"id": "erdos-0020", "date": "not a date", "change": "Invalid date", "source": "erdos"}
+  ],
+  "category_counts": {"solved": 3, "ai-proposed": 1, "partial": 1, "open": 5},
+  "model": {"name": "kimi-k3", "calls_today": 4, "daily_cap": 48},
+  "source_errors": [{"source_id": "kourovka", "error": "HTTP 503 from the notebook host"}]
+}

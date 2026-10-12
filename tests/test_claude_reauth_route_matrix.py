@@ -18,7 +18,7 @@ CLAUDE_ENGINES = (
 )
 FORMAL_CLAUDE_ENGINES = ("claude", "openclaw", "deepagents")
 MODEL = "claude-haiku-4-5"
-USER = {"id": 71}
+USER = {"id": 71, "is_admin": True}
 
 
 def _engine_info(engine: str) -> dict:

@@ -85,7 +85,7 @@ class SponsoredKimiFormalResponsesTests(unittest.TestCase):
             local_token="local-boundary-token",
         )
         with patch(
-            "agent_monitor.public_kimi_gateway.urlrequest.urlopen",
+            "agent_monitor.public_kimi_gateway._UPSTREAM_OPENER.open",
             side_effect=urlopen,
         ), gateway:
             host_port = gateway.base_url.removeprefix("http://").removesuffix("/v1")
@@ -139,7 +139,7 @@ class SponsoredKimiFormalResponsesTests(unittest.TestCase):
             host, port = server.server_address
             try:
                 with patch(
-                    "agent_monitor.public_kimi_server.urlrequest.urlopen",
+                    "agent_monitor.public_kimi_server.LOOPBACK_OPENER.open",
                     side_effect=urlopen,
                 ):
                     for token, expected in ((formal, 200), (codex, 200), (ordinary, 403)):

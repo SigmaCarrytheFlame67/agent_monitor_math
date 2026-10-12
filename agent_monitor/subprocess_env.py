@@ -11,6 +11,9 @@ from collections.abc import Mapping, MutableMapping
 # specific run is allowed to receive.
 _CONTROL_PLANE_ENV_NAMES = frozenset(
     {
+        # Optional GitHub token for Analyze source fetches: only the Analyze
+        # runner may receive it (jobs.py adds it to that run explicitly).
+        "AGENT_MONITOR_ANALYZE_GITHUB_TOKEN",
         "AGENT_MONITOR_BASE_PATH",
         "AGENT_MONITOR_DATA_ENCRYPTION_KEY",
         "AGENT_MONITOR_DATA_KEY_FILE",
@@ -187,6 +190,29 @@ def project_provider_env(
         if name in original:
             env[name] = original[name]
     return env
+
+
+def server_elan_home() -> str:
+    """Absolute elan home of this (server) process: where its Lean toolchains live.
+
+    Subscription routes give agents a private per-account ``HOME``. elan's
+    ``lean``/``lake`` shims resolve ``$ELAN_HOME`` (default ``$HOME/.elan``), so
+    without an explicit value a Claude-route ``lake`` would download a second
+    toolchain into the account's credential home. Compute it here, in the
+    server process, and hand the absolute path to every Lean-capable child.
+    """
+    raw = str(os.environ.get("ELAN_HOME") or "").strip()
+    if raw and os.path.isabs(raw):
+        return os.path.normpath(raw)
+    home = str(os.environ.get("HOME") or "").strip()
+    if not home or not os.path.isabs(home):
+        try:
+            import pwd
+
+            home = pwd.getpwuid(os.getuid()).pw_dir
+        except (ImportError, KeyError, OSError):
+            home = os.path.expanduser("~")
+    return os.path.join(os.path.normpath(home), ".elan")
 
 
 def child_process_env(

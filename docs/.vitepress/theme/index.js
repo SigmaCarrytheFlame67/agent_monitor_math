@@ -5,7 +5,7 @@ import '@fontsource-variable/newsreader/wght.css'
 import '@fontsource-variable/space-grotesk/wght.css'
 import InstitutionRail from './InstitutionRail.vue'
 import ResearchDag from './ResearchDag.vue'
-import OpenProblems from './OpenProblems.vue'
+import Problems from './Problems.vue'
 import HeroMotion from './HeroMotion.vue'
 import HomeReveal from './HomeReveal.vue'
 import './custom.css'
@@ -14,7 +14,7 @@ export default {
   extends: DefaultTheme,
   enhanceApp({ app }) {
     app.component('ResearchDag', ResearchDag)
-    app.component('OpenProblems', OpenProblems)
+    app.component('Problems', Problems)
     if (typeof window === 'undefined') return
 
     const root = document.documentElement
@@ -38,8 +38,8 @@ export default {
     'nav-bar-content-after': () => h('a', {
       class: 'ansatz-mobile-signin',
       href: '/sign-in',
-      'aria-label': 'Sign in to Ansätze'
-    }, 'Sign in'),
+      'aria-label': 'Sign up or sign in to Ansätze'
+    }, 'Sign up'),
     'home-hero-after': () => h(Fragment, [h(InstitutionRail), h(HomeReveal)])
   })
 }

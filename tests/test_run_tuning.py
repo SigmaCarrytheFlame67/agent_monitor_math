@@ -1,10 +1,12 @@
 from __future__ import annotations
 
+import json
 import os
 from pathlib import Path
 import shutil
 import subprocess
 import tempfile
+import time
 import unittest
 from unittest.mock import patch
 
@@ -266,19 +268,29 @@ class RunTuningContractTests(unittest.TestCase):
 
 class RunTuningUiTests(unittest.TestCase):
     def test_run_mode_replaces_subagents_in_the_prompt_dock(self) -> None:
+        # Speed is a two-state toggle (standard/fast) in the redesigned dock;
+        # thinking effort keeps its slider.
         for identifier in (
             "run-profile-trigger",
             "run-profile-popover",
-            "run-speed-slider",
+            "run-speed-toggle",
             "run-thinking-slider",
-            "run-speed-stage",
             "run-thinking-stage",
         ):
             self.assertEqual(HTML.count(f'id="{identifier}"'), 1)
+        self.assertNotIn('id="run-speed-slider"', HTML)
+        self.assertIn(
+            '<button type="button" class="speed-button" id="run-speed-toggle" aria-pressed="false">',
+            HTML,
+        )
+        self.assertIn("speed.disabled=speeds.length<=1;", HTML)
+        self.assertIn("speed.setAttribute('aria-pressed',String(fast));", HTML)
+        self.assertIn("if(choices.length<2)return;", HTML)
         dock = HTML.split('<div class="choice-dock">', 1)[1].split(
             '<button class="start"', 1
         )[0]
-        sidebar = HTML.split('<aside class="sidebar">', 1)[1].split('</aside>', 1)[0]
+        # The sidebar gained an id for the mobile drawer; match its opening tag.
+        sidebar = HTML.split('<aside class="sidebar"', 1)[1].split('</aside>', 1)[0]
         self.assertIn('<details class="run-profile choice-field"', dock)
         self.assertIn('<summary class="run-profile-trigger"', dock)
         details = dock.split('<details class="run-profile choice-field"', 1)[1]
@@ -292,15 +304,18 @@ class RunTuningUiTests(unittest.TestCase):
         self.assertIn("speed_mode:tuning.speed_mode", HTML)
         self.assertIn("use_subagents:false", HTML)
         self.assertIn("subagent_model:null", HTML)
-        self.assertIn("Existing runs, Formal Lean, Lean DAG, and continuations", HTML)
+        self.assertIn(
+            "existing runs, Formal Lean, Lean DAG, and continuations keep the profile they started with",
+            HTML,
+        )
 
     def test_run_mode_motion_is_helpful_and_respects_reduced_motion(self) -> None:
         self.assertIn("runProfilePulse", HTML)
         self.assertIn("runProfileRevealHalf", HTML)
-        self.assertIn("runProfileStars", HTML)
-        self.assertIn("runSliderGlide", HTML)
-        self.assertIn("runSliderShimmer", HTML)
         self.assertIn("runSliderPulse", HTML)
+        self.assertIn("@keyframes controlShimmer", HTML)
+        self.assertIn(".slider-burst .run-slider-fill::after { animation:controlShimmer", HTML)
+        self.assertIn("@keyframes tuningPop", HTML)
         self.assertIn("height: 13px", HTML)
         self.assertIn("--slider-progress", HTML)
         self.assertNotIn("calc(var(--slider-progress)", HTML)
@@ -308,15 +323,31 @@ class RunTuningUiTests(unittest.TestCase):
         self.assertIn("transform: translateY(0) scale(.5)", HTML)
         self.assertNotIn("animation: runProfileReveal .36s", HTML)
         self.assertIn(".run-profile-field-head b { font-size: 25px", HTML)
-        self.assertNotIn(".run-profile-popover { position: fixed", HTML)
+        # The redesigned popover is moved to <body> and fixed-positioned, so
+        # a clipped or transformed toolbar ancestor can never hide it.
+        self.assertIn("document.body.appendChild($('run-profile-popover'))", HTML)
+        self.assertIn(".run-profile-popover { position:fixed;", HTML)
         self.assertNotIn('class="run-profile-head"', HTML)
         self.assertNotIn('class="run-profile-hero"', HTML)
         self.assertIn('class="run-slider-fill"', HTML)
-        self.assertIn("run-mode-slider speed-slider", HTML)
+        self.assertIn("run-mode-slider thinking-slider", HTML)
+        self.assertNotIn("run-mode-slider speed-slider", HTML)
         self.assertNotIn("speed-options", HTML)
         self.assertNotIn("function toggleRunProfile", HTML)
         self.assertIn("$('run-profile').ontoggle", HTML)
         self.assertIn("@media (prefers-reduced-motion: reduce)", HTML)
+        reduced = HTML.split("@media(prefers-reduced-motion:reduce) {", 1)[1].split("}", 1)[0]
+        for selector in (
+            ".run-profile-popover",
+            ".run-profile-bolt::after",
+            ".run-slider-fill::after",
+            ".thinking-thumb",
+            ".tuning-pop",
+            ".speed-button",
+            ".speed-bolt",
+        ):
+            self.assertIn(selector, reduced)
+        self.assertIn("animation:none!important; transition:none!important;", reduced)
 
     @unittest.skipUnless(Path(NODE).is_file(), "node is unavailable")
     def test_full_inline_javascript_parses(self) -> None:
@@ -336,6 +367,248 @@ class RunTuningUiTests(unittest.TestCase):
             Path("tests/test_run_tuning.py"),
         ):
             self.assertNotIn("sk" + "-proj-", path.read_text(encoding="utf-8"))
+
+
+def _ids(caps: dict, field: str) -> list[str]:
+    return [item["id"] for item in caps[field]]
+
+
+class Gpt6RunTuningTests(unittest.TestCase):
+    """GPT-6 controls follow the OpenAI model pages and the vetted Codex catalog."""
+
+    def test_api_models_expose_their_documented_thinking_and_speed(self) -> None:
+        full = ["default", "low", "medium", "high", "xhigh", "max"]
+        with_none = ["default", "none", "low", "medium", "high", "xhigh", "max"]
+        cases = {
+            "gpt-6-astra": (full, ["standard", "fast", "ultrafast"]),
+            "gpt-6.1-sol": (full, ["standard", "fast"]),
+            "gpt-6-sol": (with_none, ["standard", "fast"]),
+            "gpt-6-luna": (with_none, ["standard", "fast"]),
+        }
+        for model, (reasoning, speed) in cases.items():
+            for engine in ("plain", "math_harness", "metaharness", "hermes"):
+                with self.subTest(model=model, engine=engine):
+                    caps = run_tuning.capabilities(model, "api_key", engine)
+                    self.assertEqual(_ids(caps, "reasoning"), reasoning)
+                    self.assertEqual(_ids(caps, "speed"), speed)
+
+    def test_codex_transport_keeps_the_vetted_cli_catalog(self) -> None:
+        for route in ("api_key", "codex_subscription"):
+            with self.subTest(route=route):
+                astra = run_tuning.capabilities("gpt-6-astra", route, "codex")
+                sol = run_tuning.capabilities("gpt-6-sol", route, "codex")
+                newer = run_tuning.capabilities("gpt-6.1-sol", route, "codex")
+                self.assertEqual(_ids(astra, "speed"), ["standard", "fast"])
+                self.assertNotIn("none", _ids(sol, "reasoning"))
+                # GPT-6.1 Sol ships in the pinned codex-cli 0.160.0 catalog.
+                self.assertEqual(
+                    _ids(newer, "reasoning"), ["default", "low", "medium", "high", "xhigh", "max"]
+                )
+                self.assertEqual(_ids(newer, "speed"), ["standard", "fast"])
+        self.assertEqual(
+            run_tuning.codex_config_args(
+                {run_tuning.REASONING_ENV: "high", run_tuning.SPEED_ENV: "fast"}, "gpt-6.1-sol"
+            ),
+            ["-c", 'model_reasoning_effort="high"', "-c", 'service_tier="fast"'],
+        )
+        luna = run_tuning.capabilities("gpt-6-luna", "codex_subscription", "deepagents")
+        self.assertEqual(_ids(luna, "speed"), ["standard", "fast"])
+
+    def test_deepagents_api_route_does_not_advertise_openai_controls(self) -> None:
+        caps = run_tuning.capabilities("gpt-6-astra", "api_key", "deepagents")
+        self.assertEqual(_ids(caps, "reasoning"), ["default"])
+        self.assertEqual(_ids(caps, "speed"), ["standard"])
+        self.assertNotIn("deepagents", caps["supported_engines"])
+
+    def test_settings_payload_names_the_harnesses_of_partial_options(self) -> None:
+        astra = run_tuning.capabilities("gpt-6-astra", "api_key")
+        sol = run_tuning.capabilities("gpt-6-sol", "api_key")
+        # Ansatz Analyze applies a profile exactly as math_harness does.
+        responses = ["analyze", "hermes", "math_harness", "metaharness", "plain"]
+        speeds = {item["id"]: item for item in astra["speed"]}
+        none = next(item for item in sol["reasoning"] if item["id"] == "none")
+        self.assertEqual(speeds["ultrafast"]["engines"], responses)
+        self.assertNotIn("engines", speeds["fast"])
+        self.assertEqual(none["engines"], responses)
+        self.assertIn("codex", astra["supported_engines"])
+
+    def test_harness_specific_options_are_validated_per_harness(self) -> None:
+        self.assertEqual(
+            run_tuning.normalize(
+                "gpt-6-astra", "api_key",
+                reasoning_effort="max", speed_mode="ultrafast", engine="plain",
+            ),
+            {"reasoning_effort": "max", "speed_mode": "ultrafast"},
+        )
+        with self.assertRaisesRegex(ValueError, "speed mode 'ultrafast'"):
+            run_tuning.normalize("gpt-6-astra", "api_key", speed_mode="ultrafast", engine="codex")
+        with self.assertRaisesRegex(ValueError, "reasoning effort 'none'"):
+            run_tuning.normalize(
+                "gpt-6-sol", "codex_subscription", reasoning_effort="none", engine="plain"
+            )
+
+    def test_ultrafast_and_none_reach_the_responses_request(self) -> None:
+        captured: dict = {}
+
+        def fake_http(_url, **kwargs):
+            captured.update(kwargs["payload"])
+            return 200, {"output_text": "done", "usage": {}}
+
+        for model, effort, speed, tier in (
+            ("gpt-6-astra", "max", "ultrafast", "ultrafast"),
+            ("gpt-6-sol", "none", "fast", "fast"),
+            ("gpt-6.1-sol", "xhigh", "standard", "default"),
+        ):
+            captured.clear()
+            env = {
+                "OPENAI_API_KEY": "test-only-key",
+                run_tuning.REASONING_ENV: effort,
+                run_tuning.SPEED_ENV: speed,
+            }
+            with (
+                self.subTest(model=model),
+                patch.dict(os.environ, env, clear=True),
+                patch("agent_monitor.settings._http_json", side_effect=fake_http),
+            ):
+                api_backend.api_chat("system", "user", model=model)
+                self.assertEqual(captured["reasoning"], {"effort": effort})
+                self.assertEqual(captured["service_tier"], tier)
+
+    def test_codex_cli_never_receives_api_only_values(self) -> None:
+        api_only = {run_tuning.REASONING_ENV: "none", run_tuning.SPEED_ENV: "ultrafast"}
+        self.assertEqual(run_tuning.codex_config_args(api_only, "gpt-6-astra"), [])
+        self.assertEqual(
+            run_tuning.codex_config_args(
+                {run_tuning.REASONING_ENV: "high", run_tuning.SPEED_ENV: "fast"}, "gpt-6-luna"
+            ),
+            ["-c", 'model_reasoning_effort="high"', "-c", 'service_tier="fast"'],
+        )
+
+    def test_hermes_receives_the_selected_service_tier(self) -> None:
+        from agent_monitor.runners import hermes as hermes_runner
+
+        class FakeAgent:
+            model = "gpt-6-astra"
+            session_input_tokens = 1
+            session_output_tokens = 1
+            session_estimated_cost_usd = 0.0
+
+            def run_conversation(self, prompt):
+                return {
+                    "completed": True,
+                    "final_response": "# Proof\n\nDone.",
+                    "messages": [],
+                    "input_tokens": 1,
+                    "output_tokens": 1,
+                }
+
+        captured: dict = {}
+
+        def create_agent(**kwargs):
+            captured.update(kwargs)
+            return FakeAgent()
+
+        with tempfile.TemporaryDirectory() as tmp:
+            with (
+                patch.object(hermes_runner, "create_agent", side_effect=create_agent),
+                patch.object(hermes_runner, "close_agent"),
+                patch.object(jobs, "_write_run"),
+                patch.object(jobs, "_attach_analysis", side_effect=lambda run, _ws: run),
+            ):
+                jobs._run_hermes(
+                    run_id="hermes-ultrafast",
+                    problem_id="tier",
+                    problem_text="Prove it.",
+                    model="gpt-6-astra",
+                    max_iterations=1,
+                    started=time.time(),
+                    workspace=Path(tmp),
+                    extra_env={
+                        "OPENAI_API_KEY": "test-only-key",
+                        run_tuning.REASONING_ENV: "max",
+                        run_tuning.SPEED_ENV: "ultrafast",
+                    },
+                    use_subagents=False,
+                )
+        self.assertEqual(captured["service_tier"], "ultrafast")
+        self.assertEqual(captured["reasoning_effort"], "max")
+
+
+def _js_function(name: str) -> str:
+    start = SCRIPT.index(f"function {name}(")
+    opening = SCRIPT.index("{", start)
+    depth = 0
+    for index in range(opening, len(SCRIPT)):
+        if SCRIPT[index] == "{":
+            depth += 1
+        elif SCRIPT[index] == "}":
+            depth -= 1
+            if depth == 0:
+                return SCRIPT[start : index + 1]
+    raise AssertionError(f"unterminated JavaScript function: {name}")
+
+
+@unittest.skipUnless(Path(NODE).is_file(), "node is unavailable")
+class Gpt6RunModeUiTests(unittest.TestCase):
+    def test_run_mode_offers_each_harness_its_own_speeds(self) -> None:
+        caps = run_tuning.capabilities("gpt-6-astra", "api_key")
+        source = "\n".join(
+            _js_function(name)
+            for name in (
+                "runTuningCapabilities",
+                "runTuningStorage",
+                "runTuningStorageKey",
+                "currentRunTuning",
+                "renderRunTuning",
+            )
+        )
+        program = f"""
+const RUN_TUNING_KEY='tuning';
+let store={{}};
+const localStorage={{getItem:()=>JSON.stringify(store),setItem(){{}}}};
+const els={{}};
+const $=id=>els[id]||(els[id]={{id,textContent:'',innerHTML:'',title:'',attrs:{{}},style:{{setProperty(){{}}}},classList:{{toggle(){{}},add(){{}},remove(){{}}}},setAttribute(name,value){{this.attrs[name]=value;}}}});
+const selectedAccountRuntime=()=>'api', engineModelMode=()=>'api_key', currentModel=()=>'gpt-6-astra', animateRunTuningFeedback=()=>{{}};
+let maxSelected=false;
+const isCgmMax=()=>maxSelected, runAuthRoute=()=>maxSelected?'dual_subscription':'api_key';
+let engine='plain';
+const SETTINGS={{run_tuning_by_runtime:{{api:{{'gpt-6-astra':{json.dumps(caps)}}}}}}};
+{source}
+const ids=items=>items.map(item=>item.id), out=[];
+out.push(ids(runTuningCapabilities().speed));
+engine='codex'; out.push(ids(runTuningCapabilities().speed));
+engine='deepagents'; out.push(!!runTuningCapabilities().unsupported_engine);
+engine='plain';
+store={{'api_key:gpt-6-astra':{{reasoning_effort:'high',speed_mode:'fast'}}}};
+renderRunTuning(); out.push($('run-speed-toggle').title,$('run-profile-summary').textContent);
+store={{'api_key:gpt-6-astra':{{reasoning_effort:'high',speed_mode:'ultrafast'}}}};
+renderRunTuning(); out.push($('run-speed-toggle').title,$('run-profile-summary').textContent,$('run-speed-toggle').attrs['aria-label']);
+engine='codex'; renderRunTuning(); out.push($('run-speed-label').textContent);
+engine='math_harness'; maxSelected=true; renderRunTuning();
+out.push($('run-profile-summary').textContent,$('run-profile-note').textContent,!!$('run-speed-toggle').disabled,!!$('run-thinking-slider').disabled);
+console.log(JSON.stringify(out));
+"""
+        result = subprocess.run([NODE, "-e", program], capture_output=True, text=True, check=False)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(
+            json.loads(result.stdout),
+            [
+                ["standard", "fast", "ultrafast"],
+                ["standard", "fast"],
+                True,
+                "Use ultrafast speed",
+                "High · Fast",
+                "Use standard speed",
+                "High · Ultrafast",
+                "Speed: Ultrafast",
+                "Standard",
+                # Max: fixed at maximum effort, nothing to adjust.
+                "Ultra",
+                "Max runs Claude Code and Codex at maximum effort.",
+                True,
+                True,
+            ],
+        )
 
 
 if __name__ == "__main__":

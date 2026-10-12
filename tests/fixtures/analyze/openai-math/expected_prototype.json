@@ -1,0 +1,238 @@
+{
+ "irrationality-exponent-of-pi": {
+  "source": "p2/kg-tools/out/pyfallback/p017-pi/dag.json (kg-tools prototype, pylatexenc front end)",
+  "statements": [
+   "Theorem 1.1",
+   "Corollary 1.2",
+   "Theorem 2.1",
+   "Lemma 2.2",
+   "Proposition 2.3",
+   "Lemma 3.1",
+   "Lemma 3.2",
+   "Lemma 3.3",
+   "Proposition 3.4",
+   "Lemma 4.1",
+   "Lemma 5.1",
+   "Corollary 5.2"
+  ],
+  "uses": [
+   [
+    "Lemma 2.2",
+    "Proposition 2.3"
+   ],
+   [
+    "Lemma 3.1",
+    "Proposition 3.4"
+   ],
+   [
+    "Lemma 3.1",
+    "Theorem 1.1"
+   ],
+   [
+    "Lemma 3.2",
+    "Lemma 3.3"
+   ],
+   [
+    "Lemma 3.2",
+    "Proposition 3.4"
+   ],
+   [
+    "Lemma 3.2",
+    "Theorem 1.1"
+   ],
+   [
+    "Lemma 3.3",
+    "Proposition 3.4"
+   ],
+   [
+    "Lemma 3.3",
+    "Theorem 1.1"
+   ],
+   [
+    "Lemma 4.1",
+    "Theorem 1.1"
+   ],
+   [
+    "Lemma 5.1",
+    "Corollary 1.2"
+   ],
+   [
+    "Lemma 5.1",
+    "Corollary 5.2"
+   ],
+   [
+    "Proposition 2.3",
+    "Theorem 2.1"
+   ],
+   [
+    "Proposition 3.4",
+    "Theorem 1.1"
+   ],
+   [
+    "Theorem 1.1",
+    "Corollary 1.2"
+   ],
+   [
+    "Theorem 1.1",
+    "Corollary 5.2"
+   ],
+   [
+    "Theorem 2.1",
+    "Theorem 1.1"
+   ]
+  ],
+  "weak": [],
+  "with_proof": [
+   "Corollary 1.2",
+   "Corollary 5.2",
+   "Lemma 2.2",
+   "Lemma 3.1",
+   "Lemma 3.2",
+   "Lemma 3.3",
+   "Lemma 4.1",
+   "Lemma 5.1",
+   "Proposition 2.3",
+   "Proposition 3.4",
+   "Theorem 1.1",
+   "Theorem 2.1"
+  ]
+ },
+ "kaplansky-char2": {
+  "source": "p2/kg-tools/out/pyfallback/p197-kaplansky-char2/dag.json (kg-tools prototype, pylatexenc front end)",
+  "statements": [
+   "Theorem 1.1",
+   "Lemma 2.1",
+   "Lemma 2.2",
+   "Proposition 2.3",
+   "Remark 2.4",
+   "Theorem 3.1",
+   "Lemma 3.2",
+   "Theorem 5.1",
+   "Lemma 5.2",
+   "Lemma 5.3",
+   "Lemma 5.4",
+   "Lemma 5.5",
+   "Lemma 5.6",
+   "Lemma 5.7",
+   "Lemma 5.8",
+   "Lemma 5.9",
+   "Lemma 7.1",
+   "Proposition 7.2",
+   "Corollary 7.3",
+   "Corollary 7.4"
+  ],
+  "uses": [
+   [
+    "Lemma 2.1",
+    "Proposition 2.3"
+   ],
+   [
+    "Lemma 2.2",
+    "Proposition 2.3"
+   ],
+   [
+    "Lemma 3.2",
+    "Theorem 3.1"
+   ],
+   [
+    "Lemma 5.2",
+    "Lemma 5.5"
+   ],
+   [
+    "Lemma 5.2",
+    "Lemma 5.9"
+   ],
+   [
+    "Lemma 5.3",
+    "Lemma 5.4"
+   ],
+   [
+    "Lemma 5.3",
+    "Theorem 5.1"
+   ],
+   [
+    "Lemma 5.4",
+    "Lemma 5.9"
+   ],
+   [
+    "Lemma 5.4",
+    "Theorem 5.1"
+   ],
+   [
+    "Lemma 5.5",
+    "Lemma 5.6"
+   ],
+   [
+    "Lemma 5.9",
+    "Theorem 5.1"
+   ],
+   [
+    "Lemma 7.1",
+    "Proposition 7.2"
+   ],
+   [
+    "Proposition 2.3",
+    "Remark 2.4"
+   ],
+   [
+    "Proposition 2.3",
+    "Theorem 1.1"
+   ],
+   [
+    "Proposition 7.2",
+    "Corollary 7.3"
+   ],
+   [
+    "Proposition 7.2",
+    "Corollary 7.4"
+   ],
+   [
+    "Theorem 1.1",
+    "Corollary 7.3"
+   ],
+   [
+    "Theorem 1.1",
+    "Corollary 7.4"
+   ],
+   [
+    "Theorem 3.1",
+    "Theorem 1.1"
+   ],
+   [
+    "Theorem 5.1",
+    "Theorem 1.1"
+   ]
+  ],
+  "weak": [
+   [
+    "Lemma 2.1",
+    "Lemma 2.2"
+   ],
+   [
+    "Lemma 5.6",
+    "Lemma 5.7"
+   ]
+  ],
+  "with_proof": [
+   "Corollary 7.3",
+   "Corollary 7.4",
+   "Lemma 2.1",
+   "Lemma 2.2",
+   "Lemma 3.2",
+   "Lemma 5.2",
+   "Lemma 5.3",
+   "Lemma 5.4",
+   "Lemma 5.5",
+   "Lemma 5.6",
+   "Lemma 5.7",
+   "Lemma 5.8",
+   "Lemma 5.9",
+   "Lemma 7.1",
+   "Proposition 2.3",
+   "Proposition 7.2",
+   "Theorem 1.1",
+   "Theorem 3.1",
+   "Theorem 5.1"
+  ]
+ }
+}

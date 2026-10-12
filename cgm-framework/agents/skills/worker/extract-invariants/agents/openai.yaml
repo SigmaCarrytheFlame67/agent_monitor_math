@@ -1,0 +1,7 @@
+interface:
+  display_name: "Extract Invariants"
+  short_description: "Find and prove a conserved quantity, then derive its consequence"
+  default_prompt: "Use $extract-invariants to enumerate the legal operations, find a quantity conserved or monotone under every one of them, prove invariance per operation, and derive the impossibility, separation, or classification constraint it yields."
+
+policy:
+  allow_implicit_invocation: true

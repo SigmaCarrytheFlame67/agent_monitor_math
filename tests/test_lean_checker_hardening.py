@@ -3,11 +3,12 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import re
 import stat
 import tempfile
 import unittest
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import call, patch
 
 from agent_monitor import lean_broker, lean_verify
 
@@ -56,6 +57,31 @@ def _broker_result(source: str, *, sandbox: str | None = None) -> dict:
         "sandbox": sandbox or lean_broker.SANDBOX_MARKER,
         **_release_fields(),
     }
+
+
+def _with_probe_markers(source: str, report: str) -> str:
+    """Echo the probe's `#print "…"` marker lines around ``report``, as Lean does."""
+    markers = re.findall(r'(?m)^#print "(AGENT_MONITOR_AXIOMS::[0-9a-f]+::(?:begin|end))"$', source)
+    return "".join(line + "\n" for line in markers[:1]) + report + "".join(
+        line + "\n" for line in markers[1:]
+    )
+
+
+def _broker_with_axioms(axioms: str):
+    """Broker double: attests each exact source; answers the axioms probe."""
+
+    def check(source: str, **_kwargs) -> dict:
+        result = _broker_result(source)
+        if "#print axioms" in source:
+            report = (
+                "'main' does not depend on any axioms\n"
+                if axioms == "[]"
+                else f"'main' depends on axioms: {axioms}\n"
+            )
+            result["stdout"] = _with_probe_markers(source, report)
+        return result
+
+    return check
 
 
 class LeanCheckerHardeningTests(unittest.TestCase):
@@ -109,7 +135,7 @@ class LeanCheckerHardeningTests(unittest.TestCase):
             with patch.object(
                 lean_broker,
                 "check_source",
-                return_value=_broker_result(SOURCE),
+                side_effect=_broker_with_axioms("[propext]"),
             ) as checked:
                 result = lean_verify._run_lean_check(ldir, False)
 
@@ -119,12 +145,138 @@ class LeanCheckerHardeningTests(unittest.TestCase):
             result["source_sha256"],
             hashlib.sha256(SOURCE.encode()).hexdigest(),
         )
-        checked.assert_called_once_with(
-            SOURCE,
-            uses_mathlib=False,
-            timeout=100.0,
+        # The authoritative check sends exactly the file; the second call is
+        # the read-only `#print axioms` soundness probe, anchored at the root
+        # so a same-named declaration in an open namespace cannot answer.
+        self.assertEqual(checked.call_count, 2)
+        self.assertEqual(
+            checked.call_args_list[0],
+            call(SOURCE, uses_mathlib=False, timeout=100.0),
         )
+        probe_source = checked.call_args_list[1].args[0]
+        self.assertTrue(probe_source.startswith(SOURCE.rstrip()))
+        # The reports are bracketed by per-check nonce markers, so nothing the
+        # file prints itself can stand between them.
+        tail = probe_source[len(SOURCE.rstrip()):].strip().splitlines()
+        self.assertEqual(len(tail), 3)
+        self.assertRegex(tail[0], r'^#print "AGENT_MONITOR_AXIOMS::[0-9a-f]{32}::begin"$')
+        self.assertEqual(tail[1], "#print axioms _root_.«main»")
+        self.assertEqual(tail[2], tail[0].replace("::begin", "::end"))
+        self.assertEqual(result["axioms"]["axioms"], ["propext"])
         self.assertIsNotNone(lean_verify._trusted_kernel_receipt(result))
+
+    def test_hidden_sorry_or_extra_axiom_fails_the_soundness_probe(self) -> None:
+        for axioms in ("[sorryAx]", "[propext, Classical.choice, cheat]"):
+            with self.subTest(axioms=axioms), tempfile.TemporaryDirectory() as raw:
+                ldir = Path(raw) / "lean"
+                ldir.mkdir()
+                (ldir / lean_verify.PROOF_FILENAME).write_text(
+                    SOURCE, encoding="utf-8"
+                )
+                with patch.object(
+                    lean_broker,
+                    "check_source",
+                    side_effect=_broker_with_axioms(axioms),
+                ):
+                    result = lean_verify._run_lean_check(ldir, False)
+                self.assertFalse(result["ok"])
+                self.assertEqual(result["status"], "failed")
+                self.assertIn("Soundness probe rejected", result["stderr"])
+                self.assertIsNone(lean_verify._trusted_kernel_receipt(result))
+                self.assertEqual(
+                    lean_verify._status_from_check(result, 0, mode="check"),
+                    "failed",
+                )
+
+    def test_probe_without_an_axiom_report_fails_closed(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            ldir = Path(raw) / "lean"
+            ldir.mkdir()
+            (ldir / lean_verify.PROOF_FILENAME).write_text(SOURCE, encoding="utf-8")
+            with patch.object(
+                lean_broker,
+                "check_source",
+                side_effect=lambda source, **_: _broker_result(source),
+            ):
+                result = lean_verify._run_lean_check(ldir, False)
+        self.assertFalse(result["ok"])
+        self.assertIn("no axiom report", result["stderr"])
+
+    def test_lean_sorry_warning_means_incomplete_and_skips_the_probe(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            ldir = Path(raw) / "lean"
+            ldir.mkdir()
+            (ldir / lean_verify.PROOF_FILENAME).write_text(SOURCE, encoding="utf-8")
+
+            def broker(source, **_kwargs):
+                result = _broker_result(source)
+                result["stdout"] = (
+                    "/tmp/x/Proof.lean:1:8: warning: declaration uses 'sorry'\n"
+                )
+                return result
+
+            with patch.object(
+                lean_broker, "check_source", side_effect=broker
+            ) as checked:
+                result = lean_verify._run_lean_check(ldir, False)
+        self.assertTrue(result["ok"])
+        self.assertTrue(result["reports_sorry"])
+        checked.assert_called_once()
+        # No literal `sorry` token, yet Lean says one was used: incomplete.
+        self.assertEqual(lean_verify._count_sorry(SOURCE), 0)
+        self.assertEqual(
+            lean_verify._status_from_check(result, 0, mode="check"), "incomplete"
+        )
+
+    def test_missing_broker_is_toolchain_missing_without_local_fallback(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            ldir = Path(raw) / "lean"
+            ldir.mkdir()
+            (ldir / lean_verify.PROOF_FILENAME).write_text(SOURCE, encoding="utf-8")
+            with (
+                patch.object(
+                    lean_broker,
+                    "check_source",
+                    side_effect=lean_broker.LeanBrokerUnavailable("no socket"),
+                ),
+                patch.object(lean_verify.subprocess, "Popen") as spawned,
+                patch.object(lean_verify.subprocess, "run") as ran,
+            ):
+                result = lean_verify._run_lean_check(ldir, False)
+        self.assertFalse(result["ok"])
+        self.assertEqual(result["status"], "toolchain_missing")
+        self.assertIn("any local fallback", result["stderr"])
+        self.assertEqual(
+            lean_verify._status_from_check(result, 0, mode="check"),
+            "toolchain_missing",
+        )
+        spawned.assert_not_called()
+        ran.assert_not_called()
+
+    def test_bare_import_mathlib_is_sent_to_the_mathlib_profile(self) -> None:
+        source = "import Mathlib\n\ntheorem main : (2 : ℕ) + 2 = 4 := by norm_num\n"
+        with tempfile.TemporaryDirectory() as raw:
+            ldir = Path(raw) / "lean"
+            ldir.mkdir()
+            (ldir / lean_verify.PROOF_FILENAME).write_text(source, encoding="utf-8")
+            with (
+                patch.object(
+                    lean_broker,
+                    "check_source",
+                    side_effect=_broker_with_axioms("[propext]"),
+                ) as checked,
+                patch.object(lean_verify.subprocess, "Popen") as spawned,
+            ):
+                result = lean_verify._run_lean_check(
+                    ldir, lean_verify._detect_mathlib(source)
+                )
+        self.assertTrue(result["ok"])
+        self.assertEqual(result["checker_profile"], "mathlib")
+        self.assertEqual(
+            checked.call_args_list[0],
+            call(source, uses_mathlib=True, timeout=100.0),
+        )
+        spawned.assert_not_called()
 
     def test_broker_failure_has_no_local_process_fallback(self) -> None:
         with tempfile.TemporaryDirectory() as raw:

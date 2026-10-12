@@ -413,5 +413,165 @@ class ApiBackendProviderMatrixTests(unittest.TestCase):
         self.assertIn("[redacted]", rendered)
 
 
+class ApiBackendPerCallParameterTests(unittest.TestCase):
+    """Per-call knobs are explicit arguments, so concurrent callers never
+    communicate through (or mutate) the process environment."""
+
+    def _kimi_env(self, **extra: str) -> dict[str, str]:
+        return {
+            "KIMI_API_KEY": "run-kimi-key",
+            "KIMI_API_BASE": "https://run.kimi.invalid/v1",
+            **extra,
+        }
+
+    def test_explicit_effort_and_max_tokens_override_the_environment(self) -> None:
+        captured: dict[str, Any] = {}
+
+        def fake_http(url, **kwargs):
+            captured.update(url=url, **kwargs)
+            return 200, _response("kimi")
+
+        env = self._kimi_env(
+            KIMI_REASONING_EFFORT="max", AGENT_MONITOR_API_MAX_TOKENS="2048"
+        )
+        with (
+            patch.dict(api_backend.os.environ, env, clear=True),
+            patch("agent_monitor.settings._http_json", side_effect=fake_http),
+        ):
+            before = dict(api_backend.os.environ)
+            api_backend.api_chat(
+                "system", "user", model="kimi-k3", effort="low", max_tokens=9000
+            )
+            self.assertEqual(dict(api_backend.os.environ), before)
+        self.assertEqual(captured["payload"]["reasoning_effort"], "low")
+        self.assertEqual(captured["payload"]["max_tokens"], 9000)
+
+    def test_job_output_ceiling_still_caps_an_explicit_max_tokens(self) -> None:
+        captured: dict[str, Any] = {}
+
+        def fake_http(url, **kwargs):
+            captured.update(kwargs)
+            return 200, _response("kimi")
+
+        env = self._kimi_env(AGENT_MONITOR_MAX_OUTPUT_TOKENS="4096")
+        with (
+            patch.dict(api_backend.os.environ, env, clear=True),
+            patch("agent_monitor.settings._http_json", side_effect=fake_http),
+        ):
+            api_backend.api_chat("system", "user", model="kimi-k3", max_tokens=60000)
+        self.assertEqual(captured["payload"]["max_tokens"], 4096)
+
+    def test_explicit_env_mapping_replaces_the_process_environment(self) -> None:
+        captured: dict[str, Any] = {}
+
+        def fake_http(url, **kwargs):
+            captured.update(url=url, **kwargs)
+            return 200, _response("kimi")
+
+        run_env = self._kimi_env(KIMI_REASONING_EFFORT="high")
+        with (
+            patch.dict(
+                api_backend.os.environ,
+                {"KIMI_API_KEY": "process-key", "KIMI_API_BASE": "https://process.invalid/v1"},
+                clear=True,
+            ),
+            patch("agent_monitor.settings._http_json", side_effect=fake_http),
+        ):
+            api_backend.api_chat("system", "user", model="kimi-k3", env=run_env)
+        self.assertEqual(captured["url"], "https://run.kimi.invalid/v1/chat/completions")
+        self.assertEqual(captured["headers"], {"Authorization": "Bearer run-kimi-key"})
+        self.assertEqual(captured["payload"]["reasoning_effort"], "high")
+
+    def test_sponsored_retry_policy_reads_the_explicit_env(self) -> None:
+        attempts: list[dict[str, str]] = []
+
+        def failing_http(url, **kwargs):
+            attempts.append(dict(kwargs["headers"]))
+            return 503, {"error": {"message": "busy"}}
+
+        with (
+            patch.dict(
+                api_backend.os.environ, {"AGENT_MONITOR_SPONSORED_KIMI": "1"}, clear=True
+            ),
+            patch("agent_monitor.settings._http_json", side_effect=failing_http),
+            patch("agent_monitor.kimi_k3.time.sleep"),
+        ):
+            with self.assertRaises(api_backend.APIBackendError):
+                api_backend.api_chat(
+                    "system",
+                    "user",
+                    model="kimi-k3",
+                    env=self._kimi_env(AGENT_MONITOR_SPONSORED_KIMI="1"),
+                )
+            # An ambiguous (untyped) sponsored failure is never replayed, and
+            # the broker is told the call's whole timeout.
+            self.assertEqual(len(attempts), 1, "sponsored calls are never replayed")
+            self.assertEqual(attempts[0]["X-Ansatze-Timeout"], "240")
+
+            # The explicit env, not the process environment, decides: a
+            # user-key run keeps its bounded retries and sends no header.
+            attempts.clear()
+            with self.assertRaises(api_backend.APIBackendError):
+                api_backend.api_chat("system", "user", model="kimi-k3", env=self._kimi_env())
+            self.assertEqual(len(attempts), 3)
+            self.assertNotIn("X-Ansatze-Timeout", attempts[0])
+
+    def test_invalid_effort_or_max_tokens_fail_before_any_request(self) -> None:
+        with (
+            patch.dict(api_backend.os.environ, self._kimi_env(), clear=True),
+            patch("agent_monitor.settings._http_json") as http,
+        ):
+            with self.assertRaisesRegex(api_backend.APIBackendError, "reasoning effort"):
+                api_backend.api_chat("s", "u", model="kimi-k3", effort="xhigh")
+            with self.assertRaisesRegex(api_backend.APIBackendError, "max_tokens"):
+                api_backend.api_chat("s", "u", model="kimi-k3", max_tokens="9000")  # type: ignore[arg-type]
+        http.assert_not_called()
+
+    def test_concurrent_calls_keep_their_own_parameters(self) -> None:
+        import threading
+
+        barrier = threading.Barrier(4)
+        seen: list[tuple[str, int, str]] = []
+        lock = threading.Lock()
+
+        def fake_http(url, **kwargs):
+            # Every call is in flight at once before any returns.
+            barrier.wait(timeout=10)
+            payload = kwargs["payload"]
+            with lock:
+                seen.append(
+                    (payload["reasoning_effort"], payload["max_tokens"], payload["messages"][-1]["content"])
+                )
+            return 200, _response("kimi")
+
+        jobs = [("low", 2048), ("high", 4096), ("max", 8192), ("low", 16384)]
+        errors: list[BaseException] = []
+
+        def call(effort: str, limit: int) -> None:
+            try:
+                api_backend.api_chat(
+                    "system", f"{effort}:{limit}", model="kimi-k3", effort=effort, max_tokens=limit
+                )
+            except BaseException as exc:  # pragma: no cover - reported below
+                errors.append(exc)
+
+        with (
+            patch.dict(api_backend.os.environ, self._kimi_env(KIMI_REASONING_EFFORT="max"), clear=True),
+            patch("agent_monitor.settings._http_json", side_effect=fake_http),
+        ):
+            before = dict(api_backend.os.environ)
+            threads = [threading.Thread(target=call, args=job) for job in jobs]
+            for thread in threads:
+                thread.start()
+            for thread in threads:
+                thread.join(timeout=20)
+            self.assertEqual(dict(api_backend.os.environ), before)
+        self.assertEqual(errors, [])
+        self.assertEqual(
+            sorted(seen),
+            sorted((effort, limit, f"{effort}:{limit}") for effort, limit in jobs),
+        )
+
+
 if __name__ == "__main__":
     unittest.main()

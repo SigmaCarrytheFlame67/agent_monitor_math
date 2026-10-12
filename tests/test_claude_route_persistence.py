@@ -72,7 +72,7 @@ class ClaudeRoutePersistenceTests(unittest.TestCase):
                     problem_text="Prove 1 = 1.",
                     model="sonnet",
                     auth_route="claude_subscription",
-                    user={"id": 17, "email": "person@example.com"},
+                    user={"id": 17, "email": "person@example.com", "is_admin": True},
                 )
         self.assertFalse(jobs._JOBS)
 
@@ -112,7 +112,7 @@ class ClaudeRoutePersistenceTests(unittest.TestCase):
                     problem_text="Prove 1 = 1.",
                     model="sonnet",
                     auth_route="claude_subscription",
-                    user={"id": 17, "email": "person@example.com"},
+                    user={"id": 17, "email": "person@example.com", "is_admin": True},
                 )
 
         self.assertEqual(job["auth_route"], "claude_subscription")
@@ -146,7 +146,7 @@ class ClaudeRoutePersistenceTests(unittest.TestCase):
                 run_data=record,
                 engine="plain",
                 model="claude-sonnet-4-6",
-                user={"id": 17},
+                user={"id": 17, "is_admin": True},
                 env=polluted,
             )
 
@@ -175,7 +175,7 @@ class ClaudeRoutePersistenceTests(unittest.TestCase):
                     run_data=record,
                     engine="plain",
                     model="sonnet",
-                    user={"id": 17},
+                    user={"id": 17, "is_admin": True},
                     env={"ANTHROPIC_API_KEY": "fallback-must-not-run"},
                 )
 
@@ -223,7 +223,7 @@ class ClaudeRoutePersistenceTests(unittest.TestCase):
                 patch("agent_monitor.jobs.threading.Thread", FakeThread),
             ):
                 result = jobs.continue_run(
-                    "plain_claude", message="Check the endpoint.", user={"id": 17}
+                    "plain_claude", message="Check the endpoint.", user={"id": 17, "is_admin": True}
                 )
 
         self.assertEqual(captured["extra_env"]["HOME"], str(account_home))
@@ -252,7 +252,7 @@ class ClaudeRoutePersistenceTests(unittest.TestCase):
                 run_data=record,
                 engine="plain",
                 model="gpt-5.6-sol",
-                user={"id": 17},
+                user={"id": 17, "is_admin": True},
                 env={
                     "AGENT_MONITOR_ACCOUNT_RUNTIME": "claude",
                     "AGENT_MONITOR_CLAUDE_SUBSCRIPTION": "1",
@@ -309,7 +309,7 @@ class ClaudeRoutePersistenceTests(unittest.TestCase):
                 patch("agent_monitor.jobs.threading.Thread", FakeThread),
             ):
                 result = jobs.send_human_message(
-                    "plain_hitl", "Check the endpoint.", user={"id": 17}
+                    "plain_hitl", "Check the endpoint.", user={"id": 17, "is_admin": True}
                 )
 
         self.assertEqual(captured["extra_env"]["HOME"], str(account_home))

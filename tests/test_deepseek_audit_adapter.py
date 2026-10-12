@@ -780,8 +780,8 @@ class KimiChatCompletionsProxyTests(unittest.TestCase):
         response_body = b'{"choices":[{"message":{"role":"assistant","content":"ok"}}]}'
         with (
             patch.object(
-                kimi_chat_completions_proxy.urlrequest,
-                "urlopen",
+                kimi_chat_completions_proxy._UPSTREAM_OPENER,
+                "open",
                 return_value=self._Upstream(response_body),
             ) as upstream,
             kimi_chat_completions_proxy.KimiChatCompletionsProxy(
@@ -830,7 +830,7 @@ class KimiChatCompletionsProxyTests(unittest.TestCase):
 
     def test_proxy_rejects_missing_auth_without_contacting_upstream(self) -> None:
         with (
-            patch.object(kimi_chat_completions_proxy.urlrequest, "urlopen") as upstream,
+            patch.object(kimi_chat_completions_proxy._UPSTREAM_OPENER, "open") as upstream,
             kimi_chat_completions_proxy.KimiChatCompletionsProxy(
                 upstream_base="https://kimi.example/v1",
                 reasoning_effort="max",
