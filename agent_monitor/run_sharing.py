@@ -2,10 +2,13 @@
 from __future__ import annotations
 
 import json
+import hashlib
+import math
 import os
 import re
 import secrets
 import sqlite3
+import stat
 import time
 from pathlib import Path
 from urllib.parse import urlsplit
@@ -36,14 +39,30 @@ def _text(value, limit=100_000):
 
 
 def _file(root: Path, name: str, limit=300_000):
-    p = root / name
+    # Follow no links, including intermediate directories. An allowlisted
+    # leaf such as lean/Proof.lean must not become a route into other files.
+    parts = Path(name).parts
+    if not parts or Path(name).is_absolute() or any(p in {'.', '..'} for p in parts):
+        return ''
+    descriptors = []
     try:
-        if not p.resolve().is_relative_to(root.resolve()) or p.is_symlink():
+        flags = os.O_RDONLY | os.O_CLOEXEC | getattr(os, 'O_NOFOLLOW', 0)
+        parent = os.open(root, flags | os.O_DIRECTORY)
+        descriptors.append(parent)
+        for part in parts[:-1]:
+            parent = os.open(part, flags | os.O_DIRECTORY, dir_fd=parent)
+            descriptors.append(parent)
+        descriptor = os.open(parts[-1], flags | getattr(os, 'O_NONBLOCK', 0), dir_fd=parent)
+        descriptors.append(descriptor)
+        if not stat.S_ISREG(os.fstat(descriptor).st_mode):
             return ''
-        with p.open('rb') as stream:
+        with os.fdopen(descriptor, 'rb', closefd=False) as stream:
             return stream.read(limit).decode('utf-8', errors='replace')
     except OSError:
         return ''
+    finally:
+        for descriptor in reversed(descriptors):
+            os.close(descriptor)
 
 
 def record(run_id):
@@ -60,20 +79,208 @@ def record(run_id):
     return None
 
 
-def graph_snapshot(value):
+def _items(value, limit):
+    return value[:limit] if isinstance(value, list) else []
+
+
+def graph_snapshot(value, *, details=False):
     if not isinstance(value, dict):
         return {'nodes': [], 'edges': []}
     raw = value.get('graph', value)
     if not isinstance(raw, dict):
         return {'nodes': [], 'edges': []}
-    nodes = [{k: _text(n.get(k), 20_000 if k == 'statement' else 240)
-              for k in ('id', 'kind', 'lean_kind', 'label', 'statement', 'status')}
-             for n in (raw.get('nodes') or [])[:100] if isinstance(n, dict)]
+    nodes, seen = [], set()
+    for node in _items(raw.get('nodes'), 100):
+        if not isinstance(node, dict):
+            continue
+        nid = _text(node.get('id'), 240)
+        if not nid or nid in seen:
+            continue
+        seen.add(nid)
+        entry = {key: _text(node.get(key), 20_000 if key == 'statement' else 240)
+                 for key in ('id', 'kind', 'lean_kind', 'label', 'statement', 'status')}
+        entry['citations'] = [_text(item, 240) for item in _items(node.get('citations'), 8)
+                              if isinstance(item, str)]
+        meta = node.get('meta') if isinstance(node.get('meta'), dict) else {}
+        # Mathematical node details only, never arbitrary workflow metadata,
+        # authors, prompts, filesystem locations or provider request records.
+        clean = {key: _text(meta.get(key), limit) for key, limit in (
+            ('workflow_kind', 40), ('status', 80), ('entry_status', 80),
+            ('verdict', 80), ('lemma', 80), ('technique', 80),
+            ('decomposition_technique', 80), ('and_group', 120),
+            ('fact_id', 240), ('label', 120), ('proof_excerpt', 6000), ('intuition', 2000),
+        ) if isinstance(meta.get(key), str)}
+        for key in ('verifiable', 'verifier_accepted', 'is_target', 'proof_truncated', 'receipt_attested'):
+            if isinstance(meta.get(key), bool):
+                clean[key] = meta[key]
+        for key in ('score', 'depth'):
+            item = meta.get(key)
+            if (isinstance(item, (int, float)) and not isinstance(item, bool)
+                    and 0 <= item <= (1 if key == 'score' else 1000) and math.isfinite(item)):
+                clean[key] = item
+        if clean and details:
+            entry['meta'] = clean
+        nodes.append(entry)
     ids = {n['id'] for n in nodes}
-    edges = [{k: _text(e.get(k), 240) for k in ('from', 'to', 'label')}
-             for e in (raw.get('edges') or [])[:300]
+    edges = [{k: _text(e.get(k), 240) for k in ('from', 'to', 'label', 'kind', 'provenance')
+              if isinstance(e.get(k), str)}
+             for e in _items(raw.get('edges'), 300)
              if isinstance(e, dict) and e.get('from') in ids and e.get('to') in ids]
     return {'title': _text(raw.get('title'), 240), 'nodes': nodes, 'edges': edges}
+
+
+GRAPH_MODES = {
+    'outline': ('proof-outline', 'No proof outline was available when this snapshot was created.'),
+    'explore': ('workflow', 'No exploration graph was available when this snapshot was created.'),
+    'facts': ('fact-dependency', 'No fact dependency graph was available when this snapshot was created.'),
+    'formal': ('formal-structure', 'No formal graph was available when this snapshot was created.'),
+    'compiler': ('compiler-dependency', 'No validated compiler facts were available when this snapshot was created.'),
+    'manuscript': ('manuscript-dependency', 'This snapshot has no manuscript dependency graph.'),
+}
+
+
+def _graph_record(mode, value=None, *, sanitized=None):
+    """A separate presentation record; graph types never stand in for each other."""
+    role, reason = GRAPH_MODES[mode]
+    value = value if isinstance(value, dict) else {}
+    if mode == 'explore' and value.get('graph_role') == 'execution':
+        role = 'execution'
+    graph = sanitized if isinstance(sanitized, dict) else graph_snapshot(value, details=mode in {'facts', 'explore'})
+    out = {'kind': mode, 'status': 'unavailable', 'graph_role': role, 'graph': graph}
+    raw = value.get('graph', value)
+    raw = raw if isinstance(raw, dict) else {}
+    counts = value.get('counts') if isinstance(value.get('counts'), dict) else {}
+    totals = {key: len(raw[key]) if isinstance(raw.get(key), list) else len(graph.get(key, []))
+              for key in ('nodes', 'edges')}
+    for key in totals:
+        if isinstance(counts.get(key), int) and not isinstance(counts[key], bool) and counts[key] >= totals[key]:
+            totals[key] = counts[key]
+    out['counts'] = {**totals, 'shown_nodes': len(graph.get('nodes', [])), 'shown_edges': len(graph.get('edges', []))}
+    out['truncated'] = any(totals[key] > len(graph.get(key, [])) for key in totals)
+    if not graph.get('nodes'):
+        out['reason'] = reason
+        return out
+    out['status'] = _text(value.get('status'), 80) or 'recorded'
+    for key in ('model', 'dependency_basis'):
+        if isinstance(value.get(key), str):
+            out[key] = _text(value[key], 160)
+    selection = value.get('selection')
+    if isinstance(selection, dict):
+        ids = {node['id'] for node in graph['nodes']}
+        out['selection'] = {'target_ids': [item for item in _items(selection.get('target_ids'), 100)
+                                           if isinstance(item, str) and item in ids]}
+    provenance = value.get('provenance')
+    if not isinstance(provenance, dict) and isinstance(value.get('graph'), dict):
+        provenance = value['graph'].get('provenance')
+    if isinstance(provenance, dict):
+        clean = {key: _text(provenance[key], 160) for key in (
+            'kind', 'producer', 'adapter', 'semantics', 'attestation', 'receipt_status',
+            'verifier_verdict', 'fact_receipt_status', 'toolchain',
+        ) if isinstance(provenance.get(key), str)}
+        for key in ('certificate', 'proof_logic', 'lean_verified', 'acyclic', 'truncated'):
+            if isinstance(provenance.get(key), bool):
+                clean[key] = provenance[key]
+        if clean:
+            out['provenance'] = clean
+    return out
+
+
+def _json_read(read, name):
+    try:
+        value = json.loads(read(name))
+        return value if isinstance(value, dict) else {}
+    except (ValueError, TypeError, RecursionError):
+        return {}
+
+
+def _graph_modes(workspace, data, read, result, *, safe_workspace):
+    """Snapshot stored artifacts using offline adapters; never run a model,
+    Lean, a graph cache writer, or any provider/verification operation."""
+    from agent_monitor import engine_graph, lean_kg, proof_graph
+
+    graphs = {mode: _graph_record(mode) for mode in GRAPH_MODES}
+    if is_analysis(data):
+        # The specially sanitized Analyze graph is the only manuscript view.
+        # Do not fall through into generic node metadata or manuscript text.
+        shared = result['informal_graph']
+        basis = {'dependency_basis': result['analysis'].get('dependency_basis', ''),
+                 'counts': result['analysis'].get('graph_counts', {})}
+        graphs['manuscript'] = _graph_record('manuscript', basis, sanitized=shared)
+        graphs['outline'] = _graph_record('outline', basis, sanitized=shared)
+    else:
+        if safe_workspace:
+            # The execution adapter only receives fields already selected for
+            # this share plus bounded edge endpoints, never the raw run record.
+            selected_run = {'engine': result['engine'], 'status': result['status'],
+                            'agents': [{**agent, 'name': agent['label']} for agent in result['agents']],
+                            'edges': [{key: _text(edge.get(key), 240) for key in ('from', 'to', 'source', 'target', 'label', 'type')}
+                                      for edge in _items(data.get('edges'), 300) if isinstance(edge, dict)]}
+            for mode, view, expected_role in (
+                ('facts', 'facts', 'fact-dependency'), ('explore', 'workflow', 'workflow'),
+            ):
+                try:
+                    artifact = engine_graph.build(workspace, selected_run, view=view)
+                except (OSError, ValueError, engine_graph.EngineGraphError):
+                    continue
+                # Non-CGM engines expose their recorded execution topology in
+                # Explore with its own role; it must never be labelled Facts.
+                if artifact.get('graph_role') == expected_role or (mode == 'explore' and artifact.get('graph_role') == 'execution'):
+                    graphs[mode] = _graph_record(mode, artifact)
+        outline = _json_read(read, 'proof_graph.json')
+        if safe_workspace and outline.get('model') == proof_graph.FACT_GRAPH_MODEL:
+            # A fact-derived cache is a projection, not an independent saved
+            # outline. Recompute it from the current validated facts without
+            # rewriting the cache so Outline and Facts describe one source.
+            outline = proof_graph.fact_graph_result(workspace) or {}
+        elif not graph_snapshot(outline)['nodes'] and graphs['facts']['graph']['nodes']:
+            outline = proof_graph.fact_graph_result(workspace) or {}
+        if not graph_snapshot(outline)['nodes'] and result['proof']:
+            try:
+                outline = {'status': 'parsed', 'model': 'structural-text-parse',
+                           'graph': proof_graph.graph_from_text(result['proof'])}
+            except ValueError:
+                outline = {}
+        graphs['outline'] = _graph_record('outline', outline)
+
+    lean = result['lean_source']
+    formal = _json_read(read, 'lean_proof_graph.json')
+    if lean:
+        source_hashes = {hashlib.sha256(lean.encode()).hexdigest(), lean_kg.normalized_source_sha256(lean)}
+        cached_source_hash = formal.get('source_sha256')
+        if not isinstance(cached_source_hash, str) or cached_source_hash not in source_hashes:
+            formal = {}
+        cached_raw = formal.get('graph') if isinstance(formal.get('graph'), dict) else {}
+        cached_compiler = (formal.get('model') == 'lean-compiler' or bool(cached_raw.get('provenance'))
+                           or any(edge.get('label') in {'proof uses', 'type mentions'}
+                                  for edge in _items(cached_raw.get('edges'), 300) if isinstance(edge, dict)))
+        if not graph_snapshot(formal)['nodes'] or cached_compiler:
+            try:
+                formal = {'status': 'parsed', 'model': 'lean-parse', 'graph': proof_graph.graph_from_lean(lean)}
+            except ValueError:
+                formal = {}
+        # Loading is deliberately separate from load_or_parse_formal(), which
+        # is permitted to extract new compiler metadata. Sharing is read-only.
+        if safe_workspace and read('lean_kg_snapshot.json') and read('lean_verify.json'):
+            try:
+                stored = lean_kg.load_snapshot(workspace, source=lean)
+                compiler = proof_graph.graph_from_lean(lean, kg_snapshot=stored) if stored else {}
+                if compiler.get('provenance'):
+                    graphs['compiler'] = _graph_record('compiler', {
+                        'status': 'recorded', 'model': 'lean-compiler', 'graph': compiler,
+                    })
+            except (OSError, ValueError):
+                pass
+    # Compiler provenance belongs only to the independently validated mode.
+    # A historical saved Formal shape without source remains merely recorded.
+    formal = dict(formal)
+    formal.pop('provenance', None)
+    if formal.get('model') == 'lean-compiler':
+        formal['model'] = 'stored-formal'
+    raw_formal = formal.get('graph', formal)
+    formal['graph'] = dict(raw_formal) if isinstance(raw_formal, dict) else {}
+    formal['graph'].pop('provenance', None)
+    graphs['formal'] = _graph_record('formal', formal)
+    return graphs
 
 
 # How a shared Analyze snapshot names each verdict.  Model judgements are
@@ -195,7 +402,9 @@ def _analysis_snapshot(run_id, data, read, graph):
                  if str(source.get(key) or '').startswith('https://')), '')
     title = _text(plain_title(source.get('title')), 240) or 'manuscript'
     try:
-        manuscript_graph = analysis_graph.load(ws)
+        # Reuse the no-symlink reader instead of following an analysis/
+        # directory link through the generic graph loader.
+        manuscript_graph = analysis_graph.sanitize(_json_read(read, 'analysis/analysis_graph.json'))
     except Exception:  # noqa: BLE001 - a damaged graph shares nothing
         manuscript_graph = None
     shared_graph = analysis_graph_snapshot(manuscript_graph) if manuscript_graph else None
@@ -207,16 +416,18 @@ def _analysis_snapshot(run_id, data, read, graph):
         problem += f'\nVerdicts: {counts}'
     lean = read('lean/Proof.lean')
     result = {
-        'version': 1, 'type': 'shared', 'kind': 'analysis',
+        'version': 2, 'type': 'shared', 'kind': 'analysis',
         'title': _text(f'Analyze · {title}', 240),
         'status': _text(data.get('status'), 80), 'engine': 'analyze',
         'problem': problem,
         # The report quotes labels and model findings, never the manuscript.
         'proof': read('analysis/report.md'),
         'agents': [],
-        'informal_graph': shared_graph if shared_graph else graph('proof_graph.json'),
+        'informal_graph': shared_graph if shared_graph else {'title': '', 'nodes': [], 'edges': []},
         'formal_graph': graph('lean_proof_graph.json'), 'lean_source': lean,
         'analysis': {
+            'dependency_basis': (manuscript_graph or {}).get('dependency_basis', ''),
+            'graph_counts': {key: len((manuscript_graph or {}).get(key, [])) for key in ('nodes', 'edges')},
             'source': {key: _text(source.get(key), 300) for key in ('title', 'version', 'license', 'format', 'canonical_id')
                        if source.get(key)},
             'warnings': [_text(item, 400) for item in (source.get('warnings') or [])[:12] if isinstance(item, str)],
@@ -232,11 +443,17 @@ def _analysis_snapshot(run_id, data, read, graph):
 
 
 def snapshot(run_id, data):
+    if not isinstance(run_id, str) or not RUN_ID.fullmatch(run_id) or '..' in run_id:
+        raise ValueError('Invalid run identifier.')
     ws = RUNS_DIR / 'workspaces' / run_id
     # The workspace itself must not redirect into another user's files.
-    safe_ws = not ws.is_symlink() and ws.resolve().is_relative_to((RUNS_DIR / 'workspaces').resolve())
+    safe_ws = (not ws.is_symlink() and not ws.parent.is_symlink()
+               and ws.resolve().is_relative_to((RUNS_DIR / 'workspaces').resolve()))
     def read(name):
-        return _file(ws, name) if safe_ws else ''
+        # Read bounded graph documents whole before applying the smaller share
+        # limits; truncating JSON bytes would hide an otherwise usable graph.
+        limit = 3_000_000 if name in {'proof_graph.json', 'lean_proof_graph.json', 'analysis/analysis_graph.json'} else 300_000
+        return _file(ws, name, limit) if safe_ws else ''
     def graph(name):
         try:
             return graph_snapshot(json.loads(read(name)))
@@ -246,9 +463,8 @@ def snapshot(run_id, data):
         # Never analysis/source/** and no manuscript text beyond the node
         # statements already in the graph; no agent transcripts either.
         result = _analysis_snapshot(run_id, data, read, graph)
-        if not result['formal_graph']['nodes'] and result['lean_source']:
-            from agent_monitor.proof_graph import graph_from_lean
-            result['formal_graph'] = graph_snapshot(graph_from_lean(result['lean_source']))
+        result['graphs'] = _graph_modes(ws, data, read, result, safe_workspace=safe_ws)
+        result['formal_graph'] = result['graphs']['formal']['graph']
         if len(json.dumps(result).encode()) > 4_000_000:
             raise ValueError('This snapshot is too large to share (4 MB maximum).')
         return result
@@ -264,7 +480,7 @@ def snapshot(run_id, data):
             'summary': _text(item.get('summary') or item.get('output_text') or item.get('response_text') or item.get('final_text') or item.get('output'), 20_000),
         })
     result = {
-        'version': 1, 'type': 'shared', 'title': _text(data.get('title') or data.get('problem_text_preview') or run_id, 240),
+        'version': 2, 'type': 'shared', 'title': _text(data.get('title') or data.get('problem_text_preview') or run_id, 240),
         'status': _text(data.get('status'), 80), 'engine': _text(data.get('engine'), 100),
         'problem': _text(data.get('problem_text') or data.get('problem_text_preview')),
         'proof': read('proof.md') or read('proof.tex') or _text(data.get('proof_text')),
@@ -272,9 +488,9 @@ def snapshot(run_id, data):
         'formal_graph': graph('lean_proof_graph.json'), 'lean_source': read('lean/Proof.lean'),
         'notice': 'Read-only snapshot selected by the run owner. It does not update as the run continues. Graphs describe dependencies; they are not, by themselves, proof certificates.',
     }
-    if not result['formal_graph']['nodes'] and result['lean_source']:
-        from agent_monitor.proof_graph import graph_from_lean
-        result['formal_graph'] = graph_snapshot(graph_from_lean(result['lean_source']))
+    result['graphs'] = _graph_modes(ws, data, read, result, safe_workspace=safe_ws)
+    result['informal_graph'] = result['graphs']['outline']['graph']
+    result['formal_graph'] = result['graphs']['formal']['graph']
     if len(json.dumps(result).encode()) > 4_000_000:
         raise ValueError('This snapshot is too large to share (4 MB maximum).')
     return result
@@ -345,7 +561,7 @@ class RunSharingMixin:
                 url = base + ('/api/examples/erdos-straus' if example else '/api/shared/' + match[2])
                 html = (WEB / 'run-viewer.html').read_text().replace('__DATA_URL__', url).replace('__ASSET_BASE__', base + '/static').replace('__CONSOLE_URL__', base + '/')
                 self._send(200, html, 'text/html; charset=utf-8', headers={**HEADERS,
-                    'Content-Security-Policy': "default-src 'none'; script-src 'self'; style-src 'self'; connect-src 'self'; img-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'self'"})
+                    'Content-Security-Policy': "default-src 'none'; script-src 'self'; style-src 'self'; style-src-attr 'unsafe-inline'; font-src 'self'; connect-src 'self'; img-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'self'"})
             return True
         match = re.fullmatch(r'/api/runs/([^/]+)/share', path)
         if not match:

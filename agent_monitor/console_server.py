@@ -2512,7 +2512,7 @@ class Handler(RunSharingMixin, ProjectsMixin, ResearchMixin, BaseHTTPRequestHand
             rel = path.removeprefix("/static/")
             f = _static_asset(rel)
             if f is not None:
-                ctype = "text/css" if f.suffix == ".css" else "application/javascript" if f.suffix == ".js" else "application/octet-stream"
+                ctype = {".css": "text/css", ".js": "application/javascript", ".woff2": "font/woff2", ".woff": "font/woff", ".ttf": "font/ttf"}.get(f.suffix, "application/octet-stream")
                 self._send_bytes(200, f.read_bytes(), ctype)
                 return
             self._send(404, json.dumps({"error": "not found"}))
