@@ -246,6 +246,7 @@ def test_activity_scan_rejects_symlinked_runtime_roots(tmp_path):
 
 def test_cleanup_restores_only_recorded_timers_and_stops_owned_build(tmp_path, monkeypatch):
     monkeypatch.setattr(deploy, "RUNTIME", tmp_path)
+    monkeypatch.setattr(deploy, "CONFIG", tmp_path / "absent-test-config.json")
     for name in ("maintenance", "bootstrap-maintenance"):
         (tmp_path / name).touch()
     (tmp_path / "paused-timers.json").write_text(json.dumps({"timers": ["ansatze-news.timer"]}))
