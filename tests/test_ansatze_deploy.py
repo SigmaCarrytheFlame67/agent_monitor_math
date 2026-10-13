@@ -474,6 +474,16 @@ def test_rendered_units_pass_systemd_analyze_verify(tmp_path):
         # older development/CI hosts; the production template above retains
         # PID isolation, and supported hosts verify the unmodified unit.
         broker.write_text(re.sub(r"(?m)^PrivatePIDs=yes\n", "", broker.read_text(encoding="utf-8")), encoding="utf-8")
+    # verify also checks that ExecStart's executable exists. CI has no
+    # production checkout, so use its real interpreter in these temporary
+    # verification copies while preserving every argument and other directive.
+    for name in UNITS:
+        unit = out / name
+        source = unit.read_text(encoding="utf-8")
+        if name.endswith(".service"):
+            production_command = "ExecStart=/home/repo/agent_monitor_math/.venv/bin/python "
+            assert source.count(production_command) == 1
+            unit.write_text(source.replace(production_command, f"ExecStart={Path(sys.executable).resolve()} "), encoding="utf-8")
     completed = subprocess.run(
         [analyzer, "verify", "--man=no", *[f"./{name}" for name in UNITS]],
         cwd=out, capture_output=True, text=True, timeout=120,

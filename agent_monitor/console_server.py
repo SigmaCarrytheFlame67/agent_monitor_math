@@ -14,6 +14,7 @@ import sys
 import threading
 import time
 from collections import deque
+from functools import wraps
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
@@ -49,6 +50,33 @@ PORT = int(os.environ.get("AGENT_MONITOR_PORT", os.environ.get("LLM_MONITOR_PORT
 # every interface must be an explicit operator choice.
 HOST = os.environ.get("AGENT_MONITOR_HOST", "127.0.0.1").strip() or "127.0.0.1"
 logger = logging.getLogger("agent_monitor.console_server")
+
+# The deployment agent first pauses new writes at Caddy, then waits for this
+# count and persisted background-work statuses to become idle. GET requests can
+# also start a guest sidecar, so they are counted and paused too. Count errors: finally
+# ensures a disconnected browser cannot leave deployment blocked forever.
+_REQUEST_ACTIVITY_LOCK = threading.Lock()
+_ACTIVE_REQUESTS = 0
+
+
+def _track_request(method):
+    @wraps(method)
+    def tracked(*args, **kwargs):
+        global _ACTIVE_REQUESTS
+        with _REQUEST_ACTIVITY_LOCK:
+            _ACTIVE_REQUESTS += 1
+        try:
+            return method(*args, **kwargs)
+        finally:
+            with _REQUEST_ACTIVITY_LOCK:
+                _ACTIVE_REQUESTS -= 1
+    return tracked
+
+
+def _deployment_activity(*, exclude_current: bool = False) -> dict[str, int]:
+    with _REQUEST_ACTIVITY_LOCK:
+        return {"protocol": 1, "active_requests": max(0, _ACTIVE_REQUESTS - int(exclude_current))}
+
 
 # Password-reset delivery must not make HTTP response timing depend on whether
 # an account exists. Keep the work bounded, serialize SMTP, and rate-limit by a
@@ -2428,6 +2456,7 @@ class Handler(RunSharingMixin, ProjectsMixin, ResearchMixin, BaseHTTPRequestHand
     def do_OPTIONS(self):  # noqa: N802
         self._send(204, "")
 
+    @_track_request
     def do_GET(self):  # noqa: N802
         parsed = urlparse(self.path)
         path = self._resolve_path()
@@ -2505,7 +2534,7 @@ class Handler(RunSharingMixin, ProjectsMixin, ResearchMixin, BaseHTTPRequestHand
             return
 
         if path == "/health":
-            self._send(200, json.dumps({"ok": True, "service": "agent-monitor-console"}))
+            self._send(200, json.dumps({"ok": True, "service": "agent-monitor-console", "deployment": _deployment_activity(exclude_current=True)}))
             return
 
         if path.startswith("/static/"):
@@ -2923,6 +2952,7 @@ class Handler(RunSharingMixin, ProjectsMixin, ResearchMixin, BaseHTTPRequestHand
 
         self._send(404, json.dumps({"error": "unknown workspace action"}))
 
+    @_track_request
     def do_POST(self):  # noqa: N802
         path = self._resolve_path()
         if path is None:
@@ -3993,6 +4023,7 @@ class Handler(RunSharingMixin, ProjectsMixin, ResearchMixin, BaseHTTPRequestHand
                 slot.handed_off = True
         self._send(200, json.dumps(result, ensure_ascii=False))
 
+    @_track_request
     def do_DELETE(self):  # noqa: N802
         path = self._resolve_path()
         if path is None:

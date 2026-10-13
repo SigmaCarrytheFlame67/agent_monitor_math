@@ -1,0 +1,85 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1220 704" role="img" aria-labelledby="title desc">
+<title id="title">Ansätze: from a research question to inspectable evidence</title>
+<desc id="desc">A problem or manuscript enters the authenticated console. Bounded CGM and manuscript analysis save distinct artifacts. The interface exposes proof text, search history, fact dependencies, manuscript judgments, and separate Lean evidence. The standalone CGM framework is a separate runtime.</desc>
+<defs>
+  <marker id="arrow" markerWidth="8" markerHeight="8" refX="6" refY="4" orient="auto"><path d="M0 0 8 4 0 8Z" fill="#68758a"/></marker>
+  <style>
+    text{font-family:Arial,Helvetica,sans-serif;fill:#253146}.heading{font-size:28px;font-weight:700}.section{font-size:18px;font-weight:700}.label{font-size:15px;font-weight:700}.body{font-size:14px}.small{font-size:12px;fill:#58657a}.wire{fill:none;stroke:#68758a;stroke-width:2;marker-end:url(#arrow)}.node{stroke:#c1cbd8;stroke-width:1.2}
+  </style>
+</defs>
+<rect width="1220" height="704" rx="24" fill="#faf9f6"/>
+<text x="30" y="45" class="heading">From a research question to inspectable evidence</text>
+<text x="30" y="71" class="body">One console • separate meanings for search, model review, and formal verification</text>
+
+<rect x="30" y="107" width="210" height="205" rx="17" fill="#d9e8f1" class="node"/>
+<rect x="47" y="125" width="30" height="35" rx="5" fill="#fff" stroke="#667f9b"/>
+<path d="M54 135h16m-16 7h16m-16 7h10" stroke="#667f9b" stroke-width="2"/>
+<text x="90" y="148" class="section">Your input</text>
+<text x="48" y="189" class="label">Problem statement</text>
+<text x="48" y="214" class="body">or existing manuscript</text>
+<line x1="48" y1="231" x2="222" y2="231" stroke="#b4c5d5"/>
+<text x="48" y="255" class="small">Account &amp; provider policy</text>
+<text x="48" y="276" class="small">Run workspace &amp; budgets</text>
+
+<path d="M241 207H266" class="wire"/>
+<rect x="277" y="107" width="639" height="205" rx="17" fill="#fff" class="node"/>
+<text x="295" y="136" class="section">Choose a workflow</text>
+<text x="296" y="167" class="small">PROVE / WEBSITE CGM</text>
+<rect x="295" y="180" width="110" height="40" rx="10" fill="#c5dde9"/>
+<text x="350" y="205" class="label" text-anchor="middle">Strategist</text>
+<path d="M406 200h21" class="wire"/>
+<rect x="438" y="180" width="110" height="40" rx="10" fill="#c4e7e6"/>
+<text x="493" y="205" class="label" text-anchor="middle">Workers</text>
+<path d="M549 200h21" class="wire"/>
+<rect x="581" y="180" width="155" height="40" rx="10" fill="#ffe6b1"/>
+<text x="658" y="205" class="label" text-anchor="middle">Model verifiers</text>
+<path d="M737 200h21" class="wire"/>
+<rect x="770" y="180" width="126" height="40" rx="10" fill="#e6cfdd"/>
+<text x="833" y="205" class="label" text-anchor="middle">Curator</text>
+<text x="296" y="250" class="small">ANALYZE / EXISTING MANUSCRIPT</text>
+<text x="296" y="281" class="body">Ingest → Segment → Check → Roll-up → Report</text>
+
+<path d="M917 207h21" class="wire"/>
+<rect x="950" y="107" width="240" height="205" rx="17" fill="#e2efe6" class="node"/>
+<path d="M968 136h28v27h-28zm5-7h18v7h-18" fill="#fff" stroke="#678c7a" stroke-width="2"/>
+<text x="1008" y="148" class="section">Saved artifacts</text>
+<text x="968" y="188" class="body">Proof / analysis report</text>
+<text x="968" y="214" class="body">Events, usage, graph data</text>
+<text x="968" y="240" class="body">Formal source &amp; results</text>
+<text x="968" y="279" class="small">Only evidence that exists</text>
+
+<path d="M1070 313v22H218v13" class="wire"/>
+<path d="M610 335v13" class="wire"/>
+<path d="M1002 335v13" class="wire"/>
+
+<rect x="30" y="360" width="377" height="196" rx="17" fill="#e2efe6" class="node"/>
+<circle cx="59" cy="390" r="10" fill="#fff" stroke="#699681" stroke-width="2"/>
+<circle cx="47" cy="412" r="5" fill="#fff" stroke="#699681" stroke-width="2"/>
+<circle cx="71" cy="412" r="5" fill="#fff" stroke="#699681" stroke-width="2"/>
+<path d="M54 399l-5 8m15-8 5 8" stroke="#699681" stroke-width="2"/>
+<text x="87" y="397" class="section">Inspect the argument</text>
+<text x="49" y="443" class="body">Sandbox · Outline · Facts · Manuscript</text>
+<text x="49" y="471" class="body">Read statements and their dependencies.</text>
+<text x="49" y="520" class="small">Model acceptance ≠ a formal certificate</text>
+
+<rect x="422" y="360" width="377" height="196" rx="17" fill="#ece7f2" class="node"/>
+<path d="M442 409h30m-26 0v-15m10 15v-28m11 28v-21" stroke="#8b85a9" stroke-width="3" fill="none"/>
+<text x="479" y="397" class="section">Inspect the search</text>
+<text x="442" y="443" class="body">Monitor · Explore</text>
+<text x="442" y="471" class="body">Trace plans, attempts, feedback, and cost.</text>
+<text x="442" y="520" class="small">Search edges ≠ proof dependencies</text>
+
+<rect x="814" y="360" width="376" height="196" rx="17" fill="#ffeadb" class="node"/>
+<path d="M848 377l13 5v16c0 8-13 15-13 15s-13-7-13-15v-16Z" fill="#fff" stroke="#b88d72" stroke-width="2"/>
+<path d="M841 394l5 5 9-11" fill="none" stroke="#b88d72" stroke-width="2"/>
+<text x="875" y="397" class="section">Inspect formal evidence</text>
+<text x="834" y="443" class="body">Lean Verification · Formal · Compiler facts</text>
+<text x="834" y="471" class="body">Compile / axioms / statement fidelity</text>
+<text x="834" y="520" class="small">Separate checks, with explicit scope</text>
+
+<rect x="30" y="577" width="1160" height="37" rx="10" fill="#fce2df"/>
+<text x="610" y="601" class="body" text-anchor="middle">Shared view = explicit, read-only snapshot • reading does not start a model or checker</text>
+<rect x="30" y="632" width="1160" height="46" rx="11" fill="#e9e2d9"/>
+<text x="49" y="660" class="label">Standalone CGM</text>
+<text x="226" y="660" class="body">Separate runtime • persistent memory • role-gated services • orchestration • its own configuration</text>
+</svg>

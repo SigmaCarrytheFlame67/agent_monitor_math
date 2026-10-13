@@ -50,3 +50,17 @@ jobs:
       - run: npm ci
       - run: node --test tests/*.mjs
       - run: npm run docs:build
+
+  release-ready:
+    name: Main release ready
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    needs: [monitor, cgm, website]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Mark the checked main revision as eligible
+        env:
+          RELEASE_SHA: ${{ github.sha }}
+        run: |
+          echo "All source checks passed for $RELEASE_SHA." >> "$GITHUB_STEP_SUMMARY"
+          echo 'The Ansätze host polls this successful main workflow every two minutes, builds the same revision, drains active work, and publishes with health checks and rollback.' >> "$GITHUB_STEP_SUMMARY"
+          echo 'Review approval alone does not deploy unmerged code. Host rollout status is recorded in /opt/ansatze/deployment-status.json.' >> "$GITHUB_STEP_SUMMARY"
