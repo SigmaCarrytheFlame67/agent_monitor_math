@@ -26,9 +26,9 @@ This repository contains the code behind **[ansatze.ai](https://ansatze.ai/)**, 
 > **Read the evidence at the right level.** A model accepting a proof step is a model judgment. A proof outline, search graph, or compiled statement does not establish a theorem. Lean compilation, axiom checks, and statement-fidelity checks are reported separately.
 
 <p align="center">
-  <img src="docs/public/readme/shared-explore.png" width="1080" alt="Ansätze shared-run interface: console navigation, Explore and Facts tabs, and a graph of a problem, plans, goals, and worker attempts." />
+  <img src="docs/public/readme/ansatze-hero.png" width="720" alt="What if? — a mathematical illustration with pale-blue orbital curves, connected points, and formulas on a dark background." />
 </p>
-<p align="center"><em>Actual browser capture of the shared viewer, using a synthetic CGM regression fixture. No model or checker was run to produce this example; it is an interface demonstration, not a research result.</em></p>
+<p align="center"><em>What if? — explore mathematical ideas with Ansätze.</em></p>
 
 **Explore:** [Features](#features) · [Start here](#start-here) · [Interface guide](#interface-guide) · [Local setup](#local-setup) · [Standalone CGM](#standalone-cgm) · [Architecture](#architecture) · [Contributing](#public-contributions) · [Deployment](#from-pull-request-to-website)
 
@@ -70,7 +70,7 @@ The console uses four main views. **Sandbox** contains the proof or analysis rep
 | **Compiler facts** | Dependencies extracted from the configured Lean compiler environment, when valid saved evidence is available. |
 | **Manuscript** | Results and references in an analyzed manuscript, with the recorded model verdicts. |
 
-These are browser screenshots using synthetic test data. In sharing mode, all views are **read-only** and describe the saved snapshot. A recipient cannot start model calls or formal checks. An older share can be missing graphs that were not included when it was created; its owner must choose **Create / update snapshot** to include the available views. The owner can revoke a link, but cannot recall copies already saved by a reader.
+In sharing mode, all views are **read-only** and describe the saved snapshot. A recipient cannot start model calls or formal checks. An older share can be missing graphs that were not included when it was created; its owner must choose **Create / update snapshot** to include the available views. The owner can revoke a link, but cannot recall copies already saved by a reader.
 
 ## Local setup
 
@@ -244,7 +244,7 @@ No. Configure the engine and provider route you want to use. Bundled adapters ar
 <details>
 <summary><strong>Can I test an interface change without private runs or paid calls?</strong></summary>
 
-Yes. Use the regression suites and synthetic fixtures. The screenshots in this README were produced that way. Keep private account data and live capability links out of contributions.
+Yes. Use the regression suites and synthetic fixtures. Keep private account data and live capability links out of contributions.
 
 </details>
 

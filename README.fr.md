@@ -16,8 +16,8 @@ Ce dépôt contient le code de **[ansatze.ai](https://ansatze.ai/)**, le pipelin
 
 > **Distinguez les niveaux de justification.** L’acceptation d’une étape par un modèle reste un jugement de modèle. Un plan de preuve, un graphe de recherche ou un énoncé compilé ne suffit pas à établir un théorème. La compilation Lean, les contrôles d’axiomes et la fidélité de l’énoncé formel au problème sont rapportés séparément.
 
-<p align="center"><img src="docs/public/readme/shared-explore.png" width="1080" alt="Capture réelle du navigateur : interface de partage Ansätze avec navigation de la console, onglets Explore et Facts, problème, plans, sous-objectifs et tentatives." /></p>
-<p align="center"><em>Capture du véritable lecteur de partage avec des données synthétiques de test CGM. Aucun modèle ni vérificateur n’a été exécuté pour produire cet exemple : il illustre l’interface, pas un résultat de recherche.</em></p>
+<p align="center"><img src="docs/public/readme/ansatze-hero.png" width="720" alt="What if? — illustration mathématique avec des courbes orbitales bleu clair, des points reliés et des formules sur fond sombre." /></p>
+<p align="center"><em>Et si ? — explorez les idées mathématiques avec Ansätze.</em></p>
 
 **Sommaire :** [Fonctionnalités](#fonctionnalités) · [Par où commencer](#par-où-commencer) · [Interface](#guide-de-linterface) · [Installation locale](#installation-locale) · [CGM autonome](#cgm-autonome) · [Architecture](#architecture) · [Contribuer](#contributions-publiques) · [Déploiement](#de-la-pull-request-au-site-web)
 
@@ -61,7 +61,7 @@ La console comporte quatre vues principales. **Sandbox** contient la preuve ou l
 | **Compiler facts** | Les dépendances extraites de l’environnement du compilateur Lean configuré, si des éléments enregistrés valides sont disponibles. |
 | **Manuscript** | Les résultats et références d’un manuscrit analysé, avec les verdicts du modèle enregistrés. |
 
-Ces captures utilisent des données synthétiques de test. En mode partage, toutes les vues sont **en lecture seule** et décrivent l’instantané enregistré. Le destinataire ne peut lancer ni appel de modèle ni vérification formelle. Un ancien partage peut ne pas contenir les graphes absents lors de sa création ; son propriétaire doit choisir **Create / update snapshot** pour inclure les vues disponibles. Révoquer un lien ne supprime pas les copies déjà enregistrées par un lecteur.
+En mode partage, toutes les vues sont **en lecture seule** et décrivent l’instantané enregistré. Le destinataire ne peut lancer ni appel de modèle ni vérification formelle. Un ancien partage peut ne pas contenir les graphes absents lors de sa création ; son propriétaire doit choisir **Create / update snapshot** pour inclure les vues disponibles. Révoquer un lien ne supprime pas les copies déjà enregistrées par un lecteur.
 
 ## Installation locale
 
@@ -235,7 +235,7 @@ Non. Configurez le moteur et le fournisseur souhaités. La présence d’un adap
 <details>
 <summary><strong>Peut-on tester l’interface sans données privées ni appels payants ?</strong></summary>
 
-Oui, avec les suites de régression et leurs données synthétiques. Les captures de ce README ont été produites ainsi. Excluez des contributions les données de compte privées et les liens donnant réellement accès à des partages privés.
+Oui, avec les suites de régression et leurs données synthétiques. Excluez des contributions les données de compte privées et les liens donnant réellement accès à des partages privés.
 
 </details>
 
