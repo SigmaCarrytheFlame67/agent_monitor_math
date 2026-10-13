@@ -16,8 +16,8 @@ Ansätze 将 **Continual Graph Memory（CGM，持续图记忆）**、数学智�
 
 > **区分不同层次的证据。** 模型接受某个证明步骤，只代表模型的判断。证明大纲、搜索图或通过编译的命题声明都不能单独确立一个定理。Lean 编译、公理检查，以及形式化命题是否忠实对应原问题的检查会分别报告。
 
-<p align="center"><img src="docs/public/readme/ansatze-hero.png" width="720" alt="What if? 数学插画：深色背景上，浅蓝色轨道曲线、相连的节点与公式围绕着中心文字。" /></p>
-<p align="center"><em>What if? —— 与 Ansätze 一起探索数学想法。</em></p>
+<p align="center"><img src="docs/public/readme/ansatze-homepage.png" width="1080" alt="Ansätze 首页：Every proof begins with an idea 标题、导航链接、数学研究工作空间介绍与 What if? 插画。" /></p>
+<p align="center"><em>Ansätze 首页：数学研究、证明探索与可审查的证据。</em></p>
 
 **导航：** [功能](#功能) · [从这里开始](#从这里开始) · [界面说明](#界面说明) · [本地安装](#本地安装) · [独立 CGM 框架](#独立-cgm-框架) · [架构](#架构) · [公开贡献](#公开贡献) · [合并与部署](#从拉取请求到网站更新)
 

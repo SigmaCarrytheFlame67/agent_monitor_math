@@ -26,9 +26,9 @@ This repository contains the code behind **[ansatze.ai](https://ansatze.ai/)**, 
 > **Read the evidence at the right level.** A model accepting a proof step is a model judgment. A proof outline, search graph, or compiled statement does not establish a theorem. Lean compilation, axiom checks, and statement-fidelity checks are reported separately.
 
 <p align="center">
-  <img src="docs/public/readme/ansatze-hero.png" width="720" alt="What if? — a mathematical illustration with pale-blue orbital curves, connected points, and formulas on a dark background." />
+  <img src="docs/public/readme/ansatze-homepage.png" width="1080" alt="Ansätze homepage: Every proof begins with an idea, navigation links, the research workspace introduction, and the What if? illustration." />
 </p>
-<p align="center"><em>What if? — explore mathematical ideas with Ansätze.</em></p>
+<p align="center"><em>Ansätze homepage: mathematical research, proof exploration, and evidence you can inspect.</em></p>
 
 **Explore:** [Features](#features) · [Start here](#start-here) · [Interface guide](#interface-guide) · [Local setup](#local-setup) · [Standalone CGM](#standalone-cgm) · [Architecture](#architecture) · [Contributing](#public-contributions) · [Deployment](#from-pull-request-to-website)
 

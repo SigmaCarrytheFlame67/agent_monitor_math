@@ -16,8 +16,8 @@ Ce dépôt contient le code de **[ansatze.ai](https://ansatze.ai/)**, le pipelin
 
 > **Distinguez les niveaux de justification.** L’acceptation d’une étape par un modèle reste un jugement de modèle. Un plan de preuve, un graphe de recherche ou un énoncé compilé ne suffit pas à établir un théorème. La compilation Lean, les contrôles d’axiomes et la fidélité de l’énoncé formel au problème sont rapportés séparément.
 
-<p align="center"><img src="docs/public/readme/ansatze-hero.png" width="720" alt="What if? — illustration mathématique avec des courbes orbitales bleu clair, des points reliés et des formules sur fond sombre." /></p>
-<p align="center"><em>Et si ? — explorez les idées mathématiques avec Ansätze.</em></p>
+<p align="center"><img src="docs/public/readme/ansatze-homepage.png" width="1080" alt="Page d’accueil d’Ansätze : titre Every proof begins with an idea, liens de navigation, présentation de l’espace de recherche et illustration What if?" /></p>
+<p align="center"><em>Page d’accueil d’Ansätze : recherche mathématique, exploration de preuves et justifications consultables.</em></p>
 
 **Sommaire :** [Fonctionnalités](#fonctionnalités) · [Par où commencer](#par-où-commencer) · [Interface](#guide-de-linterface) · [Installation locale](#installation-locale) · [CGM autonome](#cgm-autonome) · [Architecture](#architecture) · [Contribuer](#contributions-publiques) · [Déploiement](#de-la-pull-request-au-site-web)
 
