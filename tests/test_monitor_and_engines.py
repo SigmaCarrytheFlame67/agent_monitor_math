@@ -599,12 +599,16 @@ class ProviderRoutingRegressionTests(unittest.TestCase):
                 },
                 clear=True,
             ),
+            tempfile.TemporaryDirectory() as launcher_dir,
             patch.object(codex_backend.sys, "platform", "linux"),
             patch.object(
-                codex_backend.shutil, "which", return_value="/usr/local/bin/codex"
+                codex_backend.shutil, "which", return_value=str(Path(launcher_dir) / "codex")
             ),
             patch.object(codex_backend, "_run_codex_process", side_effect=fake_run),
         ):
+            launcher = Path(launcher_dir) / "codex"
+            launcher.write_text("#!/bin/sh\nexit 99\n", encoding="utf-8")
+            launcher.chmod(0o755)
             result = codex_backend.codex_exec("system", "user")
 
         command = captured["command"]

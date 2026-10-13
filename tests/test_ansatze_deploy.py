@@ -465,6 +465,15 @@ def test_rendered_units_pass_systemd_analyze_verify(tmp_path):
     out = _render(tmp_path)
     assert "@@" not in (out / "agent-monitor.service").read_text(encoding="utf-8")
     assert f"AGENT_MONITOR_BASE_PATH={MOUNT}" in (out / "agent-monitor.service").read_text(encoding="utf-8")
+    broker = out / "ansatze-kimi.service"
+    assert dict(_directives(broker.read_text(encoding="utf-8")))["PrivatePIDs"] == "yes"
+    version = subprocess.run([analyzer, "--version"], capture_output=True, text=True, check=True, timeout=10)
+    major = int(re.match(r"systemd\s+(\d+)", version.stdout).group(1))
+    if major < 257:
+        # PrivatePIDs arrived in systemd 257. Validate all other directives on
+        # older development/CI hosts; the production template above retains
+        # PID isolation, and supported hosts verify the unmodified unit.
+        broker.write_text(re.sub(r"(?m)^PrivatePIDs=yes\n", "", broker.read_text(encoding="utf-8")), encoding="utf-8")
     completed = subprocess.run(
         [analyzer, "verify", "--man=no", *[f"./{name}" for name in UNITS]],
         cwd=out, capture_output=True, text=True, timeout=120,

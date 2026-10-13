@@ -226,7 +226,9 @@ class PublicKimiApplicationTests(unittest.TestCase):
             }
             path = app.metadata_dir / "plain_expired_abc.json"
             path.write_text(json.dumps(expired), encoding="utf-8")
-            app._last_expiry_check = 0
+            # A fresh CI VM may have less than 15 minutes of monotonic uptime.
+            # Exercise the elapsed cleanup interval, independent of boot time.
+            app._last_expiry_check = time.monotonic() - 901
             app.config()
             self.assertEqual(fake.deleted, ["plain_expired_abc"])
             self.assertFalse(path.exists())
