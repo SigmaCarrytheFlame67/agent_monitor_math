@@ -1,0 +1,18 @@
+[Unit]
+Description=Deploy the latest passing Ansätze main commit
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/python3 /usr/local/lib/ansatze/auto_deploy.py
+ExecStopPost=/usr/bin/python3 /usr/local/lib/ansatze/auto_deploy.py --cleanup
+# Root controls release ownership and systemd; repository build hooks run in a
+# separate restricted ansatze-build unit without these privileges.
+User=root
+Group=root
+UMask=0022
+RuntimeDirectory=ansatze-deploy
+RuntimeDirectoryMode=0755
+RuntimeDirectoryPreserve=yes
+TimeoutStartSec=35min

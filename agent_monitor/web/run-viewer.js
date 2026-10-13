@@ -1,22 +1,242 @@
+/* Read-only snapshot client. Navigation, graph inspection and copying stay local. */
 'use strict';
-(async()=>{
- const $=id=>document.getElementById(id);let data;
- try{const response=await fetch(document.body.dataset.snapshotUrl,{credentials:'omit',cache:'no-store',referrerPolicy:'no-referrer'});if(!response.ok)throw new Error('This run is unavailable. The owner may have revoked the link.');data=await response.json();}catch(e){$('rv-notice').textContent=e.message;return;}
- document.title=(data.title||'Shared run')+' · Ansätze';
- /* An analysis of an existing manuscript: report, Manuscript DAG with
-    model-verifier verdicts (never "verified"), Lean statements only. */
- const analysis=data.kind==='analysis';
- if(analysis){const relabel={proof:'Report',informal:'Manuscript DAG',formal:'Lean DAG',lean:'Lean statements'};for(const b of document.querySelectorAll('[data-tab]')){if(b.dataset.tab==='agents')b.hidden=true;else if(relabel[b.dataset.tab])b.textContent=relabel[b.dataset.tab];}const heading=document.querySelector('.rv-problem h2');if(heading)heading.textContent='Manuscript';const proofHeading=document.querySelector('#rv-proof h2');if(proofHeading)proofHeading.textContent='Analysis report';const intro=document.querySelector('#rv-graph > p');if(intro)intro.textContent='Arrows point from a result to a result that uses it (solid: the manuscript’s own reference; dashed: inferred from the text; dotted: proposed by the model). Colours are verdicts of a model verifier — blue checked by a model verifier, amber gap, red error, grey unclear, hollow not checked. They are not a certificate.';const leanHeading=document.querySelector('#rv-lean h2');if(leanHeading)leanHeading.textContent='Lean statements (proofs not attempted)';}
- for(const [id,value] of [['rv-title',data.title],['rv-status',data.status],['rv-problem',data.problem],['rv-notice',data.notice],['rv-proof-text',data.proof||(analysis?'No analysis report was included in this snapshot.':'No proof text was included in this snapshot.')],['rv-lean-text',data.lean_source||(analysis?'No statements were formalized.':'No Lean source was included.')],['rv-verification',data.verification?data.verification.version+' · '+data.verification.result:'Source is shown as saved. No new verification is performed when this page is opened.']])$(id).textContent=value||'';
- if(data.source_url&&/^https:\/\//.test(data.source_url)){$('rv-source').href=data.source_url;$('rv-source').hidden=false;if(analysis)$('rv-source').textContent='Source manuscript ↗';}
- (data.agents||[]).forEach((a,i)=>{const card=document.createElement('article');card.className='rv-step';const index=document.createElement('span');index.textContent=String(i+1).padStart(2,'0');const body=document.createElement('div');const h=document.createElement('h3');h.textContent=a.label||'Research step';const meta=document.createElement('small');meta.textContent=[a.status,a.model].filter(Boolean).join(' · ');const p=document.createElement('p');p.textContent=a.summary||'No summary included.';body.append(h,meta,p);card.append(index,body);$('rv-agents').append(card);});
- if(!(data.agents||[]).length)$('rv-agents').textContent=analysis?'Open the report for the analysis.':'No agent summaries were included in this snapshot.';
- function graph(kind){const g=data[kind+'_graph']||{nodes:[],edges:[]};const nodes=g.nodes||[],edges=g.edges||[];$('rv-graph-title').textContent=g.title||(kind==='formal'?'Lean DAG':analysis?'Manuscript DAG':'Reasoning DAG');const canvas=$('rv-canvas');canvas.replaceChildren();$('rv-node-detail').textContent=nodes.length?'Select a node.':'No graph was included. Generating a graph is an owner-only action.';if(!nodes.length){canvas.style.height='0';return;}
- const depth=new Map(nodes.map(n=>[n.id,0]));for(let pass=0;pass<nodes.length;pass++){let changed=false;for(const e of edges){if(!depth.has(e.from)||!depth.has(e.to))continue;const d=Math.min(nodes.length-1,depth.get(e.from)+1);if(d>depth.get(e.to)){depth.set(e.to,d);changed=true;}}if(!changed)break;}
- const levels=new Map;for(const n of nodes){const d=depth.get(n.id);if(!levels.has(d))levels.set(d,[]);levels.get(d).push(n);}const width=Math.max(240,...[...levels.values()].map(a=>a.length*232));const height=(Math.max(...depth.values())+1)*150;canvas.style.width=width+'px';canvas.style.height=height+'px';const pos=new Map;for(const [d,row]of levels)row.forEach((n,i)=>pos.set(n.id,{x:(width-row.length*232)/2+i*232+12,y:d*150+12}));
- const ns='http://www.w3.org/2000/svg';const svg=document.createElementNS(ns,'svg');svg.setAttribute('width',width);svg.setAttribute('height',height);svg.setAttribute('aria-hidden','true');const defs=document.createElementNS(ns,'defs');const marker=document.createElementNS(ns,'marker');for(const[k,v]of Object.entries({id:'rv-arrow',markerWidth:8,markerHeight:8,refX:7,refY:4,orient:'auto'}))marker.setAttribute(k,v);const arrow=document.createElementNS(ns,'path');arrow.setAttribute('d','M0 0 L8 4 L0 8');arrow.setAttribute('fill','#789078');marker.append(arrow);defs.append(marker);svg.append(defs);for(const e of edges){if(!pos.has(e.from)||!pos.has(e.to))continue;const a=pos.get(e.from),b=pos.get(e.to);const p=document.createElementNS(ns,'path');p.setAttribute('d',`M${a.x+104},${a.y+96} C${a.x+104},${a.y+124} ${b.x+104},${b.y-28} ${b.x+104},${b.y-4}`);p.setAttribute('fill','none');p.setAttribute('stroke','#789078');p.setAttribute('stroke-width','2');p.setAttribute('marker-end','url(#rv-arrow)');if(analysis&&kind==='informal'&&['inferred','model'].includes(e.provenance))p.setAttribute('stroke-dasharray',e.provenance==='model'?'2 4':'6 4');svg.append(p);}canvas.append(svg);
- for(const n of nodes){const button=document.createElement('button');button.style.left=pos.get(n.id).x+'px';button.style.top=pos.get(n.id).y+'px';button.textContent=n.label||n.id;button.dataset.open=String(!analysis&&(n.status||'').includes('open'));if(analysis&&kind==='informal'&&n.verdict)button.dataset.verdict=String(n.verdict);const small=document.createElement('small');small.textContent=n.status||n.lean_kind||n.kind||'';button.append(small);button.onclick=()=>{for(const b of canvas.querySelectorAll('button'))b.setAttribute('aria-pressed',String(b===button));const dependencies=edges.filter(e=>e.to===n.id).map(e=>nodes.find(x=>x.id===e.from)?.label||e.from);$('rv-node-detail').textContent=(n.label||n.id)+'\n\n'+(n.statement||'')+(analysis&&n.status?'\n\nVerdict: '+n.status+(n.closure?' · with dependencies: '+n.closure:''):'')+'\n\nDepends on: '+(dependencies.join(', ')||'No incoming dependencies');};canvas.append(button);}}
- function tab(name){for(const b of document.querySelectorAll('[data-tab]'))b.setAttribute('aria-pressed',String(b.dataset.tab===name));for(const key of ['agents','proof','graph','lean'])$('rv-'+key).hidden=key!==(['formal','informal'].includes(name)?'graph':name);if(['formal','informal'].includes(name))graph(name);}
- for(const b of document.querySelectorAll('[data-tab]'))b.onclick=()=>tab(b.dataset.tab);
- const requested=new URL(location.href).searchParams.get('view');if(['formal','informal','lean','proof'].includes(requested))tab(requested);else if(analysis)tab('proof');
+(async () => {
+  const $ = id => document.getElementById(id);
+  const all = selector => [...document.querySelectorAll(selector)];
+  const text = value => value == null ? '' : String(value);
+  const node = (tag, className, value) => {
+    const element = document.createElement(tag);
+    if (className) element.className = className;
+    if (value != null) element.textContent = text(value);
+    return element;
+  };
+  const renderText = (target, value) => {
+    if (window.AnsatzSharedText?.render) window.AnsatzSharedText.render(target, text(value), { manuscript: analysis });
+    else { target.textContent = text(value); target.classList.add('rv-plain-text'); }
+  };
+  const statusLabel = value => text(value).replace(/_/g, ' ').replace(/^./, ch => ch.toUpperCase());
+  const empty = (target, title, message, symbol = '◇') => {
+    const box = node('div', 'rv-empty');
+    const icon = node('span', 'rv-empty-icon', symbol); icon.setAttribute('aria-hidden', 'true');
+    box.append(icon, node('h3', '', title), node('p', '', message));
+    target.replaceChildren(box);
+  };
+  let data, analysis = false, activeTab = 'sandbox', graphMode = 'engine', engineMode = 'explore', graphInstance;
+  const graphLabels = { outline: 'Outline', explore: 'Explore', facts: 'Facts', formal: 'Formal · Lean', compiler: 'Compiler facts', manuscript: 'Manuscript' };
+  const graphDescriptions = {
+    outline: 'An informal outline of the saved proof and its dependencies.',
+    explore: 'Plans, attempts, verifier feedback, and curation in the saved exploration record. These edges describe the search process.',
+    facts: 'Saved facts and their dependencies. Each node shows its recorded model-verifier acceptance; this is not a Lean certificate.',
+    formal: 'The structural dependency graph of the saved Lean declarations.',
+    compiler: 'Compiler-observed proof-body uses and type mentions. These observations are not a logical proof certificate.',
+    manuscript: 'The manuscript’s results and references, with model-verifier verdicts. Model checks are not proof certificates.',
+  };
+  const legacyReasons = {
+    explore: 'This older snapshot does not contain the exploration record. The owner can update the shared snapshot from the console to include it.',
+    facts: 'This older snapshot does not contain the CGM Facts graph. The owner can update the shared snapshot from the console to include it.',
+    compiler: 'Compiler facts were not included in this saved snapshot.',
+    outline: 'No informal outline was included in this saved snapshot.',
+    formal: 'No structural Lean graph was included in this saved snapshot.',
+    manuscript: 'No manuscript graph was included in this saved snapshot.',
+  };
+  function graphFor(mode) {
+    if (data?.graphs && Object.prototype.hasOwnProperty.call(data.graphs, mode)) return data.graphs[mode];
+    const old = mode === 'formal' ? data?.formal_graph : ((analysis && mode === 'manuscript') || (!analysis && mode === 'outline')) ? data?.informal_graph : null;
+    if (old?.nodes?.length) return { kind: mode, status: 'ready', graph_role: mode === 'outline' ? 'outline' : mode, graph: old };
+    return { kind: mode, status: 'unavailable', graph_role: mode, graph: { nodes: [], edges: [] }, reason: legacyReasons[mode] };
+  }
+  function graphNodes(mode) {
+    const envelope = graphFor(mode);
+    return Array.isArray(envelope?.graph?.nodes) ? envelope.graph.nodes : [];
+  }
+  function selectedMode() { return graphMode === 'engine' ? engineMode : graphMode; }
+  function showGraph() {
+    if (!data) return;
+    const mode = selectedMode();
+    $('rv-engine-modes').hidden = graphMode !== 'engine';
+    const execution = graphFor(mode)?.graph_role === 'execution';
+    $('rv-graph-title').textContent = graphMode === 'engine' ? (execution ? 'Engine trace' : 'Informal · CGM') : graphLabels[mode];
+    $('rv-graph-description').textContent = execution ? 'Recorded engine activity and its execution sequence. These events are not accepted CGM facts or proof dependencies.' : graphDescriptions[mode];
+    all('[data-graph-mode]').forEach(button => button.setAttribute('aria-pressed', String(button.dataset.graphMode === graphMode)));
+    all('[data-engine-mode]').forEach(button => button.setAttribute('aria-pressed', String(button.dataset.engineMode === engineMode)));
+    graphInstance?.destroy?.();
+    graphInstance = null;
+    const container = $('rv-graph-workspace');
+    container.replaceChildren();
+    if (window.AnsatzSharedGraphs?.mount) {
+      graphInstance = window.AnsatzSharedGraphs.mount(container, { graph: graphFor(mode), mode, renderText });
+    } else {
+      const graph = graphFor(mode);
+      empty(container, `${graphLabels[mode]} unavailable`, graph.reason || 'The graph viewer could not be loaded. Reload the page to try again.');
+    }
+  }
+  function tab(name, focus = false) {
+    if (!['sandbox', 'lean', 'monitor', 'dag'].includes(name)) return;
+    activeTab = name;
+    all('[data-tab]').forEach(button => {
+      const selected = button.dataset.tab === name;
+      button.setAttribute('aria-selected', String(selected));
+      button.tabIndex = selected ? 0 : -1;
+      if (selected && focus) button.focus();
+    });
+    for (const view of ['sandbox', 'lean', 'monitor', 'dag']) $('rv-' + view).hidden = view !== name;
+    if (name === 'dag') showGraph();
+  }
+  function openGraph(mode) {
+    if (mode === 'explore' || mode === 'facts') { graphMode = 'engine'; engineMode = mode; }
+    else graphMode = mode;
+    tab('dag');
+  }
+  all('[data-tab]').forEach(button => {
+    button.addEventListener('click', () => tab(button.dataset.tab));
+    button.addEventListener('keydown', event => {
+      const buttons = all('[data-tab]');
+      const index = buttons.indexOf(button);
+      let next;
+      if (event.key === 'ArrowRight') next = (index + 1) % buttons.length;
+      if (event.key === 'ArrowLeft') next = (index + buttons.length - 1) % buttons.length;
+      if (event.key === 'Home') next = 0;
+      if (event.key === 'End') next = buttons.length - 1;
+      if (next != null) { event.preventDefault(); tab(buttons[next].dataset.tab, true); }
+    });
+  });
+  all('[data-graph-mode]').forEach(button => button.addEventListener('click', () => { graphMode = button.dataset.graphMode; showGraph(); }));
+  all('[data-engine-mode]').forEach(button => button.addEventListener('click', () => { engineMode = button.dataset.engineMode; showGraph(); }));
+  all('[data-open-tab]').forEach(button => button.addEventListener('click', () => tab(button.dataset.openTab)));
+  all('[data-open-graph]').forEach(button => button.addEventListener('click', () => openGraph(button.dataset.openGraph)));
+  $('rv-theme').addEventListener('click', () => {
+    const dark = document.documentElement.dataset.theme !== 'dark';
+    document.documentElement.dataset.theme = dark ? 'dark' : 'light';
+    const label = 'Switch to ' + (dark ? 'light' : 'dark') + ' theme';
+    $('rv-theme').setAttribute('aria-label', label);
+    $('rv-theme').title = label;
+  });
+  let toastTimer;
+  function toast(message) {
+    clearTimeout(toastTimer); $('rv-toast').textContent = message; $('rv-toast').hidden = false;
+    toastTimer = setTimeout(() => { $('rv-toast').hidden = true; }, 2600);
+  }
+  $('rv-copy-lean').addEventListener('click', async () => {
+    if (!data?.lean_source) return;
+    try { await navigator.clipboard.writeText(data.lean_source); toast('Lean source copied'); }
+    catch { toast('Copy is unavailable in this browser. Select the source to copy it.'); }
+  });
+  try {
+    const snapshotUrl = document.body.dataset.snapshotUrl;
+    // Do not retain the capability-bearing endpoint in the rendered document.
+    delete document.body.dataset.snapshotUrl;
+    const response = await fetch(snapshotUrl, { credentials: 'omit', cache: 'no-store', referrerPolicy: 'no-referrer' });
+    if (!response.ok) throw new Error('unavailable');
+    data = await response.json();
+    if (!data || typeof data !== 'object' || Array.isArray(data)) throw new Error('unavailable');
+  } catch {
+    $('rv-notice').textContent = 'This shared run is unavailable. The owner may have revoked or replaced the link.';
+    $('rv-notice').dataset.error = 'true';
+    $('rv-status').textContent = 'Unavailable';
+    $('rv-workspace').setAttribute('aria-busy', 'false');
+    $('rv-problem-disclosure').hidden = true;
+    empty($('rv-proof-text'), 'Shared run unavailable', 'Check the link or ask the owner for an updated shared snapshot.');
+    $('rv-run-facts').hidden = true;
+    all('.rv-sidebar-section').forEach(section => { section.hidden = true; });
+    all('[data-tab]').forEach(button => { button.disabled = true; });
+    return;
+  }
+  analysis = data.kind === 'analysis';
+  const originalTitle = data.title || (analysis ? 'Manuscript analysis' : 'Shared research run');
+  const title = analysis && window.AnsatzSharedText?.manuscriptProse ? window.AnsatzSharedText.manuscriptProse(originalTitle) : originalTitle;
+  document.title = title + ' · Ansätze';
+  $('rv-title').textContent = title; $('rv-title').title = title;
+  $('rv-status').textContent = statusLabel(data.status) || 'Saved run';
+  $('rv-notice').textContent = data.notice || 'Read-only snapshot · browse the saved proof, activity, and graph views.';
+  if (analysis) {
+    $('rv-proof-title').textContent = 'Analysis report';
+    $('rv-problem-label').textContent = 'Manuscript';
+    $('rv-lean-title').textContent = 'Lean statements';
+    $('rv-tab-lean').textContent = 'Lean statements';
+    all('[data-graph-mode="manuscript"]').forEach(button => { button.hidden = false; });
+    graphMode = 'manuscript';
+  }
+  renderText($('rv-problem'), data.problem || 'The original task was not included in this snapshot.');
+  if (data.proof) renderText($('rv-proof-text'), data.proof);
+  else empty($('rv-proof-text'), analysis ? 'No saved analysis report' : 'No saved proof', analysis ? 'The report was not included in this snapshot.' : 'The proof document was not included in this snapshot.', '∎');
+  try {
+    const source = new URL(data.source_url);
+    if (source.protocol === 'https:' && !/\/shared\//i.test(source.pathname)) {
+      $('rv-source').href = source.href; $('rv-source').hidden = false;
+      $('rv-source').textContent = analysis ? 'Source manuscript ↗' : 'Source problem ↗';
+    }
+  } catch { /* An absent or invalid source link is simply omitted. */ }
+  const agents = Array.isArray(data.agents) ? data.agents.filter(agent => agent && typeof agent === 'object') : [];
+  const fact = (label, value) => { $('rv-run-facts').append(node('dt', '', label), node('dd', '', value)); };
+  fact('Run type', analysis ? 'Analyze' : 'Prove');
+  fact('Status', statusLabel(data.status) || 'Saved');
+  fact('Research steps', String(agents.length));
+  fact('Graph views', `${Object.keys(graphLabels).filter(mode => graphNodes(mode).length).length} included`);
+  const shortcutModes = analysis ? ['manuscript', 'outline', 'formal', 'compiler'] : ['explore', 'facts', 'outline', 'formal', 'compiler'];
+  for (const mode of shortcutModes) {
+    const button = node('button', 'rv-view-shortcut'); button.type = 'button';
+    const count = graphNodes(mode).length;
+    button.append(node('strong', '', graphLabels[mode]), node('small', '', count ? `${count} ${count === 1 ? 'node' : 'nodes'}` : 'Not included'));
+    button.addEventListener('click', () => openGraph(mode));
+    $('rv-view-shortcuts').append(button);
+  }
+  const leanShortcut = node('button', 'rv-view-shortcut'); leanShortcut.type = 'button';
+  leanShortcut.append(node('strong', '', analysis ? 'Lean statements' : 'Lean source'), node('small', '', data.lean_source ? 'Saved source' : 'Not included'));
+  leanShortcut.addEventListener('click', () => tab('lean')); $('rv-view-shortcuts').append(leanShortcut);
+  for (const [index, agent] of agents.slice(0, 4).entries()) {
+    const item = node('li'); const body = node('div');
+    body.append(node('strong', '', agent.label || `Research step ${index + 1}`), node('small', '', statusLabel(agent.status) || 'Recorded'));
+    item.append(node('span', 'rv-activity-number', index + 1), body); $('rv-activity-preview').append(item);
+  }
+  if (!agents.length) $('rv-activity-preview').append(node('li', 'rv-muted rv-no-activity', 'No activity summaries included.'));
+  function selectStep(index) {
+    const agent = agents[index];
+    all('.rv-step').forEach((button, i) => button.setAttribute('aria-pressed', String(i === index)));
+    const detail = $('rv-step-detail'); detail.replaceChildren();
+    detail.append(node('p', 'rv-step-kicker', `RESEARCH STEP ${String(index + 1).padStart(2, '0')}`), node('h2', '', agent.label || 'Research step'));
+    const meta = node('div', 'rv-detail-meta');
+    if (agent.status) meta.append(node('span', 'rv-badge', statusLabel(agent.status)));
+    if (agent.model) meta.append(node('span', 'rv-badge', agent.model));
+    detail.append(meta);
+    const summary = node('div', 'rv-markdown'); renderText(summary, agent.summary || 'No summary was included for this step.'); detail.append(summary);
+  }
+  for (const [index, agent] of agents.entries()) {
+    const button = node('button', 'rv-step'); button.type = 'button'; button.setAttribute('aria-pressed', 'false');
+    const body = node('span'); body.append(node('strong', '', agent.label || `Research step ${index + 1}`), node('small', '', agent.model || 'Recorded activity'));
+    button.append(node('span', 'rv-step-index', String(index + 1).padStart(2, '0')), body, node('span', 'rv-step-status', statusLabel(agent.status)));
+    button.addEventListener('click', () => selectStep(index)); $('rv-agents').append(button);
+  }
+  if (agents.length) selectStep(0);
+  else {
+    empty($('rv-agents'), 'No recorded steps', 'Activity summaries were not included in this shared snapshot.', '⌁');
+    empty($('rv-step-detail'), 'No activity details', 'The proof and graph views may still contain saved artifacts.', '⌁');
+  }
+  $('rv-step-count').textContent = `${agents.length} ${agents.length === 1 ? 'step' : 'steps'}`;
+  const models = new Set(agents.map(agent => agent.model).filter(Boolean));
+  for (const [value, label] of [[String(agents.length), 'Recorded research steps'], [models.size ? String(models.size) : '—', 'Models included in snapshot'], [statusLabel(data.status) || 'Saved', 'Run status']]) {
+    const card = node('div', 'rv-monitor-stat'); card.append(node('strong', '', value), node('span', '', label)); $('rv-monitor-stats').append(card);
+  }
+  const leanSource = text(data.lean_source);
+  $('rv-lean-text').textContent = leanSource || (analysis ? 'No Lean statements were included in this snapshot.' : 'No Lean source was included in this snapshot.');
+  $('rv-lean-lines').textContent = leanSource ? `${leanSource.split('\n').length} lines · read only` : 'No source included';
+  $('rv-copy-lean').disabled = !leanSource;
+  const verification = data.verification && typeof data.verification === 'object' ? data.verification : null;
+  const recordedResult = verification ? text(verification.result || verification.status) : '';
+  $('rv-lean-badge').textContent = recordedResult ? 'Recorded: ' + statusLabel(recordedResult) : analysis ? 'Statements only' : leanSource ? 'Saved source' : 'No saved source';
+  if (/error|fail/i.test(recordedResult)) $('rv-lean-badge').dataset.state = 'error';
+  $('rv-lean-version').textContent = verification?.version || '';
+  if (verification && recordedResult) {
+    $('rv-verification').append(node('p', '', statusLabel(recordedResult)));
+    if (verification.reason) $('rv-verification').append(node('p', '', verification.reason));
+    $('rv-verification').append(node('p', 'rv-muted', 'Saved checker metadata. This page has not independently rechecked the source.'));
+  } else $('rv-verification').append(node('p', '', analysis ? 'Analyze formalizes statements; it does not attempt their Lean proofs.' : 'No checker result was included in this snapshot. Saved source alone does not establish verification.'));
+  $('rv-fidelity').append(node('p', '', 'No fidelity assessment was included in this snapshot.'), node('p', 'rv-muted', 'Compilation and agreement with the original mathematical claim are separate checks.'));
+  $('rv-workspace').setAttribute('aria-busy', 'false');
+  const requested = new URL(location.href).searchParams.get('view');
+  if (['outline', 'explore', 'facts', 'formal', 'compiler', 'manuscript'].includes(requested)) openGraph(requested);
+  else if (requested === 'informal') openGraph(analysis ? 'manuscript' : 'outline');
+  else if (requested === 'proof') tab('sandbox');
+  else if (requested === 'agents') tab('monitor');
+  else if (['sandbox', 'lean', 'monitor', 'dag'].includes(requested)) tab(requested);
+  else tab(activeTab);
 })();

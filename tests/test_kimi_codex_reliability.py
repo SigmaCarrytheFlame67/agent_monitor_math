@@ -69,12 +69,18 @@ class CodexTerminalReliabilityTests(unittest.TestCase):
             return subprocess.CompletedProcess(command, 0, stdout=stdout, stderr="")
 
         with (
+            tempfile.TemporaryDirectory() as launcher_dir,
             patch.dict(os.environ, {"CODEX_HOME": "/tmp/codex-test"}, clear=True),
             patch.object(
-                codex_backend.shutil, "which", return_value="/usr/local/bin/codex"
+                codex_backend.shutil, "which", return_value=str(Path(launcher_dir) / "codex")
             ),
             patch.object(codex_backend, "_run_codex_process", side_effect=fake_run),
         ):
+            # The process itself is mocked; executable resolution still uses
+            # a real fixture rather than assuming a developer's CLI install.
+            launcher = Path(launcher_dir) / "codex"
+            launcher.write_text("#!/bin/sh\nexit 99\n", encoding="utf-8")
+            launcher.chmod(0o755)
             return codex_backend.codex_exec("system", "user")
 
     def test_zero_exit_without_terminal_event_is_failure(self) -> None:

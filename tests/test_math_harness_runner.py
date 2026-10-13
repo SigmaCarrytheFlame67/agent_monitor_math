@@ -1666,7 +1666,7 @@ class MathHarnessProviderRoutingTests(unittest.TestCase):
             patch.object(
                 runner._codex_backend.shutil,
                 "which",
-                return_value="/usr/local/bin/codex",
+                return_value=str(Path(home_raw) / "codex"),
             ),
             patch.object(
                 runner._codex_backend,
@@ -1675,6 +1675,9 @@ class MathHarnessProviderRoutingTests(unittest.TestCase):
             ),
         ):
             workspace = Path(raw)
+            launcher = Path(home_raw) / "codex"
+            launcher.write_text("#!/bin/sh\nexit 99\n", encoding="utf-8")
+            launcher.chmod(0o755)
             result = runner._codex_backend.codex_exec(
                 "system",
                 "user",

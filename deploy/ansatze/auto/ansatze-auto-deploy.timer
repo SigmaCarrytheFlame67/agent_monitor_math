@@ -1,0 +1,11 @@
+[Unit]
+Description=Check for a passing Ansätze main release every two minutes
+
+[Timer]
+OnBootSec=90s
+OnUnitInactiveSec=2min
+RandomizedDelaySec=15s
+Unit=ansatze-auto-deploy.service
+
+[Install]
+WantedBy=timers.target
