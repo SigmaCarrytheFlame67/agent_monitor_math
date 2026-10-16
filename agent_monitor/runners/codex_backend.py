@@ -483,6 +483,7 @@ def codex_exec(
     sandbox: str = "read-only",
     enable_tools: bool = False,
     source_env: Mapping[str, str] | None = None,
+    allow_empty_text: bool = False,
 ) -> CodexResult:
     """Run one isolated ``codex exec`` turn using an explicit source env.
 
@@ -490,6 +491,10 @@ def codex_exec(
     they must bind the subprocess to the run owner's ``CODEX_HOME`` rather
     than whichever login or API credentials happen to exist in the server's
     global environment.  The child receives an allowlisted environment only.
+
+    A completed turn without a final message is an error unless
+    ``allow_empty_text`` is set: a tool-enabled caller whose deliverable is a
+    workspace file checks that file instead.
     """
     source = source_env if source_env is not None else os.environ
     use_kimi = _kimi_model(model)
@@ -701,7 +706,7 @@ def codex_exec(
                 if item.get("type") == "agent_message" and str(item.get("text") or "").strip():
                     text = str(item["text"]).strip()
                     break
-        if not text:
+        if not text and not allow_empty_text:
             raise CodexBackendError("codex exec returned an empty response")
         # The cached and reasoning parts appear only when the CLI reported them.
         return CodexResult(text=text, usage={key: value for key, value in usage.items()

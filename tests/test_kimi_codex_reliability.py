@@ -1,17 +1,93 @@
 from __future__ import annotations
 
+import io
 import json
 import os
 import signal
 import subprocess
+import sys
 import tempfile
+import textwrap
 import unittest
+from contextlib import redirect_stderr, redirect_stdout
 from pathlib import Path
 from unittest.mock import Mock, call, patch
 
 from agent_monitor import kimi_responses_proxy
 from agent_monitor.runners import codex_backend, kimi_codex_runner
 from agent_monitor.runners.codex_backend import CodexBackendError, CodexResult
+
+PROOF = (
+    "# Proof\n\nLet a = 2m and b = 2n for integers m and n. Then a + b = 2(m + n), "
+    "so the sum of two even integers is even.\n\nProvingConsole outcome: Solved\n"
+)
+
+
+def install_fake_codex(bin_dir: Path, body: str) -> None:
+    """A fake ``codex`` CLI whose ``exec`` runs ``body``.
+
+    Tool-enabled (Kimi) calls never ask for the model catalog.
+    """
+    bin_dir.mkdir(parents=True, exist_ok=True)
+    script = bin_dir / "codex"
+    script.write_text(
+        f"#!{sys.executable}\nPROOF = {PROOF!r}\n"
+        + textwrap.dedent(
+            """\
+            import json, sys, time
+            from pathlib import Path
+            args = sys.argv[1:]
+            if args == ["--version"]:
+                print("codex-cli 0.160.0")
+                sys.exit(0)
+            sys.stdin.read()
+            workspace = Path(args[args.index("--cd") + 1])
+            last_message = Path(args[args.index("--output-last-message") + 1])
+            def event(payload):
+                print(json.dumps(payload), flush=True)
+            """
+        )
+        + textwrap.dedent(body),
+        encoding="utf-8",
+    )
+    script.chmod(0o755)
+
+
+def run_kimi_wrapper(body: str, *, timeout: str = "60") -> tuple[int, str | None, str]:
+    """Run the real Kimi Codex wrapper in-process against a fake ``codex``.
+
+    Returns the exit status, the final proof.md text (if any) and stderr.
+    """
+    previous = Path.cwd()
+    with tempfile.TemporaryDirectory() as raw:
+        root = Path(raw)
+        install_fake_codex(root / "bin", body)
+        workspace = root / "workspace"
+        workspace.mkdir()
+        stderr = io.StringIO()
+        os.chdir(workspace)
+        try:
+            with (
+                patch.dict(
+                    os.environ,
+                    {
+                        "PATH": f"{root / 'bin'}{os.pathsep}{os.environ.get('PATH', os.defpath)}",
+                        "KIMI_API_KEY": "test-key-not-real",
+                        "KIMI_API_BASE": "http://127.0.0.1:9/v1",
+                        "AGENT_MONITOR_SELECTED_MODEL": "kimi-k3",
+                        "AGENT_MONITOR_CODEX_TIMEOUT": timeout,
+                    },
+                ),
+                patch.object(sys, "argv", ["kimi_codex_runner.py", "Prove that a sum of evens is even."]),
+                redirect_stdout(io.StringIO()),
+                redirect_stderr(stderr),
+            ):
+                status = kimi_codex_runner.main()
+        finally:
+            os.chdir(previous)
+        proof = workspace / "proof.md"
+        text = proof.read_text(encoding="utf-8") if proof.exists() else None
+        return status, text, stderr.getvalue()
 
 
 class KimiResponsesReliabilityTests(unittest.TestCase):
@@ -174,6 +250,68 @@ class KimiArtifactReliabilityTests(unittest.TestCase):
                     self.assertEqual(kimi_codex_runner.main(), 0)
             finally:
                 os.chdir(previous)
+
+
+# Kimi K3 can spend its whole output budget on reasoning and end the turn with
+# no visible text; codex 0.160 then writes an empty --output-last-message file.
+EMPTY_FINAL_MESSAGE = """\
+(workspace / "proof.md").write_text(PROOF, encoding="utf-8")
+event({"type": "thread.started", "thread_id": "t1"})
+event({"type": "turn.started"})
+event({"type": "item.completed", "item": {"type": "file_change", "changes": [{"path": "proof.md", "kind": "add"}]}})
+event({"type": "item.completed", "item": {"type": "agent_message", "text": ""}})
+event({"type": "turn.completed", "usage": {"input_tokens": 10, "output_tokens": 5}})
+last_message.write_text("")
+"""
+
+
+class KimiCodexEmptyFinalMessageTests(unittest.TestCase):
+    def test_a_new_proof_with_an_empty_final_message_succeeds(self) -> None:
+        status, proof, stderr = run_kimi_wrapper(EMPTY_FINAL_MESSAGE)
+        self.assertEqual(status, 0, stderr)
+        self.assertEqual(proof, PROOF)
+
+    def test_an_empty_final_message_without_a_new_proof_still_fails(self) -> None:
+        status, proof, stderr = run_kimi_wrapper(
+            EMPTY_FINAL_MESSAGE.replace('(workspace / "proof.md").write_text(PROOF, encoding="utf-8")\n', "")
+        )
+        self.assertEqual((status, proof), (1, None))
+        self.assertIn("without a new substantive proof.md", stderr)
+
+    def test_a_failed_turn_fails_even_with_a_proof_on_disk(self) -> None:
+        status, _, stderr = run_kimi_wrapper(
+            """\
+            (workspace / "proof.md").write_text(PROOF, encoding="utf-8")
+            event({"type": "thread.started", "thread_id": "t1"})
+            event({"type": "turn.failed", "error": {"message": "stream disconnected before completion"}})
+            last_message.write_text("")
+            sys.exit(1)
+            """
+        )
+        self.assertEqual(status, 1)
+        self.assertIn("stream disconnected before completion", stderr)
+
+    def test_other_callers_still_reject_an_empty_answer(self) -> None:
+        # Callers that need the answer text (sidecars, news, analysis) keep
+        # failing closed: only the wrapper opts in to an empty final message.
+        with tempfile.TemporaryDirectory() as raw:
+            root = Path(raw)
+            install_fake_codex(root / "bin", EMPTY_FINAL_MESSAGE)
+            (root / "workspace").mkdir()
+            with self.assertRaisesRegex(CodexBackendError, "empty response"):
+                codex_backend.codex_exec(
+                    "system",
+                    "user",
+                    model="kimi-k3",
+                    workspace=root / "workspace",
+                    sandbox="danger-full-access",
+                    enable_tools=True,
+                    source_env={
+                        "PATH": f"{root / 'bin'}{os.pathsep}{os.environ.get('PATH', os.defpath)}",
+                        "KIMI_API_KEY": "test-key-not-real",
+                        "KIMI_API_BASE": "http://127.0.0.1:9/v1",
+                    },
+                )
 
 
 if __name__ == "__main__":

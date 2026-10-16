@@ -144,6 +144,9 @@ def main() -> int:
             workspace=Path.cwd(),
             sandbox="danger-full-access",
             enable_tools=True,
+            # Kimi can end a turn with no visible text; the deliverable is
+            # the fresh artifact checked below.
+            allow_empty_text=True,
         )
     except (CodexBackendError, OSError, ValueError) as exc:
         print(f"Kimi Codex adapter failed: {exc}", file=sys.stderr, flush=True)
