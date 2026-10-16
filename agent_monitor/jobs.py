@@ -6299,8 +6299,9 @@ def _refuse_analyze_continuation(record: dict[str, Any] | None) -> None:
 
 
 # One node of a finished analysis is re-checked by the runner itself
-# (``analyze_runner.py --recheck <node_id>``, at most 8 calls and 900 s) with
-# the run's own route environment; the outer watchdog adds one call and
+# (``analyze_runner.py --recheck <node_id>``, 8 calls and 900 s, more for a
+# proof checked in more parts; see ``analyze_runner.recheck_caps``) with the
+# run's own route environment; the outer watchdog adds one call and
 # publication.
 _RECHECK_GRACE_SECONDS = 180
 
@@ -6422,9 +6423,12 @@ def start_analysis_recheck(
         if not sponsored and _is_kimi_model(model):
             configured["AGENT_MONITOR_KIMI_BASE_URL"] = _operator_kimi_base()
         env = _analyze_recheck_env(configured, model=model)
-        from agent_monitor.runners import analyze_runner
+        from agent_monitor.analyze import recheck as analyze_recheck
 
-        timeout = analyze_runner.RECHECK_SECONDS + _analyze_api_timeout(sponsored) + _RECHECK_GRACE_SECONDS
+        # The runner's own time limit for this proof (sponsored and guest runs
+        # check it in the bounded prompt budget's smaller parts).
+        caps = analyze_recheck.node_caps(ws, node_id, bounded=sponsored or guest)
+        timeout = caps["max_seconds"] + _analyze_api_timeout(sponsored) + _RECHECK_GRACE_SECONDS
         job_id = uuid.uuid4().hex[:10]
         label = str(node.get("label") or node_id)[:120]
         started_at = _now()
@@ -6694,6 +6698,8 @@ def _execute_recheck(
     result: dict[str, Any] | None = None
     error = ""
     spent: dict[str, Any] = {}
+    # A re-check that never reached a model gives its sponsored start back.
+    unsent = False
     try:
         runner = Path(__file__).resolve().parent / "runners" / "analyze_runner.py"
         argv = [sys.executable, "-u", str(runner), "--recheck", node_id]
@@ -6705,6 +6711,7 @@ def _execute_recheck(
             )
         except OSError as exc:
             error = f"The re-check could not start ({type(exc).__name__})"
+            unsent = True
         else:
             _register_proc(run_id, proc)
             deadline = time.monotonic() + timeout
@@ -6737,6 +6744,8 @@ def _execute_recheck(
             except Exception:  # noqa: BLE001 - accounting must not lose the outcome
                 spent = {}
             result, terminal = _recheck_outcome(output or "")
+            # Exit 2 is a configuration refusal: nothing was sent to a model.
+            unsent = proc.returncode == 2
             if proc.returncode == 0 and result is not None:
                 status = "done"
             elif proc.returncode == 128 + int(signal.SIGTERM) or _stop_event(run_id).is_set():
@@ -6774,7 +6783,7 @@ def _execute_recheck(
         if gate_key is not None:
             from agent_monitor import analyze_runs
 
-            analyze_runs.GATE.release(gate_key)
+            analyze_runs.GATE.release(gate_key, refund=unsent)
         if callable(on_exit):
             try:
                 on_exit()

@@ -24,7 +24,7 @@ from agent_monitor.analyze import graph as analysis_graph  # noqa: E402
 from agent_monitor.analyze import request as analysis_request  # noqa: E402
 from agent_monitor.runners import analyze_runner  # noqa: E402
 
-from test_analyze_runner import PAPER, Provider, default_script, own_key_env  # noqa: E402
+from test_analyze_runner import LONG_PAPER, PAPER, Provider, default_script, own_key_env  # noqa: E402
 
 TOKEN = "short-lived-loopback-token-" + "y" * 20
 SECRET_PROOF = "Distributivity-unique-proof-marker-7731"
@@ -555,6 +555,48 @@ def test_recheck_calls_reach_the_usage_ledger(gate, provider, monkeypatch):
     assert booked["recheck"][3] == pytest.approx(0.0025 * calls)
     # Booked once, as a re-check: the analysis's engine usage is unchanged.
     assert booked["engine"][1] == 100 and record["totals"]["input_tokens"] == 100
+
+
+@pytest.mark.parametrize("node_id", ["lem:sum", "lem:rep"])
+def test_the_recheck_watchdog_follows_the_length_of_the_proof(gate, provider, monkeypatch, node_id):
+    server = provider(default_script())
+    for name, value in own_key_env(server).items():
+        if name.startswith(("DEEPSEEK", "NO_PROXY", "no_proxy")):
+            monkeypatch.setenv(name, value)
+    run_id = "analyze_recheck_watchdog_" + node_id.replace(":", "_")
+    workspace = jobs.workspace_dir(run_id)
+    analysis_workspace(workspace, server, text=LONG_PAPER)
+    write_record(run_id, workspace, owner_id=None)
+    launched: list[dict] = []
+    monkeypatch.setattr(jobs, "_execute_recheck", lambda **kwargs: launched.append(kwargs)
+                        or jobs._update_job(kwargs["job_id"], status="finished"))
+    jobs.start_analysis_recheck(run_id, node_id, user=None)
+    meta = next(node["meta"] for node in analysis_graph.load(workspace)["nodes"] if node["id"] == node_id)
+    parts = meta.get("parts", 1)
+    assert (parts > analyze_runner.RECHECK_MAX_CALLS) == (node_id == "lem:rep")
+    # The runner's own time limit for this proof, one in-flight call and publication.
+    seconds = analyze_runner.RECHECK_SECONDS * max(analyze_runner.RECHECK_MAX_CALLS, parts + 2) \
+        // analyze_runner.RECHECK_MAX_CALLS
+    assert launched[0]["timeout"] == seconds + jobs._analyze_api_timeout(False) + jobs._RECHECK_GRACE_SECONDS
+
+
+def test_a_recheck_that_reaches_no_model_gives_its_sponsored_start_back(gate, tmp_path):
+    run_id = "analyze_recheck_refund_1"
+    jobs._write_run({"run_id": run_id, "engine": "analyze", "run_kind": "analyze", "status": "finished"})
+    key = analyze_runs.recheck_key(run_id)
+    gate.reserve(key, run_id=run_id)
+    assert gate.usage_today() == 1
+    env = {"PATH": os.environ.get("PATH", "/usr/bin:/bin"), "AGENT_MONITOR_DATA_DIR": str(tmp_path / "data"),
+           "AGENT_MONITOR_ENV_PATH": str(tmp_path / "server.env")}
+    (tmp_path / "server.env").touch()
+    (tmp_path / "ws").mkdir()
+    # No analysis/request.json: the runner exits 2 (configuration) before any model call.
+    jobs._execute_recheck(run_id=run_id, job_id="rf1", node_id="lem:rep", label="Lemma 2.1",
+                          workspace=tmp_path / "ws", env=env, timeout=120, gate_key=key, on_exit=None,
+                          started_at=jobs._now())
+    recheck = jobs._load_run_record(run_id)["analyze"]["recheck"]
+    assert recheck["status"] == "failed" and "request.json is missing" in recheck["error"]
+    assert not gate.holds(key) and gate.usage_today() == 0
 
 
 def test_recheck_refusals(tmp_path, provider):

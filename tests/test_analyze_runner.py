@@ -565,6 +565,42 @@ def test_a_failed_recheck_keeps_the_previous_verdict(tmp_path, provider, failure
     assert receipt["rechecks"][0]["failed"] and receipt["calls"] > first_receipt["calls"]
 
 
+# A proof of about 376 KB: checked in more parts than a short re-check's eight calls.
+LONG_STEPS = "\n\n".join(f"Step {index}: we observe that $a_{{{index}}} + b_{{{index}}}$ is even, since "
+                         + "both summands are even and the sum of evens is even. " * 9 for index in range(720))
+LONG_PAPER = PAPER.replace("\\begin{proof} By definition. \\end{proof}",
+                           "\\begin{proof} " + LONG_STEPS + " \\end{proof}")
+
+
+def test_a_recheck_has_a_call_for_every_part_of_a_long_proof(tmp_path, provider):
+    server = provider(default_script())
+    env = own_key_env(server)
+    run(tmp_path, write_request(tmp_path, text=LONG_PAPER, role="admin"), env)
+    parts = sum(1 for seen in server.seen if seen["node"] == "lem:rep")
+    assert parts > runner.RECHECK_MAX_CALLS and node_meta(tmp_path, "lem:rep")["parts"] == parts
+    before = len(server.seen)
+    result = recheck.run(tmp_path, "lem:rep", route_env=env, sink=lambda _event: None)
+    assert result["verdict"] == "checked" and result["calls"] == parts == len(server.seen) - before
+    entry = json.loads((tmp_path / "analysis" / "receipt.json").read_text())["rechecks"][0]
+    # Two calls to spare (a format reminder), and the time in proportion.
+    assert entry["caps"]["max_calls"] == parts + 2
+    assert entry["caps"]["max_seconds"] == runner.RECHECK_SECONDS * (parts + 2) // runner.RECHECK_MAX_CALLS
+
+
+def test_a_proof_longer_than_the_runs_calls_is_refused_before_any_call(tmp_path, provider):
+    server = provider(default_script())
+    run(tmp_path, write_request(tmp_path, text=LONG_PAPER, role="admin"), own_key_env(server))
+    stored = (tmp_path / "analysis" / "nodes" / "lem:rep.json").read_bytes()
+    receipt = (tmp_path / "analysis" / "receipt.json").read_bytes()
+    before = len(server.seen)
+    env = own_key_env(server, AGENT_MONITOR_ANALYZE_ADMIN_MAX_CALLS="5")
+    with pytest.raises(runner.ConfigError, match=r"too long to re-check on its own: .* parts, .* at most 5 calls"):
+        recheck.run(tmp_path, "lem:rep", route_env=env, sink=lambda _event: None)
+    assert len(server.seen) == before
+    assert (tmp_path / "analysis" / "nodes" / "lem:rep.json").read_bytes() == stored
+    assert (tmp_path / "analysis" / "receipt.json").read_bytes() == receipt
+
+
 def test_runner_command_line_contract(tmp_path, provider):
     server = provider(default_script({"lem:sum": "gap"}))
     workspace = tmp_path / "ws"

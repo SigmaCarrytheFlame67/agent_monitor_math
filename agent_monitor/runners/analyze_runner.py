@@ -44,8 +44,9 @@ The parser packages (pylatexenc, pypdf) are checked before anything runs: a
 missing one is a configuration error (exit 2), not a property of the
 manuscript.
 
-Exit status: 0 published, 2 configuration (request, route or credentials),
-143 stopped by SIGTERM (results that had settled are still published), 1 any
+Exit status: 0 published, 2 configuration (request, route or credentials, or
+a re-check its caps cannot hold; nothing was sent to a model), 143 stopped
+by SIGTERM (results that had settled are still published), 1 any
 other failure (including when every attempted check failed: provider errors,
 empty answers, uninterpretable output or the time limit; the structure is
 still published).
@@ -175,6 +176,11 @@ class RouteInfo:
     sponsored: bool
     guest: bool
 
+    @property
+    def bounded(self) -> bool:
+        """Sponsored and guest runs get the bounded prompt budget."""
+        return self.sponsored or self.guest
+
 
 def configure_route(env: dict[str, str], req: Mapping[str, Any]) -> RouteInfo:
     """Select and attest the provider route (mutates ``env`` like kimi_runner:
@@ -294,7 +300,7 @@ class AnalysisRun:
             minimum=60,
             maximum=900,
         )
-        bounded = self.info.sponsored or self.info.guest
+        bounded = self.info.bounded
         self.ctx = harness._Ctx(
             route=self.info.route,
             budgets=harness.Budgets(max_calls=self.caps.max_calls, max_seconds=self.caps.max_seconds,
@@ -567,11 +573,9 @@ class AnalysisRun:
         return prioritize(segments, focus=str(self.req.get("focus") or ""), paper_map=self.paper_map)
 
     def prompts_for(self, node: Mapping[str, Any], segments: Mapping[str, Any]) -> list[str]:
-        sp_limit, pred_limit, notation_limit, bib_limit = self.budget
-        statement = prompts.clip(str(node.get("statement") or ""), max(2000, sp_limit // 3))
-        part_limit = max(2000, sp_limit - prompts.utf8_len(statement) - 600)
+        _sp_limit, pred_limit, notation_limit, bib_limit = self.budget
+        statement, parts = proof_parts(node, self.budget)
         proof = str(node.get("proof") or "")
-        parts = prompts.split_proof(proof, part_limit) if proof.strip() else [""]
         by_id = {item["id"]: item for item in segments["nodes"]}
         predecessors = []
         for edge in segments["edges"]:
@@ -987,6 +991,26 @@ def prioritize(segments: Mapping[str, Any], *, focus: str = "",
     ordered += [node["id"] for node in nodes if node["id"] not in seen]
     allowed = {node["id"] for node in checkable}
     return [by_id[node_id] for node_id in ordered if node_id in allowed]
+
+
+def proof_parts(node: Mapping[str, Any], budget: tuple[int, ...]) -> tuple[str, list[str]]:
+    """``node``'s statement as a check prompt carries it, and its proof in the
+    parts checked one call each (statement and part fit the first ``budget``
+    limit)."""
+    sp_limit = budget[0]
+    statement = prompts.clip(str(node.get("statement") or ""), max(2000, sp_limit // 3))
+    part_limit = max(2000, sp_limit - prompts.utf8_len(statement) - 600)
+    proof = str(node.get("proof") or "")
+    return statement, prompts.split_proof(proof, part_limit) if proof.strip() else [""]
+
+
+def recheck_caps(node: Mapping[str, Any], *, bounded: bool) -> dict[str, int]:
+    """A re-check's own caps, within the run's role caps: eight calls and 15
+    minutes, or for a proof checked in more parts, a call for each part and
+    two to spare (a format reminder), with the time in proportion."""
+    parts = proof_parts(node, prompts.BOUNDED_BUDGET if bounded else prompts.FULL_BUDGET)[1]
+    calls = max(RECHECK_MAX_CALLS, len(parts) + 2)
+    return {"max_calls": calls, "max_seconds": RECHECK_SECONDS * calls // RECHECK_MAX_CALLS, "max_nodes": 1}
 
 
 def _read_capped(path: Path) -> str:
