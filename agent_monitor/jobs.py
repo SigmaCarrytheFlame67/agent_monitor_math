@@ -5189,7 +5189,6 @@ def _append_chat(
     ledger_text: str | None = None,
 ) -> dict[str, Any]:
     path = _chat_file(run_id)
-    path.parent.mkdir(parents=True, exist_ok=True)
     entry = {"role": role, "content": content, "ts": _now()}
     if attachments:
         entry["attachments"] = attachments
@@ -5197,6 +5196,11 @@ def _append_chat(
         # The session ledger stores the prompt-facing form of this turn. Record
         # it so ledger recovery below does not re-add the turn as a duplicate.
         entry["ledger_text"] = ledger_text
+    if run_id in _DELETED_RUNS:
+        # A worker still finishing a deleted run must not recreate its
+        # workspace for its closing lines.
+        return entry
+    path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("a", encoding="utf-8") as f:
         f.write(json.dumps(entry, ensure_ascii=False) + "\n")
     return entry

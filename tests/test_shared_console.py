@@ -300,9 +300,12 @@ def test_deleting_a_run_ends_its_links_even_if_a_worker_writes_it_back(tmp_path,
     assert shares.lookup(token) == {'title': 'P', 'shared_at': shares.lookup(token)['shared_at']}
     jobs.delete_run('run-7')
     assert shares.lookup(token) is None and shares.owner_share('run-7', 1) is None
-    # The still-running worker finishes after the delete: nothing comes back.
+    # The still-running worker finishes after the delete: nothing comes back,
+    # not even a workspace holding its closing chat lines.
     jobs._write_run({**record, 'status': 'finished'})
+    jobs._append_chat('run-7', 'system', '✗ run stopped')
     assert not (cache / 'run-7.json').exists() and shares.lookup(token) is None
+    assert not (shares.RUNS_DIR / 'workspaces' / 'run-7').exists()
 
 
 def test_a_large_run_record_keeps_its_link_and_can_be_shared(tmp_path, monkeypatch):
@@ -408,11 +411,18 @@ def test_snapshots_carry_no_run_id_and_keep_step_links():
                          {'trace_id': rid + '::turn-2', 'stage_name': 'turn-2 (message)', 'role': 'assistant',
                           'output': 'see /home/u/runs/workspaces/' + rid + '/proof.md'}],
               'edges': [{'from': rid + '::turn-1', 'to': rid + '::turn-2', 'type': 'next'}]}
+    # A transcript line shortened inside the id, and Monitor's cache counts.
+    record['agents'].append({'trace_id': rid + '::turn-3', 'stage_name': 'turn-3 (message)', 'role': 'assistant',
+                             'output': 'tool · Write /home/u/runs/workspaces/' + rid[:20] + '…',
+                             'input_tokens': 1388, 'cache_read_tokens': 2000, 'cache_write_tokens': 300})
     snap = shares.snapshot(rid, record)
     payload = json.dumps(shares.shared_payload(snap))
     assert rid not in json.dumps(snap) and rid not in payload
+    assert rid[:12] not in json.dumps(snap) and 'Write …/shared…' in json.dumps(snap, ensure_ascii=False)
+    turn = shares.console_view(snap)['run']['agents'][2]
+    assert (turn['cache_read_tokens'], turn['cache_write_tokens']) == (2000, 300)
     run = shares.console_view(snap)['run']
-    assert [agent['trace_id'] for agent in run['agents']] == ['shared::turn-1', 'shared::turn-2']
+    assert [agent['trace_id'] for agent in run['agents']] == ['shared::turn-1', 'shared::turn-2', 'shared::turn-3']
     assert run['edges'] == [{'from': 'shared::turn-1', 'to': 'shared::turn-2', 'type': 'next'}]
 
 

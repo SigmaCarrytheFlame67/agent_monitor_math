@@ -142,7 +142,8 @@ def _agent_details(item):
     out = {key: _text(item.get(key), 200) for key in ('stage_name', 'pipeline_stage', 'role', 'agent_name')
            if isinstance(item.get(key), str)}
     out.update(_numbers(item, ('call_seq', 'round', 'input_tokens', 'total_input_tokens', 'cached_input_tokens',
-                               'output_tokens', 'reasoning_tokens', 'latency_s', 'duration_s', 'exit_code'), 1e12))
+                               'cache_read_tokens', 'cache_write_tokens', 'output_tokens', 'reasoning_tokens',
+                               'latency_s', 'duration_s', 'exit_code'), 1e12))
     tools = [_text(name, 80) for name in _items(item.get('tools'), 20) if isinstance(name, str)]
     if tools:
         out['tools'] = tools
@@ -886,11 +887,14 @@ def _neutral(value, run_ids):
     run_ids = sorted({rid for rid in run_ids if isinstance(rid, str) and len(rid) >= 8}, key=len, reverse=True)
     if not run_ids:
         return value
+    # A log line shortened inside the id keeps most of it: 'Write …/claude_adhoc_fa0fd944_c…'.
+    cut = re.compile('|'.join(re.escape(rid[:size]) + '(?=…|\\.\\.\\.)' for rid in run_ids
+                              for size in range(len(rid) - 1, max(8, len(rid) // 2) - 1, -1)))
     def walk(item):
         if isinstance(item, str):
             for rid in run_ids:
                 item = item.replace(rid, CONSOLE_RUN)
-            return item
+            return cut.sub(CONSOLE_RUN, item)
         if isinstance(item, dict):
             return {walk(key): walk(entry) for key, entry in item.items()}
         if isinstance(item, list):
