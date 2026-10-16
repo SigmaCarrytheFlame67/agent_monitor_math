@@ -190,6 +190,26 @@ def _agent_output(item):
 _PIPELINE_STAGES = ('informal_dag', 'lean', 'formal_dag', 'coverage')
 
 
+# A provider's error can name the owner's subscription and its sign-in state.
+_WITHHELD_ERROR = 'The run stopped with an error. Its details are not included in shared snapshots.'
+_WITHHELD_STAGE = 'This stage stopped with an error. Its details are not included in shared snapshots.'
+_STAGE_FAILURE = re.compile(r'\bfailed: ')
+
+
+def _stage_detail(stage):
+    """A stage chip's note without the provider error some notes quote."""
+    detail = stage.get('detail')
+    if not isinstance(detail, str):
+        return None
+    if stage.get('status') in {'error', 'failed'}:
+        return _WITHHELD_STAGE
+    cut = _STAGE_FAILURE.search(detail)
+    if cut:
+        # 'Built structurally; semantic model analysis failed: <provider error>'
+        return _redact(detail[:cut.start()] + 'failed (details are not included in shared snapshots).', 400)
+    return _redact(detail, 400)
+
+
 def _pipeline_view(state):
     """The derived-view chips (Informal DAG, Lean, Formal DAG, Coverage)."""
     if not isinstance(state, dict) or not isinstance(state.get('stages'), dict):
@@ -200,8 +220,9 @@ def _pipeline_view(state):
         if not isinstance(stage, dict):
             continue
         entry = {key: _text(stage.get(key), 80) for key in ('status', 'outcome', 'updated_at') if isinstance(stage.get(key), str)}
-        if isinstance(stage.get('detail'), str):
-            entry['detail'] = _redact(stage['detail'], 400)
+        detail = _stage_detail(stage)
+        if detail is not None:
+            entry['detail'] = detail
         result = stage.get('result') if isinstance(stage.get('result'), dict) else {}
         kept = {key: _text(result.get(key), 80) for key in ('status', 'scope', 'outcome', 'proof_lean') if isinstance(result.get(key), str)}
         if kept:
@@ -293,7 +314,7 @@ def _run_view(data, read):
         view['route_plan'] = roles
     if isinstance(data.get('error'), str) and data['error'].strip():
         # The error itself can name the owner's subscription or sign-in state.
-        view['error'] = 'The run stopped with an error. Its details are not included in shared snapshots.'
+        view['error'] = _WITHHELD_ERROR
     interruption = data.get('interruption') if isinstance(data.get('interruption'), dict) else {}
     if isinstance(interruption.get('reason'), str):
         view['interruption'] = {'reason': _redact(interruption['reason'], 400)}
@@ -1058,13 +1079,16 @@ def console_view(snap):
         'agents': agents, 'edges': saved.get('edges') or [],
         'totals': saved.get('totals') or ({'agents': len(agents)} if legacy else {}), 'live': saved.get('live') or {},
         'lean_verification': _lean_summary(lean),
-        'auto_pipeline': saved.get('auto_pipeline'), 'proof_coverage': saved.get('proof_coverage'),
+        # Re-filtered: links made before notes and errors were withheld.
+        'auto_pipeline': _pipeline_view(saved.get('auto_pipeline')), 'proof_coverage': saved.get('proof_coverage'),
         'shared': True,
     }
     for key in ('route_plan', 'error', 'interruption', 'model', 'requested_model', 'reasoning_effort',
                 'created_at', 'updated_at', 'wall_s', 'pipeline', 'stages_present'):
         if key in saved:
             run[key] = saved[key]
+    if run.get('error'):
+        run['error'] = _WITHHELD_ERROR
     if isinstance(saved.get('agent_flow'), dict):
         flow = saved['agent_flow']
         nodes = [{**node, 'id': f'{CONSOLE_RUN}::flow-{index}', 'trace_id': f'{CONSOLE_RUN}::flow-{index}'}

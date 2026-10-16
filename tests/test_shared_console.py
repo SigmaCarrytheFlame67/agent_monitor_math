@@ -448,3 +448,26 @@ def test_mathematics_starting_with_a_formula_is_never_taken_for_tool_output():
             'graphs': {'outline': {'kind': 'outline', 'status': 'parsed', 'graph_role': 'proof-outline',
                                    'graph': {'nodes': [{'id': 'a', 'label': 'Lemma (tool)', 'statement': math}], 'edges': []}}}}
     assert shares.console_view(snap)['graphs']['informal']['graph']['nodes'][0]['statement'] == math
+
+
+def test_shares_withhold_provider_errors_from_stage_notes_old_links_included():
+    auth_error = ('Claude Code subscription authentication failed: OAuth session expired; '
+                  'reconnect Claude Code in Settings (the linked account needs a new sign-in) and retry.')
+    state = {'status': 'done', 'stages': {
+        'informal_dag': {'status': 'done', 'detail': 'Built structurally; semantic model analysis failed: ' + auth_error},
+        'lean': {'status': 'error', 'detail': auth_error},
+        'formal_dag': {'status': 'done', 'detail': '12 Lean nodes · shared formal DAG'},
+    }}
+    view = shares._pipeline_view(state)
+    assert 'OAuth' not in json.dumps(view) and 'Settings' not in json.dumps(view)
+    assert view['stages']['informal_dag']['detail'].startswith('Built structurally; semantic model analysis failed (details')
+    assert view['stages']['lean'] == {'status': 'error', 'detail': shares._WITHHELD_STAGE}
+    assert view['stages']['formal_dag']['detail'] == '12 Lean nodes · shared formal DAG'
+    # A link made before errors were withheld stored them raw: they are withheld when viewed.
+    stored = {'version': 3, 'title': 'P', 'proof': 'x', 'status': 'failed', 'run_view': {
+        'status': 'failed', 'engine': 'claude', 'error': 'Claude Code exited with code 1: ' + auth_error,
+        'auto_pipeline': {'status': 'done', 'stages': {'lean': {'status': 'error', 'detail': auth_error}}}}}
+    payload = json.dumps(shares.shared_payload(stored))
+    assert 'OAuth' not in payload and 'reconnect' not in payload
+    run = shares.console_view(stored)['run']
+    assert run['error'] == shares._WITHHELD_ERROR and run['status'] == 'failed'
