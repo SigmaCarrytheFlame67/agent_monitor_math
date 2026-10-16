@@ -1481,6 +1481,16 @@ def start_job(
         raise ValueError("Kimi K3 is an API model and cannot use a linked account subscription")
     if route == "api_key" and user is not None and not has_api_key:
         raise ValueError("No compatible API key is configured; add and verify one in Settings")
+    if (
+        engine == "codex"
+        and route == "api_key"
+        and not selected_kimi
+        and user is not None
+        and not str(extra_env.get("OPENAI_API_KEY") or "").strip()
+    ):
+        # Codex signs in only with an OpenAI key; another provider's key would
+        # leave it nothing to use but the service account's own login.
+        raise ValueError("Codex CLI on the API route needs an OpenAI API key; add one in Settings")
 
     # Validate both the main and delegated model against the selected billing
     # route. A stale API model in either field must never flip a subscription
@@ -3738,7 +3748,9 @@ def _ensure_codex_auth(env: dict[str, str], owner_id: int | None = None) -> Path
     OPENAI_API_KEY when no account login is present (or no owner is known).
     ``codex login`` stores the key in plaintext, so that home lives outside
     the data directory and is returned for the caller to remove
-    (``_remove_codex_api_home``) once Codex has exited.
+    (``_remove_codex_api_home``) once Codex has exited. An account's API-key
+    run without an OpenAI key gets that home empty, so Codex reports it is
+    not logged in rather than signing in as the service account's ~/.codex.
     """
     import subprocess
     import tempfile
@@ -3755,10 +3767,14 @@ def _ensure_codex_auth(env: dict[str, str], owner_id: int | None = None) -> Path
             return None
 
     key = env.get("OPENAI_API_KEY")
-    if not key:
+    if not key and (owner_id is None or env.get("AGENT_MONITOR_CODEX_SUBSCRIPTION") == "1"):
+        # A local run without an account keeps the invoking user's own Codex
+        # setup; a subscription run keeps the account home its route set.
         return None
     home = Path(tempfile.mkdtemp(prefix="agent-monitor-codex-"))
     env["CODEX_HOME"] = str(home)
+    if not key:
+        return home
     from agent_monitor.engines_registry import which_tool
 
     codex = shutil.which("codex", path=env.get("PATH")) or which_tool("codex")

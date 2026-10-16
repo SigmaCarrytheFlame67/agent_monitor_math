@@ -7328,7 +7328,20 @@ def _harness_worker(
         except (OSError, TypeError, ValueError):
             pass
 
+    from agent_monitor.jobs import _ensure_codex_auth, _is_kimi_model, _remove_codex_api_home
+
+    codex_api_home = None
     try:
+        if (
+            engine == "codex"
+            and env.get("AGENT_MONITOR_AUTH_MODE") == "api_key"
+            and not _is_kimi_model(model)
+        ):
+            # A login of its own with the run's OpenAI key, never the service
+            # account's ~/.codex; it is removed once the harness exits.
+            codex_api_home = _ensure_codex_auth(
+                env, (user or {}).get("id") or (run_record or {}).get("owner_id")
+            )
         proc = subprocess.Popen(
             argv,
             cwd=str(ldir),
@@ -7341,6 +7354,7 @@ def _harness_worker(
             start_new_session=True,
         )
     except OSError as exc:
+        _remove_codex_api_home(codex_api_home)
         lines.append(f"failed to launch {label}: {exc}\n")
         _harness_finish(
             workspace=workspace,
@@ -7417,6 +7431,7 @@ def _harness_worker(
         reader.join(timeout=1)
         if proc.stdout is not None:
             proc.stdout.close()
+        _remove_codex_api_home(codex_api_home)
         with _HARNESS_LOCK:
             job = _HARNESS_JOBS.get(key) or {}
             stopped = bool(job.get("stopping"))

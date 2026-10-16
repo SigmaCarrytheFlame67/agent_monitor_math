@@ -122,3 +122,73 @@ def test_start_up_removes_the_per_key_logins_earlier_versions_saved(tmp_path, mo
     assert (account / "auth.json").exists() and (other / "auth.json").exists()
     assert (root / "0123456789abcdef").is_symlink()
     assert jobs.remove_legacy_codex_key_homes() == 0
+
+
+def test_an_account_codex_run_without_an_openai_key_never_uses_the_service_login(
+    fake_codex, tmp_path
+):
+    # Only another provider's key: Codex has no login of its own to use.
+    _run_codex(fake_codex, tmp_path / "openrouter", OPENROUTER_API_KEY="sk-or-test-3333")
+    seen = _codex_runs(fake_codex)[-1]
+    assert seen["CODEX_HOME"] is not None, "Codex fell back to the service account's ~/.codex"
+    assert seen["files"] == [] and seen["auth"] is None
+    assert not Path(seen["CODEX_HOME"]).exists()
+    # A local run without an account keeps the invoking user's own Codex setup.
+    env = {"AGENT_MONITOR_AUTH_MODE": "api_key"}
+    assert jobs._ensure_codex_auth(env, None) is None and "CODEX_HOME" not in env
+
+
+def test_codex_on_the_api_route_needs_an_openai_key_to_start(monkeypatch, tmp_path):
+    started: list = []
+
+    class NoThread:
+        def __init__(self, **_kwargs):
+            started.append(True)
+
+        def start(self) -> None:
+            pass
+
+    codex = {"id": "codex", "label": "Codex CLI", "available": True,
+             "auth_modes": ["api_key", "codex_subscription"]}
+    monkeypatch.setattr("agent_monitor.engines_registry.list_engines", lambda: [codex])
+    monkeypatch.setattr(jobs, "workspace_dir", lambda _run_id: tmp_path)
+    monkeypatch.setattr(jobs, "_write_run", lambda _run: None)
+    monkeypatch.setattr(jobs.threading, "Thread", NoThread)
+    monkeypatch.setattr("agent_monitor.auto_pipeline.start", lambda **_kwargs: None)
+    admin = {"id": 1, "is_admin": True}
+    for key in ("OPENROUTER_API_KEY", "DEEPSEEK_API_KEY", "ANTHROPIC_API_KEY"):
+        monkeypatch.setattr(jobs, "_user_extra_env", lambda *_args, key=key: {key: "sk-other-4444"})
+        with pytest.raises(ValueError, match="needs an OpenAI API key"):
+            jobs.start_job(engine="codex", problem_text="Prove it.", model="gpt-6-astra",
+                           user=admin, auth_route="api_key")
+    assert started == []
+
+
+def test_formal_lean_codex_on_the_api_route_signs_in_with_the_runs_key(
+    fake_codex, tmp_path, monkeypatch
+):
+    from agent_monitor import lean_verify
+
+    monkeypatch.setenv("PATH", fake_codex["env"]["PATH"])
+    monkeypatch.setenv("FAKE_CODEX_LOG", fake_codex["env"]["FAKE_CODEX_LOG"])
+    monkeypatch.setattr(lean_verify, "_harness_lean_bin_dirs", lambda: [])
+    monkeypatch.setattr(lean_verify, "toolchain_status",
+                        lambda: {"available": True, "lean": None, "lake": None, "elan": None})
+    monkeypatch.setattr("agent_monitor.settings.resolved_user_env",
+                        lambda _user: {"OPENAI_API_KEY": "sk-test-formal-5555"})
+    monkeypatch.setattr(lean_verify, "_harness_finish", lambda **_kwargs: None)
+    admin = {"id": 1, "is_admin": True}
+    run = {"run_id": "codex_api", "owner_id": 1, "auth_route": "api_key", "model": "gpt-6-astra"}
+    env = lean_verify._harness_env("codex", admin, model="gpt-6-astra", run_record=run)
+    ldir = tmp_path / "lean"
+    ldir.mkdir()
+    lean_verify._harness_worker(
+        workspace=tmp_path, ldir=ldir,
+        argv=[os.path.join(fake_codex["env"]["PATH"].split(os.pathsep)[0], "codex"), "exec", "x"],
+        engine="codex", label="Codex", user=admin, model="gpt-6-astra", run_record=run,
+        env=env, problem="", informal="", base={}, initial_fingerprint=None, audit=False,
+    )
+    seen = _codex_runs(fake_codex)[-1]
+    assert seen["CODEX_HOME"] is not None, "Formal Lean Codex used the service account's ~/.codex"
+    assert json.loads(seen["auth"]) == {"OPENAI_API_KEY": "sk-test-formal-5555"}
+    assert not Path(seen["CODEX_HOME"]).exists()
