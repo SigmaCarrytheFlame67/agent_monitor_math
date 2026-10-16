@@ -5,6 +5,7 @@ import json
 import os
 import tempfile
 import threading
+import time
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
@@ -394,6 +395,67 @@ class ClaudeLoginTests(unittest.TestCase):
         self.assertNotIn("output", result)
         with claude_login._lock:
             self.assertNotIn("one-time-secret", json.dumps(claude_login._states[17], default=str))
+
+
+# What `claude auth login --claudeai` prints before it reads the code.  The
+# prompt ends without a newline, and the link's state is opaque text.
+_LOGIN_PROMPT = """[ "$1 $2" = "auth login" ] || exit 2
+echo "Opening browser to sign in…"
+echo "If the browser didn't open, visit: https://claude.com/cai/oauth/authorize?code=true&state=error-failed"
+printf "Paste code here if prompted > "
+read -r code
+"""
+
+
+class ClaudeLoginFailureReasonTests(unittest.TestCase):
+    USER_ID = 4545
+
+    def _login(self, script: str) -> dict:
+        with tempfile.TemporaryDirectory() as raw:
+            root = Path(raw)
+            claude = root / "claude"
+            claude.write_text("#!/bin/sh\n" + _LOGIN_PROMPT + script, encoding="utf-8")
+            claude.chmod(0o755)
+            self.addCleanup(lambda: claude_login._states.pop(self.USER_ID, None))
+            # The reader must finish while the fake is patched in: the real
+            # lookup would find an installed `claude`.
+            with (
+                patch.dict(os.environ, {"AGENT_MONITOR_CLAUDE_ACCOUNT_HOME": str(root / "homes")}),
+                patch.object(claude_login, "claude_binary", return_value=str(claude)),
+            ):
+                status = claude_login.start_login(self.USER_ID)
+                claude_login.submit_code(self.USER_ID, "wrong-code#state")
+                deadline = time.monotonic() + 10
+                while status["running"] and time.monotonic() < deadline:
+                    time.sleep(0.05)
+                    status = claude_login.status(self.USER_ID)
+        self.assertEqual(status["status"], "error")
+        self.assertFalse(status["connected"])
+        self.assertNotIn("https://", status["error"])
+        self.assertNotIn("wrong-code", status["error"])
+        return status
+
+    def test_a_rejected_code_reports_the_clis_reason(self) -> None:
+        # The CLI writes its error on stderr, which joins the unfinished prompt line.
+        status = self._login('echo "Login failed: Request failed with status code 400" >&2\nexit 1\n')
+        self.assertEqual(
+            status["error"],
+            "claude auth login exited with code 1: Login failed: Request failed with status code 400",
+        )
+
+    def test_a_reason_on_its_own_line_is_reported(self) -> None:
+        status = self._login('printf "\\nOAuth error: Invalid code\\n"\nexit 1\n')
+        self.assertEqual(status["error"], "claude auth login exited with code 1: OAuth error: Invalid code")
+
+    def test_exit_without_a_reason_keeps_the_exit_code_message(self) -> None:
+        status = self._login("exit 3\n")
+        self.assertEqual(status["error"], "claude auth login exited with code 3")
+
+    def test_success_exit_without_a_saved_login_is_explained(self) -> None:
+        status = self._login('echo "Login successful."\nexit 0\n')
+        self.assertEqual(
+            status["error"], "claude auth login finished but no usable Claude sign-in was saved"
+        )
 
 
 class ClaudeAccountRuntimeSettingsTests(unittest.TestCase):

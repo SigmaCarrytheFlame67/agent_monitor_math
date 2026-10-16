@@ -7,8 +7,9 @@ signed-in Proving Console user's Claude configuration in a separate private
 directory.
 
 Only the authenticated session's numeric user id may be passed into these
-functions.  No OAuth credential, authorization code, CLI output, or token is
-ever included in a response payload.
+functions.  No OAuth credential, authorization code, token, or raw CLI output
+is ever included in a response payload; a failed sign-in reports only the
+CLI's own error line.
 """
 from __future__ import annotations
 
@@ -37,6 +38,10 @@ DEFAULT_CLAUDE_MODELS = (
 
 _ANSI_RE = re.compile(r"\x1b\[[0-9;?]*[ -/]*[@-~]")
 _URL_RE = re.compile(r"https?://[^\s<>]+")
+# The code prompt ends without a newline, so the CLI's error (on stderr, the
+# same pipe) can follow it on one line.
+_CODE_PROMPT_RE = re.compile(r"^.*paste code here if prompted\s*>\s*", re.IGNORECASE)
+_MAX_REASON_LINES = 50
 _AUTH_CACHE_SECONDS = 5.0
 _MAX_CREDENTIAL_FILE_BYTES = 64 * 1024
 _REAUTH_MARKER_NAME = ".agent-monitor-reauth-required.json"
@@ -403,13 +408,32 @@ def poll_login(user_id: int) -> dict[str, Any]:
     return status(user_id)
 
 
+def _failure_reason(lines: list[str]) -> str:
+    """The CLI's own reason for a failed sign-in (``Login failed: ...``).
+
+    The sign-in link is never a reason (its state is opaque text), so a line
+    with a URL never qualifies; the code prompt before an error is dropped.
+    """
+    for line in reversed(lines):
+        if _URL_RE.search(line):
+            continue
+        text = _CODE_PROMPT_RE.sub("", line)
+        lowered = text.lower()
+        if "error" in lowered or "failed" in lowered:
+            return " ".join(text.split())[:300]
+    return ""
+
+
 def _reader(proc: subprocess.Popen[str], home: Path, user_id: int) -> None:
     # The user's state belongs to this process only while it holds ``proc``:
     # a cancel or logout drops it, and a newer sign-in replaces it.
+    lines: list[str] = []
     try:
         assert proc.stdout is not None
         for raw_line in proc.stdout:
             line = _ANSI_RE.sub("", raw_line.rstrip("\r\n"))
+            lines.append(line)
+            del lines[:-_MAX_REASON_LINES]
             with _lock:
                 st = _state_for(user_id)
                 if st.get("proc") is not proc or st.get("status") != "running":
@@ -441,9 +465,13 @@ def _reader(proc: subprocess.Popen[str], home: Path, user_id: int) -> None:
             clear_reauth_required(home)
             st["status"] = "success"
             st.pop("error", None)
+        elif rc == 0:
+            st["status"] = "error"
+            st["error"] = "claude auth login finished but no usable Claude sign-in was saved"
         else:
             st["status"] = "error"
-            st["error"] = f"claude auth login exited with code {rc}"
+            reason = _failure_reason(lines)
+            st["error"] = f"claude auth login exited with code {rc}" + (f": {reason}" if reason else "")
 
 
 def start_login(user_id: int) -> dict[str, Any]:

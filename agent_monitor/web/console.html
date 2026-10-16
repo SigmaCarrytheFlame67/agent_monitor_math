@@ -3150,7 +3150,7 @@ function claudeCardBody(st){
       :`<div class="connection-summary connected">✓ Connected, not in use. Select Claude subscription above to use it for new runs.</div>`)+`<button id="claude-logout-btn" style="margin-top:8px">Disconnect</button>`;
   }
   if(st.reauth_required){
-    return `<div class="verify-err">✗ Claude authorization needs renewal. The saved session could not be refreshed, so new subscription runs are blocked.</div><div class="connection-summary" style="margin-top:6px">Your saved API keys remain separate and will not be used as a fallback.</div><button id="claude-connect-btn" style="margin-top:8px">Reconnect via Claude</button>`;
+    return (st.error?`<div class="verify-err">✗ ${LIB_ESC(st.error)}</div>`:'')+`<div class="verify-err"${st.error?' style="margin-top:6px"':''}>✗ Claude authorization needs renewal. The saved session could not be refreshed, so new subscription runs are blocked.</div><div class="connection-summary" style="margin-top:6px">Your saved API keys remain separate and will not be used as a fallback.</div><button id="claude-connect-btn" style="margin-top:8px">Reconnect via Claude</button>`;
   }
   return (st.error?`<div class="verify-err">✗ ${LIB_ESC(st.error)}</div>`:'')+`<div class="connection-summary" style="margin-top:${st.error?'6px':'0'}">Connect your Claude account to make the official Claude Code subscription available in the new-run selector. API keys remain a separate route.</div><button id="claude-connect-btn" style="margin-top:8px">Connect via Claude</button>`;
 }

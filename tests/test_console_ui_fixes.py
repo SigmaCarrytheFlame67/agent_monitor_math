@@ -442,5 +442,23 @@ const state=()=>({status:LAST_CLAUDE_STATUS.status,connected:SETTINGS.claude_con
         self.assertNotIn("No Claude login is waiting", out["restarted"])
 
 
+    def test_a_failed_reconnect_says_why_on_the_renewal_card(self) -> None:
+        # Reconnecting an expired login with a rejected code leaves the
+        # account flagged, so the card shows its renewal state again.
+        program = self.PROGRAM + r"""
+(async()=>{
+  await applyClaudeStatus({status:'error',running:false,connected:false,reauth_required:true,claude_installed:true,models:[],
+    error:'claude auth login exited with code 1: Login failed: Request failed with status code 400'});
+  console.log(JSON.stringify(cardText('claude-card')));
+})().catch(error=>{console.error(error);process.exit(1);});
+"""
+        card = _run(program)
+        self.assertIn(
+            "✗ claude auth login exited with code 1: Login failed: Request failed with status code 400", card
+        )
+        self.assertIn("Claude authorization needs renewal", card)
+        self.assertIn("Reconnect via Claude", card)
+
+
 if __name__ == "__main__":
     unittest.main()
