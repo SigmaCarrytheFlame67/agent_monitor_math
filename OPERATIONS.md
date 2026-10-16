@@ -131,6 +131,12 @@ ceilings, so an environment value can only lower them.
   `AGENT_MONITOR_CGM_REASONING_EFFORT` (`low`, `high` or
   `max`) overrides the Kimi effort of every stage but the curator. Guest and
   sponsored CGM calls always have an 8192-token output ceiling.
+- On one linked Codex or Claude Code account each call may take 600 s
+  (`AGENT_MONITOR_CODEX_TIMEOUT`; `AGENT_MONITOR_MATH_HARNESS_CLAUDE_TIMEOUT`,
+  where Claude Code workers and repairs get 1200 s). At Extra high or Ultra
+  effort, CGM and Analyze calls, follow-ups included, get 1800 s unless one
+  of those or `AGENT_MONITOR_CLAUDE_TIMEOUT` is set. Every call still ends
+  with the run's wall clock.
 - A problem statement may be at most 44,000 bytes of UTF-8 text; larger ones
   are refused before a run slot or a sponsored credential is used.
 - Calls still in flight 15 s after `AGENT_MONITOR_CGM_MAX_SECONDS` are

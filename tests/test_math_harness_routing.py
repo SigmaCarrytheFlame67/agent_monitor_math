@@ -7,6 +7,7 @@ import sys
 import tempfile
 import time
 import unittest
+from contextlib import contextmanager
 from unittest.mock import patch
 
 from agent_monitor import run_tuning, sponsored_kimi_client
@@ -148,6 +149,128 @@ class MathHarnessRoutingTests(unittest.TestCase):
     def test_anonymous_public_console_stays_plain_only(self) -> None:
         self.assertEqual(set(PUBLIC_ENGINES), {"plain"})
         self.assertNotIn("math_harness", PUBLIC_ENGINES)
+
+
+_TIMEOUTS = (
+    "AGENT_MONITOR_CODEX_TIMEOUT",
+    "AGENT_MONITOR_MATH_HARNESS_CLAUDE_TIMEOUT",
+    "AGENT_MONITOR_CLAUDE_TIMEOUT",
+)
+
+
+class LongEffortTimeoutTests(unittest.TestCase):
+    """Extra-high and maximum effort calls on one linked account get the 30
+    minutes Max and Analyze calls get, not the 600 s default."""
+
+    MODELS = {"codex_subscription": "gpt-6-astra", "claude_subscription": "opus"}
+
+    def tearDown(self) -> None:
+        from agent_monitor import jobs
+
+        with jobs._LOCK:
+            jobs._JOBS.clear()
+
+    @contextmanager
+    def _accounts(self, operator: dict | None = None):
+        """Both linked accounts connected, and only ``operator`` timeouts set."""
+        clean = {name: value for name, value in os.environ.items() if name not in _TIMEOUTS}
+        with (
+            tempfile.TemporaryDirectory() as tmp,
+            patch("agent_monitor.claude_login.account_home", return_value=Path(tmp) / "claude"),
+            patch("agent_monitor.claude_login.account_login_ready", return_value=True),
+            patch("agent_monitor.codex_login.account_home", return_value=Path(tmp) / "codex"),
+            patch("agent_monitor.codex_login.account_login_ready", return_value=True),
+            patch("agent_monitor.codex_login.available_models", return_value=["gpt-6-astra"]),
+            patch.dict(os.environ, {**clean, **(operator or {})}, clear=True),
+        ):
+            yield Path(tmp)
+
+    def _start(self, route: str, effort: str, *, engine: str = "math_harness", operator: dict | None = None) -> dict:
+        from agent_monitor import jobs, settings
+
+        captured: dict = {}
+
+        class FakeThread:
+            def __init__(self, *, kwargs, **_unused):
+                captured.update(kwargs)
+
+            def start(self) -> None:
+                pass
+
+        info = {
+            "id": engine,
+            "label": engine,
+            "available": True,
+            "auth_modes": ["api_key", "codex_subscription", "claude_subscription"],
+        }
+        with (
+            self._accounts(operator) as tmp,
+            patch("agent_monitor.engines_registry.all_engine_ids", return_value={engine}),
+            patch("agent_monitor.engines_registry.list_engines", return_value=[info]),
+            patch("agent_monitor.engines_registry.supported_models", return_value=[]),
+            patch.object(settings, "resolved_user_env", return_value={}),
+            patch.object(jobs, "workspace_dir", return_value=tmp),
+            patch.object(jobs, "_write_run"),
+            patch.object(jobs.threading, "Thread", FakeThread),
+        ):
+            jobs.start_job(
+                engine=engine,
+                problem_text="Prove one equals one.",
+                model=self.MODELS[route],
+                user={"id": 17, "is_admin": True},
+                use_subagents=False,
+                auth_route=route,
+                reasoning_effort=effort,
+            )
+        return captured["extra_env"]
+
+    def test_cgm_runs_at_extra_high_and_max_effort_get_30_minute_calls(self) -> None:
+        for route in self.MODELS:
+            for effort in ("xhigh", "max"):
+                with self.subTest(route=route, effort=effort):
+                    env = self._start(route, effort)
+                    self.assertEqual(env["AGENT_MONITOR_CODEX_TIMEOUT"], "1800")
+                    self.assertEqual(env["AGENT_MONITOR_MATH_HARNESS_CLAUDE_TIMEOUT"], "1800")
+                    self.assertNotIn("AGENT_MONITOR_CLAUDE_TIMEOUT", env)
+
+    def test_lower_effort_other_engines_and_operator_settings_keep_their_limits(self) -> None:
+        env = self._start("codex_subscription", "high")
+        self.assertNotIn("AGENT_MONITOR_CODEX_TIMEOUT", env)
+        self.assertNotIn("AGENT_MONITOR_MATH_HARNESS_CLAUDE_TIMEOUT", env)
+        # Another engine reads these variables with its own defaults.
+        env = self._start("codex_subscription", "max", engine="plain")
+        self.assertNotIn("AGENT_MONITOR_CODEX_TIMEOUT", env)
+        # An operator setting wins, the shared Claude timeout included.
+        operator = {"AGENT_MONITOR_CODEX_TIMEOUT": "900", "AGENT_MONITOR_CLAUDE_TIMEOUT": "900"}
+        env = self._start("claude_subscription", "max", operator=operator)
+        self.assertNotIn("AGENT_MONITOR_CODEX_TIMEOUT", env)
+        self.assertNotIn("AGENT_MONITOR_MATH_HARNESS_CLAUDE_TIMEOUT", env)
+
+    def test_cgm_continuation_at_max_effort_gets_30_minute_calls(self) -> None:
+        from agent_monitor import jobs
+
+        for route, model in self.MODELS.items():
+            record = {
+                "run_id": "math_harness_long",
+                "engine": "math_harness",
+                "owner_id": 17,
+                "auth_route": route,
+                "model": model,
+                "reasoning_effort": "max",
+                "speed_mode": "standard",
+            }
+            with self.subTest(route=route):
+                with self._accounts():
+                    configured, continued = jobs._continuation_auth_environment(
+                        run_data=record,
+                        engine="math_harness",
+                        model=model,
+                        user={"id": 17, "is_admin": True},
+                        env={},
+                    )
+                self.assertEqual(continued, route)
+                self.assertEqual(configured["AGENT_MONITOR_CODEX_TIMEOUT"], "1800")
+                self.assertEqual(configured["AGENT_MONITOR_MATH_HARNESS_CLAUDE_TIMEOUT"], "1800")
 
 
 if __name__ == "__main__":

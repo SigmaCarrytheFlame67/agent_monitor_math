@@ -1285,6 +1285,35 @@ def _validate_subscription_model(
         )
 
 
+def _raise_long_effort_timeouts(
+    env: dict[str, str], *, engine: str, route: str, effort: object
+) -> None:
+    """Give extra-high and maximum effort CGM and Analyze calls 30 minutes.
+
+    Those calls on a linked account are long (Max allows them 30 minutes
+    each) and would otherwise get the 600 s default; a timed-out call is
+    never retried.  Every call stays capped at the run's deadline, so the
+    watchdogs are unchanged.  Other engines read these variables with
+    defaults of their own.  An operator setting wins, the shared Claude
+    timeout included (the CGM-specific one would take precedence over it).
+    """
+    if (
+        engine not in _CGM_ENGINES | {_ANALYZE_ENGINE}
+        or route not in {"claude_subscription", "codex_subscription"}
+        or effort not in {"xhigh", "max"}
+    ):
+        return
+    for names, seconds in (
+        (
+            ("AGENT_MONITOR_MATH_HARNESS_CLAUDE_TIMEOUT", "AGENT_MONITOR_CLAUDE_TIMEOUT"),
+            cgm_max.CLAUDE_CALL_TIMEOUT,
+        ),
+        (("AGENT_MONITOR_CODEX_TIMEOUT",), cgm_max.CODEX_CALL_TIMEOUT),
+    ):
+        if not any(str(env.get(name) or os.environ.get(name) or "").strip() for name in names):
+            env[names[0]] = str(seconds)
+
+
 def start_job(
     *,
     engine: str,
@@ -1588,6 +1617,9 @@ def start_job(
     )
     if max_plan is not None:
         cgm_max.apply_models(extra_env, max_plan)
+    _raise_long_effort_timeouts(
+        extra_env, engine=engine, route=route, effort=tuning.get("reasoning_effort")
+    )
     # Carry the UI toggle into every external harness. Engines without an
     # internal delegation tool ignore it; DeepAgents uses it to remove `task`.
     extra_env["AGENT_MONITOR_USE_SUBAGENTS"] = "1" if use_subagents else "0"
@@ -1640,20 +1672,6 @@ def start_job(
                 effective, sponsored=sponsored_kimi, api_timeout=_analyze_api_timeout(sponsored_kimi)
             )
         )
-        if route in {"claude_subscription", "codex_subscription"} and tuning.get(
-            "reasoning_effort"
-        ) in {"xhigh", "max"}:
-            # Extra-high and maximum effort calls on the linked accounts are
-            # long (Max allows them 30 minutes each); a check would otherwise
-            # get the 600 s default.  Every call stays capped at the
-            # analysis deadline, so the watchdog above is unchanged.  An
-            # operator setting wins.
-            for name, seconds in (
-                ("AGENT_MONITOR_MATH_HARNESS_CLAUDE_TIMEOUT", cgm_max.CLAUDE_CALL_TIMEOUT),
-                ("AGENT_MONITOR_CODEX_TIMEOUT", cgm_max.CODEX_CALL_TIMEOUT),
-            ):
-                if not str(extra_env.get(name) or os.environ.get(name) or "").strip():
-                    extra_env[name] = str(seconds)
         if not sponsored_kimi:
             # A flag inherited from the account environment is not this run's
             # route: the runner would otherwise expect a broker credential.
@@ -2096,7 +2114,10 @@ def _continuation_auth_environment(
         cgm_max.apply_models(configured, cgm_max.record_plan(run_data))
     from agent_monitor.run_tuning import from_record as apply_recorded_tuning
 
-    apply_recorded_tuning(configured, run_data)
+    tuning = apply_recorded_tuning(configured, run_data) or {}
+    _raise_long_effort_timeouts(
+        configured, engine=engine, route=route, effort=tuning.get("reasoning_effort")
+    )
     return configured, route
 
 
