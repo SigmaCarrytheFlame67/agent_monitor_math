@@ -499,3 +499,40 @@ def test_graph_rebuilds_of_a_collaborator_project_run_stay_off_its_subscription(
     # The model-free engine view, and graph work on the run's API route, still run.
     assert engine_view[0] == 200 and len(rebuilt) == 1
     assert api_route[0] == 200 and [call["run_record"]["run_id"] for call in generated] == [plain_run]
+
+
+def test_compile_and_check_of_a_collaborator_project_run_refresh_no_graph_on_its_subscription(
+    member_console, monkeypatch, tmp_path
+):
+    from agent_monitor import auto_pipeline, lean_verify
+
+    _isolated_jobs(monkeypatch, tmp_path)
+    monkeypatch.setattr(lean_verify, "compile_or_check", lambda **_kwargs: {"status": "failed"})
+    refreshed: list = []
+    monkeypatch.setattr(auto_pipeline, "refresh_formal", lambda **kwargs: refreshed.append(kwargs["run_id"]))
+    monkeypatch.setattr(console, "_workspace_for_run", lambda run_id: jobs.RUNS_DIR / "workspaces" / run_id)
+
+    def stored_record(run_id):
+        try:
+            return jobs._load_run_record(run_id)
+        except FileNotFoundError:
+            return None
+
+    monkeypatch.setattr(console, "_run_record_for", stored_record)
+    admin, token = auth.login_and_create_session(ADMIN_EMAIL, PASSWORD)
+    cookie = {"Cookie": f"{auth.SESSION_COOKIE}={token}"}
+    with running_server() as port:
+        member, _member_cookie = _member(port)
+        pid = _project_with_member(admin, member)
+        claude_run = _stored_run("claude_p_r1", admin, engine="claude", auth_route="claude_subscription")
+        plain_run = _stored_run("plain_p_r2", admin, engine="plain", auth_route="api_key")
+        for run_id in (claude_run, plain_run):
+            projects.attach(pid, admin["id"], run_id, "Find a lemma")
+        statuses = [
+            request(port, "POST", f"{APP_MOUNT}/api/run/{run_id}/lean_verify", body={"action": action}, headers=cookie)[0]
+            for run_id in (claude_run, plain_run) for action in ("compile", "check")
+        ]
+
+    # The model-free checker still runs; only the API-route run refreshes its graphs.
+    assert statuses == [200, 200, 200, 200]
+    assert refreshed == [plain_run, plain_run]

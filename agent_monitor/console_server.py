@@ -4193,12 +4193,14 @@ class Handler(RunSharingMixin, ProjectsMixin, ResearchMixin, BaseHTTPRequestHand
         )
         if refreshes and str(result.get("status") or "") != "running":
             run_record = _derived_record_for(rid) or {}
+            route = job_manager._route_from_record(run_record)
             # The refresh may ask a model on the run's recorded route, so a
             # member's run off the API route (billed to a subscription or Max,
-            # reached here by Compile or Check) keeps its Formal stages.
-            if (
+            # reached here by Compile or Check), and a tool-free project run
+            # off it, keep their Formal stages.
+            if route == "api_key" or (
                 not account_policy.is_member(user)
-                or job_manager._route_from_record(run_record) == "api_key"
+                and not job_manager.tool_free_run(rid, run_record)
             ):
                 auto_pipeline.refresh_formal(
                     run_id=rid,
