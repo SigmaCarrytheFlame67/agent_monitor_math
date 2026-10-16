@@ -3109,6 +3109,9 @@ async function refreshCodexCard(){
 }
 function startCodexPoll(){ startSignInPoll(CODEX_POLL,'/api/settings/codex/login/poll','Codex',()=>LAST_CODEX_STATUS,applyCodexStatus); }
 let CLAUDE_POLL={timer:null,loop:null}, LAST_CLAUDE_STATUS={status:'loading',running:false,connected:false,reauth_required:false,claude_installed:true,models:[]};
+// Why the last authorization code was not taken. The server's status has no
+// such field, so the card keeps it with the code step until the sign-in moves on.
+let CLAUDE_CODE_ERROR='';
 function stopClaudePoll(){ stopSignInPoll(CLAUDE_POLL); }
 function claudeCardBody(st){
   if(SETTINGS?.subscription_policy?.claude==='admin_only')return subscriptionPolicyBody('claude');
@@ -3117,7 +3120,8 @@ function claudeCardBody(st){
     const authUrl=safeExternalAuthUrl(st.url);
     st={...st,url:authUrl||''};
     const link=st.url?`<div class="codex-url-box"><a href="${LIB_ESC(st.url)}" target="_blank" rel="noopener noreferrer">${LIB_ESC(st.url)}</a></div>`:`<div style="font-size:12px;color:var(--dim);margin:6px 0">Preparing a secure Claude sign-in link…</div>`;
-    const codeStep=st.code_submitted?`<div class="verify-ok" style="margin-top:10px">✓ One-time code sent. Finishing the account connection…</div>`:`<div class="claude-code-row"><label class="settings-field"><span class="settings-field-label">Authorization code <em>One-time only</em></span><div class="settings-input-wrap"><span class="input-glyph">CODE</span><input id="claude-login-code" type="password" autocomplete="off" spellcheck="false" maxlength="4096" placeholder="Paste the code from Claude" aria-label="Claude one-time authorization code"/></div></label><button id="claude-code-submit" class="provider-verify" ${st.awaiting_code?'':'disabled'}>Submit code</button></div>`;
+    const codeError=CLAUDE_CODE_ERROR||st.error;
+    const codeStep=st.code_submitted?`<div class="verify-ok" style="margin-top:10px">✓ One-time code sent. Finishing the account connection…</div>`:`${codeError?`<div class="verify-err" style="margin-top:10px">✗ ${LIB_ESC(codeError)}</div>`:''}<div class="claude-code-row"><label class="settings-field"><span class="settings-field-label">Authorization code <em>One-time only</em></span><div class="settings-input-wrap"><span class="input-glyph">CODE</span><input id="claude-login-code" type="password" autocomplete="off" spellcheck="false" maxlength="4096" placeholder="Paste the code from Claude" aria-label="Claude one-time authorization code"/></div></label><button id="claude-code-submit" class="provider-verify" ${st.awaiting_code?'':'disabled'}>Submit code</button></div>`;
     return `<div style="font-size:12px;color:var(--dim)">1. Open this official Claude link and approve access:</div>${link}<div style="font-size:12px;color:var(--dim);margin-top:10px">2. Paste the one-time authorization code below. It is sent directly to the waiting Claude CLI and is never saved.</div>${codeStep}<button id="claude-cancel-btn" style="margin-top:10px">Cancel</button>`;
   }
   if(st.connected){
@@ -3139,11 +3143,12 @@ function renderClaudeCard(st){
   el.innerHTML=`<div class="provider-card-head"><div class="provider-logo">CL</div><div class="provider-title"><b>Claude Code</b><small>${adminOnly?'Subscription sign-in · site administrator only':`Private Anthropic subscription login${subscription}`}</small></div><span class="provider-state ${st.connected&&!adminOnly?'configured':''}"><i></i>${badge}</span></div><div class="provider-card-body">${claudeCardBody(st)}</div>`;
   const key=$('claude-api-key-btn'); if(key)key.onclick=()=>focusApiProvider(key.dataset.apiProvider);
   const stored=$('claude-remove-stored-btn'); if(stored)stored.onclick=()=>removeStoredSignIn('claude');
-  const connect=$('claude-connect-btn'); if(connect)connect.onclick=async()=>{ try{ const response=await fetch('/api/settings/claude/login/start',{method:'POST'}); const next=await response.json(); await applyClaudeStatus(response.ok?next:failedLoginStatus(LAST_CLAUDE_STATUS,next,'Could not start Claude sign-in')); if(response.ok&&next.status==='running')startClaudePoll(); }catch(error){ await applyClaudeStatus(failedLoginStatus(LAST_CLAUDE_STATUS,null,'Could not reach the Claude login service')); } };
-  const cancel=$('claude-cancel-btn'); if(cancel)cancel.onclick=async()=>{ const input=$('claude-login-code'); if(input)input.value=''; stopClaudePoll(); await fetch('/api/settings/claude/login/cancel',{method:'POST'}); refreshClaudeCard(); };
+  const connect=$('claude-connect-btn'); if(connect)connect.onclick=async()=>{ CLAUDE_CODE_ERROR=''; try{ const response=await fetch('/api/settings/claude/login/start',{method:'POST'}); const next=await response.json(); await applyClaudeStatus(response.ok?next:failedLoginStatus(LAST_CLAUDE_STATUS,next,'Could not start Claude sign-in')); if(response.ok&&next.status==='running')startClaudePoll(); }catch(error){ await applyClaudeStatus(failedLoginStatus(LAST_CLAUDE_STATUS,null,'Could not reach the Claude login service')); } };
+  const cancel=$('claude-cancel-btn'); if(cancel)cancel.onclick=async()=>{ const input=$('claude-login-code'); if(input)input.value=''; CLAUDE_CODE_ERROR=''; stopClaudePoll(); await fetch('/api/settings/claude/login/cancel',{method:'POST'}); refreshClaudeCard(); };
   const logout=$('claude-logout-btn'); if(logout)logout.onclick=async()=>{ if(!confirm('Disconnect your Claude account? This does not change or expose your Anthropic credentials.'))return; const response=await fetch('/api/settings/claude/logout',{method:'POST'}), body=await response.json(); await applyClaudeStatus(response.ok?body:failedLoginStatus(LAST_CLAUDE_STATUS,body,'Could not disconnect Claude')); };
   const submit=$('claude-code-submit');
-  if(submit)submit.onclick=async()=>{ const input=$('claude-login-code'), code=String(input?.value||'').trim(); if(!code){if(input)input.focus();return;} input.value=''; submit.disabled=true; try{ const response=await fetch('/api/settings/claude/login/code',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({code})}); const next=await response.json(); if(!response.ok)throw new Error(next.error||'Claude rejected the authorization code'); await applyClaudeStatus(next); if(next.status==='running')startClaudePoll(); }catch(error){ await applyClaudeStatus({...LAST_CLAUDE_STATUS,error:String(error?.message||error)}); } };
+  // The code is cleared before it is sent, so a failure says how to go on.
+  if(submit)submit.onclick=async()=>{ const input=$('claude-login-code'), code=String(input?.value||'').trim(); if(!code){if(input)input.focus();return;} input.value=''; submit.disabled=true; CLAUDE_CODE_ERROR=''; let next=null; try{ const response=await fetch('/api/settings/claude/login/code',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({code})}); const body=await response.json().catch(()=>null); if(response.ok&&body)next=body; else CLAUDE_CODE_ERROR=body?.error||`The code could not be sent (HTTP ${response.status}). Paste the code again, or open the link above for a new one.`; }catch(error){ CLAUDE_CODE_ERROR='Could not reach the Claude login service. Paste the code again, or open the link above for a new one.'; } if(!next){ renderClaudeCard(); return; } await applyClaudeStatus(next); if(next.status==='running')startClaudePoll(); };
   const input=$('claude-login-code');
   if(input)input.onkeydown=event=>{ if(event.key==='Enter'){event.preventDefault();submit?.click();} };
 }
@@ -3152,6 +3157,7 @@ async function applyClaudeStatus(st){
   const preserveInput=!!input&&(document.activeElement===input||!!input.value)&&st.status==='running'&&!st.code_submitted&&!st.connected&&!st.error;
   const wasConnected=!!SETTINGS?.claude_connected;
   LAST_CLAUDE_STATUS=st;
+  if(st.status!=='running'||st.code_submitted)CLAUDE_CODE_ERROR='';
   if(SETTINGS){ SETTINGS.claude_connected=!!st.connected; SETTINGS.claude_reauth_required=!!st.reauth_required; if(Array.isArray(st.models)&&st.connected){ SETTINGS.claude_models=[...st.models]; SETTINGS.models_by_runtime={...(SETTINGS.models_by_runtime||{}),claude:[...st.models]}; } else if(!st.connected){ SETTINGS.claude_models=[]; SETTINGS.models_by_runtime={...(SETTINGS.models_by_runtime||{}),claude:[]}; } if(selectedAccountRuntime()==='claude')SETTINGS.runtime_ready=!!st.connected; }
   if(!preserveInput)renderClaudeCard(st);
   // As for Codex: Max and the thinking controls follow the linked accounts.

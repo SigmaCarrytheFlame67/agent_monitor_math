@@ -334,5 +334,73 @@ const state=()=>({status:LAST_CLAUDE_STATUS.status,connected:SETTINGS.claude_con
         self.assertIn("Codex sign-in is limited to the site administrator", out["codexRefused"]["card"])
 
 
+    def test_a_code_that_was_not_taken_says_why_until_the_sign_in_moves_on(self) -> None:
+        program = self.PROGRAM + r"""
+(async()=>{
+  const out={};
+  await applyClaudeStatus(waiting);
+  startClaudePoll();
+  const submit=async(code,response)=>{
+    $('claude-login-code').value=code;
+    const sent=$('claude-code-submit').onclick();
+    const cleared=$('claude-login-code').value;
+    await answer(requests.find(request=>request.url==='/api/settings/claude/login/code'),response);
+    await sent;
+    return {cleared,card:cardText('claude-card'),input:$('claude-login-code')?.value,submit:$('claude-code-submit')?{disabled:$('claude-code-submit').disabled}:null};
+  };
+  const poll=async body=>{ await tick(); await answer(requests.find(request=>request.url==='/api/settings/claude/login/poll'),reply(200,body)); return cardText('claude-card'); };
+  // A proxy in front of the console fails the request with an HTML page.
+  out.proxy=await submit('one-time-code-1',proxyError(502));
+  // The next poll's snapshot has no error: the message stays with the code step.
+  out.afterPoll=await poll(waiting);
+  out.refused=await submit('one-time-code-2',reply(400,{error:'Claude login is no longer accepting a code'}));
+  out.offline=await submit('one-time-code-3',new TypeError('Failed to fetch'));
+  // The CLI exited: the card shows the sign-in's own error, not the code's.
+  out.ended=await poll({status:'error',running:false,connected:false,claude_installed:true,models:[],error:'claude auth login exited with code 1'});
+  console.log(JSON.stringify(out));
+})().catch(error=>{console.error(error);process.exit(1);});
+"""
+        out = _run(program)
+        retry = "Paste the code again, or open the link above for a new one."
+        # The one-time code leaves the page before the request, as before.
+        self.assertEqual(out["proxy"]["cleared"], "")
+        self.assertIn(f"The code could not be sent (HTTP 502). {retry}", out["proxy"]["card"])
+        self.assertEqual(out["proxy"]["input"], "")
+        self.assertEqual(out["proxy"]["submit"], {"disabled": False})
+        self.assertIn("The code could not be sent (HTTP 502)", out["afterPoll"])
+        self.assertIn("Claude login is no longer accepting a code", out["refused"]["card"])
+        self.assertNotIn("HTTP 502", out["refused"]["card"])
+        self.assertIn(f"Could not reach the Claude login service. {retry}", out["offline"]["card"])
+        self.assertIn("claude auth login exited with code 1", out["ended"])
+        self.assertNotIn("Claude login service", out["ended"])
+        self.assertIn("Connect via Claude", out["ended"])
+
+
+    def test_a_new_sign_in_starts_without_the_last_codes_error(self) -> None:
+        program = self.PROGRAM + r"""
+(async()=>{
+  await applyClaudeStatus(waiting);
+  startClaudePoll();
+  $('claude-login-code').value='one-time-code-1';
+  const sent=$('claude-code-submit').onclick();
+  // While the code is on its way the CLI exits: a poll reports the ended sign-in first.
+  await tick();
+  await answer(requests.find(request=>request.url==='/api/settings/claude/login/poll'),
+    reply(200,{status:'error',running:false,connected:false,claude_installed:true,models:[],error:'claude auth login exited with code 1'}));
+  await answer(requests.find(request=>request.url==='/api/settings/claude/login/code'),reply(400,{error:'No Claude login is waiting for an authorization code'}));
+  await sent;
+  const ended=cardText('claude-card');
+  const started=$('claude-connect-btn').onclick();
+  await answer(requests.find(request=>request.url==='/api/settings/claude/login/start'),reply(200,waiting));
+  await started;
+  console.log(JSON.stringify({ended,restarted:cardText('claude-card')}));
+})().catch(error=>{console.error(error);process.exit(1);});
+"""
+        out = _run(program)
+        self.assertIn("claude auth login exited with code 1", out["ended"])
+        self.assertIn("Paste the one-time authorization code below", out["restarted"])
+        self.assertNotIn("No Claude login is waiting", out["restarted"])
+
+
 if __name__ == "__main__":
     unittest.main()
