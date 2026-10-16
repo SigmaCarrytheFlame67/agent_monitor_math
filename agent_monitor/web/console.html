@@ -2742,7 +2742,7 @@ function runtimeUiSpec(runtime){
   // A member cannot sign in with a subscription, so it cannot select one.
   const adminOnly=runtime!=='api'&&SETTINGS?.subscription_policy?.[runtime]==='admin_only';
   if(runtime==='claude')return {mark:'CL',tone:'#d97757',title:'Claude subscription',description:'Linked Claude Code account',ready:!adminOnly&&!!SETTINGS?.claude_connected,adminOnly,state:adminOnly?'Site administrator only':SETTINGS?.claude_connected?'Connected':(SETTINGS?.claude_reauth_required?'Reauthorization required':'Connect below')};
-  if(runtime==='codex')return {mark:'CX',tone:'#10b981',title:'Codex subscription',description:'Linked ChatGPT account',ready:!adminOnly&&!!SETTINGS?.codex_connected,adminOnly,state:adminOnly?'Site administrator only':SETTINGS?.codex_connected?'Connected':'Connect below'};
+  if(runtime==='codex')return {mark:'CX',tone:'#10b981',title:'Codex subscription',description:'Linked ChatGPT account',ready:!adminOnly&&!!SETTINGS?.codex_connected,adminOnly,state:adminOnly?'Site administrator only':SETTINGS?.codex_connected?'Connected':(SETTINGS?.codex_reauth_required?'Reauthorization required':'Connect below')};
   const sponsored=!!SETTINGS?.sponsored_kimi_available;
   return {mark:'K3',tone:'#eab308',title:'Kimi + API providers',description:sponsored?'Kimi K3 included · own keys optional':'Metered provider credentials',ready:sponsored||configured>0,state:configured?`${configured} own key${configured===1?'':'s'}`:(sponsored?'Kimi K3 included':'Add a key below')};
 }
@@ -3027,6 +3027,12 @@ function codexCardBody(st){
       :`<div class="connection-summary connected">✓ Connected, not in use. Select Codex subscription above to use it for new runs.</div>`)+
       `<button id="codex-logout-btn" style="margin-top:8px">Disconnect</button>`;
   }
+  if(st.reauth_required){
+    return (st.error?`<div class="verify-err">✗ ${LIB_ESC(st.error)}</div>`:'')+
+      `<div class="verify-err"${st.error?' style="margin-top:6px"':''}>✗ ChatGPT authorization needs renewal. Codex rejected the saved sign-in (it expired or was revoked), so new Codex subscription runs are blocked.</div>`+
+      `<div class="connection-summary" style="margin-top:6px">Your saved API keys remain separate and will not be used as a fallback.</div>`+
+      `<button id="codex-connect-btn" style="margin-top:8px">Reconnect via ChatGPT</button>`;
+  }
   return (st.error?`<div class="verify-err">✗ ${LIB_ESC(st.error)}</div>`:'')+
     `<div class="connection-summary" style="margin-top:${st.error?'6px':'0'}">Not connected. Connect ChatGPT once to make the Codex subscription available in the new-run selector.</div>`+
     `<button id="codex-connect-btn" style="margin-top:8px">Connect via ChatGPT</button>`;
@@ -3035,7 +3041,7 @@ function renderCodexCard(st){
   const el=$('codex-card'); if(!el)return;
   st=st||LAST_CODEX_STATUS; LAST_CODEX_STATUS=st;
   const adminOnly=SETTINGS?.subscription_policy?.codex==='admin_only';
-  const badge=adminOnly?'administrator only':st.status==='running'?'connecting':(st.connected?'connected':'not connected');
+  const badge=adminOnly?'administrator only':st.status==='running'?'connecting':(st.connected?'connected':(st.reauth_required?'reauth required':'not connected'));
   el.innerHTML=`<div class="provider-card-head"><div class="provider-logo">CX</div><div class="provider-title"><b>ChatGPT / Codex</b><small>${adminOnly?'Subscription sign-in · site administrator only':'Private subscription login for compatible harnesses'}</small></div><span class="provider-state ${st.connected&&!adminOnly?'configured':''}"><i></i>${badge}</span></div><div class="provider-card-body">${codexCardBody(st)}</div>`;
   const key=$('codex-api-key-btn'); if(key)key.onclick=()=>focusApiProvider(key.dataset.apiProvider);
   const stored=$('codex-remove-stored-btn'); if(stored)stored.onclick=()=>removeStoredSignIn('codex');
@@ -3049,6 +3055,7 @@ async function applyCodexStatus(st){
   const wasConnected=!!SETTINGS?.codex_connected;
   if(SETTINGS){
     SETTINGS.codex_connected=!!st.connected;
+    SETTINGS.codex_reauth_required=!!st.reauth_required;
     if(Array.isArray(st.models)&&st.connected){ SETTINGS.codex_models=[...st.models]; SETTINGS.models_by_runtime={...(SETTINGS.models_by_runtime||{}),codex:[...st.models]}; }
     if(selectedAccountRuntime()==='codex')SETTINGS.runtime_ready=!!st.connected;
   }

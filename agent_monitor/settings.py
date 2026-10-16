@@ -617,6 +617,7 @@ def get_settings(user: dict[str, Any] | None = None) -> dict[str, Any]:
     use_codex = runtime == "codex"
     use_claude = runtime == "claude"
     codex_connected = False
+    codex_reauth_required = False
     codex_models: list[str] = []
     if user is not None and not user.get("guest") and not member:
         try:
@@ -626,6 +627,8 @@ def get_settings(user: dict[str, Any] | None = None) -> dict[str, Any]:
             codex_connected = codex_login.account_login_ready(home)
             if codex_connected:
                 codex_models = codex_login.available_models(int(user["id"]))
+            else:
+                codex_reauth_required = codex_login.account_reauth_required(home)
         except (KeyError, OSError, ValueError):
             codex_models = []
 
@@ -761,6 +764,7 @@ def get_settings(user: dict[str, Any] | None = None) -> dict[str, Any]:
         "account_runtime": runtime,
         "codex_enabled": use_codex,
         "codex_connected": codex_connected,
+        "codex_reauth_required": codex_reauth_required,
         "claude_enabled": use_claude,
         "claude_connected": claude_connected,
         "claude_reauth_required": claude_reauth_required,

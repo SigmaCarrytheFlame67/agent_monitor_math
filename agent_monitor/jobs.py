@@ -4569,6 +4569,15 @@ def _run_cli_engine(
         _persist_openclaw_final_answer(parser, workspace)
     if stopped or stop_ev.is_set():
         return _flush(parser.output(), status="stopped")
+    if engine == "codex" and not _is_kimi_model(requested_model) and env.get("CODEX_HOME"):
+        from agent_monitor import codex_login
+
+        # Settings offers Reconnect once Codex rejects a linked login.
+        codex_login.note_turn_outcome(
+            env["CODEX_HOME"],
+            completed=parser.terminal_status == "completed",
+            failure=(parser.terminal_error or "") if parser.terminal_status == "failed" else "",
+        )
     # Wrappers (claude_runner and friends) report their typed failure on
     # stderr as "[agent-monitor] <reason>"; it is the run's best explanation
     # when the structured stream itself carries none.

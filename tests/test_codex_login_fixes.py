@@ -1,16 +1,20 @@
 """Codex sign-in state and Formal Lean Codex timeouts."""
 from __future__ import annotations
 
+import json
 import os
 from pathlib import Path
+import shutil
 import signal
+import subprocess
 import sys
 import tempfile
 import time
 import unittest
 from unittest.mock import patch
 
-from agent_monitor import codex_login, lean_verify
+from agent_monitor import cgm_max, codex_login, jobs, lean_verify, settings
+from agent_monitor.runners import codex_backend
 
 SOURCE = "theorem main : True := by trivial\n"
 
@@ -180,6 +184,268 @@ class CodexLoginFailureReasonTests(unittest.TestCase):
     def test_success_exit_without_a_saved_login_is_explained(self) -> None:
         status = self._login('echo "Successfully logged in"\nexit 0\n')
         self.assertIn("no ChatGPT sign-in was saved", status.get("error") or "")
+
+
+def _stream(*events: dict) -> str:
+    return "".join(json.dumps(event) + "\n" for event in events)
+
+
+# codex exec --json 0.160.0 once the saved ChatGPT login has expired (captured
+# offline): a transient "Reconnecting..." 401, then the terminal failure.
+_EXPIRED = (
+    "unexpected status 401 Unauthorized: Your authentication token has expired. "
+    "Please try signing in again., url: http://127.0.0.1:43557/v1/responses"
+)
+_EXPIRED_LOGIN = _stream(
+    {"type": "thread.started", "thread_id": "01a12cde-4aa0-7f30-a4cd-4fa325edddad"},
+    {"type": "turn.started"},
+    {"type": "error", "message": f"Reconnecting... 1/1 ({_EXPIRED})"},
+    {"type": "error", "message": _EXPIRED},
+    {"type": "turn.failed", "error": {"message": _EXPIRED}},
+)
+# A 401 that Codex recovered from on its own.
+_RECOVERED = _stream(
+    {"type": "turn.started"},
+    {"type": "error", "message": f"Reconnecting... 1/5 ({_EXPIRED})"},
+    {"type": "item.completed", "item": {"id": "item_1", "type": "agent_message", "text": "done"}},
+    {"type": "turn.completed", "usage": {"input_tokens": 3, "output_tokens": 1}},
+)
+_USAGE_LIMIT = _stream(
+    {"type": "turn.started"},
+    {"type": "turn.failed", "error": {"message": (
+        "You’ve hit your usage limit. Visit https://chatgpt.com/codex/settings/usage "
+        "to purchase more credits or try again at 10:28 PM.")}},
+)
+
+
+def _fake_codex_exec(stdout: str, returncode: int):
+    def run(command, **_kwargs):
+        if command[1:] == ["--version"]:
+            return subprocess.CompletedProcess(command, 0, "codex-cli 0.160.0\n", "")
+        if command[1:] == ["debug", "models", "--bundled"]:
+            return subprocess.CompletedProcess(
+                command, 0, json.dumps({"models": [{"slug": "gpt-6-astra"}]}), "")
+        if returncode == 0:
+            Path(command[command.index("--output-last-message") + 1]).write_text("done")
+        return subprocess.CompletedProcess(command, returncode, stdout, "")
+
+    return run
+
+
+class CodexReauthTests(unittest.TestCase):
+    """An expired or revoked ChatGPT login must read as "reconnect", not "connected"."""
+
+    USER = {"id": 4343, "email": "owner@example.com", "is_admin": True}
+
+    def setUp(self) -> None:
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        self.root = Path(tmp.name)
+        accounts = patch.dict(
+            os.environ, {"AGENT_MONITOR_CODEX_ACCOUNT_HOME": str(self.root / "users")}
+        )
+        accounts.start()
+        self.addCleanup(accounts.stop)
+        self.home = codex_login.account_home(self.USER["id"])
+        self.home.mkdir(parents=True)
+        (self.home / "auth.json").write_text(
+            json.dumps({"tokens": {"access_token": "test-access", "refresh_token": "test-refresh"}}),
+            encoding="utf-8",
+        )
+
+    def _exec(self, home: Path, stdout: str, returncode: int) -> codex_backend.CodexResult:
+        with (
+            patch.object(codex_backend.shutil, "which", return_value="/bin/true"),
+            patch.object(
+                codex_backend, "_run_codex_process", side_effect=_fake_codex_exec(stdout, returncode)
+            ),
+        ):
+            return codex_backend.codex_exec(
+                "system", "user", model="gpt-6-astra",
+                source_env={"CODEX_HOME": str(home), "PATH": "/usr/bin:/bin"},
+            )
+
+    def _subscription_env(self) -> dict[str, str]:
+        return jobs._configure_auth_route(
+            {"OPENAI_API_KEY": "sk-test-dormant", "PATH": os.environ.get("PATH", os.defpath)},
+            route="codex_subscription",
+            user_id=self.USER["id"],
+        )
+
+    def test_final_401_flags_the_login_for_reconnection_everywhere(self) -> None:
+        self.assertTrue(codex_login.status(self.USER["id"])["connected"])
+        with self.assertRaises(codex_backend.CodexBackendError) as raised:
+            self._exec(self.home, _EXPIRED_LOGIN, 1)
+        self.assertEqual(raised.exception.kind, "auth")
+
+        status = codex_login.status(self.USER["id"])
+        self.assertFalse(status["connected"])
+        self.assertTrue(status["reauth_required"])
+        with (
+            patch.object(
+                settings, "resolved_user_env", return_value={"AGENT_MONITOR_ACCOUNT_RUNTIME": "codex"}
+            ),
+            patch("agent_monitor.claude_login.account_login_ready", return_value=True),
+        ):
+            current = settings.get_settings(self.USER)
+            plan = cgm_max.plan_for(self.USER)
+        self.assertFalse(current["codex_connected"])
+        self.assertTrue(current["codex_reauth_required"])
+        self.assertFalse(current["runtime_ready"])
+        self.assertEqual(current["codex_models"], [])
+        self.assertFalse(plan["available"])
+        self.assertIn("connect Codex", plan["reason"])
+        # New subscription runs refuse the login; a saved API key is no fallback.
+        with self.assertRaisesRegex(ValueError, "Codex is not connected"):
+            self._subscription_env()
+
+    def test_completed_turn_clears_the_flag(self) -> None:
+        codex_login.mark_reauth_required(self.home)
+        self.assertFalse(codex_login.account_login_ready(self.home))
+        self.assertEqual(self._exec(self.home, _RECOVERED, 0).text, "done")
+        self.assertFalse(codex_login.account_reauth_required(self.home))
+        self.assertTrue(codex_login.status(self.USER["id"])["connected"])
+
+    def test_recovered_401_usage_limit_and_api_key_homes_never_flag(self) -> None:
+        self._exec(self.home, _RECOVERED, 0)
+        with self.assertRaises(codex_backend.CodexBackendError):
+            self._exec(self.home, _USAGE_LIMIT, 1)
+        self.assertFalse(codex_login.account_reauth_required(self.home))
+        api_key_home = self.root / "codex_home" / "0123456789abcdef"
+        api_key_home.mkdir(parents=True)
+        with self.assertRaises(codex_backend.CodexBackendError):
+            self._exec(api_key_home, _EXPIRED_LOGIN, 1)
+        self.assertEqual(list(api_key_home.iterdir()), [])
+        self.assertTrue(codex_login.status(self.USER["id"])["connected"])
+
+    def test_new_sign_in_and_disconnect_clear_the_flag(self) -> None:
+        class SignedIn:
+            stdout = iter(["Successfully logged in\n"])
+
+            def wait(self, timeout=None):
+                return 0
+
+        user_id = self.USER["id"]
+        codex_login.mark_reauth_required(self.home)
+        with codex_login._lock:
+            codex_login._states[user_id] = {"status": "running", "running": True}
+        self.addCleanup(lambda: codex_login._states.pop(user_id, None))
+        with patch.object(codex_login, "refresh_models_cache", return_value=True):
+            codex_login._reader(SignedIn(), self.home, user_id)
+        status = codex_login.status(user_id)
+        self.assertEqual(status["status"], "success")
+        self.assertTrue(status["connected"])
+        self.assertFalse(status["reauth_required"])
+
+        codex_login.mark_reauth_required(self.home)
+        result = codex_login.logout(user_id)
+        self.assertFalse(result["connected"])
+        self.assertFalse(result["reauth_required"])
+
+    def _run_codex_engine(self, extra_env: dict[str, str], stdout: str, returncode: int) -> dict:
+        workspace = self.root / f"run-{returncode}"
+        workspace.mkdir()
+        command = [
+            sys.executable,
+            "-c",
+            (
+                "import sys; from pathlib import Path; "
+                "Path('proof.md').write_text('# Proof\\n\\n' + 'A bounded proof artifact. ' * 20); "
+                "sys.stdout.write(sys.argv[1]); sys.exit(int(sys.argv[2]))"
+            ),
+            stdout,
+            str(returncode),
+        ]
+        with (
+            patch("agent_monitor.engines_registry.build_cli_command", return_value=command),
+            patch("agent_monitor.agent_config.persona_preamble", return_value=""),
+            patch.object(jobs, "_write_run"),
+        ):
+            return jobs._run_cli_engine(
+                run_id=f"codex_reauth_{returncode}",
+                engine="codex",
+                problem_id="reauth",
+                problem_text="Prove it.",
+                started=time.time(),
+                workspace=workspace,
+                extra_env=extra_env,
+                requested_model="gpt-6-astra",
+                max_iterations=3,
+                owner_id=self.USER["id"],
+            )
+
+    def test_codex_engine_runs_flag_and_clear_the_login(self) -> None:
+        extra_env = self._subscription_env()
+        failed = self._run_codex_engine(extra_env, _EXPIRED_LOGIN, 1)
+        self.assertEqual(failed["status"], "failed")
+        self.assertIn("401 Unauthorized", failed["error"])
+        self.assertTrue(codex_login.account_reauth_required(self.home))
+        self.assertFalse(codex_login.status(self.USER["id"])["connected"])
+
+        # A run already routed to the account keeps it (never an API key), and
+        # its completed turn shows the login works again.
+        self._run_codex_engine(extra_env, _RECOVERED, 0)
+        self.assertFalse(codex_login.account_reauth_required(self.home))
+        self.assertTrue(codex_login.status(self.USER["id"])["connected"])
+
+    def test_a_flagged_login_never_switches_a_routed_run_to_an_api_key(self) -> None:
+        env = self._subscription_env()
+        codex_login.mark_reauth_required(self.home)
+        jobs._ensure_codex_auth(env, self.USER["id"])
+        self.assertEqual(env["CODEX_HOME"], str(self.home))
+        self.assertNotIn("OPENAI_API_KEY", env)
+
+
+HTML = (Path(__file__).parents[1] / "agent_monitor" / "web" / "console.html").read_text(encoding="utf-8")
+SCRIPT = HTML.rsplit("<script>", 1)[1].split("</script>", 1)[0]
+NODE = shutil.which("node")
+if not NODE and Path("/home/ubuntu/.local/node24/bin/node").is_file():
+    NODE = "/home/ubuntu/.local/node24/bin/node"
+
+
+def _js_function(name: str) -> str:
+    function_start = SCRIPT.index(f"function {name}(")
+    start = function_start - 6 if SCRIPT[function_start - 6 : function_start] == "async " else function_start
+    opening = SCRIPT.index("{", function_start)
+    depth = 0
+    for index in range(opening, len(SCRIPT)):
+        if SCRIPT[index] == "{":
+            depth += 1
+        elif SCRIPT[index] == "}":
+            depth -= 1
+            if depth == 0:
+                return SCRIPT[start : index + 1]
+    raise AssertionError(f"unterminated JavaScript function: {name}")
+
+
+@unittest.skipUnless(NODE, "node is unavailable")
+class CodexReauthCardTests(unittest.TestCase):
+    def test_rejected_login_offers_reconnect_instead_of_connected(self) -> None:
+        source = "\n".join(
+            _js_function(name)
+            for name in ("runtimeUiSpec", "codexCardBody", "renderCodexCard", "applyCodexStatus")
+        )
+        program = f"""
+const LIB_ESC=value=>String(value);
+let SETTINGS={{configured_providers:[],codex_connected:true,codex_reauth_required:false,subscription_policy:{{}}}};
+const selectedAccountRuntime=()=>'codex';
+const els={{}}; const $=id=>els[id]||(els[id]={{id,innerHTML:'',dataset:{{}}}});
+let LAST_CODEX_STATUS={{}};
+const loadSettings=async()=>{{}}, renderRuntimeSelector=()=>{{}}, syncRuntimeModelControls=()=>{{}}, renderEngines=()=>{{}};
+{source}
+(async()=>{{
+  await applyCodexStatus({{status:'idle',running:false,connected:false,reauth_required:true,codex_installed:true}});
+  const card=els['codex-card'].innerHTML;
+  console.log(JSON.stringify([runtimeUiSpec('codex').state,SETTINGS.codex_reauth_required,card.includes('reauth required'),
+    card.includes('Reconnect via ChatGPT'),card.includes('id="codex-connect-btn"'),card.includes('Connected and in use')]));
+}})().catch(error=>{{console.error(error);process.exit(1);}});
+"""
+        result = subprocess.run([NODE, "-e", program], capture_output=True, text=True, check=False)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(
+            json.loads(result.stdout),
+            ["Reauthorization required", True, True, True, True, False],
+        )
 
 
 if __name__ == "__main__":

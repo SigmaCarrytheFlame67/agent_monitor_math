@@ -23,6 +23,7 @@ import json
 import os
 import re
 import shutil
+import stat
 import subprocess
 import tempfile
 import threading
@@ -38,6 +39,7 @@ _URL_RE = re.compile(r"https?://\S+")
 _ANSI_RE = re.compile(r"\x1b\[[0-9;]*[a-zA-Z]")
 _CODE_RE = re.compile(r"^[A-Z0-9]{3,6}-[A-Z0-9]{3,6}$")
 _MAX_OUTPUT_CHARS = 4000
+_REAUTH_MARKER_NAME = ".agent-monitor-reauth-required.json"
 
 # A newly completed device login has valid OAuth tokens before Codex has made
 # its first model-list request and written models_cache.json. Keep the first
@@ -83,7 +85,7 @@ def account_home(user_id: int) -> Path:
     return base / f"user_{user_id}"
 
 
-def account_login_ready(home: Path) -> bool:
+def _has_account_tokens(home: Path) -> bool:
     """True if ``home`` holds a ChatGPT-account (OAuth) Codex login.
 
     An account login's auth.json carries a ``tokens`` bundle (id_token /
@@ -99,6 +101,70 @@ def account_login_ready(home: Path) -> bool:
         return False
     tokens = data.get("tokens") or {}
     return bool(tokens.get("access_token") or tokens.get("id_token"))
+
+
+def account_login_ready(home: Path) -> bool:
+    """True if ``home`` holds a usable ChatGPT-account (OAuth) Codex login.
+
+    A login Codex has rejected (see ``mark_reauth_required``) stays unusable
+    until the account signs in again.
+    """
+    return _has_account_tokens(home) and not account_reauth_required(home)
+
+
+def _reauth_marker(home: str | Path) -> Path:
+    return Path(home) / _REAUTH_MARKER_NAME
+
+
+def account_reauth_required(home: str | Path) -> bool:
+    """True when Codex rejected this account's saved login (expired or revoked)."""
+    try:
+        return stat.S_ISREG(_reauth_marker(home).lstat().st_mode)
+    except OSError:
+        return False
+
+
+def mark_reauth_required(home: str | Path) -> None:
+    """Persist a secret-free marker after Codex's final 401 for this login."""
+    flags = os.O_WRONLY | os.O_CREAT | os.O_TRUNC | getattr(os, "O_NOFOLLOW", 0)
+    fd = os.open(_reauth_marker(home), flags, 0o600)
+    with os.fdopen(fd, "w", encoding="utf-8") as stream:
+        json.dump({"version": 1, "marked_at": int(time.time())}, stream)
+
+
+def clear_reauth_required(home: str | Path) -> None:
+    """Clear the marker after a new sign-in, a disconnect or a completed turn."""
+    try:
+        _reauth_marker(home).unlink()
+    except FileNotFoundError:
+        pass
+
+
+def note_turn_outcome(home: str | Path, *, completed: bool, failure: str = "") -> None:
+    """Keep a linked account's reconnect flag in step with its last Codex turn.
+
+    Codex's final 401 or failed token refresh (an expired or revoked login)
+    flags the account, so Settings offers Reconnect and subscription routes
+    refuse it; a completed turn clears the flag. A usage limit, a transient
+    error, or an API-key or temporary CODEX_HOME never flags anything.
+    """
+    from agent_monitor.runners.codex_backend import _failure_kind
+
+    path = Path(home).expanduser()
+    match = re.fullmatch(r"user_(\d+)", path.name)
+    try:
+        if not match or path.resolve() != account_home(int(match.group(1))).resolve():
+            return
+        if completed:
+            clear_reauth_required(path)
+        elif (
+            _failure_kind(failure) == "auth"
+            # A newer sign-in replaced this login while the turn ran.
+            and "signed in to another account" not in failure
+        ):
+            mark_reauth_required(path)
+    except OSError:
+        pass
 
 
 def _installed_cli_version(codex: str) -> str:
@@ -220,6 +286,7 @@ def _augment(user_id: int, snapshot: dict[str, Any]) -> dict[str, Any]:
     """
     home = account_home(user_id)
     snapshot["connected"] = account_login_ready(home)
+    snapshot["reauth_required"] = account_reauth_required(home)
     snapshot["codex_installed"] = codex_binary() is not None
     snapshot["codex_home"] = str(home)
     return snapshot
@@ -270,6 +337,12 @@ def _reader(proc: subprocess.Popen, home: Path, user_id: int) -> None:
     except subprocess.TimeoutExpired:
         proc.kill()
         rc = -1
+    if rc == 0 and _has_account_tokens(home):
+        # The new sign-in replaces a login Codex had rejected.
+        try:
+            clear_reauth_required(home)
+        except OSError:
+            pass
     if rc == 0 and account_login_ready(home):
         # Before reporting success (the UI then reloads its model list), fetch
         # the account's real catalog.
@@ -364,4 +437,5 @@ def logout(user_id: int) -> dict[str, Any]:
     auth_path = home / "auth.json"
     if auth_path.exists():
         auth_path.unlink()
+    clear_reauth_required(home)
     return _augment(user_id, {"ok": True})
