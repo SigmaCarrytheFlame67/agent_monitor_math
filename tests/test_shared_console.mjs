@@ -11,6 +11,7 @@ function loadShim(snapshot, status = 200) {
   const calls = []
   const config = { data: '/proof-x/api/shared/T', base: '/proof-x', console: '/proof-x/', monitor: '/proof-x/shared/T/monitor', view: 'dag' }
   const window = {
+    navigator: { sendBeacon: () => true },
     fetch: async (input, init) => {
       calls.push([String(input), (init && init.method) || 'GET'])
       return new Response(JSON.stringify(snapshot), { status, headers: { 'Content-Type': 'application/json' } })
@@ -58,6 +59,10 @@ test('the shared shim answers the console run view from the snapshot only', asyn
     ['/api/runs/shared/share', 'DELETE'], ['/login', 'GET'], ['https://evil.test/x', 'GET']])
     assert.equal((await window.fetch(url, { method })).status, 403, method + ' ' + url)
   assert.deepEqual(calls, [['/proof-x/api/shared/T', 'GET']])
+  // No other request API is left open.
+  for (const name of ['XMLHttpRequest', 'EventSource', 'WebSocket'])
+    assert.throws(() => new window[name]('/api/settings'), /not available in a shared run/)
+  assert.equal(window.navigator.sendBeacon('/api/runs', 'x'), false)
 })
 
 test('an unavailable shared link reports why to the console', async () => {

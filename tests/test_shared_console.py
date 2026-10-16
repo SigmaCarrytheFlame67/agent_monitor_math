@@ -188,7 +188,9 @@ def test_new_snapshots_keep_console_details_but_nothing_private(tmp_path):
     view = shares.console_view(snap)
     run = view['run']
     assert run['totals'] == {'input_tokens': 10, 'output_tokens': 5}
-    assert run['live'] == {'model': 'kimi-k3', 'auth_mode': 'claude_subscription', 'tool_calls': 3, 'tools_recent': [{'name': 'edit'}]}
+    # The model chips, never how the owner pays for model access.
+    assert run['live'] == {'model': 'kimi-k3', 'tool_calls': 3, 'tools_recent': [{'name': 'edit'}]}
+    assert 'claude_subscription' not in encoded
     assert run['route_plan'] == {'advisor': {'model': 'claude-opus'}}
     assert run['auto_pipeline']['stages']['lean'] == {'status': 'done', 'result': {'status': 'verified', 'scope': 'proof'}}
     assert run['auto_pipeline']['stages']['informal_dag']['detail'] == 'built from …/proof.md'
@@ -390,3 +392,36 @@ def test_every_static_asset_a_served_page_links_exists():
     for page in pages:
         for name in re.findall(r'(?:__BASE__|__ASSET_BASE__)?/static/([\w./-]+\.(?:css|js))', page.read_text()):
             assert (shares.WEB / name).is_file() or (shares.DASHBOARD_WEB / name).is_file(), (page.name, name)
+
+
+
+def test_snapshots_carry_no_run_id_and_keep_step_links():
+    ws = shares.RUNS_DIR / 'workspaces' / 'codex_adhoc_9f3a_abcdef0123'
+    ws.mkdir(parents=True)
+    (ws / 'proof.md').write_text('P')
+    rid = 'codex_adhoc_9f3a_abcdef0123'
+    record = {'run_id': rid, 'status': 'finished', 'engine': 'codex', 'problem_text': 'P',
+              'agents': [{'trace_id': rid + '::turn-1', 'stage_name': 'turn-1 (message)', 'role': 'assistant', 'output': 'hi'},
+                         {'trace_id': rid + '::turn-2', 'stage_name': 'turn-2 (message)', 'role': 'assistant',
+                          'output': 'see /home/u/runs/workspaces/' + rid + '/proof.md'}],
+              'edges': [{'from': rid + '::turn-1', 'to': rid + '::turn-2', 'type': 'next'}]}
+    snap = shares.snapshot(rid, record)
+    payload = json.dumps(shares.shared_payload(snap))
+    assert rid not in json.dumps(snap) and rid not in payload
+    run = shares.console_view(snap)['run']
+    assert [agent['trace_id'] for agent in run['agents']] == ['shared::turn-1', 'shared::turn-2']
+    assert run['edges'] == [{'from': 'shared::turn-1', 'to': 'shared::turn-2', 'type': 'next'}]
+
+
+def test_older_shares_clean_their_explore_graph_text_and_ids():
+    rid = 'hermes_adhoc_21758d22_99cf6a0431'
+    snap = {'version': 2, 'title': 'Old', 'status': 'finished', 'agents': [{'id': rid + '::iter-1', 'label': 'iter-1 (write_file)', 'summary': '▸ write_file(x)\nPRIVATE'}],
+            'graphs': {'explore': {'kind': 'explore', 'status': 'recorded', 'graph_role': 'execution', 'graph': {
+                'nodes': [{'id': rid + '::iter-1', 'label': 'iter-1 (write_file)',
+                           'statement': '▸ write_file({"path": "/home/ubuntu/w/' + rid + '/proof.md"})\n{"bytes_written": 617, "PRIVATE": 1}'}],
+                'edges': []}}}}
+    view = shares.console_view(snap)
+    node = view['graphs']['engine:workflow']['graph']['nodes'][0]
+    assert node['id'] == 'shared::iter-1'
+    assert node['statement'] == '▸ write_file({"path": "…/proof.md"})\n(tool output is not included in shared snapshots)'
+    assert rid not in json.dumps(view) and 'PRIVATE' not in json.dumps(view)

@@ -269,7 +269,8 @@ def _run_view(data, read):
                  for node in _items(flow.get('nodes'), 100) if isinstance(node, dict)]
         view['agent_flow'] = {'compact': {'pipeline_strip': strip, 'link_rows': links}, 'nodes': nodes}
     live = data.get('live') if isinstance(data.get('live'), dict) else {}
-    chips = {key: _text(live.get(key), 160) for key in ('model', 'model_requested', 'auth_mode', 'subagent_model')
+    # The model chips; never auth_mode (how the owner pays for model access).
+    chips = {key: _text(live.get(key), 160) for key in ('model', 'model_requested', 'subagent_model')
              if isinstance(live.get(key), str)}
     if isinstance(live.get('model_requested'), bool):
         chips['model_requested'] = live['model_requested']
@@ -710,7 +711,7 @@ def _shared_summary(summary):
     if not summary:
         return {}
     out = {key: summary.get(key) for key in ('nodes', 'checked', 'gap', 'error', 'unclear', 'not_checked',
-                                             'main_closure', 'model', 'route') if key in summary}
+                                             'main_closure', 'model') if key in summary}
     out.update(_numbers(summary, ('calls',), 1e9))
     coverage = _numbers(summary.get('coverage'), ('total', 'checked', 'located', 'uninterpretable', 'statements'), 1e9)
     if coverage:
@@ -823,6 +824,7 @@ def snapshot(run_id, data):
         result['run_view'] = _run_view(data, read)
         result['lean_record'] = _lean_record(read)
         result['formal_graph'] = result['graphs']['formal']['graph']
+        result = _neutral(result, {run_id})
         if len(json.dumps(result, ensure_ascii=False).encode()) > 4_000_000:
             raise ValueError('This snapshot is too large to share (4 MB maximum).')
         return result
@@ -848,7 +850,7 @@ def snapshot(run_id, data):
             **_agent_details(item),
         })
     result = {
-        'version': 3, 'type': 'shared', 'title': _text(data.get('title') or data.get('problem_text_preview') or run_id, 240),
+        'version': 3, 'type': 'shared', 'title': _text(data.get('title') or data.get('problem_text_preview') or 'Shared run', 240),
         'status': _text(data.get('status'), 80), 'engine': _text(data.get('engine'), 100),
         'problem': _text(data.get('problem_text') or data.get('problem_text_preview')),
         'proof': proof, 'proof_source': proof_source,
@@ -861,9 +863,29 @@ def snapshot(run_id, data):
     result['lean_record'] = _lean_record(read)
     result['informal_graph'] = result['graphs']['outline']['graph']
     result['formal_graph'] = result['graphs']['formal']['graph']
+    result = _neutral(result, {run_id})
     if len(json.dumps(result, ensure_ascii=False).encode()) > 4_000_000:
         raise ValueError('This snapshot is too large to share (4 MB maximum).')
     return result
+
+
+def _neutral(value, run_ids):
+    """The owner's run id (it names the engine, problem and job) reads as
+    'shared' everywhere in a snapshot: step ids, edges, graph ids, paths."""
+    run_ids = sorted({rid for rid in run_ids if isinstance(rid, str) and len(rid) >= 8}, key=len, reverse=True)
+    if not run_ids:
+        return value
+    def walk(item):
+        if isinstance(item, str):
+            for rid in run_ids:
+                item = item.replace(rid, CONSOLE_RUN)
+            return item
+        if isinstance(item, dict):
+            return {walk(key): walk(entry) for key, entry in item.items()}
+        if isinstance(item, list):
+            return [walk(entry) for entry in item]
+        return item
+    return walk(value)
 
 
 CONSOLE_RUN = 'shared'
@@ -937,6 +959,18 @@ def _lean_summary(record):
             'generated_at': record.get('generated_at') or ''}
 
 
+def _clean_legacy_graph(record):
+    if not isinstance(record, dict) or not isinstance(record.get('graph'), dict):
+        return record
+    nodes = []
+    for node in record['graph'].get('nodes') or []:
+        if isinstance(node, dict) and isinstance(node.get('statement'), str):
+            tool = bool(_TOOL_LABEL.search(str(node.get('label') or '')))
+            node = {**node, 'statement': _agent_output({'summary': node['statement'], 'role': 'tool' if tool else ''})}
+        nodes.append(node)
+    return {**record, 'graph': {**record['graph'], 'nodes': nodes}}
+
+
 def console_view(snap):
     """What the console's own run interface requests for one run, answered
     from a saved snapshot (any version): the run record, the proof document,
@@ -966,6 +1000,12 @@ def console_view(snap):
                 'notes': recorded and 'Checker result as recorded with the saved source.'
                 or 'The Lean source as saved. Its checker record was not included in this snapshot.'}
     legacy = not isinstance(snap.get('version'), int) or snap['version'] < 3
+    if legacy:
+        # Shares made before version 3: no run ids, and graph text cleaned
+        # like step output (Explore statements were raw step output).
+        run_ids = {str(agent.get('id') or '').split('::')[0] for agent in _items(snap.get('agents'), 100)
+                   if isinstance(agent, dict) and '::' in str(agent.get('id') or '')}
+        graphs = _neutral({mode: _clean_legacy_graph(record) for mode, record in graphs.items()}, run_ids)
     agents = []
     for index, agent in enumerate(_items(snap.get('agents'), 100), 1):
         if not isinstance(agent, dict):
@@ -977,7 +1017,8 @@ def console_view(snap):
             # rules (tool output withheld, server paths and costs removed).
             tool = bool(_TOOL_LABEL.search(str(agent.get('label') or '')))
             output = _agent_output({'summary': output, 'role': 'tool' if tool else ''})
-        entry.update({'trace_id': f'{CONSOLE_RUN}::{index}', 'call_seq': agent.get('call_seq') or index,
+        step = agent.get('id') if not legacy and str(agent.get('id') or '').startswith(CONSOLE_RUN + '::') else f'{CONSOLE_RUN}::{index}'
+        entry.update({'trace_id': step, 'call_seq': agent.get('call_seq') or index,
                       'stage_name': agent.get('stage_name') or agent.get('label') or 'Research step',
                       'output': output, 'model': agent.get('model') or ''})
         agents.append(entry)

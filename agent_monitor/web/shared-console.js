@@ -96,6 +96,13 @@
   }
 
   window.fetch = sharedFetch;
+  // The console uses fetch only; every other way to reach the server is shut
+  // too, so nothing on a shared page can act with the visitor's session.
+  const closed = name => function () { throw new Error(name + ' is not available in a shared run.'); };
+  for (const name of ['XMLHttpRequest', 'EventSource', 'WebSocket']) {
+    try { window[name] = closed(name); } catch { /* read-only in this browser */ }
+  }
+  try { if (window.navigator) window.navigator.sendBeacon = () => false; } catch { /* read-only */ }
   window.__PC_SHARED__ = Object.freeze({
     runId: RUN,
     console: typeof config.console === 'string' ? config.console : (base || '') + '/',
