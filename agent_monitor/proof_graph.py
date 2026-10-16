@@ -864,8 +864,10 @@ def _run_claude_prompt(
         route="claude_subscription",
         user_id=(user or {}).get("id"),
     )
-    requested = str(model or "").strip().lower()
-    selected = requested if requested in _CLAUDE_ACCOUNT_MODELS else "sonnet"
+    from agent_monitor.jobs import _canonical_claude_continuation_model
+
+    # Records carry resolved names (claude-opus-5-5): keep the run's model.
+    selected = _canonical_claude_continuation_model(model) or "sonnet"
     effective_timeout = (
         _claude_derived_timeout(env) if timeout is None else timeout
     )
@@ -1877,7 +1879,13 @@ def generate(
         chosen_model, content = _run_claude_prompt(
             user,
             prompt,
-            model=model or str((run_record or {}).get("model") or "").strip() or None,
+            model=model
+            or str(
+                (run_record or {}).get("requested_model")
+                or (run_record or {}).get("model")
+                or ""
+            ).strip()
+            or None,
             source_env=env,
         )
     elif not use_codex:

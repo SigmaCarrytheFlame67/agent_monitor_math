@@ -72,7 +72,10 @@ class ClaudeLeanDagTests(unittest.TestCase):
                 "formalize",
             )
 
-        self.assertEqual(model, "claude-sonnet")
+        # Later repairs route to the selected alias; the provider-reported
+        # name is authorship evidence only.
+        self.assertEqual(model, "sonnet")
+        self.assertEqual(model.observed_model, "claude-sonnet")
         self.assertIn("theorem main", content)
         self.assertEqual(claude.call_args.kwargs["model"], "sonnet")
         self.assertEqual(claude.call_args.kwargs["timeout"], 600.0)

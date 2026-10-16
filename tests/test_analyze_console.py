@@ -13,6 +13,7 @@ import io
 import json
 import threading
 import zipfile
+from collections import OrderedDict
 from http.server import ThreadingHTTPServer
 from pathlib import Path
 
@@ -48,6 +49,8 @@ def analyze_console(member_console, tmp_path, monkeypatch):
                  "AGENT_MONITOR_ANALYZE_GUESTS", "ANALYZE_CMD"):
         monkeypatch.delenv(name, raising=False)
     monkeypatch.setattr(analyze_runs.GATE, "usage_path", tmp_path / "analyze_usage.json")
+    # Previewed titles label later analyses: keep them inside each test.
+    monkeypatch.setattr(analyze_runs, "_RESOLVED_TITLES", OrderedDict())
     analyze_runs.GATE.reset()
     windows = (console._GUEST_ANALYZE_WINDOWS, console._GUEST_ANALYZE_CLIENT_WINDOWS,
                console._ANALYZE_RESOLVE_WINDOWS, console._ANALYZE_RESOLVE_CLIENT_WINDOWS,
@@ -314,14 +317,55 @@ def test_link_preview_returns_metadata_and_refuses_guests_generic_files(analyze_
     assert all("example.org" not in url for url in _FakeFetcher.calls)
 
 
-def test_link_previews_are_rate_limited_per_role(analyze_console):
+def test_link_previews_are_rate_limited_per_role(analyze_console, monkeypatch):
+    monkeypatch.setattr(analyze_runs, "RESOLVE_FETCHER_FACTORY", _FakeFetcher)
+    monkeypatch.setattr(analyze_runs, "RESOLVE_SLEEP", lambda _seconds: None)
+    monkeypatch.setattr(analysis_sources, "ARXIV_SLOT_PATH", None)
+    monkeypatch.setattr(analysis_sources, "ARXIV_POLITENESS_SECONDS", 0)
+    monkeypatch.setattr(analysis_sources, "_ARXIV_LAST", [0.0])
     with running_server() as port:
         _guest, guest_cookie, _ = _issue_guest(port)
-        guest_codes = [_post(port, "/api/analyze/resolve", guest_cookie, {"url": "not a link"})[0] for _ in range(11)]
+        guest_codes = [_post(port, "/api/analyze/resolve", guest_cookie, {"url": ARXIV})[0] for _ in range(11)]
         _user, cookie = _member(port)
-        member_codes = [_post(port, "/api/analyze/resolve", cookie, {"url": "not a link"})[0] for _ in range(31)]
+        member_codes = [_post(port, "/api/analyze/resolve", cookie, {"url": ARXIV})[0] for _ in range(31)]
     assert guest_codes[:10] == [200] * 10 and guest_codes[10] == 429
     assert member_codes[:30] == [200] * 30 and member_codes[30] == 429
+
+
+def test_link_previews_refused_without_a_lookup_never_count(analyze_console, monkeypatch):
+    """A mistyped, half-typed or member-only link is refused at once and does
+    not use up the previews of the links that need a lookup."""
+    monkeypatch.setattr(analyze_runs, "RESOLVE_FETCHER_FACTORY", _FakeFetcher)
+    monkeypatch.setattr(analyze_runs, "RESOLVE_SLEEP", lambda _seconds: None)
+    monkeypatch.setattr(analysis_sources, "ARXIV_SLOT_PATH", None)
+    monkeypatch.setattr(analysis_sources, "ARXIV_POLITENESS_SECONDS", 0)
+    monkeypatch.setattr(analysis_sources, "_ARXIV_LAST", [0.0])
+    _FakeFetcher.calls = []
+    with running_server() as port:
+        _guest, cookie, _ = _issue_guest(port)
+        refused = [_post(port, "/api/analyze/resolve", cookie, {"url": url})
+                   for url in ("not a link", "https://arxiv.org/abs/2302", "https://github.com/openai",
+                               "http://example.org/paper.pdf", PDF_LINK) * 4]
+        lookups = [_post(port, "/api/analyze/resolve", cookie, {"url": ARXIV})[0] for _ in range(11)]
+    assert all(code == 200 and body["ok"] is False and body["error"] for code, _headers, body in refused)
+    assert refused[4][2]["member_only"] is True
+    assert lookups[:10] == [200] * 10 and lookups[10] == 429, lookups
+    assert len(_FakeFetcher.calls) == 10, _FakeFetcher.calls
+
+
+def test_a_previewed_title_labels_the_analysis_from_its_start(analyze_console, monkeypatch):
+    monkeypatch.setattr(analyze_runs, "RESOLVE_FETCHER_FACTORY", _FakeFetcher)
+    monkeypatch.setattr(analyze_runs, "RESOLVE_SLEEP", lambda _seconds: None)
+    monkeypatch.setattr(analysis_sources, "ARXIV_SLOT_PATH", None)
+    monkeypatch.setattr(analysis_sources, "ARXIV_POLITENESS_SECONDS", 0)
+    monkeypatch.setattr(analysis_sources, "_ARXIV_LAST", [0.0])
+    unseen = analyze_runs.normalize_request({"source": {"url": "https://arxiv.org/abs/2302.99999"}}, {"id": 5})
+    assert unseen["label"] == "https://arxiv.org/abs/2302.99999"
+    preview = analyze_runs.resolve_link(ARXIV, role="member")
+    assert preview["ok"] is True, preview
+    seen = analyze_runs.normalize_request({"source": {"url": ARXIV}}, {"id": 5})
+    assert seen["label"] == "Sums of evens"
+    assert analyze_runs.problem_text(seen["label"]) == "Analyze · Sums of evens"
 
 
 # ---------------------------------------------------------------------------

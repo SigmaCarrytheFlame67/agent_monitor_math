@@ -82,6 +82,7 @@ from agent_monitor import kimi_k3, safe_fetch
 from agent_monitor.analyze import graph as analysis_graph
 from agent_monitor.analyze import latex_structure, limits, prompts, report, sources, text_structure, verdicts
 from agent_monitor.analyze import request as analysis_request
+from agent_monitor.analyze.titles import tex_text_refs
 from agent_monitor.cgm.parsing import ParseError
 from agent_monitor.runners import math_harness_runner as harness
 
@@ -96,6 +97,9 @@ _FOCUS_RE = re.compile(rf"\b({_KIND_WORDS})s?\s+((?:[A-Z]\.)?\d+(?:\.\d+)*[a-z]?
 _DORMANT_ENV = (
     "KIMI_BASE_URL", "HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "http_proxy", "https_proxy", "all_proxy",
 )
+# Claude Code / Codex failure kinds (ClaudeBackendError.kind,
+# CodexBackendError.kind) that every further check would hit as well.
+_SUBSCRIPTION_STOP_KINDS = frozenset({"auth", "usage_limit", "model"})
 
 
 class AnalyzeError(RuntimeError):
@@ -541,7 +545,10 @@ class AnalysisRun:
         except (harness._BudgetExhausted, harness.MathHarnessError, ParseError):
             self.degraded.append("paper-map-failed")
         if self.paper_map.get("main_results"):
-            self.note("Check · main results: " + ", ".join(self.paper_map["main_results"][:6]))
+            # Progress names results as the manuscript does ("Theorem 1.1"), not by label id.
+            labels = {node["id"]: prompts.node_label(node) for node in nodes}
+            self.note("Check · main results: " + ", ".join(
+                labels.get(node_id, node_id) for node_id in self.paper_map["main_results"][:6]))
 
     def priority(self, segments: Mapping[str, Any]) -> list[dict[str, Any]]:
         return prioritize(segments, focus=str(self.req.get("focus") or ""), paper_map=self.paper_map)
@@ -576,6 +583,11 @@ class AnalysisRun:
         nodes = segments["nodes"]
         results: dict[str, dict[str, Any]] = {}
         prompt_lists: dict[str, list[str]] = {}
+        # Progress notes name what a finding cites ("Corollary 1.2", not \ref{cor:x});
+        # a re-check of an older analysis reads its section labels from the stored copy.
+        self.progress_refs = analysis_graph.segments_ref_labels(segments)
+        for label, value in analysis_graph.source_section_labels(self.workspace).items():
+            self.progress_refs.setdefault(label, (value["name"], value["number"]))
 
         def prompts_of(node: Mapping[str, Any]) -> list[str]:
             if node["id"] not in prompt_lists:
@@ -655,6 +667,11 @@ class AnalysisRun:
                 stop_reason = "Not checked: the model-call budget for this run was used"
                 break
             pending = pending[len(turn_jobs):]
+            # Progress: which results this wave checks (a check can take minutes).
+            checking = list(dict.fromkeys(
+                prompts.node_label(by_id[job.node_id]) + (f" (part {job.part} of {job.parts})" if job.parts > 1 else "")
+                for job in turn_jobs))
+            self.note("Check · now checking " + ", ".join(checking))
             try:
                 harness._run_turns(self.ctx, [job.turn_job for job in turn_jobs])
             except harness.RunCancelled:
@@ -715,8 +732,10 @@ class AnalysisRun:
         if isinstance(error, harness.PromptBoundError):
             return ("failed", job, "The check prompt exceeded its size bound")
         if isinstance(error, harness.EmptyReplyError):
-            # No judgement at all (Kimi's reasoning can use the whole output budget).
-            return ("failed", job, "the model returned an empty answer, even at low effort")
+            # No judgement at all (Kimi's reasoning can use the whole output
+            # budget).  Only Kimi routes retry at low effort.
+            low = ", even at low effort" if harness._is_kimi_route(self.info.route) else ""
+            return ("failed", job, f"the model returned an empty answer{low}")
         if isinstance(error, ParseError):
             return ("verdict", job, (verdicts.uninterpretable(str(error)), harness._job_reply(turn_job)))
         if isinstance(error, harness.ProviderCallError):
@@ -737,6 +756,17 @@ class AnalysisRun:
             message = kimi_k3.failure_message(failure, billed=self.ctx.run_processed())
             if failure.permanent:
                 self.permanent_failure = True
+        if not message:
+            # A linked Claude Code / Codex account that must sign in again, has
+            # reached its usage limit, or cannot use the model fails every
+            # further check the same way: say why, and start no more checks.
+            cause = error.__cause__
+            kind = getattr(cause, "kind", None)
+            if kind in _SUBSCRIPTION_STOP_KINDS:
+                message = " ".join(str(cause).split())[:400]
+                self.permanent_failure = True
+            elif kind == "timeout":
+                message = "The model did not answer this check in time (" + " ".join(str(cause).split())[:200] + ")"
         if not message:
             message = "The model provider did not answer this check"
         self.provider_failure = message
@@ -794,7 +824,8 @@ class AnalysisRun:
         report_block = result.get("verification_report") or {}
         first = (report_block.get("critical_errors") or report_block.get("gaps") or [None])[0]
         if first:
-            detail = " — " + " ".join(str(first.get("issue") or "").split())[:100]
+            issue = tex_text_refs(first.get("issue"), getattr(self, "progress_refs", None))
+            detail = " — " + " ".join(issue.split())[:100]
         elif verdict == "not_checked":
             detail = " — " + str(result.get("reason") or "")[:100]
         self.note(f"Check · {prompts.node_label(node)} · {verdict}{detail}")
@@ -814,6 +845,9 @@ class AnalysisRun:
         analysis_graph.merge_annotations(graph, results)
         analysis_graph.rollup(graph)
         clean = analysis_graph.sanitize(graph)
+        if not clean["ref_labels"]:
+            # Segments parsed before sections kept their labels (a re-check of an older analysis).
+            clean["ref_labels"] = analysis_graph.source_section_labels(self.workspace)
         closure = clean.get("main_closure")
         if clean.get("dependency_basis") == "model":
             self.note("Roll-up · dependencies not established (the model located the statements)")

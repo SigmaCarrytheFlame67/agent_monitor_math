@@ -1481,6 +1481,48 @@ def _https_link(value: object) -> str | None:
     return text if text.startswith("https://") and len(text) <= 2000 else None
 
 
+# The Analyze runner's own progress notes start with this prefix ("Analyze ·
+# Check · Lemma 3.7 · error — …"); a bare call stage after it ("map",
+# "check-3", "check-3-low", "segment-1-retry") only marks a model call.
+_ANALYZE_NOTE_PREFIX = "Analyze · "
+_ANALYZE_CALL_RE = re.compile(r"(?:map|segment-\d+|check-\d+)(?:-retry)?(?:-low)?")
+_ANALYZE_NOW_CHECKING = "Check · now checking "
+ANALYZE_PROGRESS_LINES = 600
+
+
+def _analysis_progress_text(data: dict) -> str:
+    """The live Sandbox of an Analyze run: the runner's progress notes and its
+    public error messages, one per line, without the ``Analyze · `` prefix.
+
+    Never a verifier's or paper map's raw JSON reply, a model-call marker or
+    the process log (the session summary node): those are model output and
+    plumbing, shown in the Monitor and the process log only."""
+    lines: list[str] = []
+    for agent in data.get("agents") or []:
+        if not isinstance(agent, dict):
+            continue
+        output = str(agent.get("output") or "").strip()
+        if not output:
+            continue
+        if output.startswith(_ANALYZE_NOTE_PREFIX):
+            note = " ".join(output[len(_ANALYZE_NOTE_PREFIX):].split())
+            if note and not _ANALYZE_CALL_RE.fullmatch(note):
+                lines.append(note[:600])
+        elif str(agent.get("stage_name") or "").endswith("(error)"):
+            # The runner's terminal error ("The source could not be used: …").
+            message = " ".join(output.split())
+            if message:
+                lines.append(message[:600])
+    if not lines and str(data.get("status") or "") not in ("", "running"):
+        error = " ".join(str(data.get("error") or "").split())
+        if error:
+            lines.append(error[:600])
+    # "Now checking …" matters only for the checks still in flight (the last line).
+    lines = [line for index, line in enumerate(lines)
+             if not line.startswith(_ANALYZE_NOW_CHECKING) or index == len(lines) - 1]
+    return "\n".join(lines[-ANALYZE_PROGRESS_LINES:])
+
+
 def _analysis_preview(run_id: str, data: dict) -> dict:
     """The Sandbox of an Analyze run: ``analysis/report.md`` (live progress
     until it exists).  Never anything under ``analysis/source/``; the owner
@@ -1515,7 +1557,7 @@ def _analysis_preview(run_id: str, data: dict) -> dict:
                 source_file = f"analysis/source/{root_file}"
     block = data.get("analyze") if isinstance(data.get("analyze"), dict) else {}
     source = block.get("source") if isinstance(block.get("source"), dict) else {}
-    live = "" if report else _live_writes(data)
+    live = "" if report else _analysis_progress_text(data)
     return {
         "kind": "analysis",
         "text": report or live,
@@ -2182,6 +2224,12 @@ class Handler(RunSharingMixin, ProjectsMixin, ResearchMixin, BaseHTTPRequestHand
             return
         if len(url) > analyze_runs.MAX_URL_CHARS:
             self._send(400, json.dumps({"error": "The link is too long"}))
+            return
+        # A link refused without any lookup (mistyped, half-typed, member-only)
+        # is answered at once and does not count against the preview limit.
+        refusal = analyze_runs.preview_refusal(url.strip(), role=analyze_runs.role_of(user))
+        if refusal is not None:
+            self._send(200, json.dumps(refusal, ensure_ascii=False), headers={"Cache-Control": "no-store"})
             return
         error, retry_after = _reserve_analyze_resolve(user, self._guest_client_key())
         if error:

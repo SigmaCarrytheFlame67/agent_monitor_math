@@ -160,12 +160,30 @@ def apply_models(env: dict[str, str], plan: Mapping[str, Any]) -> dict[str, str]
 
 
 def formal_view(record: Mapping[str, Any] | None) -> dict[str, Any] | None:
-    """A Max run as its worker route, for Lean and graph work after the run.
+    """A run as Lean and graph work after the run sees it.
 
     Derived calls run on one route; for Max that is the linked Codex account
-    with the worker model.  Other records are returned unchanged.
+    with the worker model.  Derived Codex calls have a fixed per-call limit
+    (240 s for a DAG or Lean response), so like Max they run at no more than
+    high effort: a Codex-subscription run made at extra-high or maximum
+    effort derives its views at high.  Other records are returned unchanged.
     """
-    if record is None or not is_max_record(record):
+    if record is None:
+        return record  # type: ignore[return-value]
+    if not is_max_record(record):
+        live = record.get("live") or {}
+        route = str(record.get("auth_route") or "").strip().lower() or (
+            "codex_subscription"
+            if isinstance(live, Mapping)
+            and str(live.get("auth_mode") or "").strip().lower()
+            in {"codex_subscription", "chatgpt_subscription"}
+            else ""
+        )
+        effort = str(record.get("reasoning_effort") or "").strip().lower()
+        if route == "codex_subscription" and effort in {"xhigh", "max"}:
+            view = dict(record)
+            view["reasoning_effort"] = FORMAL_EFFORT
+            return view
         return record  # type: ignore[return-value]
     worker = record_plan(record)["worker"]
     model = str(worker["model"])

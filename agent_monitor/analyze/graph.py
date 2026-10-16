@@ -38,6 +38,7 @@ import json
 import os
 import re
 import stat
+import threading
 from collections import defaultdict, deque
 from pathlib import Path
 from typing import Any, Iterable, Mapping
@@ -151,8 +152,175 @@ def build(segments: Mapping[str, Any], manuscript: Mapping[str, Any], *, generat
         "edges": edges,
         "macros": dict(list((segments.get("macros") or {}).items())[:400]),
         "math_fidelity": segments.get("math_fidelity"),
+        # Labels of sections (the results' own labels are on their nodes), so
+        # "Section~\ref{sec:x}" in model prose reads "Section 7".
+        "ref_labels": section_ref_labels(segments),
     }
     return graph
+
+
+_REF_LABEL_RE = re.compile(r"[^\s{}\\]{1,120}")
+MAX_REF_LABELS = 400
+
+
+def _section_ref(section: Mapping[str, Any]) -> tuple[str, str] | None:
+    """(name, number) of a section: "Section 7"/"7", "Appendix A"/"A",
+    "Chapter 2"/"2", else its title in quotes."""
+    number = _text(section.get("number"), 40)
+    title = " ".join(_text(section.get("title"), 160).split())
+    level = str(section.get("level") or "")
+    if number and level in ("chapter", "section", "subsection", "subsubsection"):
+        word = "Chapter" if level == "chapter" else "Appendix" if number[:1].isalpha() else "Section"
+        return f"{word} {number}", number
+    if title:
+        return f"“{title}”", f"“{title}”"
+    return None
+
+
+def section_ref_labels(segments: Mapping[str, Any]) -> dict[str, dict[str, str]]:
+    """``{label: {"name", "number"}}`` for the manuscript's labelled sections
+    (see :func:`_section_ref`)."""
+    out: dict[str, dict[str, str]] = {}
+    for section in segments.get("sections") or []:
+        if not isinstance(section, Mapping):
+            continue
+        ref = _section_ref(section)
+        if ref is None:
+            continue
+        for label in section.get("labels") or []:
+            if isinstance(label, str) and _REF_LABEL_RE.fullmatch(label) and label not in out:
+                out[label] = {"name": ref[0], "number": ref[1]}
+        if len(out) >= MAX_REF_LABELS:
+            break
+    return out
+
+
+# Analyses parsed before sections kept their labels: the label is read from
+# the stored copy of the manuscript (analysis/source), right after the
+# section's heading at the file and line the parser recorded.  Never
+# compiled or run; bounded; cached per segments file.
+_HEADING_RE = re.compile(r"\\(?:part|chapter|section|subsection|subsubsection|paragraph|subparagraph)\*?"
+                         r"\s*(?:\[[^\]\n]*\])?\s*\{")
+_LABEL_IN_RE = re.compile(r"\\label\s*\{([^{}\n]{1,120})\}")
+_LABEL_NEXT_RE = re.compile(r"\s*(?:%[^\n]*\n\s*)*\\label\s*\{([^{}\n]{1,120})\}")
+SOURCE_LABEL_LINES = 4
+MAX_SOURCE_FILE_BYTES = 8 * 1024 * 1024
+MAX_SEGMENTS_BYTES = 32 * 1024 * 1024
+_SOURCE_LABELS: "dict[tuple[str, int, int], dict[str, dict[str, str]]]" = {}
+_SOURCE_LABELS_LOCK = threading.Lock()
+
+
+def _heading_labels(chunk: str) -> list[str]:
+    """Labels of the first heading in ``chunk``: in its title or right after it."""
+    match = _HEADING_RE.search(chunk)
+    if not match:
+        return []
+    depth, index = 1, match.end()
+    while index < len(chunk) and depth:
+        char = chunk[index]
+        if char == "\\":
+            index += 2
+            continue
+        depth += 1 if char == "{" else -1 if char == "}" else 0
+        index += 1
+    if depth:
+        return []
+    labels = _LABEL_IN_RE.findall(chunk[match.end():index - 1])
+    rest = chunk[index:]
+    while True:
+        following = _LABEL_NEXT_RE.match(rest)
+        if not following:
+            break
+        labels.append(following.group(1))
+        rest = rest[following.end():]
+    return [label.strip() for label in labels if _REF_LABEL_RE.fullmatch(label.strip())]
+
+
+def _source_lines(source: Path, name: str, cache: dict[str, list[str]]) -> list[str]:
+    if name in cache:
+        return cache[name]
+    lines: list[str] = []
+    parts = Path(name).parts
+    if parts and not Path(name).is_absolute() and not any(part in ("..", ".") for part in parts):
+        try:
+            path = source.joinpath(*parts)
+            resolved = path.resolve(strict=True)
+            if (resolved.is_relative_to(source) and not path.is_symlink() and resolved.is_file()
+                    and resolved.stat().st_size <= MAX_SOURCE_FILE_BYTES):
+                lines = resolved.read_text(encoding="utf-8", errors="replace").splitlines()
+        except (OSError, ValueError, RuntimeError):
+            lines = []
+    cache[name] = lines
+    return lines
+
+
+def source_section_labels(workspace: Path) -> dict[str, dict[str, str]]:
+    """``{label: {"name", "number"}}`` of the labelled sections of an analysis
+    whose segments predate recorded section labels (else ``{}``)."""
+    root = Path(workspace).resolve()
+    segments_path = root / "analysis" / "segments.json"
+    try:
+        if segments_path.is_symlink():
+            return {}
+        info = segments_path.stat()
+    except OSError:
+        return {}
+    key = (str(root), info.st_mtime_ns, info.st_size)
+    with _SOURCE_LABELS_LOCK:
+        if key in _SOURCE_LABELS:
+            return dict(_SOURCE_LABELS[key])
+    out: dict[str, dict[str, str]] = {}
+    try:
+        segments = json.loads(segments_path.read_bytes()[:MAX_SEGMENTS_BYTES + 1]) \
+            if info.st_size <= MAX_SEGMENTS_BYTES else {}
+    except (OSError, ValueError, RecursionError):
+        segments = {}
+    sections = [item for item in (segments.get("sections") or [] if isinstance(segments, Mapping) else [])
+                if isinstance(item, Mapping)][:MAX_REF_LABELS]
+    if not any("labels" in section for section in sections):
+        source = (root / "analysis" / "source").resolve()
+        files: dict[str, list[str]] = {}
+        for section in sections:
+            name, line, ref = section.get("file"), section.get("line"), _section_ref(section)
+            if not isinstance(name, str) or not isinstance(line, int) or line < 1 or ref is None:
+                continue
+            chunk = "\n".join(_source_lines(source, name, files)[line - 1:line - 1 + SOURCE_LABEL_LINES])
+            for label in _heading_labels(chunk):
+                out.setdefault(label, {"name": ref[0], "number": ref[1]})
+    with _SOURCE_LABELS_LOCK:
+        if len(_SOURCE_LABELS) >= 128:
+            _SOURCE_LABELS.pop(next(iter(_SOURCE_LABELS)))
+        _SOURCE_LABELS[key] = dict(out)
+    return out
+
+
+def _labels_of(nodes: Iterable[Mapping[str, Any]], label_of, number_of) -> dict[str, tuple[str, str]]:
+    refs: dict[str, tuple[str, str]] = {}
+    for node in nodes:
+        name = label_of(node)
+        for label in node.get("labels") or (node.get("meta") or {}).get("labels") or []:
+            if isinstance(label, str) and label not in refs:
+                refs[label] = (name, number_of(node) or label)
+    return refs
+
+
+def ref_labels(graph: Mapping[str, Any]) -> dict[str, tuple[str, str]]:
+    """``{label: (name, number)}`` of a graph's results and labelled sections,
+    for :func:`agent_monitor.analyze.titles.tex_text_refs`."""
+    refs = _labels_of(graph.get("nodes") or [], lambda node: str(node.get("label") or node.get("id") or ""),
+                      lambda node: str((node.get("meta") or {}).get("number") or ""))
+    for label, value in (graph.get("ref_labels") or {}).items():
+        if isinstance(value, Mapping) and label not in refs:
+            refs[label] = (str(value.get("name") or label), str(value.get("number") or label))
+    return refs
+
+
+def segments_ref_labels(segments: Mapping[str, Any]) -> dict[str, tuple[str, str]]:
+    """:func:`ref_labels` of a segments document (before the graph is built)."""
+    refs = _labels_of(segments.get("nodes") or [], node_label, lambda node: str(node.get("number") or ""))
+    for label, value in section_ref_labels(segments).items():
+        refs.setdefault(label, (value["name"], value["number"]))
+    return refs
 
 
 def source_card(manuscript: Mapping[str, Any]) -> dict[str, Any]:
@@ -512,6 +680,11 @@ def sanitize(raw: object) -> dict[str, Any]:
         "macros": {_text(key, 60): _text(value, 400) for key, value in list((raw.get("macros") or {}).items())[:400]
                    if isinstance(key, str) and re.fullmatch(r"\\[A-Za-z]+", key)},
         "math_fidelity": "pdf-text" if raw.get("math_fidelity") == "pdf-text" else None,
+        "ref_labels": {
+            label: {"name": _text(value.get("name"), 200) or label, "number": _text(value.get("number"), 200) or label}
+            for label, value in list((raw.get("ref_labels") or {}).items())[:MAX_REF_LABELS]
+            if isinstance(label, str) and _REF_LABEL_RE.fullmatch(label) and isinstance(value, Mapping)
+        } if isinstance(raw.get("ref_labels"), Mapping) else {},
     }
     return clean
 
@@ -550,9 +723,13 @@ def load(workspace: Path) -> dict[str, Any] | None:
                 return None
             raw = handle.read(MAX_GRAPH_BYTES + 1)
         value = json.loads(raw.decode("utf-8"))
-        return sanitize(value)
+        clean = sanitize(value)
     except (OSError, ValueError, UnicodeDecodeError, RecursionError):
         return None
+    if not clean["ref_labels"]:
+        # A graph written before sections kept their labels.
+        clean["ref_labels"] = source_section_labels(workspace)
+    return clean
 
 
 # ---------------------------------------------------------------------------

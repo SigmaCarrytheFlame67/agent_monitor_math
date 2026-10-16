@@ -42,8 +42,15 @@ def parse_codex_jsonl(text: str) -> CodexUsage:
         raw_usage = ev.get("usage")
         if not isinstance(raw_usage, dict):
             continue
-        usage.input_tokens += int(raw_usage.get("input_tokens") or 0)
-        usage.cached_input_tokens += int(raw_usage.get("cached_input_tokens") or 0)
+        input_tokens = int(raw_usage.get("input_tokens") or 0)
+        cached = int(raw_usage.get("cached_input_tokens") or 0)
+        if raw_usage.get("input_excludes_cache") is True:
+            # Claude Code usage projected by agent_monitor.runners.claude_backend
+            # reports cache reads and writes apart from input_tokens; fold
+            # them in so input_tokens keeps Codex semantics (all input read).
+            input_tokens += cached + int(raw_usage.get("cache_write_tokens") or 0)
+        usage.input_tokens += input_tokens
+        usage.cached_input_tokens += cached
         usage.output_tokens += int(raw_usage.get("output_tokens") or 0)
         usage.reasoning_output_tokens += int(raw_usage.get("reasoning_output_tokens") or 0)
         usage.n_turns += 1

@@ -15,7 +15,73 @@ from typing import Callable, Mapping
 
 
 class CodexBackendError(RuntimeError):
-    """Raised when a one-shot Codex CLI call cannot produce a response."""
+    """Raised when a one-shot Codex CLI call cannot produce a response.
+
+    ``kind`` classifies failures a caller should not simply retry: ``"auth"``
+    (the linked account must sign in again), ``"usage_limit"`` (plan usage or
+    quota; a bare 429 may be transient and is not one), ``"model"`` (the model
+    is unavailable to this account or build), ``"timeout"`` (no answer within
+    the per-call limit); ``None`` otherwise.
+    """
+
+    def __init__(self, message: str = "", *, kind: str | None = None) -> None:
+        super().__init__(message)
+        self.kind = kind
+
+
+def _failure_kind(message: str) -> str | None:
+    """Classify a Codex CLI failure message (see ``CodexBackendError.kind``)."""
+    rendered = str(message or "").lower()
+    if (
+        "usage limit" in rendered
+        or "quota exceeded" in rendered
+        or "exceeded your current quota" in rendered
+        or "insufficient_quota" in rendered
+        or ("hit your" in rendered and "limit" in rendered)
+    ):
+        return "usage_limit"
+    if (
+        "401 unauthorized" in rendered
+        or "access token could not be refreshed" in rendered
+        or "sign in again" in rendered
+        or "not logged in" in rendered
+        or "log out and sign in" in rendered
+    ):
+        return "auth"
+    if (
+        "model is not supported" in rendered
+        or "not supported when using codex" in rendered
+        or "not in the vetted bundled catalog" in rendered
+        or "model_not_found" in rendered
+        or ("does not exist" in rendered and "model" in rendered)
+    ):
+        return "model"
+    return None
+
+
+def _event_failure_message(events: list[dict]) -> str:
+    """The CLI's own reason for a failed turn, without its JSONL framing.
+
+    Codex 0.160 ends a failed turn with ``turn.failed`` (``error.message``)
+    after an ``error`` event and writes nothing useful to stderr; the first
+    ``error`` item is often only the nonfatal ``use_legacy_landlock``
+    deprecation notice and must never be reported as the cause.
+    """
+    for event in reversed(events):
+        if event.get("type") in {"turn.failed", "turn.cancelled"}:
+            detail = event.get("error") or event.get("message") or ""
+            if isinstance(detail, dict):
+                detail = detail.get("message") or json.dumps(detail, ensure_ascii=False)
+            if str(detail).strip():
+                return " ".join(str(detail).split())
+    for event in reversed(events):
+        # Item-level errors are nonfatal notices (the landlock deprecation,
+        # "Falling back from WebSockets ..."); only top-level errors count.
+        if event.get("type") == "error" and str(event.get("message") or "").strip():
+            message = " ".join(str(event["message"]).split())
+            if not message.startswith("Reconnecting..."):
+                return message
+    return ""
 
 
 # Callers that persist a no-tools provenance claim can fail closed on this
@@ -539,7 +605,9 @@ def codex_exec(
                     ),
                 )
             except subprocess.TimeoutExpired as exc:
-                raise CodexBackendError(f"codex exec timed out after {timeout:g}s") from exc
+                raise CodexBackendError(
+                    f"codex exec timed out after {timeout:g}s", kind="timeout"
+                ) from exc
             except OSError as exc:
                 raise CodexBackendError(f"could not start codex exec: {exc}") from exc
         finally:
@@ -547,7 +615,14 @@ def codex_exec(
                 proxy.__exit__(None, None, None)
 
         events: list[dict] = []
-        usage = {"input_tokens": 0, "output_tokens": 0}
+        # Codex semantics: cached input is part of input_tokens.  Keep the
+        # cached and reasoning parts so callers can show and price them.
+        usage = {
+            "input_tokens": 0,
+            "cached_input_tokens": 0,
+            "output_tokens": 0,
+            "reasoning_output_tokens": 0,
+        }
         terminal_event: dict | None = None
         for line in completed.stdout.splitlines():
             try:
@@ -561,24 +636,36 @@ def codex_exec(
                 emit_event(event)
             if event.get("type") == "turn.completed":
                 event_usage = event.get("usage") or {}
-                usage["input_tokens"] += int(event_usage.get("input_tokens") or 0)
-                usage["output_tokens"] += int(event_usage.get("output_tokens") or 0)
+                for key in usage:
+                    try:
+                        usage[key] += int(event_usage.get(key) or 0)
+                    except (TypeError, ValueError):
+                        pass
             if event.get("type") in {"turn.completed", "turn.failed", "turn.cancelled"}:
                 terminal_event = event
 
+        failure = _event_failure_message(events)
         if completed.returncode:
+            if failure:
+                # The CLI's own reason (usage limit, expired login, model not
+                # available ...) instead of the raw JSONL tail.
+                raise CodexBackendError(
+                    f"codex exec failed: {failure[-1000:]}", kind=_failure_kind(failure)
+                )
             detail = (completed.stderr or completed.stdout or "").strip()
             suffix = f": {detail[-1000:]}" if detail else ""
             raise CodexBackendError(
-                f"codex exec exited with status {completed.returncode}{suffix}"
+                f"codex exec exited with status {completed.returncode}{suffix}",
+                kind=_failure_kind(detail),
             )
         if terminal_event is None:
             raise CodexBackendError("codex exec ended without a terminal turn event")
         if terminal_event.get("type") != "turn.completed":
-            detail = terminal_event.get("error") or terminal_event.get("message") or ""
+            detail = failure or ""
             suffix = f": {str(detail)[-500:]}" if detail else ""
             raise CodexBackendError(
-                f"codex exec terminal event was {terminal_event.get('type')}{suffix}"
+                f"codex exec terminal event was {terminal_event.get('type')}{suffix}",
+                kind=_failure_kind(detail),
             )
 
         try:
@@ -593,7 +680,9 @@ def codex_exec(
                     break
         if not text:
             raise CodexBackendError("codex exec returned an empty response")
-        return CodexResult(text=text, usage=usage)
+        # The cached and reasoning parts appear only when the CLI reported them.
+        return CodexResult(text=text, usage={key: value for key, value in usage.items()
+                                             if value or key in {"input_tokens", "output_tokens"}})
 
 
 def codex_subscription_exec(

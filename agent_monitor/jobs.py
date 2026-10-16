@@ -1,6 +1,7 @@
 """Background job manager for engine runs."""
 from __future__ import annotations
 
+import errno
 import hashlib
 import json
 import math
@@ -1560,6 +1561,20 @@ def start_job(
                 effective, sponsored=sponsored_kimi, api_timeout=_analyze_api_timeout(sponsored_kimi)
             )
         )
+        if route in {"claude_subscription", "codex_subscription"} and tuning.get(
+            "reasoning_effort"
+        ) in {"xhigh", "max"}:
+            # Extra-high and maximum effort calls on the linked accounts are
+            # long (Max allows them 30 minutes each); a check would otherwise
+            # get the 600 s default.  Every call stays capped at the
+            # analysis deadline, so the watchdog above is unchanged.  An
+            # operator setting wins.
+            for name, seconds in (
+                ("AGENT_MONITOR_MATH_HARNESS_CLAUDE_TIMEOUT", cgm_max.CLAUDE_CALL_TIMEOUT),
+                ("AGENT_MONITOR_CODEX_TIMEOUT", cgm_max.CODEX_CALL_TIMEOUT),
+            ):
+                if not str(extra_env.get(name) or os.environ.get(name) or "").strip():
+                    extra_env[name] = str(seconds)
         if not sponsored_kimi:
             # A flag inherited from the account environment is not this run's
             # route: the runner would otherwise expect a broker credential.
@@ -2274,6 +2289,10 @@ def _execute_job_body(
                     "--component", f"cfg_claude_author.model={model}",
                     "--component", f"cfg_claude_critic.model={model}",
                 ]
+                # The Claude worker is not a codex command, so the component
+                # model never reaches its command line: it reads this variable
+                # (and otherwise falls back to Haiku).
+                extra_env = {**(extra_env or {}), "AGENT_MONITOR_CLAUDE_MODEL": model}
             elif str(model or "").lower().startswith("kimi-"):
                 improof_args = ["--model", "*=models/kimi/k3"]
             result = improof_runner.run_problem(
@@ -2408,21 +2427,18 @@ def _execute_job_body(
             status = "failed"
         _update_job(job_id, status=status, error=result_run.get("error"))
         # Full record in the human-in-the-loop chat: summary + final answer.
-        t = result_run.get("totals") or {}
-        summary = (
-            f"{'✓' if status == 'finished' else '✗'} run {status} · "
-            f"{len(result_run.get('agents') or [])} agents · "
-            f"in {t.get('input_tokens') or 0} / out {t.get('output_tokens') or 0} tokens"
-            + (f" · ${t.get('cost_usd'):.4f}" if t.get("cost_usd") else "")
-            + f" · {int(time.time() - started)}s"
-        )
+        summary = _run_finished_line(result_run, status, time.time() - started, analyze=analyze_run)
         _append_chat(run_id, "system", summary)
         final_out = ""
         for a in reversed(result_run.get("agents") or []):
             if a.get("output"):
                 final_out = str(a["output"])
                 break
-        if final_out:
+        if analyze_run:
+            # An analysis's last agent is its process log: the Progress panel
+            # gets a plain summary instead (the report is in the Sandbox).
+            _append_chat(run_id, "system", _analyze_chat_summary(result_run, status))
+        elif final_out:
             _append_chat(run_id, "assistant", final_out[:3000])
         # Neither the standalone public service nor an anonymous guest run
         # imports, reads, or writes the operator's persistent user library.
@@ -2968,6 +2984,87 @@ def _finalize_analyze_record(run: dict[str, Any], workspace: Path) -> None:
         pass
 
 
+def _analyze_running_label(workspace: Path) -> str:
+    """"Analyze · <title>" once the running analysis has read its manuscript
+    (``analysis/manuscript.json`` exists), else ``""``."""
+    if not (workspace / "analysis" / "manuscript.json").is_file():
+        return ""
+    from agent_monitor.analyze import record as analyze_record
+    from agent_monitor.analyze_runs import problem_text as analyze_problem_text
+
+    try:
+        block = analyze_record.run_block(workspace) or {}
+    except Exception:  # noqa: BLE001 - the label waits for the finished record
+        return ""
+    title = _analyze_title(block)
+    return analyze_problem_text(title, str(block.get("focus") or "")) if title else ""
+
+
+def _plural(count: int, one: str, many: str) -> str:
+    return f"{count} {one if count == 1 else many}"
+
+
+def _run_finished_line(run: dict[str, Any], status: str, seconds: float, *, analyze: bool = False) -> str:
+    """A run's closing line in its chat. An analysis counts its model calls,
+    as its Progress pane does: its agents are the runner's process log."""
+    totals = run.get("totals") or {}
+    if analyze:
+        calls = int((((run.get("analyze") or {}).get("summary") or {}).get("calls")) or 0)
+        count = _plural(calls, "model call", "model calls")
+    else:
+        count = f"{len(run.get('agents') or [])} agents"
+    return (
+        f"{'✓' if status == 'finished' else '✗'} run {status} · {count} · "
+        f"in {totals.get('input_tokens') or 0} / out {totals.get('output_tokens') or 0} tokens"
+        + (f" · ${totals.get('cost_usd'):.4f}" if totals.get("cost_usd") else "")
+        + f" · {int(seconds)}s"
+    )
+
+
+def _analyze_chat_summary(run: dict[str, Any], status: str) -> str:
+    """The closing message of an analysis in its Progress panel: what was
+    checked, in plain words (never the runner's process log or model output)."""
+    block = run.get("analyze") or {}
+    summary = block.get("summary") or {}
+    head = {"finished": "Analysis finished", "stopped": "Analysis stopped"}.get(status, "Analysis failed")
+    parts: list[str] = []
+    if summary:
+        coverage = summary.get("coverage") or {}
+        checked, total = int(coverage.get("checked") or 0), int(coverage.get("total") or 0)
+        # Results with a located proof that were not checked (statements
+        # without a proof are never checkable and are not counted here).
+        unchecked = max(0, total - checked)
+        counts = [
+            text for value, text in (
+                (summary.get("checked"), f"{int(summary.get('checked') or 0)} with no issue found"),
+                (summary.get("gap"), _plural(int(summary.get("gap") or 0), "with a gap", "with gaps")),
+                (summary.get("error"), _plural(int(summary.get("error") or 0), "with an error", "with errors")),
+                (summary.get("unclear"), f"{int(summary.get('unclear') or 0)} unclear"),
+                (unchecked, f"{unchecked} not checked"),
+            ) if value
+        ]
+        if checked:
+            parts.append(f"{head}: {checked} of {total} results checked"
+                         + (f" ({', '.join(counts)})" if counts else "") + ".")
+            parts.append("The report is in the Sandbox and the verdicts are in the DAG. "
+                         "Checked by a model verifier — not a certificate.")
+        else:
+            parts.append(f"{head}: no result was checked. The report in the Sandbox says why.")
+    else:
+        parts.append(f"{head}; no report was published.")
+    if status == "failed":
+        errors = [
+            " ".join(str(agent.get("output") or "").split())
+            for agent in run.get("agents") or []
+            if isinstance(agent, dict) and str(agent.get("stage_name") or "").endswith("(error)")
+        ]
+        error = next((item for item in reversed(errors) if item), "") or re.sub(
+            r"^Ansatz Analyze exited with code \d+: ", "", " ".join(str(run.get("error") or "").split()))
+        if error:
+            parts.append(error[:600])
+    return "\n\n".join(parts)
+
+
 def _analyze_memory_label(run: dict[str, Any]) -> str:
     """The operator-memory line of an analysis: its label and verdict counts."""
     block = run.get("analyze") or {}
@@ -3445,7 +3542,8 @@ def _run_hermes(
     try:
         result = agent.run_conversation(prompt)
         initial_final = str((result or {}).get("final_response") or "")
-        _persist_text_final_answer(initial_final, workspace, engine="Hermes")
+        if not _hermes_text_is_error_report(result):
+            _persist_text_final_answer(initial_final, workspace, engine="Hermes")
         if (
             not stop_ev.is_set()
             and _hermes_audit_last_mile_needed(problem_text, workspace)
@@ -3466,7 +3564,12 @@ def _run_hermes(
         raise StopRequested(run_id)
     elapsed = time.time() - started
     final = (result or {}).get("final_response") or ""
-    proof = _persist_text_final_answer(final, workspace, engine="Hermes")
+    turn_error = _hermes_turn_error(result)
+    proof = (
+        _root_proof_artifact(workspace)
+        if _hermes_text_is_error_report(result)
+        else _persist_text_final_answer(final, workspace, engine="Hermes")
+    )
     completed = bool((result or {}).get("completed", True)) and proof is not None
     final_status = "finished" if completed else "failed"
     try:
@@ -3533,7 +3636,11 @@ def _run_hermes(
             "live": {**live, "tools_recent": live["tools_recent"][-10:]},
             "status": final_status,
             "completed": completed,
-            "error": None if completed else "Hermes finished without creating a non-empty proof.md or proof.tex",
+            "error": None if completed else (
+                f"Hermes stopped: {turn_error}"
+                if turn_error
+                else "Hermes finished without creating a non-empty proof.md or proof.tex"
+            ),
             "updated_at": _now(),
             "workspace": str(workspace),
             "pipeline": _pipeline_for("hermes"),
@@ -3552,6 +3659,38 @@ def _run_hermes(
         engine="hermes",
     )
     return _attach_analysis(run, workspace)
+
+
+_ANSI_ESCAPE_RE = re.compile(r"\x1b\[[0-9;?]*[ -/]*[@-~]")
+
+
+def _hermes_turn_error(result: Any) -> str:
+    """The reason Hermes ended a turn unsuccessfully (a Codex usage limit,
+    an expired login, a crashed app-server), cleaned for the run record."""
+    if not isinstance(result, dict) or result.get("completed") is not False:
+        return ""
+    raw = str(result.get("error") or "").strip()
+    if not raw:
+        return ""
+    # Codex app-server failures append its stderr tail; keep the reason.
+    raw = raw.split("\ncodex stderr", 1)[0]
+    return " ".join(_ANSI_ESCAPE_RE.sub("", raw).split())[:600]
+
+
+def _hermes_text_is_error_report(result: Any) -> bool:
+    """Whether Hermes' final text is its own failure report, never a proof draft.
+
+    A crashed app-server ("Codex app-server turn failed: ..."), a result
+    marked ``failed`` or text that is the error itself is a report.  A turn
+    cut short (truncated, a usage limit mid-answer) still returns the model's
+    partial draft, which is kept as before.
+    """
+    if not isinstance(result, dict) or result.get("completed") is not False:
+        return False
+    text = str(result.get("final_response") or "").strip()
+    if result.get("failed") is True or text.startswith("Codex app-server turn failed"):
+        return True
+    return bool(text) and text == str(result.get("error") or "").strip()
 
 
 def _ensure_codex_auth(env: dict[str, str], owner_id: int | None = None) -> None:
@@ -3636,7 +3775,8 @@ def _cli_failure_reason(
         return f"{label} exited with code {returncode}{suffix}"
     if proof_missing:
         return f"{label} exited successfully but produced no {artifact}"
-    return f"{label} failed before producing a {artifact}"
+    suffix = f": {detail.strip()}" if detail and detail.strip() else ""
+    return f"{label} failed before producing a {artifact}{suffix}"
 
 
 def _analysis_published(workspace: Path) -> bool:
@@ -4041,6 +4181,9 @@ def _run_cli_engine(
     from agent_monitor.cli_events import CLIEventParser
 
     parser = CLIEventParser(spec.get("parser_style") or engine, source_engine=engine)
+    # An analysis is listed as "Analyze · <title>" as soon as the runner has
+    # read the manuscript (not only once it has exited).
+    analyze_label: dict[str, str] = {}
 
     def _flush(
         output_tail: str,
@@ -4048,6 +4191,11 @@ def _run_cli_engine(
         *,
         error: str | None = None,
     ) -> dict[str, Any]:
+        nonlocal record_problem_text
+        if analyze_run and not analyze_label:
+            label = _analyze_running_label(workspace)
+            if label:
+                analyze_label["text"] = record_problem_text = label
         u = parser.usage
         # One node per model call/turn when the CLI streams JSON events;
         # otherwise fall back to a single session node (e.g. openhands TTY).
@@ -4196,6 +4344,10 @@ def _run_cli_engine(
             },
             engine=engine,  # type: ignore[arg-type]
         )
+        if analyze_label:
+            # The run list's label comes from the session problems.
+            run["problems"] = _seed_problems(record_problem_text, source="initial")
+            run["problem_text_preview"] = record_problem_text[:500]
         _attach_analysis(run, workspace)
         _write_run(run)
         return run
@@ -4317,7 +4469,16 @@ def _run_cli_engine(
             start_new_session=True,
         )
     except OSError as exc:
-        return _flush(f"failed to launch: {exc}", status="failed")
+        label = str(spec.get("label") or engine)
+        reason = f"{label} could not start: {exc.strerror or exc}"
+        if getattr(exc, "errno", None) == errno.E2BIG:
+            # Linux limits one command-line argument to 128 KiB.
+            reason = (
+                f"{label} could not start: the task prompt is too large to pass "
+                "on the command line; shorten the problem text or attach the "
+                "long material as a file"
+            )
+        return _flush(f"failed to launch: {exc}", status="failed", error=reason)
 
     _register_proc(run_id, proc)
     import queue
@@ -4408,8 +4569,21 @@ def _run_cli_engine(
         _persist_openclaw_final_answer(parser, workspace)
     if stopped or stop_ev.is_set():
         return _flush(parser.output(), status="stopped")
+    # Wrappers (claude_runner and friends) report their typed failure on
+    # stderr as "[agent-monitor] <reason>"; it is the run's best explanation
+    # when the structured stream itself carries none.
+    runner_detail = next(
+        (
+            line.strip()[len("[agent-monitor] "):].strip()
+            for line in reversed(buf)
+            if line.strip().startswith("[agent-monitor] ")
+        ),
+        "",
+    )
     if engine in {"codex", "claude"} and parser.terminal_status is None:
-        parser.terminal_error = "CLI ended without a terminal completion event"
+        parser.terminal_error = (
+            runner_detail[-1200:] or "CLI ended without a terminal completion event"
+        )
     ok = proc.returncode == 0 and not timed_out and not parser.terminal_error
     proof_missing = False
     if analyze_run:
@@ -4433,7 +4607,7 @@ def _run_cli_engine(
             timed_out=timed_out,
             timeout_s=timeout_s,
             proof_missing=proof_missing,
-            detail=parser.terminal_error,
+            detail=parser.terminal_error or runner_detail[-1200:] or None,
             artifact="analysis report" if analyze_run else "proof artifact",
         )
     return _flush(
@@ -5496,6 +5670,31 @@ def _continue_with_message(
 
 
 
+def _interrupted_continuation_record(
+    previous: dict[str, Any], current: dict[str, Any], *, job_id: str
+) -> dict[str, Any]:
+    """The record to keep when a follow-up stops or fails before finishing.
+
+    Live heartbeats of most follow-ups (Hermes, the CLI engines) hold only the
+    follow-up's own nodes and totals.  Writing that back as the final record
+    would erase the run's earlier sessions (and their usage), so merge it onto
+    the record as it was before the follow-up.  Node ids cannot tell whether
+    that already happened (Hermes' ``{run_id}::iter-N`` restart every session);
+    a live merge (IMProof) tags the follow-up's nodes with this job instead.
+    """
+    def agents(run: dict[str, Any]) -> list[dict[str, Any]]:
+        return [agent for agent in run.get("agents") or [] if isinstance(agent, dict)]
+
+    previous_agents, current_agents = agents(previous), agents(current)
+    if not previous_agents or current_agents == previous_agents:
+        # Nothing to keep, or the follow-up wrote no live record yet.
+        return current
+    if any(agent.get("continuation_job_id") == job_id for agent in current_agents):
+        # Already merged onto the history while it ran.
+        return current
+    return _merge_continuation_run(previous, current, job_id=job_id)
+
+
 def _continuation_proof_excerpt(workspace: Path) -> tuple[str, str]:
     """Return a bounded root proof excerpt without following workspace links."""
     from agent_monitor import proof_graph
@@ -5677,7 +5876,9 @@ def _execute_continue(
                     f"Automatic Lean/DAG refresh could not start: {exc}",
                 )
     except StopRequested:
-        stopped_run = _load_run_record(run_id)
+        stopped_run = _interrupted_continuation_record(
+            previous_run_data, _load_run_record(run_id), job_id=job_id
+        )
         stopped_run["status"] = "stopped"
         stopped_run["updated_at"] = _now()
         _write_run(stopped_run)
@@ -5685,7 +5886,9 @@ def _execute_continue(
         _append_chat(run_id, "system", "Run stopped by user.")
     except Exception as exc:  # noqa: BLE001
         try:
-            failed_run = _load_run_record(run_id)
+            failed_run = _interrupted_continuation_record(
+                previous_run_data, _load_run_record(run_id), job_id=job_id
+            )
             failed_run["status"] = "failed"
             failed_run["error"] = str(exc)
             failed_run["updated_at"] = _now()
@@ -5730,6 +5933,8 @@ def _run_improof_continuation(
             "--component", f"cfg_claude_author.model={model}",
             "--component", f"cfg_claude_critic.model={model}",
         ]
+        # See _execute_job_body: the Claude worker reads its model from here.
+        extra_env = {**(extra_env or {}), "AGENT_MONITOR_CLAUDE_MODEL": model}
     try:
         result = improof_runner.run_problem(
             prompt_path,

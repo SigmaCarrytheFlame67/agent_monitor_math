@@ -2612,11 +2612,19 @@ _FORMAL_RUNTIME_ENV_NAMES = (
 
 
 def _claude_account_model(model: str | None, env: dict[str, str]) -> str:
-    selected = str(model or "").strip().lower()
-    if selected in _CLAUDE_ACCOUNT_MODELS:
-        return selected
-    configured = str(env.get("AGENT_MONITOR_CLAUDE_MODEL") or "").strip().lower()
-    return configured if configured in _CLAUDE_ACCOUNT_MODELS else "sonnet"
+    """The Claude Code account alias to route to.
+
+    Records and provider telemetry carry resolved names such as
+    ``claude-opus-5-5``; they map back to their alias (``opus``) instead of
+    silently falling back to Sonnet.
+    """
+    from agent_monitor.jobs import _canonical_claude_continuation_model as canonical
+
+    return (
+        canonical(model)
+        or canonical(env.get("AGENT_MONITOR_CLAUDE_MODEL"))
+        or "sonnet"
+    )
 
 
 def _llm_environment(
@@ -2721,8 +2729,14 @@ def _llm_environment(
             )
         )
     if route == "claude_subscription":
-        recorded_model = str((run_record or {}).get("model") or "").strip().lower()
-        if recorded_model in _CLAUDE_ACCOUNT_MODELS:
+        from agent_monitor.jobs import _canonical_claude_continuation_model as canonical
+
+        # The native Claude Code engine records the resolved model name
+        # (claude-opus-5-5); the selection itself is in requested_model.
+        recorded_model = canonical((run_record or {}).get("requested_model")) or canonical(
+            (run_record or {}).get("model")
+        )
+        if recorded_model:
             env["AGENT_MONITOR_CLAUDE_MODEL"] = recorded_model
     from agent_monitor.run_tuning import from_record as apply_recorded_tuning
 
@@ -2768,7 +2782,9 @@ def _chat(
         content = str(result.text or "").strip()
         if not content:
             raise ValueError("Claude Code returned an empty Lean response")
-        return _ObservedModel(str(result.model or selected), result.model), content
+        # Route every later repair to the selected alias; the resolved model
+        # name is authorship evidence only (see proof_graph.ObservedModel).
+        return _ObservedModel(selected, result.model), content
     if env.get("AGENT_MONITOR_CODEX_SUBSCRIPTION") == "1":
         from agent_monitor.proof_graph import _run_codex_prompt_env
 
@@ -6557,6 +6573,14 @@ def harness_model_options(
         models = list(api_settings.get("api_models") or [])
         preferred = str(api_settings.get("default_model") or "").strip()
     recorded = _recorded_harness_model(run_record)
+    if route == "claude_subscription":
+        from agent_monitor.jobs import _canonical_claude_continuation_model as canonical
+
+        recorded = (
+            canonical((run_record or {}).get("requested_model"))
+            or canonical(recorded)
+            or recorded
+        )
     if recorded and recorded in models:
         models = [recorded, *(item for item in models if item != recorded)]
     return {

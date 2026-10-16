@@ -471,9 +471,31 @@ def emit_item(item: dict[str, Any]) -> None:
 def _emit_backend_event(
     event: dict[str, Any], *, out: Callable[[dict[str, Any]], None] | None = None
 ) -> None:
-    """Forward activity while reserving usage projection for each stage."""
-    if event.get("type") != "turn.completed":
-        (out or _out)(event)
+    """Forward activity while reserving usage projection for each stage.
+
+    A provider call's own terminal events never end the run: usage is
+    projected per stage (``_emit_stage_usage``) and a failed call (Codex
+    ``turn.failed`` / ``turn.cancelled``) is shown as a non-terminal error
+    item.  The pipeline itself decides the run's outcome (a failed curator or
+    verifier call degrades the run; it does not unpublish its proof) and
+    reports a fatal error with its own terminal error item.
+    """
+    event_type = event.get("type")
+    if event_type == "turn.completed":
+        return
+    if event_type in {"turn.failed", "turn.cancelled"}:
+        detail = event.get("error") or event.get("message") or event_type
+        if isinstance(detail, Mapping):
+            detail = detail.get("message") or json.dumps(detail, ensure_ascii=False)
+        event = {
+            "type": "item.completed",
+            "item": {
+                "type": "error",
+                "message": "provider call failed: "
+                + " ".join(str(detail).split())[-1200:],
+            },
+        }
+    (out or _out)(event)
 
 
 def _emit_stage_usage(

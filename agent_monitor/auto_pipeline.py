@@ -1322,6 +1322,25 @@ def refresh_formal(
 _ANALYSIS_WAIT_MARGIN_SECONDS = 900 + 300 + 300
 
 
+def max_run_wait_seconds() -> float:
+    """How long the pipeline waits for an Ansatz CGM Max run: its own wall
+    clock, the CLI watchdog's margin and the record write."""
+    from agent_monitor import cgm_max
+
+    return float(cgm_max.RUN_SECONDS + 300 + 300)
+
+
+def _is_max_run(run_id: str) -> bool:
+    """Whether ``run_id`` is a Max run (``_run_record`` returns its worker view)."""
+    try:
+        from agent_monitor import cgm_max
+        from agent_monitor.jobs import _load_run_record
+
+        return cgm_max.is_max_record(_load_run_record(run_id))
+    except (FileNotFoundError, OSError, ValueError):
+        return False
+
+
 def analysis_wait_seconds(workspace: Path) -> float:
     """How long the pipeline waits for an analysis to end: never less than the
     analysis's own watchdog (an administrator's may run four hours)."""
@@ -1350,6 +1369,11 @@ def _run(
     if is_analysis_run(_run_record(run_id)):
         # Its derived views come from the published graph, once it has ended.
         timeout = max(timeout, analysis_wait_seconds(workspace))
+    elif _is_max_run(run_id):
+        # An Ansatz CGM Max run may take three hours and writes proof.md only
+        # when it publishes; giving up at the default two hours left every
+        # long Max run without derived views ("produced no proof draft").
+        timeout = max(timeout, max_run_wait_seconds())
     processed_sig = ""
     try:
         sig, record = _wait_for_source(run_id, workspace, timeout=timeout)

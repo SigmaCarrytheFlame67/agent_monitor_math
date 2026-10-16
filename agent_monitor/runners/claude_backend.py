@@ -37,11 +37,40 @@ RESPONSE_ONLY_TOOL_ISOLATION_VERSION = 1
 
 
 class ClaudeBackendError(RuntimeError):
-    """Raised when native Claude Code does not complete the requested turn."""
+    """Raised when native Claude Code does not complete the requested turn.
+
+    ``kind`` classifies failures a caller should not simply retry: ``"auth"``
+    (the linked account must be reconnected), ``"usage_limit"`` (the
+    subscription's session/weekly limit or a rate limit), ``"model"`` (the
+    account cannot use the selected model), ``"timeout"`` (no answer within
+    the per-call limit); ``None`` otherwise.
+    """
+
+    def __init__(self, message: str = "", *, kind: str | None = None) -> None:
+        super().__init__(message)
+        self.kind = kind
 
 
 class ClaudeAuthenticationError(ClaudeBackendError):
     """Raised when the linked Claude Code subscription cannot authenticate."""
+
+    def __init__(self, message: str = "", *, kind: str | None = "auth") -> None:
+        super().__init__(message, kind=kind)
+
+
+# Claude Code 2.1.x marks its own (non-model) API error messages with an
+# ``error`` category on a synthetic assistant event. ``rate_limit`` is not
+# listed: it covers every 429, including "Request rejected (429) · this may be
+# a temporary capacity issue", so only its text ("You've hit your … limit")
+# makes it a usage limit (see ``_looks_like_usage_limit``).
+_API_ERROR_KINDS = {
+    "authentication_failed": "auth",
+    "oauth_org_not_allowed": "auth",
+    "account_on_hold": "auth",
+    "verification_required": "auth",
+    "billing_error": "usage_limit",
+    "model_not_found": "model",
+}
 
 
 @dataclass(frozen=True)
@@ -92,10 +121,20 @@ def forward_as_codex_event(
         return
     if event_type == "assistant":
         # Some Claude Code releases surface a transport-level OAuth diagnostic
-        # as an assistant event immediately before the terminal error. It is
-        # not model output and must not appear as a successful assistant
-        # response in Codex-shaped harnesses.
+        # as an assistant event immediately before the terminal error, and
+        # 2.1.x reports every API error (login, usage limit, outage) as a
+        # synthetic assistant message.  Neither is model output, so neither
+        # may appear as an assistant response in Codex-shaped harnesses.  The
+        # typed exception from _terminal_result reports an auth failure once;
+        # any other API error is shown as a non-terminal error item, so a
+        # pipeline that degrades past a failed call (a CGM verifier) still
+        # shows why.
         if _assistant_is_auth_diagnostic(event):
+            return
+        if _is_api_error_message(event):
+            _, text = _api_error_category((event,))
+            if text:
+                emit({"type": "item.completed", "item": {"type": "error", "message": text}})
             return
         message = event.get("message") or {}
         for block in message.get("content") or []:
@@ -157,19 +196,84 @@ def forward_as_codex_event(
     )
 
 
+# Account-auth diagnostics of the official CLI, older releases and 2.1.x
+# ("Not logged in · Please run /login", "Failed to authenticate: OAuth session
+# expired and could not be refreshed", "OAuth token revoked · Please run
+# /login", "Authentication required · Sign in again to continue", ...).
+_OAUTH_FAILURE_PHRASES = (
+    "oauth access token has expired",
+    "oauth access token expired",
+    "oauth access token is invalid",
+    "oauth session expired",
+    "oauth token revoked",
+    "oauth token has been revoked",
+    "oauth token has expired",
+    "oauth refresh token is no longer valid",
+    "invalid bearer token",
+    "not logged in",
+    "authentication required",
+    "login expired",
+    "failed to authenticate",
+)
+# A concurrent Claude Code process holding the credential refresh lock is a
+# transient condition of a healthy login, never a reason to reconnect.
+_REFRESH_LOCK_RETRY_SECONDS = 5.0
+_REFRESH_LOCK_PHRASES = (
+    "another claude code process is holding the refresh lock",
+    "another claude code process is refreshing it",
+)
+
+
+def _looks_like_refresh_lock(value: object) -> bool:
+    rendered = str(value or "").strip().lower()
+    return any(phrase in rendered for phrase in _REFRESH_LOCK_PHRASES)
+
+
 def _looks_like_oauth_failure(value: object) -> bool:
     """Recognize Claude Code's own OAuth transport diagnostic, not model prose."""
     rendered = str(value or "").strip().lower()
-    if not rendered:
+    if not rendered or _looks_like_refresh_lock(rendered):
         return False
+    return any(phrase in rendered for phrase in _OAUTH_FAILURE_PHRASES)
+
+
+def _looks_like_usage_limit(value: object) -> bool:
+    """A plan limit ("You've hit your session limit"), not a transient 429."""
+    rendered = str(value or "").strip().lower()
+    return ("hit your" in rendered and "limit" in rendered) or "usage limit reached" in rendered
+
+
+def _is_api_error_message(event: Mapping[str, object]) -> bool:
+    """A CLI-generated (synthetic) assistant error message, never model output.
+
+    Claude Code 2.1.x flags these with ``is_api_error_message`` and an
+    ``error`` category, and attributes them to the model ``<synthetic>``.
+    """
+    if str(event.get("type") or "") != "assistant":
+        return False
+    if event.get("is_api_error_message") is True:
+        return True
+    message = event.get("message") or {}
     return (
-        "oauth access token has expired" in rendered
-        or "oauth access token expired" in rendered
-        or (
-            "failed to authenticate" in rendered
-            and ("401" in rendered or "re-authenticate" in rendered)
-        )
+        isinstance(message, Mapping)
+        and str(message.get("model") or "").strip() == "<synthetic>"
+        and not _usage_has_tokens(message.get("usage"))
     )
+
+
+def _api_error_category(events: tuple[dict, ...]) -> tuple[str, str]:
+    """The last synthetic API error's ``(category, text)``, if any."""
+    for event in reversed(events):
+        if not isinstance(event, dict) or not _is_api_error_message(event):
+            continue
+        message = event.get("message") or {}
+        text = " ".join(
+            str(block.get("text") or "").strip()
+            for block in (message.get("content") or [])
+            if isinstance(block, Mapping)
+        ).strip()
+        return str(event.get("error") or "").strip().lower(), text
+    return "", ""
 
 
 def _usage_has_tokens(raw_usage: object) -> bool:
@@ -193,6 +297,12 @@ def _assistant_is_auth_diagnostic(event: Mapping[str, object]) -> bool:
     """Return true only for a zero-token, text-only OAuth diagnostic event."""
     if str(event.get("type") or "") != "assistant":
         return False
+    if (
+        _is_api_error_message(event)
+        and _API_ERROR_KINDS.get(str(event.get("error") or "").strip().lower()) == "auth"
+    ):
+        # Claude Code 2.1.x: the structured category, whatever the wording.
+        return True
     message = event.get("message") or {}
     if not isinstance(message, Mapping) or _usage_has_tokens(message.get("usage")):
         return False
@@ -370,7 +480,9 @@ def _actual_model_telemetry(
             observed.append(rendered)
 
     for event in events:
-        if event.get("type") != "assistant":
+        if event.get("type") != "assistant" or _is_api_error_message(event):
+            # A CLI-generated error message (model "<synthetic>") is not
+            # inference by any model.
             continue
         message = event.get("message") or {}
         if isinstance(message, dict):
@@ -468,11 +580,18 @@ def _build_command(
     enable_tools: bool = True,
     binary: str | None = None,
 ) -> list[str]:
-    """Build one non-interactive, non-resumable official Claude Code turn."""
+    """Build one non-interactive, non-resumable official Claude Code turn.
+
+    The prompt itself is not part of the command: ``_run_stream`` writes it
+    to the CLI's stdin (``claude -p`` reads its prompt there when no
+    positional prompt is given).  One argv string is limited to 128 KiB on
+    Linux, which a long proof in a 3-byte script (Chinese, Japanese, Korean)
+    exceeds well below the prompt caps measured in characters.
+    """
+    del prompt  # sent on stdin; kept in the signature for callers
     command = [
         binary or _claude_binary(),
         "-p",
-        prompt,
         "--output-format",
         "stream-json",
         "--verbose",
@@ -523,6 +642,7 @@ def _run_stream(
     timeout: float,
     emit_line: Callable[[str], None] | None = None,
     emit_event: Callable[[dict], None] | None = None,
+    stdin_text: str | None = None,
 ) -> _ProcessResult:
     """Stream one Claude process while retaining complete timeout control."""
     try:
@@ -530,15 +650,37 @@ def _run_stream(
             command,
             cwd=str(cwd),
             env=env,
-            stdin=subprocess.DEVNULL,
+            stdin=subprocess.DEVNULL if stdin_text is None else subprocess.PIPE,
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
             text=True,
+            encoding="utf-8",
+            errors="replace",
             bufsize=1,
             start_new_session=os.name == "posix",
         )
     except OSError as exc:
         raise ClaudeBackendError(f"could not start Claude Code: {exc}") from exc
+
+    if stdin_text is not None:
+        def write_prompt() -> None:
+            # A separate thread: the CLI may print before it has read a large
+            # prompt, and the output pipe must keep draining meanwhile.
+            try:
+                assert process.stdin is not None
+                process.stdin.write(stdin_text)
+            except (BrokenPipeError, OSError, ValueError):
+                pass
+            finally:
+                try:
+                    if process.stdin is not None:
+                        process.stdin.close()
+                except (BrokenPipeError, OSError, ValueError):
+                    pass
+
+        threading.Thread(
+            target=write_prompt, name="claude-code-stdin", daemon=True
+        ).start()
 
     output_queue: queue.Queue[str | None] = queue.Queue()
 
@@ -599,14 +741,14 @@ def _run_stream(
             process.stdout.close()
 
     if timed_out:
-        raise ClaudeBackendError(f"Claude Code timed out after {timeout:g}s")
+        raise ClaudeBackendError(f"Claude Code timed out after {timeout:g}s", kind="timeout")
     return _ProcessResult(process.returncode, "".join(output), tuple(events))
 
 
 def _assistant_text(events: tuple[dict, ...]) -> str:
     chunks: list[str] = []
     for event in events:
-        if event.get("type") != "assistant":
+        if event.get("type") != "assistant" or _is_api_error_message(event):
             continue
         message = event.get("message") or {}
         for block in message.get("content") or []:
@@ -623,7 +765,14 @@ def _terminal_result(process: _ProcessResult) -> ClaudeResult:
         None,
     )
     if terminal is None:
-        detail = process.output.strip()[-1000:]
+        # Prefer what the CLI said on stderr (merged into the output) over
+        # the tail of its JSON events.
+        said = [
+            line.strip()
+            for line in process.output.splitlines()
+            if line.strip() and not line.lstrip().startswith("{")
+        ]
+        detail = ("\n".join(said) or process.output.strip())[-1000:]
         suffix = f": {detail}" if detail else ""
         raise ClaudeBackendError(f"Claude Code ended without a terminal result event{suffix}")
     result_text = str(terminal.get("result") or "").strip()
@@ -640,20 +789,31 @@ def _terminal_result(process: _ProcessResult) -> ClaudeResult:
                 if isinstance(block, dict)
             ).strip()
             break
+    category, category_text = _api_error_category(process.events)
+    category_kind = _API_ERROR_KINDS.get(category)
+    if not auth_detail and category_kind == "auth":
+        auth_detail = category_text or result_text or category
     if auth_detail:
-        if _looks_like_oauth_failure(auth_detail):
-            raise ClaudeAuthenticationError(
-                "Claude Code subscription authentication failed: OAuth access "
-                "token has expired (HTTP 401); reconnect Claude Code and retry."
-            )
+        detail = " ".join(auth_detail.split())[:400]
         raise ClaudeAuthenticationError(
-            f"Claude Code subscription authentication failed: {auth_detail}"
+            f"Claude Code subscription authentication failed: {detail.rstrip('.')}; "
+            "reconnect Claude Code in Settings (the linked account needs a new "
+            "sign-in) and retry."
         )
     if terminal.get("is_error") or subtype != "success":
-        detail = result_text or subtype or "unknown Claude Code error"
+        errors = terminal.get("errors")
+        listed = (
+            "; ".join(str(item).strip() for item in errors if str(item).strip())
+            if isinstance(errors, list)
+            else ""
+        )
+        detail = result_text or listed or category_text or subtype or "unknown Claude Code error"
         safe_subtype = subtype if subtype.lower() not in {"success", "completed"} else ""
-        suffix = f" ({safe_subtype})" if safe_subtype else ""
-        raise ClaudeBackendError(f"Claude Code failed{suffix}: {detail}")
+        suffix = f" ({safe_subtype})" if safe_subtype and safe_subtype not in detail else ""
+        kind = category_kind
+        if kind is None and (_looks_like_usage_limit(detail) or _looks_like_usage_limit(category_text)):
+            kind = "usage_limit"
+        raise ClaudeBackendError(f"Claude Code failed{suffix}: {detail}", kind=kind)
     if process.returncode:
         detail = process.output.strip()[-1000:]
         suffix = f": {detail}" if detail else ""
@@ -705,15 +865,29 @@ def _is_preinference_oauth_expiry(
     allowed when the failed stream contains no assistant/tool activity; once a
     model has acted, callers must see the original failure.
     """
-    if not _is_oauth_expiry(error):
+    if not (_is_oauth_expiry(error) or _is_refresh_lock(error)):
         return False
+    return _no_model_activity(process)
+
+
+def _is_refresh_lock(error: ClaudeBackendError) -> bool:
+    """Another Claude Code process was refreshing the shared login (transient)."""
+    return _looks_like_refresh_lock(str(error))
+
+
+def _no_model_activity(process: _ProcessResult) -> bool:
+    """True when the failed stream holds no model or tool activity at all."""
     for event in process.events:
         if not isinstance(event, dict):
             continue
         event_type = str(event.get("type") or "").lower()
         if event_type == "user":
             return False
-        if event_type == "assistant" and not _assistant_is_auth_diagnostic(event):
+        if (
+            event_type == "assistant"
+            and not _assistant_is_auth_diagnostic(event)
+            and not _is_api_error_message(event)
+        ):
             return False
     return True
 
@@ -752,6 +926,7 @@ def _run_terminal_with_oauth_retry(
     emit_line: Callable[[str], None] | None = None,
     emit_event: Callable[[dict], None] | None = None,
     replay_is_safe: Callable[[], bool],
+    stdin_text: str | None = None,
 ) -> ClaudeResult:
     """Run one turn, replaying exactly once after a pre-inference OAuth 401."""
     for attempt in range(2):
@@ -762,6 +937,7 @@ def _run_terminal_with_oauth_retry(
             timeout=timeout,
             emit_line=emit_line,
             emit_event=emit_event,
+            stdin_text=stdin_text,
         )
         try:
             result = _terminal_result(process)
@@ -773,8 +949,10 @@ def _run_terminal_with_oauth_retry(
             )
             if attempt == 0 and replayable:
                 # A new official CLI process reads the refresh credential
-                # written by the failed process. Replay exactly once.
-                time.sleep(1.0)
+                # written by the failed process. Replay exactly once.  When
+                # another process (a concurrent run or derived stage on the
+                # same account) held the refresh lock, give it time to finish.
+                time.sleep(_REFRESH_LOCK_RETRY_SECONDS if _is_refresh_lock(exc) else 1.0)
                 continue
             # Replay safety and account readiness are separate decisions.  A
             # final typed authentication failure must fail the shared account
@@ -912,6 +1090,7 @@ def claude_exec(
             timeout=timeout_s,
             emit_event=emit_event,
             replay_is_safe=lambda: not enable_tools,
+            stdin_text=prompt,
         )
         _require_requested_model(result, selected_model)
         return result
@@ -1004,6 +1183,7 @@ def claude_proof(
         emit_line=emit_line,
         emit_event=emit_event,
         replay_is_safe=lambda: _artifact_signatures(cwd, names) == before,
+        stdin_text=prompt,
     )
     _require_requested_model(result, selected_model)
     artifact = _fresh_artifact(

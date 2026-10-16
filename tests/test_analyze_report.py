@@ -97,7 +97,8 @@ def test_report_escapes_model_text_and_states_the_caveats():
     assert "<script>" not in text and "&lt;script&gt;" in text
     assert "https://evil.example" not in text and "[link removed]" in text
     assert "sign -1 \\| not +1" in text
-    assert "not a certificate" in text and "kimi-k3 via sponsored_kimi" in text
+    assert "not a certificate" in text and "kimi-k3 via the site's sponsored access" in text
+    assert "sponsored_kimi" not in text
     assert "Checked **4 of 5**" in text
     # Its own verdict is a gap, but the closure is the error two steps up.
     assert "own verdict: gap; with everything it depends on: **error**" in text

@@ -348,7 +348,7 @@ def test_deadline_publishes_what_settled(tmp_path, provider, monkeypatch):
     assert all("time limit" in node["meta"]["reason"] for node in graph["nodes"])
     receipt = json.loads((tmp_path / "analysis" / "receipt.json").read_text())
     assert "time-limit" in receipt["degraded"]
-    assert "Limits reached: time-limit" in (tmp_path / "analysis" / "report.md").read_text()
+    assert "Limits reached: the time limit" in (tmp_path / "analysis" / "report.md").read_text()
 
 
 def test_deadline_keeps_the_results_that_settled(tmp_path, provider, monkeypatch):

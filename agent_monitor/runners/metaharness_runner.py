@@ -214,13 +214,13 @@ def complete_file_backed_audit(
 def main() -> int:
     prompt = sys.argv[1] if len(sys.argv) > 1 else ""
     if not prompt.strip():
-        emit_item({"type": "error", "message": "empty prompt"})
+        emit_item({"type": "error", "message": "empty prompt", "terminal": True})
         return 2
 
     use_codex = subscription_enabled()
     use_claude = claude_subscription_enabled()
     if use_codex and use_claude:
-        emit_item({"type": "error", "message": "Codex and Claude account routes cannot both be active"})
+        emit_item({"type": "error", "message": "Codex and Claude account routes cannot both be active", "terminal": True})
         return 2
     client = None
     model = (
@@ -243,11 +243,13 @@ def main() -> int:
 
     emit_item({"type": "agent_message", "text": f"meta-harness loop · model {model} · max {rounds} rounds"})
 
-    def call(system: str, user: str) -> tuple[str, dict] | None:
+    def call(system: str, user: str, *, terminal: bool = True) -> tuple[str, dict] | None:
         try:
             return chat(client, model, system, user, use_codex=use_codex, use_claude=use_claude)
         except (CodexBackendError, ClaudeBackendError, APIBackendError) as exc:
-            emit_item({"type": "error", "message": str(exc)})
+            # A failed solver, evaluator or proposer call ends the run (exit 1), so it is the
+            # run's error. The audit tolerates failed passes and still writes proof.md.
+            emit_item({"type": "error", "message": str(exc), **({"terminal": True} if terminal else {})})
             return None
 
     for rnd in range(1, rounds + 1):
@@ -312,7 +314,7 @@ def main() -> int:
                     prompt=prompt,
                     candidate=candidate,
                     model=model,
-                    call=call,
+                    call=lambda system, user: call(system, user, terminal=False),
                 )
             except (CodexBackendError, OSError, ValueError) as exc:
                 emit_item({"type": "error", "message": f"Meta-Harness audit failed: {exc}"})

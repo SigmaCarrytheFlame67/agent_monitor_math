@@ -214,9 +214,24 @@ class CLIEventParser:
         if t == "system" and ev.get("subtype") == "init":
             self.usage["model"] = ev.get("model")
             self._log(f"◦ session started · model {ev.get('model')}")
+        elif t == "assistant" and _claude_api_error_message(ev):
+            # Claude Code reports its own API errors (not logged in, usage
+            # limit, outage) as a synthetic assistant message.  It is no model
+            # output: show it as an error, never as the assistant's answer.
+            msg = ev.get("message") or {}
+            text = " ".join(
+                str(block.get("text") or "").strip()
+                for block in msg.get("content") or []
+                if isinstance(block, dict)
+            ).strip() or str(ev.get("error") or "Claude Code API error")
+            self._log(f"error · {_clip(text)}")
+            self._item("error", text)
+            self._close_turn()
         elif t == "assistant":
             msg = ev.get("message") or {}
             for block in msg.get("content") or []:
+                if not isinstance(block, dict):
+                    continue
                 bt = block.get("type")
                 if bt in {"thinking", "redacted_thinking"} and (block.get("thinking") or "").strip():
                     self._log(f"thinking · {_clip(block['thinking'])}")
@@ -251,8 +266,21 @@ class CLIEventParser:
             result_text = str(ev.get("result") or "").strip()
             subtype = str(ev.get("subtype") or "").strip()
             if ev.get("is_error") or subtype != "success":
+                errors = ev.get("errors")
+                listed = (
+                    "; ".join(str(item).strip() for item in errors if str(item).strip())
+                    if isinstance(errors, list)
+                    else ""
+                )
                 self.terminal_status = "failed"
-                self.terminal_error = result_text or subtype or "OpenClaude reported an error"
+                # Claude Code puts the reason of error_max_turns and friends in
+                # ``errors``, not ``result``. OpenClaude keeps the subtype last:
+                # its one-shot recovery keys on "…: error_max_turns".
+                if listed and self.source_engine == "openclaude" and subtype not in ("", "success"):
+                    listed = f"{listed}: {subtype}"
+                self.terminal_error = (
+                    result_text or listed or subtype or "OpenClaude reported an error"
+                )
                 self._log(
                     f"✗ result · {ev.get('num_turns', '?')} turns · "
                     f"{_clip(self.terminal_error, 160)}"
@@ -575,6 +603,23 @@ class CLIEventParser:
                 }
             )
         return nodes
+
+
+def _claude_api_error_message(ev: dict) -> bool:
+    """A Claude Code (2.1.x) synthetic API-error assistant event."""
+    if ev.get("is_api_error_message") is True:
+        return True
+    msg = ev.get("message") or {}
+    if not isinstance(msg, dict) or str(msg.get("model") or "").strip() != "<synthetic>":
+        return False
+    usage = msg.get("usage") or {}
+    try:
+        return not any(
+            int(usage.get(name) or 0) > 0
+            for name in ("input_tokens", "output_tokens")
+        )
+    except (TypeError, ValueError, AttributeError):
+        return False
 
 
 def _clip(s: Any, n: int = 160) -> str:

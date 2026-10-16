@@ -15,7 +15,8 @@ import re
 from collections import Counter, defaultdict
 from typing import Any, Mapping
 
-from agent_monitor.analyze.graph import CLAIM_KINDS
+from agent_monitor.analyze.graph import CLAIM_KINDS, ref_labels
+from agent_monitor.analyze.titles import tex_text_accents, tex_text_refs
 
 VERDICT_TEXT = {
     "checked": "checked (no issue found)",
@@ -25,6 +26,22 @@ VERDICT_TEXT = {
     "not_checked": "not checked",
 }
 UNINTERPRETABLE_TEXT = "no usable verifier output"
+# The report names the route and the limits a run reached in words, not by
+# their internal ids (an unknown id is shown as it is).
+ROUTE_TEXT = {
+    "sponsored_kimi": "the site's sponsored access",
+    "api_key": "the owner's API key",
+    "codex_subscription": "a Codex account",
+    "claude_subscription": "a Claude account",
+}
+DEGRADED_TEXT = {
+    "time-limit": "the time limit",
+    "budget": "the model-call limit",
+    "provider-failure": "the model provider did not answer every check",
+    "paper-map-failed": "the overview call failed, so results were ordered by the manuscript's structure",
+    "paper-map-skipped-for-budget": "the overview call was skipped to keep the model calls for the checks",
+    "model-segmentation-incomplete": "the model could not locate results in every part of the text",
+}
 _LINK_RE = re.compile(r"(?i)\b(?:(?:https?|ftp)://|www\.|(?:javascript|vbscript|data|file):)\S+")
 # "[text](target)" is a Markdown link (and "![alt](target)" an image) only
 # when "(" follows "]" directly; a space in between leaves plain text.
@@ -32,7 +49,8 @@ _LINK_SYNTAX_RE = re.compile(r"\]\s*\(")
 
 
 def _cell(value: object, limit: int = 240) -> str:
-    text = " ".join(str(value or "").split())
+    # TeX text accents in prose read as letters (Erd\H{o}s -> Erdős); math is kept.
+    text = tex_text_accents(" ".join(str(value or "").split()))
     text = _LINK_RE.sub("[link removed]", text)
     text = _LINK_SYNTAX_RE.sub("] (", text)
     text = text.replace("|", "\\|").replace("<", "&lt;").replace(">", "&gt;")
@@ -91,7 +109,14 @@ def render(graph: Mapping[str, Any], manuscript: Mapping[str, Any], receipt: Map
     source = graph.get("source") or {}
     title = manuscript.get("title") or source.get("title") or "Untitled manuscript"
     model = receipt.get("model") or "unknown model"
-    route = receipt.get("route") or "unknown route"
+    route = ROUTE_TEXT.get(str(receipt.get("route") or ""), receipt.get("route") or "unknown route")
+    # Model-written prose cites the manuscript's labels: Corollary~\ref{cor:x}
+    # reads "Corollary 1.2" (an unknown label is shown bare).
+    refs = ref_labels(graph)
+
+    def prose(value: object, limit: int = 600) -> str:
+        return _cell(tex_text_refs(value, refs), limit)
+
     lines: list[str] = [f"# Analysis: {_line(title, 300)}", ""]
     lines.append(
         f"> Checked by a model verifier ({_cell(model, 80)} via {_cell(route, 40)}) — not a certificate. "
@@ -108,7 +133,8 @@ def render(graph: Mapping[str, Any], manuscript: Mapping[str, Any], receipt: Map
         rows.append(("Version", _cell(manuscript["version"], 80)))
     if link:
         rows.append(("Link", f"<{link}>"))
-    if manuscript.get("canonical_id"):
+    if manuscript.get("canonical_id") and not str(manuscript["canonical_id"]).startswith("https:"):
+        # A file link's identifier is "https:" + the link already listed above.
         rows.append(("Identifier", f"`{_cell(manuscript['canonical_id'], 200)}`"))
     if manuscript.get("license"):
         rows.append(("Licence", _cell(manuscript["license"], 200)))
@@ -164,7 +190,7 @@ def render(graph: Mapping[str, Any], manuscript: Mapping[str, Any], receipt: Map
         lines.append(f"| {UNINTERPRETABLE_TEXT} | {len(unreadable)} |")
     lines.append("")
     if paper_map and paper_map.get("summary"):
-        lines.append(f"*Overview (model-written from the abstract and introduction):* {_line(paper_map['summary'], 900)}")
+        lines.append(f"*Overview (model-written from the abstract and introduction):* {prose(paper_map['summary'], 900)}")
         lines.append("")
 
     # Main results ---------------------------------------------------------------
@@ -234,7 +260,7 @@ def render(graph: Mapping[str, Any], manuscript: Mapping[str, Any], receipt: Map
             url = _url((meta.get("source_ref") or {}).get("url"))
             location_cell = f"[{_cell(location, 80)}]({url})" if url else _cell(location, 80)
             lines.append(f"| {_label(node)} | {location_cell} | {VERDICT_TEXT[meta['verdict']]} | "
-                         f"{VERDICT_TEXT.get(meta.get('closure') or '', '—')} | {_cell(finding, 300)} |")
+                         f"{VERDICT_TEXT.get(meta.get('closure') or '', '—')} | {prose(finding, 300)} |")
         lines.append("")
         for node in flagged:
             issues = node["meta"].get("issues") or []
@@ -242,7 +268,7 @@ def render(graph: Mapping[str, Any], manuscript: Mapping[str, Any], receipt: Map
                 continue
             lines.append(f"**{_label(node)}** — all findings:")
             for issue in issues:
-                lines.append(f"- {issue['type']}: {_line(issue.get('location'), 120)} — {_line(issue.get('issue'), 600)}")
+                lines.append(f"- {issue['type']}: {prose(issue.get('location'), 120)} — {prose(issue.get('issue'), 600)}")
             lines.append("")
     if lines[-1] != "":
         lines.append("")
@@ -251,7 +277,7 @@ def render(graph: Mapping[str, Any], manuscript: Mapping[str, Any], receipt: Map
     external: dict[str, list[str]] = defaultdict(list)
     for node in graph["nodes"]:
         for item in node["meta"].get("external") or []:
-            key = f"{_cell(item.get('citation'), 120)} — hypotheses checked: {item.get('hypotheses_checked', 'unknown')}"
+            key = f"{prose(item.get('citation'), 120)} — hypotheses checked: {item.get('hypotheses_checked', 'unknown')}"
             external[key].append(_label(node))
     lines += ["## External results relied on", ""]
     if not external:
@@ -309,7 +335,8 @@ def render(graph: Mapping[str, Any], manuscript: Mapping[str, Any], receipt: Map
     if receipt.get("stopped"):
         lines.append("- The analysis was stopped before every planned check finished.")
     if receipt.get("degraded"):
-        lines.append("- Limits reached: " + ", ".join(_cell(item, 60) for item in receipt["degraded"]) + ".")
+        lines.append("- Limits reached: " + "; ".join(_cell(DEGRADED_TEXT.get(str(item), item), 120)
+                                                    for item in receipt["degraded"]) + ".")
     finished = str(receipt.get("finished_at") or "")[:10]
     if finished:
         lines.append(f"- Analyzed on {finished}.")

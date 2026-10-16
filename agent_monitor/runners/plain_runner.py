@@ -257,14 +257,14 @@ def _api_chat_with_output_limit(
 def main() -> int:
     prompt = sys.argv[1] if len(sys.argv) > 1 else ""
     if not prompt.strip():
-        emit_item({"type": "error", "message": "empty prompt"})
+        emit_item({"type": "error", "message": "empty prompt", "terminal": True})
         return 2
 
     guest_output_limit = _guest_plain_output_limit()
     use_codex = subscription_enabled()
     use_claude = claude_subscription_enabled()
     if use_codex and use_claude:
-        emit_item({"type": "error", "message": "Codex and Claude account routes cannot both be active"})
+        emit_item({"type": "error", "message": "Codex and Claude account routes cannot both be active", "terminal": True})
         return 2
     model = (
         os.environ.get("AGENT_MONITOR_CODEX_MODEL", "gpt-5.6-sol")
@@ -283,7 +283,7 @@ def main() -> int:
             result = codex_exec(system, prompt, model=model, emit_event=emit)
             _save_result(prompt, result.text)
         except (CodexBackendError, ValueError) as exc:
-            emit_item({"type": "error", "message": str(exc)})
+            emit_item({"type": "error", "message": str(exc), "terminal": True})
             return 1
         return 0
 
@@ -298,7 +298,7 @@ def main() -> int:
             )
             _save_result(prompt, result.text)
         except (ClaudeBackendError, ValueError) as exc:
-            emit_item({"type": "error", "message": str(exc)})
+            emit_item({"type": "error", "message": str(exc), "terminal": True})
             return 1
         return 0
 
@@ -313,11 +313,11 @@ def main() -> int:
             max_output_tokens=guest_output_limit,
         )
     except APIBackendError as exc:
-        emit_item({"type": "error", "message": str(exc)})
+        emit_item({"type": "error", "message": str(exc), "terminal": True})
         return 1
     text = normalize_proof_markdown(result.text)
     if not text.strip():
-        emit_item({"type": "error", "message": "Model returned an empty proof; no proof artifact was saved"})
+        emit_item({"type": "error", "message": "Model returned an empty proof; no proof artifact was saved", "terminal": True})
         return 1
     issues = _api_artifact_issues(text)
     if issues:
@@ -362,7 +362,7 @@ def main() -> int:
                     max_output_tokens=None,
                 )
             except APIBackendError as exc:
-                emit_item({"type": "error", "message": str(exc)})
+                emit_item({"type": "error", "message": str(exc), "terminal": True})
                 return 1
             result = type(result)(
                 text=normalize_proof_markdown(repaired.text),

@@ -1972,7 +1972,9 @@ def build(project: Path, root: Path, *, frontend: str) -> dict[str, Any]:
     for entity in sorted(section_entities, key=okey):
         sections_out.append({"level": entity.get("subkind"), "title": _plain(entity.get("title") or "", 160),
                              "number": numbers.get(entity["id"]), "file": ns_file.get(entity["ns"]),
-                             "line": point(entity, "_s")[0] + 1})
+                             "line": point(entity, "_s")[0] + 1,
+                             # So prose that cites "Section~\ref{sec:x}" can name the section.
+                             "labels": sorted(labels_by_owner.get(("section", entity["id"]), []))[:8]})
     intro = ""
     intro_section = next((entity for entity in sorted(section_entities, key=okey)
                           if re.search(r"intro", entity.get("title") or "", re.I)), None)

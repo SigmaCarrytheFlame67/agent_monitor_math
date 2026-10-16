@@ -1728,6 +1728,25 @@ body { background:var(--bg); }
 .md-view .analysis-doc a { color: var(--accent); overflow-wrap: anywhere; }
 .analysis-live-note { color: var(--muted); font-size: 12px; margin: 0 0 8px; }
 .analysis-live { white-space: pre-wrap; overflow-wrap: anywhere; font: 12px/1.6 var(--mono); color: var(--muted); background: var(--panel2); border: 1px solid var(--border); border-radius: 10px; padding: 12px; margin: 0; }
+/* Live progress: stages, then each result as its verdict settles. */
+.analysis-progress { list-style: none; margin: 0; padding: 12px 14px; display: flex; flex-direction: column; gap: 5px; background: var(--panel2); border: 1px solid var(--border); border-radius: 10px; font-size: 12.5px; line-height: 1.55; color: var(--fg); }
+.analysis-progress li { display: flex; flex-wrap: wrap; align-items: baseline; gap: 2px 8px; min-width: 0; overflow-wrap: anywhere; }
+.analysis-progress .ap-stage { margin-top: 8px; color: var(--muted); font-size: 12px; }
+.analysis-progress .ap-stage:first-child { margin-top: 0; }
+.analysis-progress .ap-stage b { color: var(--fg); font-weight: 650; }
+.analysis-progress .ap-line, .analysis-progress .ap-result, .analysis-progress .ap-now, .analysis-progress .ap-error { padding-left: 14px; }
+.analysis-progress .ap-line { color: var(--muted); }
+.analysis-progress .ap-result .vd { --vc: var(--verdict-none); flex: none; min-width: 76px; text-align: center; font: 700 10px/1.7 var(--mono); padding: 0 7px; border-radius: 999px; color: var(--vc); border: 1px solid color-mix(in srgb, var(--vc) 50%, var(--border)); background: color-mix(in srgb, var(--vc) 11%, var(--panel)); }
+.analysis-progress .v-checked .vd { --vc: var(--verdict-checked); }
+.analysis-progress .v-gap .vd { --vc: var(--verdict-gap); }
+.analysis-progress .v-error .vd { --vc: var(--verdict-error); }
+.analysis-progress .v-unclear .vd { --vc: var(--verdict-unclear); }
+.analysis-progress .v-not_checked .vd { border-style: dashed; background: transparent; }
+.analysis-progress .ap-result .lbl { font-weight: 600; }
+.analysis-progress .ap-result .issue { flex-basis: 100%; padding-left: 84px; color: var(--muted); font-size: 12px; }
+.analysis-progress .ap-now { color: var(--accent); }
+.analysis-progress .ap-error { color: var(--err); font-weight: 600; }
+.analysis-live-foot { margin: 8px 0 0; color: var(--dim); font-size: 11px; }
 .analysis-lines { margin: 0; padding: 10px 0; background: var(--panel2); border: 1px solid var(--border); border-radius: 10px; font: 12px/1.6 var(--mono); color: var(--fg); overflow-x: auto; white-space: pre; }
 .analysis-lines .ln-row { display: block; padding-right: 12px; }
 .analysis-lines .ln { display: inline-block; min-width: 3.4em; padding: 0 10px 0 8px; margin-right: 8px; text-align: right; color: var(--dim); border-right: 1px solid var(--border); user-select: none; }
@@ -1789,9 +1808,11 @@ body { background:var(--bg); }
   .analyze-chip .body { width: 100%; }
   .dag-filters { padding: 6px 12px; }
   .dag-filters .count { margin-left: 0; flex-basis: 100%; }
+  .analysis-progress .ap-result .issue { padding-left: 0; }
 }
 @media (forced-colors: active) {
   .dag-node.analysis { border-left-color: CanvasText; }
+  .analysis-progress .ap-result .vd { border-color: CanvasText; }
   .dag-filters button[aria-pressed="true"] { border-color: Highlight; }
   /* Stage states without colour: dashed waiting, Highlight running, solid done,
      double and struck through when it stopped or failed. */
@@ -4078,14 +4099,20 @@ function updateChatStatus(run){
   syncAnalyzeRunUi(run);
   const agents=run.agents||[]; const last=agents[agents.length-1];
   const stageKey=last?.pipeline_stage||last?.stage_name||'';
-  const analysisStage=isAnalysisRun(run)?ANALYZE_STAGES.find(([id])=>id===stageKey):null;
-  const label=analysisStage?analysisStage[1]:(STAGE_LABELS[stageKey]||STAGE_LABELS[last?.stage_name]||stageKey||'Working');
+  // An analysis names the stage its strip shows as running (the placeholder
+  // node before the runner's first line is Ingest, not Segment).
+  const analysisStage=isAnalysisRun(run)?(analysisStageStates(run).find(item=>item.state==='running')?.label||ANALYZE_STAGES.find(([id])=>id===stageKey)?.[1]):null;
+  const label=analysisStage||(STAGE_LABELS[stageKey]||STAGE_LABELS[last?.stage_name]||stageKey||'Working');
   let detail='';
   const out=(last?.output||'').trim();
-  if(out){
+  if(isAnalysisRun(run)){
+    // The latest progress note, never the tail of a verifier's JSON reply.
+    detail=analysisProgressDetail(analysisRunProgress(run)).slice(0,160);
+  }else if(out){
     const lines=out.split('\n').map(s=>s.trim()).filter(Boolean);
     detail=(lines[lines.length-1]||'').slice(0,80);
   }
+  $('chat-detail').title=isAnalysisRun(run)?detail:'';
   if(run.status==='finished'){ box.className='chat-status on done'; $('chat-stage').textContent='Finished'; $('chat-detail').textContent=''; }
   else if(run.status==='stopped'){ box.className='chat-status on'; $('chat-stage').textContent='Stopped'; $('chat-detail').textContent=''; }
   else if(run.status==='interrupted'){ box.className='chat-status on interrupted'; $('chat-stage').textContent='Interrupted'; $('chat-detail').textContent=run.interruption?.reason||'Worker is no longer active'; }
@@ -4218,7 +4245,8 @@ function analysisLogLines(text){
   return String(text||'').split('\n').map(line=>line.replace(/\s+$/,'')).filter(line=>{
     const body=line.trim().replace(/^(?:assistant|thinking|reasoning|stage|exec|edit|message)\s+·\s+/,'');
     if(!body||body==='---')return false;
-    if(/^[{[]/.test(body))return false;
+    // JSON from a model reply, also pretty-printed across lines ("key": …, }, ],) or fenced.
+    if(/^[{}[\]"]/.test(body)||/^```/.test(body))return false;
     if(/^·?\s*usage\b/.test(body)||/^\$\s/.test(body)||/^◦ session\b/.test(body))return false;
     return true;
   });
@@ -4229,7 +4257,10 @@ function updateProcLog(run){
   const raw=(last?.output||'').trim();
   if(!raw){ body.textContent=''; $('proc-count').textContent=''; return; }
   // last 300 non-empty lines (fuller live record for human-in-the-loop)
-  const lines=isAnalysisRun(run)?analysisLogLines(raw):raw.split('\n').map(s=>s.replace(/\s+$/,'')).filter(s=>s.trim());
+  // An analysis's last agent is one model call while it runs: its log shows
+  // the progress notes then, and the session's own log once it has ended.
+  const lines=isAnalysisRun(run)?(/session summary$/.test(String(last?.stage_name||''))?analysisLogLines(raw):analysisRunProgress(run))
+    :raw.split('\n').map(s=>s.replace(/\s+$/,'')).filter(s=>s.trim());
   const tail=lines.slice(-300);
   const text=tail.join('\n');
   if(text===lastProcText)return; lastProcText=text;
@@ -5650,7 +5681,7 @@ function renderDag(d){
     const formalLink=(isCompiler||isEngine)?null:isAnalysis?null:dagCoverageForNode(n,isLean);
     const verified=!!formalLink;
     const auditedLink=verified&&coverageStatementAudited(formalLink,lastSandboxRun?.proof_coverage);
-    const label=dagCardTitle(n,view);
+    const label=isAnalysis?analysisTextAccents(dagCardTitle(n,view)):dagCardTitle(n,view);
     const aria=visual.badge+': '+label.slice(0,160)+(isAnalysis&&visual.status?' — '+visual.status.label:'');
     return `<div class="dag-node${isLean?' lean':''}${auditedLink?' formally-verified':verified?' lean-compiled-only':''}${visual.classes.map(cls=>' '+cls).join('')}" id="${domId}" role="button" tabindex="0" aria-label="${escapeHtml(aria)}" style="--kc:${visual.color};${visual.verdictColor?'--vc:'+visual.verdictColor+';':''}--dag-delay:${Math.min(nodeIndex*28,280)}ms;width:${W}px">
       <div class="kd-row"><span class="kd">${escapeHtml(visual.badge)}</span>${visual.status?`<span class="st ${visual.status.tone}">${escapeHtml(visual.status.label)}</span>`:''}</div>
@@ -6776,6 +6807,9 @@ function analyzeSourceFromComposer(){
   if(link){
     const known=analyzeResolveCache.get(link);
     if(known?.member_only&&viewerIsGuest())return {error:String(known.error||'Guests can analyze arXiv and GitHub links; this file needs a member account.')};
+    // The preview already found that this link can't be analyzed: starting
+    // would only fail at Ingest (and use up a guest's analysis for the hour).
+    if(known&&known.ok===false&&!known.transient)return {error:String(known.error||'That link can’t be analyzed')+' — change the link to analyze something else.'};
     return {kind:'url',url:link};
   }
   if(files)return {kind:'upload'};
@@ -6839,7 +6873,9 @@ async function resolveAnalyzeLink(link){
   try{
     const response=await fetch('/api/analyze/resolve',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({url:link})});
     const body=await response.json().catch(()=>({}));
-    if(response.ok&&body&&typeof body==='object')result=body;
+    // A lookup that may work later (the site was slow or busy) is not cached
+    // and does not stop the analysis; the link is fetched again when it runs.
+    if(response.ok&&body&&typeof body==='object')result=body.ok===false&&body.retryable?{...body,transient:true}:body;
     else result={ok:false,transient:response.status===429||response.status>=500,
       error:response.status===429?limitMessage(body?.error||'Too many link previews',response):String(body?.error||('The preview failed (HTTP '+response.status+')'))};
   }catch(e){ result={ok:false,transient:true,error:'The link preview is unavailable right now'}; }
@@ -6877,7 +6913,9 @@ function renderAnalyzeChip(link,result){
   const title=analyzeEl('div','title',String(result.title||link).slice(0,300));
   body.append(title);
   const meta=analyzeEl('div','meta');
-  const facts=[result.version,result.license,ANALYZE_FORMAT_LABEL[result.format]||'',analyzeSizeLabel(result.size_bytes),result.canonical_id]
+  // A file link's identifier is "https:" + the link itself, which Open ↗ already gives.
+  const identifier=/^https:/.test(String(result.canonical_id||''))?'':result.canonical_id;
+  const facts=[result.version,result.license,ANALYZE_FORMAT_LABEL[result.format]||'',analyzeSizeLabel(result.size_bytes),identifier]
     .map(value=>String(value||'').trim()).filter(Boolean).map(value=>value.slice(0,160));
   meta.textContent=facts.join(' · ');
   const canonical=String(result.canonical_url||'');
@@ -7014,17 +7052,28 @@ function renderAnalyzeCaps(){
   }
   lines.forEach(line=>box.append(analyzeEl('span','',line)));
 }
+let analyzeLinkLookupPending=false;
 async function startAnalyzeRun(){
   const eb=$('form-error'); eb.style.display='none';
   const fail=message=>{ eb.style.display='block'; eb.textContent=String(message); };
-  if(initialAttachments.busy)return;
+  // Enter / Ctrl+Enter reach here even while the start button is disabled.
+  if(initialAttachments.busy||analyzeLinkLookupPending)return;
   const entry=analyzeEngineEntry(), policy=analyzePolicy();
   if(!entry||!policy)return fail('Analyze is not available on this site right now.');
   if(entry.requires_login){ showEngineSignIn(entry.label||'Ansatz Analyze'); return; }
   if(policy.enabled===false)return fail(policy.reason||'Analyze is turned off on this site.');
   if(!entry.available)return fail((entry.label||'Ansatz Analyze')+' needs setup — '+(entry.health_detail||entry.hint||'runner unavailable'));
-  const source=analyzeSourceFromComposer();
+  let source=analyzeSourceFromComposer();
   if(source.error)return fail(source.error);
+  // A link whose preview has not come back yet is looked up first, so a link
+  // the preview refuses never starts (and never uses up a guest's analysis).
+  if(source.kind==='url'&&!analyzeResolveCache.has(source.url)){
+    clearTimeout(analyzeResolveTimer);
+    $('start-btn').disabled=true; analyzeLinkLookupPending=true;
+    try{ await resolveAnalyzeLink(source.url); }finally{ $('start-btn').disabled=false; analyzeLinkLookupPending=false; }
+    source=analyzeSourceFromComposer();
+    if(source.error)return fail(source.error);
+  }
   const sponsoredOnly=analyzeSponsoredOnly();
   if(!sponsoredOnly){ const issue=engineRuntimeIssue(entry); if(issue)return fail(issue); }
   // Sponsored-only viewers name no model: the server runs Kimi K3.
@@ -7167,17 +7216,102 @@ function renderAnalysisStages(run){
   }));
   list.hidden=false;
 }
-function analysisProgressText(text){
-  // Live writes mix progress lines with the verifier's raw JSON: show the progress.
-  const lines=String(text||'').split('\n').map(line=>line.trim()).filter(line=>line&&line!=='---'&&!/^[{[]/.test(line)&&!/^\$ /.test(line));
-  return lines.slice(-40).join('\n')||'Starting…';
+/* Progress of a running (or unpublished) analysis: the runner's own notes
+   ("Check · Lemma 3.7 · error — …"), never a verifier's raw JSON reply, a
+   model-call marker ("check-3-low") or a process-log line. The server sends
+   only the notes; this filter also keeps any older or mixed text readable. */
+const ANALYZE_CALL_MARKER=/^(?:map|segment-\d+|check-\d+)(?:-retry)?(?:-low)?$/;
+function analysisProgressLines(text){
+  const out=[];
+  String(text||'').split('\n').forEach(raw=>{
+    let line=raw.trim();
+    if(!line||line==='---'||/^```/.test(line)||/^[{}[\]"]/.test(line)||/^\$ /.test(line))return;
+    if(/^(?:◦ session|assistant · |thinking · |stage · |edit · |error · |· usage )/.test(line))return;
+    line=line.replace(/^Analyze · /,'');
+    // The runner's banner and closing line, not "Ansatz Analyze could not start: …".
+    if(!line||ANALYZE_CALL_MARKER.test(line)||/^Ansatz Analyze(?: ·| completed\b)/.test(line))return;
+    out.push(line.slice(0,600));
+  });
+  return out.slice(-600);
+}
+function analysisProgressText(text){ return analysisProgressLines(text).join('\n'); }
+// The lines of the run's progress: the server's (sandbox preview) or, before
+// it arrives, the notes among the run's agents.
+function analysisRunProgress(run){
+  const box=run?.sandbox_preview;
+  if(box&&!box.has_report&&typeof box.text==='string')return analysisProgressLines(box.text);
+  return analysisProgressLines((Array.isArray(run?.agents)?run.agents:[]).map(agent=>/\(error\)$/.test(String(agent?.stage_name||''))||/^Analyze · /.test(String(agent?.output||''))?String(agent.output||'').split('\n')[0]:'').join('\n'));
+}
+const ANALYZE_STAGE_LINE=/^(\d) (Ingest|Segment|Check|Roll-up|Report)(?: · (.*))?$/;
+const ANALYZE_RESULT_LINE=/^Check · (.+?) · (checked|gap|error|unclear|not_checked)(?: — (.*))?$/;
+const ANALYZE_NOW_LINE=/^Check · now checking (.+)$/;
+const ANALYZE_SOURCE_WORDS={link:'from a link','pasted text':'from pasted text','uploaded files':'from uploaded files'};
+// One short line for the Progress panel (the stage name is shown next to it).
+function analysisProgressDetail(lines){
+  const line=String(lines[lines.length-1]||'');
+  let match=ANALYZE_STAGE_LINE.exec(line);
+  if(match)return String(match[3]&&match[2]==='Ingest'?ANALYZE_SOURCE_WORDS[match[3]]||match[3]:match[3]||'');
+  if((match=ANALYZE_RESULT_LINE.exec(line)))return match[1]+' · '+ANALYZE_VERDICT_SHORT[match[2]];
+  if((match=ANALYZE_NOW_LINE.exec(line)))return 'checking '+match[1];
+  return line.replace(/^(?:Ingest|Segment|Check|Roll-up|Report) · /,'');
+}
+// The runner shortens a finding: never leave a formula open at the cut.
+function analysisClosedMath(text){
+  let value=String(text||'');
+  const open=value.lastIndexOf('\\('), close=value.lastIndexOf('\\)');
+  if(open>close)value=value.slice(0,open).trimEnd()+' …';
+  if(((value.replace(/\\\$/g,'').match(/\$/g)||[]).length)%2)value=value.slice(0,value.lastIndexOf('$')).trimEnd()+' …';
+  // ... nor a command cut short (Section~\ref{sec:presc): never a broken one.
+  return value.replace(/~?\\[A-Za-z]+\*?(?:\s*\[[^\]]*\])?\s*\{[^{}]*$/,' …')
+    .replace(/~?\\(?:ref|eqref|cref|Cref|autoref|nameref|hyperref|cite[pt]?)\*?(?:\s*\[[^\]]*\]?)?$/,' …');
+}
+// Stages, then each checked result with its verdict as it settles.
+function analysisProgressView(lines,run,refLabels){
+  const live=run?.status==='running', ended=['failed','interrupted','stopped'].includes(String(run?.status||''));
+  const list=analyzeEl('ol','analysis-progress'); list.setAttribute('aria-label','Analysis progress');
+  let section='', checkDetail=null, settled=0;
+  lines.forEach((line,index)=>{
+    const last=index===lines.length-1;
+    let match=ANALYZE_STAGE_LINE.exec(line);
+    if(match){
+      section=match[2];
+      const item=analyzeEl('li','ap-stage'); item.append(analyzeEl('b','',match[2]));
+      const detail=section==='Ingest'?(ANALYZE_SOURCE_WORDS[match[3]]||match[3]||''):(match[3]||'');
+      if(detail)item.append(analyzeEl('span','',detail));
+      if(section==='Check'){ checkDetail=analyzeEl('span','ap-count'); item.append(checkDetail); }
+      list.append(item); return;
+    }
+    if((match=ANALYZE_RESULT_LINE.exec(line))){
+      const verdict=match[2], item=analyzeEl('li','ap-result v-'+verdict);
+      item.append(analyzeEl('span','vd',ANALYZE_VERDICT_SHORT[verdict]),analyzeEl('span','lbl',match[1]));
+      const finding=String(match[3]||'').replace(/^Not checked: /,'');
+      if(finding)item.append(analyzeEl('span','issue',analysisClosedMath(analysisModelProse(finding,refLabels))));
+      if(verdict!=='not_checked')settled++;
+      list.append(item); return;
+    }
+    if((match=ANALYZE_NOW_LINE.exec(line))){
+      // Only while those checks are in flight: their verdicts follow this line.
+      if(live&&last)list.append(analyzeEl('li','ap-now','Checking '+match[1]+'…'));
+      return;
+    }
+    const plain=analysisModelProse(line.replace(/^(?:Ingest|Segment|Check|Roll-up|Report) · /,''),refLabels);
+    list.append(analyzeEl('li',ended&&last&&plain===line?'ap-error':'ap-line',plain.charAt(0).toUpperCase()+plain.slice(1)));
+  });
+  if(checkDetail&&settled)checkDetail.textContent='· '+settled+' done';
+  return list;
 }
 let analysisMarkdownParser=null;
 // The report is generated from model and manuscript text: Markdown only, raw
 // HTML is shown as text (never parsed), and the output is sanitized like any
 // other run output. Math stays TeX for KaTeX.
-function analysisMarkdownHtml(text){
-  const {s,slots}=stashMath(text);
+function analysisMarkdownHtml(text,refLabels){
+  const stashed=stashMath(text), slots=stashed.slots;
+  // Prose outside math may carry TeX text accents and cross-references
+  // (reports written before the report resolved them itself): Erd\H{o}s
+  // reads Erdős and Corollary~\ref{cor:x} "Corollary 1.2" (the label alone
+  // until the graph is known). Ties become spaces before Markdown is read, so
+  // two of them never strike text through.
+  const s=analysisResolveRefs(analysisTextAccents(stashed.s),refLabels);
   let html=null;
   try{
     const md=window.marked;
@@ -7189,8 +7323,16 @@ function analysisMarkdownHtml(text){
     if(analysisMarkdownParser)html=analysisMarkdownParser.parse(s);
   }catch(e){ html=null; }
   if(typeof html!=='string'||!html)html='<pre>'+escapeHtml(text)+'</pre>';
-  html=html.replace(/@@MATH(\d+)@@/g,(_,i)=>escapeHtml(slots[Number(i)]||''));
+  html=html.replace(/@@MATH(\d+)@@/g,(_,i)=>escapeHtml(analysisReportMath(slots[Number(i)]||'')));
   return sanitizeRenderedHtml(html);
+}
+// The report escapes every "|" as "\|" (table cells) and "<", ">" as "&lt;",
+// "&gt;" (no raw HTML) in model and manuscript text. Math is set aside before
+// the Markdown is read, so KaTeX would get the escapes: |H| typeset as the
+// norm ‖H‖ and x &lt; y as an error. Undo exactly those escapes inside math
+// (an original \| was written as \\| and comes back as \|).
+function analysisReportMath(tex){
+  return String(tex).replace(/\\\|/g,'|').replace(/&lt;/g,'<').replace(/&gt;/g,'>');
 }
 // Author macros (\newcommand) let KaTeX typeset the manuscript's own notation.
 function analysisKatexMacros(graph){
@@ -7235,7 +7377,7 @@ function applyAnalysisPreview(run){
   if(box.has_report&&rid)setDownloadUrl('/api/workspace/'+encodeURIComponent(rid)+'/file?path='+encodeURIComponent('analysis/report.md')+'&download=1','analysis-report.md');
   if(analysisSourceShown&&analysisSourceRunId===rid)return true;
   const report=!!box.has_report;
-  renderAnalysisReport(report?text:(text?analysisProgressText(text):''),!report,run,
+  renderAnalysisReport(report?text:analysisProgressText(text)||(live?'1 Ingest':''),!report,run,
     live?'The report appears here when the analysis finishes. Progress so far:':'This analysis published no report. What it recorded:');
   if(report&&rid&&!analysisGraphCache.has(rid))ensureAnalysisGraph(rid).then(payload=>{ if(payload&&runId===rid&&!analysisSourceShown){ $('md-view')._proofRenderKey=''; renderAnalysisReport(text,false,lastSandboxRun); } });
   return !!text;
@@ -7245,17 +7387,20 @@ function renderAnalysisReport(text,progress,run,note=''){
   $('pdf-pages').style.display='none';
   if(!text){ view.style.display='none'; view.innerHTML=''; view._proofRenderKey=''; setProofEmpty(true); return; }
   setProofEmpty(false); view.style.display='block';
-  const macros=analysisKatexMacros(analysisGraphCache.get(String(run?.run_id||''))?.graph);
-  const key=JSON.stringify(['analysis',!!progress,text,macros,note]);
+  const graph=analysisGraphCache.get(String(run?.run_id||''))?.graph;
+  const macros=analysisKatexMacros(graph), refs=analysisRefLabels(graph);
+  const key=JSON.stringify(['analysis',!!progress,text,macros,note,refs.size]);
   if(view._proofRenderKey===key)return;
   view._proofRenderKey=key;
   const previousTop=body.scrollTop, stick=progress&&body.scrollHeight-body.scrollTop-body.clientHeight<80;
   if(progress){
-    const doc=analyzeEl('div','md-doc analysis-doc live');
-    doc.append(analyzeEl('p','analysis-live-note',note||'Progress so far:'),analyzeEl('pre','analysis-live',text));
+    const doc=analyzeEl('div','md-doc analysis-doc live'), list=analysisProgressView(text.split('\n'),run,refs);
+    doc.append(analyzeEl('p','analysis-live-note',note||'Progress so far:'),list);
+    if(list.querySelector('.ap-result'))doc.append(analyzeEl('p','analysis-live-foot','Verdicts are '+ANALYZE_VERDICT_NOTE+'.'));
     view.replaceChildren(doc);
+    renderMathIn(doc,macros);
   }else{
-    view.innerHTML='<div class="md-doc analysis-doc">'+analysisMarkdownHtml(text)+'</div>';
+    view.innerHTML='<div class="md-doc analysis-doc">'+analysisMarkdownHtml(text,refs)+'</div>';
     view.querySelectorAll('a[href]').forEach(link=>{ link.target='_blank'; link.rel='noopener noreferrer'; });
     renderMathIn(view,macros);
   }
@@ -7347,6 +7492,7 @@ function renderLeanUpstream(run){
 const ANALYZE_VERDICTS=['checked','gap','error','unclear','not_checked'];
 const ANALYZE_VERDICT_LABEL={checked:'checked by a model verifier',gap:'gap',error:'error',unclear:'unclear',not_checked:'not checked'};
 const ANALYZE_VERDICT_SHORT={checked:'checked',gap:'gap',error:'error',unclear:'unclear',not_checked:'not checked'};
+const ANALYZE_ROUTE_WORDS={sponsored_kimi:'sponsored Kimi K3',api_key:'own API key',codex_subscription:'Codex account',claude_subscription:'Claude account'};
 const ANALYZE_VERDICT_COLOR={checked:'var(--verdict-checked)',gap:'var(--verdict-gap)',error:'var(--verdict-error)',unclear:'var(--verdict-unclear)',not_checked:'var(--verdict-none)'};
 let analysisHidden=new Set(), analysisFilterRunId='';
 // Output the verifier's reply could not be read from is no judgement: it is
@@ -7385,22 +7531,78 @@ function analysisRefLabels(graph){
     const number=String(node?.meta?.number||'').trim(), name=String(node?.label||'').trim();
     (Array.isArray(node?.meta?.labels)?node.meta.labels:[]).forEach(label=>{ if(typeof label==='string'&&!labels.has(label))labels.set(label,{number:number||name||label,name:name||number||label}); });
   });
+  // Labelled sections ("Section 7"), in graphs written since they are recorded.
+  const sections=graph?.ref_labels;
+  if(sections&&typeof sections==='object'&&!Array.isArray(sections))Object.entries(sections).slice(0,400).forEach(([label,value])=>{
+    if(!labels.has(label)&&value&&typeof value==='object')labels.set(label,{number:String(value.number||value.name||label),name:String(value.name||value.number||label)});
+  });
   return labels;
+}
+/* Cross-references as text: \ref{x} → the result's number, \cref/\Cref/
+   \autoref/\nameref{x} → its name, \eqref{x} → (number), \hyperref[x]{t} → t,
+   \cite{k} → [k], \S → §, and a tie (~) before a reference or a number → a
+   space. An unknown label is shown bare, never with its command. (Math is
+   left to the callers, which pass prose only.) */
+const ANALYZE_REF_TIE=/(\S)~(?=\\(?:ref|eqref|cref|Cref|autoref|nameref|hyperref|cite[pt]?|S)(?![A-Za-z])|\d)/g;
+// An unknown label reads as its name without the prefix, "(prescribed)" for
+// sec:prescribed, and with the kind its prefix names where a name is wanted.
+const ANALYZE_LABEL_KINDS={sec:'Section',sect:'Section',ssec:'Section',subsec:'Section',sssec:'Section',subsubsec:'Section',app:'Appendix',appendix:'Appendix',ch:'Chapter',chap:'Chapter',part:'Part',thm:'Theorem',theorem:'Theorem',lem:'Lemma',lemma:'Lemma',prop:'Proposition',cor:'Corollary',corollary:'Corollary',def:'Definition',defn:'Definition',rem:'Remark',conj:'Conjecture',claim:'Claim',ex:'Example',exa:'Example',fig:'Figure',tab:'Table',eq:'Equation',eqn:'Equation',alg:'Algorithm'};
+function analysisUnresolvedLabel(label,name){
+  const prefixed=/^([A-Za-z]{1,10}):([\s\S]+)$/.exec(label), text='('+(prefixed?prefixed[2]:label)+')';
+  const kind=prefixed&&name?ANALYZE_LABEL_KINDS[prefixed[1].toLowerCase()]:'';
+  return kind?kind+' '+text:text;
+}
+function analysisResolveRefs(text,refLabels){
+  const known=item=>refLabels instanceof Map?refLabels.get(item):null;
+  const refs=(key,field,bare=false)=>key.split(',').map(item=>item.trim()).filter(Boolean).map(item=>{
+    const value=known(item)?.[field]; if(value)return value;
+    // Inside \eqref's own parentheses the label is not parenthesized again.
+    const fallback=analysisUnresolvedLabel(item,field==='name'); return bare?fallback.slice(1,-1):fallback;
+  }).join(', ');
+  // \S first: "\S\ref{x}" is "§" and then the reference.
+  return String(text??'').replace(ANALYZE_REF_TIE,'$1 ').replace(/\\S(?![A-Za-z])\s*/g,'§')
+    .replace(/\\hyperref\s*\[[^\]\n]{0,200}\]\s*\{([^{}\n]{0,300})\}/g,'$1')
+    .replace(/\\(?:[cC]ref|autoref|nameref)\*?\s*\{([^{}\n]{1,300})\}/g,(_,key)=>refs(key,'name'))
+    .replace(/\\eqref\*?\s*\{([^{}\n]{1,300})\}/g,(_,key)=>'('+refs(key,'number',true)+')')
+    .replace(/\\ref\*?\s*\{([^{}\n]{1,300})\}/g,(_,key)=>refs(key,'number'))
+    .replace(/\\cite[pt]?\*?(?:\s*\[[^\]\n]{0,200}\])*\s*\{([^{}\n]{1,300})\}/g,(_,key)=>'['+key.split(',').map(item=>item.trim()).filter(Boolean).join(', ')+']');
+}
+// Model-written prose (findings, notes, progress): accents and references
+// read as text outside math; nothing else is changed (in model prose "~"
+// can mean "of the order of", so only ties are spaces).
+const ANALYZE_MATH_SPLIT=/(\$\$[\s\S]+?\$\$|\$[^$\n]+?\$|\\\([\s\S]+?\\\)|\\\[[\s\S]+?\\\])/;
+function analysisModelProse(text,refLabels){
+  const value=String(text??'');
+  if(!/[\\~]/.test(value))return value;
+  return value.split(ANALYZE_MATH_SPLIT).map((part,index)=>index%2?part:analysisResolveRefs(analysisTextAccents(part),refLabels)).join('');
+}
+// TeX text accents outside math read as letters (Erd\H{o}s → Erdős), as in
+// the report; a bare letter after an accent counts only where that accent is
+// used, so an escaped apostrophe ("it\'s") stays as written.
+const ANALYZE_ACCENT_MARKS={"'":'\u0301','`':'\u0300','^':'\u0302','"':'\u0308','~':'\u0303','=':'\u0304','.':'\u0307',H:'\u030b',c:'\u0327',v:'\u030c',u:'\u0306',r:'\u030a',k:'\u0328'};
+const ANALYZE_BARE_ACCENTED={"'":'aeiouyAEIOUYcnzCNZ','`':'aeiouAEIOU','^':'aeiouAEIOU','"':'aeiouyAEIOUY','~':'anoANO','=':'aeiouAEIOU','.':'zZeEgGcCI'};
+const ANALYZE_TEXT_LETTERS={o:'ø',O:'Ø',ss:'ß',ae:'æ',AE:'Æ',oe:'œ',OE:'Œ',aa:'å',AA:'Å',l:'ł',L:'Ł'};
+function analysisTextAccents(text){
+  const value=String(text??'');
+  if(!value.includes('\\'))return value;
+  return value.split(/(\$\$[\s\S]+?\$\$|\$[^$\n]+?\$|\\\([\s\S]+?\\\)|\\\[[\s\S]+?\\\])/).map((part,index)=>index%2?part:part
+    .replace(/(\{)?\\(?:(['`^"~=.])|([Hcvurk])(?![A-Za-z]))(?:\s*\{\s*(\\[ij](?![A-Za-z])|[A-Za-z])\s*\}|\s*(\\[ij](?![A-Za-z])|[A-Za-z]))(\})?/g,(match,open,sym,letter,braced,bare,close)=>{
+      const accent=sym||letter, base=braced||bare;
+      if(bare&&sym&&!ANALYZE_BARE_ACCENTED[sym].includes(bare))return match;
+      const out=((base==='\\i'?'i':base==='\\j'?'j':base)+ANALYZE_ACCENT_MARKS[accent]).normalize('NFC');
+      return (open&&!close?'{':'')+out+(close&&!open?'}':'');
+    })
+    .replace(/\{\\(o|O|ss|ae|AE|oe|OE|aa|AA|l|L)\}|\\(o|O|ss|ae|AE|oe|OE|aa|AA|l|L)(?:\{\}| (?=[A-Za-z]))/g,(_,a,b)=>ANALYZE_TEXT_LETTERS[a||b])
+  ).join('');
 }
 // Statements as readable prose: \ref becomes the result's label and simple
 // text markup is dropped; math is left as written for KaTeX.
 function analysisProse(text,refLabels){
   // Display environments are math too: their \\ row breaks must survive.
   const parts=String(text||'').split(/(\\begin\{equation\*?\}[\s\S]*?\\end\{equation\*?\}|\\begin\{align\*?\}[\s\S]*?\\end\{align\*?\}|\\begin\{alignat\*?\}[\s\S]*?\\end\{alignat\*?\}|\\begin\{gather\*?\}[\s\S]*?\\end\{gather\*?\}|\$\$[\s\S]*?\$\$|\\\[[\s\S]*?\\\]|\\\([\s\S]*?\\\)|\$(?:\\.|[^$\\])+\$)/);
-  const known=item=>refLabels instanceof Map?refLabels.get(item):null;
-  const refs=(key,field)=>key.split(',').map(item=>item.trim()).filter(Boolean).map(item=>known(item)?.[field]||item).join(', ');
   // KaTeX would number these itself, never with the manuscript's numbers: show them unnumbered.
-  return parts.map((part,index)=>index%2?part.replace(/\\(begin|end)\{(equation|align|alignat|gather)\}/g,'\\$1{$2*}'):part
-    .replace(/\\(?:[cC]ref|autoref|nameref)\*?\{([^{}]{1,200})\}/g,(_,key)=>refs(key,'name'))
-    .replace(/\\ref\*?\{([^{}]{1,200})\}/g,(_,key)=>refs(key,'number'))
-    .replace(/\\eqref\*?\{([^{}]{1,200})\}/g,(_,key)=>'('+refs(key,'number')+')')
+  return parts.map((part,index)=>index%2?part.replace(/\\(begin|end)\{(equation|align|alignat|gather)\}/g,'\\$1{$2*}'):analysisResolveRefs(analysisTextAccents(part),refLabels)
     .replace(/\\(?:emph|textbf|textit|textsc|textrm|textsf|texttt|text|mbox)\{([^{}]*)\}/g,'$1')
-    .replace(/\\cite[pt]?\*?(?:\[[^\]]*\])*\{([^{}]{1,200})\}/g,'[$1]')
     .replace(/~/g,' ').replace(/\\\\/g,' ').replace(/\s+/g,' ')
   ).join('').trim();
 }
@@ -7475,7 +7677,7 @@ function renderAnalysisDetail(node,context){
   const head=analyzeEl('div','dag-detail-head'), titleBox=analyzeEl('div');
   titleBox.style.minWidth='0';
   const badge=analyzeEl('span','kd',String(meta.env||node.kind||'result').replace(/_/g,' ').slice(0,40)); badge.style.setProperty('--kc','#64748b');
-  titleBox.append(badge,analyzeEl('h4','',dagDetailText(node.label||node.id,600)));
+  titleBox.append(badge,analyzeEl('h4','',analysisTextAccents(dagDetailText(node.label||node.id,600))));
   const close=analyzeEl('button','','×'); close.type='button'; close.setAttribute('aria-label','Close result details'); close.onclick=closeDagDetail;
   head.append(titleBox,close);
   const body=analyzeEl('div','dag-detail-body');
@@ -7483,8 +7685,9 @@ function renderAnalysisDetail(node,context){
   line.append(analyzeEl('strong','',verdict.label.charAt(0).toUpperCase()+verdict.label.slice(1)));
   if(meta.main_result===true)line.append(analyzeEl('span','tag','main result'));
   body.append(line);
+  // Model-written text cites the manuscript's labels: they read as its results.
   const section=(title,text,cls='txt',math=false)=>{
-    const value=dagDetailText(text);
+    const value=analysisModelProse(dagDetailText(text),labels);
     if(!value.trim())return null;
     const box=analyzeEl('section'); const content=analyzeEl('div',cls,value);
     box.append(analyzeEl('h5','',title),content); body.append(box);
@@ -7501,7 +7704,7 @@ function renderAnalysisDetail(node,context){
   if(Number(meta.closure_external))add('Conditional on',Number(meta.closure_external)+' cited external result'+(Number(meta.closure_external)===1?'':'s'));
   if(Array.isArray(meta.closure_assumptions)&&meta.closure_assumptions.length)add('Assumes',meta.closure_assumptions.map(id=>(context.graph.nodes||[]).find(item=>String(item.id)===String(id))?.label||id).join(', '));
   const by=meta.checked_by&&typeof meta.checked_by==='object'?meta.checked_by:null;
-  if(by)add('Checked by',[by.model,by.route,by.effort?by.effort+' effort':''].filter(Boolean).map(String).join(' · '));
+  if(by)add('Checked by',[by.model,ANALYZE_ROUTE_WORDS[by.route]||by.route,by.effort?by.effort+' effort':''].filter(Boolean).map(String).join(' · '));
   if(meta.confidence)add('Confidence',meta.confidence);
   if(meta.interpreted===false)add('Verifier output','no usable verifier output — counted as not checked');
   if(Number(meta.parts)>1)add('Checked in',Number(meta.parts)+' parts');
@@ -7522,8 +7725,8 @@ function renderAnalysisDetail(node,context){
     issues.forEach(item=>{
       const row=analyzeEl('li','issue-'+(item.type==='error'?'error':'gap'));
       row.append(analyzeEl('b','',item.type==='error'?'Error':'Gap'),' ');
-      if(item.location)row.append(analyzeEl('span','loc',dagDetailText(item.location,200)+' — '));
-      row.append(analyzeEl('span','',dagDetailText(item.issue,1200)));
+      if(item.location)row.append(analyzeEl('span','loc',analysisModelProse(dagDetailText(item.location,200),labels)+' — '));
+      row.append(analyzeEl('span','',analysisModelProse(dagDetailText(item.issue,1200),labels)));
       list.append(row);
     });
     box.append(analyzeEl('h5','','Issues found by the verifier'),list); body.append(box);
@@ -7534,8 +7737,8 @@ function renderAnalysisDetail(node,context){
     const box=analyzeEl('section'), list=analyzeEl('ul','analysis-external');
     external.forEach(item=>{
       const row=analyzeEl('li');
-      row.append(analyzeEl('b','',dagDetailText(item.citation,300)||'Cited result'));
-      if(item.statement_as_used)row.append(analyzeEl('div','',dagDetailText(item.statement_as_used,1200)));
+      row.append(analyzeEl('b','',analysisModelProse(dagDetailText(item.citation,300),labels)||'Cited result'));
+      if(item.statement_as_used)row.append(analyzeEl('div','',analysisModelProse(dagDetailText(item.statement_as_used,1200),labels)));
       if(item.hypotheses_checked)row.append(analyzeEl('div','muted','Hypotheses checked: '+dagDetailText(item.hypotheses_checked,200)));
       list.append(row);
     });

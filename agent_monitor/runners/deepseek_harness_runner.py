@@ -1116,7 +1116,7 @@ def run_codex(prompt: str) -> int:
     try:
         result = codex_exec(system, prompt, model=model, emit_event=emit)
     except CodexBackendError as exc:
-        emit_item({"type": "error", "message": str(exc)})
+        emit_item({"type": "error", "message": str(exc), "terminal": True})
         return 1
     final_text = result.text
     if audit_requested(prompt):

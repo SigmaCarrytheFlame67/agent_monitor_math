@@ -138,7 +138,9 @@ class ClaudeCodeRuntimeTests(unittest.TestCase):
                 effort="xhigh",
                 enable_tools=False,
             )
-        self.assertEqual(command[:3], ["/bin/claude", "-p", "prove it"])
+        # The prompt travels on stdin (one argv string is limited to 128 KiB).
+        self.assertEqual(command[:2], ["/bin/claude", "-p"])
+        self.assertNotIn("prove it", command)
         self.assertIn("stream-json", command)
         self.assertIn("--verbose", command)
         self.assertIn("--safe-mode", command)

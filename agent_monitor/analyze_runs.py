@@ -34,6 +34,7 @@ import re
 import tempfile
 import threading
 import time
+from collections import OrderedDict
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Mapping
@@ -371,7 +372,9 @@ def normalize_request(body: Mapping[str, Any], user: Mapping[str, Any] | None) -
         info = validate_link(url, role)
         connector = str(info.get("connector") or "")
         source: dict[str, Any] = {"kind": "url", "url": url}
-        label = str(info.get("canonical_url") or url)
+        # The previewed title when there was a preview; the runner's own
+        # title replaces either once it has read the manuscript.
+        label = resolved_title(info.get("canonical_url")) or str(info.get("canonical_url") or url)
     elif text.strip():
         limit = paste_limit(role)
         if len(text) > limit:
@@ -464,6 +467,72 @@ RESOLVE_FETCHER_FACTORY: Any = None
 RESOLVE_SLEEP: Any = None
 
 
+def _refused_preview(info: Mapping[str, Any], error: str, **extra: Any) -> dict[str, Any]:
+    return {
+        "ok": False,
+        "connector": info.get("connector"),
+        "canonical_url": info.get("canonical_url"),
+        "canonical_id": None,
+        "title": "",
+        "title_text": "",
+        "version": "",
+        "license": "",
+        "format": "",
+        "size_bytes": None,
+        "warnings": [],
+        "error": error,
+        **extra,
+    }
+
+
+def preview_refusal(url: str, *, role: str) -> dict[str, Any] | None:
+    """The preview of a link that is refused without any network use (not a
+    link this site can analyze, or a member-only link for a guest), else
+    ``None``.  The resolve endpoint answers these without counting them
+    against the hourly preview limit, so a half-typed or mistyped link never
+    uses up the previews of the links that need a lookup."""
+    info = _sources().classify(url)
+    if not info.get("ok"):
+        return _refused_preview(info, str(info.get("error") or "That link can't be analyzed"))
+    if role == "guest" and info.get("connector") not in GUEST_CONNECTORS:
+        return _refused_preview(info, GUEST_LINK_REFUSAL, member_only=True)
+    return None
+
+
+# Titles of recently previewed links (canonical link -> plain title), so an
+# analysis started from a preview is labelled "Analyze · <title>" from its
+# first moment instead of "Analyze · <link>" until the runner has read the
+# manuscript.  Public metadata this server looked up, never text from a client.
+_RESOLVED_TITLES: "OrderedDict[str, tuple[float, str]]" = OrderedDict()
+_RESOLVED_TITLES_LOCK = threading.Lock()
+RESOLVED_TITLE_SECONDS = 6 * 3600
+RESOLVED_TITLE_ENTRIES = 1024
+
+
+def remember_resolved_title(canonical_url: object, title: object) -> None:
+    key, value = str(canonical_url or ""), plain_title(title, 160)
+    if not key.startswith("https://") or not value:
+        return
+    with _RESOLVED_TITLES_LOCK:
+        _RESOLVED_TITLES.pop(key, None)
+        _RESOLVED_TITLES[key] = (time.time(), value)
+        while len(_RESOLVED_TITLES) > RESOLVED_TITLE_ENTRIES:
+            _RESOLVED_TITLES.popitem(last=False)
+
+
+def resolved_title(canonical_url: object) -> str:
+    """The title a recent preview found for this link, else ``""``."""
+    key = str(canonical_url or "")
+    with _RESOLVED_TITLES_LOCK:
+        entry = _RESOLVED_TITLES.get(key)
+        if entry is None:
+            return ""
+        if time.time() - entry[0] > RESOLVED_TITLE_SECONDS:
+            _RESOLVED_TITLES.pop(key, None)
+            return ""
+        return entry[1]
+
+
 def resolve_link(url: str, *, role: str) -> dict[str, Any]:
     """Metadata for one link (``sources.resolve``: at most 10 s, nothing is
     downloaded): ``{ok, connector, canonical_url, canonical_id, title,
@@ -471,22 +540,10 @@ def resolve_link(url: str, *, role: str) -> dict[str, Any]:
     ``size_bytes`` is ``None`` when unknown (always, today).  A guest's
     generic HTTPS link is refused with ``member_only: true``."""
     sources = _sources()
+    refusal = preview_refusal(url, role=role)
+    if refusal is not None:
+        return refusal
     info = sources.classify(url)
-    if info.get("ok") and role == "guest" and info.get("connector") not in GUEST_CONNECTORS:
-        return {
-            "ok": False,
-            "connector": info.get("connector"),
-            "canonical_url": info.get("canonical_url"),
-            "canonical_id": None,
-            "title": "",
-            "version": "",
-            "license": "",
-            "format": "",
-            "size_bytes": None,
-            "warnings": [],
-            "error": GUEST_LINK_REFUSAL,
-            "member_only": True,
-        }
     token = str(os.environ.get(GITHUB_TOKEN_ENV) or "").strip() or None
     if callable(RESOLVE_FETCHER_FACTORY):
         fetcher = RESOLVE_FETCHER_FACTORY()
@@ -500,6 +557,8 @@ def resolve_link(url: str, *, role: str) -> dict[str, Any]:
     resolved = sources.resolve(url, **kwargs).as_dict()
     # The preview typesets ``title``; announcements and plain-text places use this.
     resolved["title_text"] = plain_title(resolved.get("title"), 300)
+    if resolved.get("ok") and not resolved.get("choices"):
+        remember_resolved_title(info.get("canonical_url"), resolved.get("title"))
     return resolved
 
 
