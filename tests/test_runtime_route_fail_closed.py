@@ -291,6 +291,31 @@ class RuntimeRouteFailClosedTests(unittest.TestCase):
         self.assertEqual(codex_calls, ["gpt-6-astra"])
         self.assertEqual(result["model"], "gpt-6-astra")
 
+    def test_an_explicit_codex_dag_model_says_why_a_recorded_run_keeps_its_route(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            workspace = Path(tmp)
+            (workspace / "proof.md").write_text("Assume equality. Therefore one equals one.", encoding="utf-8")
+            with (
+                patch.object(settings, "resolved_user_env", return_value={"OPENAI_API_KEY": "openai-key"}),
+                patch.object(proof_graph, "_call_llm", side_effect=AssertionError("API call")) as direct_api,
+                patch.object(proof_graph, "_run_codex_prompt", side_effect=AssertionError("Codex")) as codex,
+                patch.object(proof_graph, "_run_claude_prompt", side_effect=AssertionError("Claude")) as claude,
+            ):
+                for route, name in (("api_key", "an API key"), ("claude_subscription", "a Claude subscription")):
+                    with self.assertRaisesRegex(
+                        ValueError, f"^This run was recorded on {name}, so its DAG is rebuilt on that route"
+                    ):
+                        proof_graph.generate(
+                            workspace=workspace,
+                            run_record={"auth_route": route, "owner_id": 17, "model": "claude-opus-4-8"},
+                            user={"id": 17, "is_admin": True},
+                            model="codex",
+                        )
+
+        direct_api.assert_not_called()
+        codex.assert_not_called()
+        claude.assert_not_called()
+
     def test_recorded_codex_lean_chat_never_calls_direct_api(self) -> None:
         env = {"AGENT_MONITOR_CODEX_SUBSCRIPTION": "1", "CODEX_HOME": "/private/codex"}
         with (

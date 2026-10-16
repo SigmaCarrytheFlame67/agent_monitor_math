@@ -383,7 +383,7 @@ def test_member_dag_rebuild_never_uses_a_stored_subscription_sign_in(
     """Sign-ins and runtimes a member stored before subscriptions became
     administrator-only stay unused by a manual DAG rebuild: not for the model
     "codex", not as a failed API call's fallback, not as a legacy run's runtime."""
-    from agent_monitor import codex_login, proof_graph
+    from agent_monitor import proof_graph
 
     workspace = tmp_path / "ws"
     workspace.mkdir()
@@ -392,7 +392,6 @@ def test_member_dag_rebuild_never_uses_a_stored_subscription_sign_in(
     monkeypatch.setattr(console, "_workspace_for_run", lambda _run_id: workspace)
     monkeypatch.setattr(console.Handler, "_owns_run", lambda _self, _run_id, _user: True)
     monkeypatch.setattr(console, "_run_record_for", lambda run_id: dict(records[run_id]))
-    monkeypatch.setenv("AGENT_MONITOR_CODEX_ACCOUNT_HOME", str(tmp_path / "codex"))
     graph = json.dumps({"nodes": [{"id": "n1", "kind": "conclusion", "label": "done",
                                    "statement": "1=1", "citations": []}], "edges": []})
     launches: list[str] = []
@@ -400,48 +399,52 @@ def test_member_dag_rebuild_never_uses_a_stored_subscription_sign_in(
                         lambda *_a, **_k: launches.append("codex") or graph)
     monkeypatch.setattr(proof_graph, "_run_claude_prompt",
                         lambda *_a, **_k: launches.append("claude") or ("sonnet", graph))
+    # Both stored sign-ins count as ready: only generate() keeps them unused.
+    monkeypatch.setattr(proof_graph, "_codex_account_ready", lambda _user: True)
     monkeypatch.setattr(proof_graph, "_claude_account_ready", lambda _user: True)
+    api_models: list = []
 
     def no_api_key(_env, model, _prompt, **_kwargs):
+        api_models.append(model)
         raise ValueError(f"Model {model} requires an API key; add and verify it in Settings")
 
     monkeypatch.setattr(proof_graph, "_call_llm", no_api_key)
     with running_server() as port:
         user, cookie = _member(port)
         member_id = int(user["id"])
-        # A ChatGPT sign-in linked before the policy, still on the server.
-        home = codex_login.account_home(member_id)
-        home.mkdir(parents=True)
-        (home / "auth.json").write_text(json.dumps({"tokens": {"access_token": "x"}}), encoding="utf-8")
-        assert proof_graph._codex_account_ready(user)
         api_run = {"run_id": "plain_api", "engine": "plain", "owner_id": member_id,
                    "auth_route": "api_key", "model": "gpt-5", "status": "finished"}
         legacy_run = {"run_id": "plain_legacy", "engine": "plain", "owner_id": member_id,
                       "model": "gpt-5", "status": "finished"}
         records.update(plain_api=api_run, plain_legacy=legacy_run)
 
-        def rebuild(run_id: str, body: dict) -> int:
-            return request(port, "POST", f"{APP_MOUNT}/api/run/{run_id}/proof_graph",
-                           body=body, headers={"Cookie": cookie})[0]
+        def rebuild(run_id: str, body: dict, session: str = cookie) -> tuple[int, str]:
+            status, _headers, raw = request(port, "POST", f"{APP_MOUNT}/api/run/{run_id}/proof_graph",
+                                            body=body, headers={"Cookie": session})
+            return status, json.loads(raw).get("error", "")
 
-        statuses = [
-            rebuild("plain_api", {"kind": "informal", "model": "codex"}),
-            rebuild("plain_legacy", {"kind": "informal", "model": "codex"}),
-        ]
+        # Asking for "codex" is refused with the note the member's Settings
+        # show, before any API call, not as an unknown API model.
+        for run_id in ("plain_api", "plain_legacy"):
+            assert rebuild(run_id, {"kind": "informal", "model": "codex"}) == (
+                400, account_policy.subscription_notes()["codex"],
+            )
+        assert api_models == []
         for runtime in ("codex", "claude"):  # stored before the policy
             auth.set_user_env(member_id, {"AGENT_MONITOR_ACCOUNT_RUNTIME": runtime})
-            statuses.append(rebuild("plain_legacy", {"kind": "informal"}))
-        assert statuses == [400, 400, 400, 400] and launches == []
+            assert rebuild("plain_legacy", {"kind": "informal"})[0] == 400
+        assert launches == []
 
-        # The administrator's legacy run still honours an explicit "codex".
+        # The administrator's API-key run stays on its key and says so; its
+        # legacy run still honours an explicit "codex".
         admin, token = auth.login_and_create_session("owner@example.test", "long-enough-password")
+        session = f"{auth.SESSION_COOKIE}={token}"
+        records["plain_api"] = {**api_run, "owner_id": admin["id"]}
         records["plain_legacy"] = {**legacy_run, "owner_id": admin["id"]}
-        status, _headers, raw = request(
-            port, "POST", f"{APP_MOUNT}/api/run/plain_legacy/proof_graph",
-            body={"kind": "informal", "model": "codex"},
-            headers={"Cookie": f"{auth.SESSION_COOKIE}={token}"},
-        )
-    assert status == 200 and launches == ["codex"], raw
+        status, error = rebuild("plain_api", {"kind": "informal", "model": "codex"}, session)
+        assert status == 400 and error.startswith("This run was recorded on an API key, so its DAG")
+        assert rebuild("plain_legacy", {"kind": "informal", "model": "codex"}, session) == (200, "")
+    assert launches == ["codex"] and api_models == [None, None]
 
 
 def test_member_settings_report_the_policy_without_probing_logins(member_console, monkeypatch):

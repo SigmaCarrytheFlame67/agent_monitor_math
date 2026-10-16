@@ -1889,6 +1889,20 @@ def generate(
     use_codex = recorded_route == "codex_subscription" or (
         requested_codex and allow_codex_fallback and may_pick_subscription
     )
+    if requested_codex and allow_codex_fallback and not use_codex:
+        # Say why "codex" is refused rather than letting it fail as an API
+        # model name: a member gets the note its Settings show, anyone else
+        # the route the run was recorded on.
+        route_name = {
+            "api_key": "an API key",
+            "claude_subscription": "a Claude subscription",
+        }.get(str(recorded_route), str(recorded_route).replace("_", " "))
+        raise ValueError(
+            account_policy.member_route_error(user, "codex_subscription")
+            or f"This run was recorded on {route_name}, so its DAG is rebuilt on "
+            "that route, not on a Codex subscription; leave the model empty to "
+            "use the run's own model"
+        )
     use_claude = recorded_route == "claude_subscription"
     if may_pick_subscription and not use_claude:
         from agent_monitor.settings import claude_enabled
