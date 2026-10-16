@@ -7,11 +7,16 @@ import json
 import os
 import subprocess
 import sys
+import tempfile
 import textwrap
+import time
+import types
 import unittest
 from pathlib import Path
 from unittest.mock import patch
 
+from agent_monitor import jobs
+from agent_monitor.cli_events import CLIEventParser
 from agent_monitor.runners import deepagents_runner
 
 
@@ -373,6 +378,113 @@ class ClaudeDeepAgentsContractTests(unittest.TestCase):
             0,
             msg=f"stdout:\n{completed.stdout}\nstderr:\n{completed.stderr}",
         )
+
+
+def _deepagents_stub_modules(agent) -> dict[str, types.ModuleType]:
+    """The DeepAgents packages main() imports (not installed here)."""
+    deepagents = types.ModuleType("deepagents")
+    deepagents.create_deep_agent = lambda **_kwargs: agent
+    filesystem = types.ModuleType("deepagents.backends.filesystem")
+    filesystem.FilesystemBackend = lambda **_kwargs: None
+    return {
+        "deepagents": deepagents,
+        "deepagents.backends": types.ModuleType("deepagents.backends"),
+        "deepagents.backends.filesystem": filesystem,
+    }
+
+
+class _SilentAgent:
+    def stream(self, *_args, **_kwargs):
+        yield {"messages": []}
+
+
+class ClaudeDeepAgentsRunErrorTests(unittest.TestCase):
+    """A fatal DeepAgents failure is the run's error, not just an exit code."""
+
+    # The real runner; its agent's first model call fails as claude_exec does
+    # for the Claude Code stream given in argv[2].
+    RUNNER = textwrap.dedent("""\
+        import json, sys, types
+        from agent_monitor.runners import claude_backend, deepagents_runner
+
+        class Agent:
+            def stream(self, *_args, **_kwargs):
+                events = tuple(json.loads(sys.argv[2]))
+                claude_backend._terminal_result(claude_backend._ProcessResult(1, "", events))
+                yield {}
+
+        deepagents = types.ModuleType("deepagents")
+        deepagents.create_deep_agent = lambda **_kwargs: Agent()
+        filesystem = types.ModuleType("deepagents.backends.filesystem")
+        filesystem.FilesystemBackend = lambda **_kwargs: None
+        sys.modules.update({"deepagents": deepagents, "deepagents.backends": types.ModuleType("deepagents.backends"),
+                            "deepagents.backends.filesystem": filesystem})
+        deepagents_runner._create_claude_subscription_model = lambda _workspace, model: model
+        sys.exit(deepagents_runner.main())
+        """)
+
+    def _run_on_claude(self, text: str, category: str) -> dict:
+        events = [
+            {"type": "assistant", "is_api_error_message": True, "error": category,
+             "message": {"model": "<synthetic>", "usage": {"input_tokens": 0, "output_tokens": 0},
+                         "content": [{"type": "text", "text": text}]}},
+            {"type": "result", "subtype": "success", "is_error": True, "result": text},
+        ]
+        command = [sys.executable, "-c", self.RUNNER, "Prove it.", json.dumps(events)]
+        with tempfile.TemporaryDirectory() as tmp, patch(
+            "agent_monitor.engines_registry.build_cli_command", return_value=command
+        ), patch("agent_monitor.agent_config.persona_preamble", return_value=""), patch.object(jobs, "_write_run"):
+            return jobs._run_cli_engine(
+                run_id="deepagents_claude", engine="deepagents", problem_id="p", problem_text="Prove it.",
+                started=time.time(), workspace=Path(tmp),
+                extra_env={"AGENT_MONITOR_CLAUDE_SUBSCRIPTION": "1", "CLAUDE_CONFIG_DIR": tmp,
+                           "PYTHONPATH": str(Path(__file__).resolve().parents[1])},
+            )
+
+    def test_a_claude_usage_limit_is_the_run_error(self) -> None:
+        run = self._run_on_claude("You've hit your session limit · resets 11pm (UTC)", "rate_limit")
+        self.assertEqual(run["status"], "failed")
+        self.assertIn("You've hit your session limit · resets 11pm (UTC)", run["error"])
+
+    def test_an_expired_claude_sign_in_says_to_reconnect(self) -> None:
+        run = self._run_on_claude(
+            "Failed to authenticate: OAuth session expired and could not be refreshed", "authentication_failed")
+        self.assertEqual(run["status"], "failed")
+        self.assertIn("reconnect Claude Code in Settings", run["error"])
+
+    def test_every_other_fatal_exit_names_its_reason(self) -> None:
+        claude = {"AGENT_MONITOR_CLAUDE_SUBSCRIPTION": "1", "CLAUDE_CONFIG_DIR": "/nonexistent"}
+        scenarios = (
+            ("empty prompt", {}, " ", None, "empty prompt"),
+            ("both account routes", {**claude, "AGENT_MONITOR_CODEX_SUBSCRIPTION": "1"}, "Prove it.", None,
+             "cannot both be active"),
+            ("model setup", claude, "Prove it.", RuntimeError("CLAUDE_CONFIG_DIR is required for DeepAgents Claude"),
+             "CLAUDE_CONFIG_DIR is required"),
+            ("no proof", claude, "Prove it.", None, "ended without a non-empty proof.md"),
+        )
+        for name, env, prompt, model_error, reason in scenarios:
+            with self.subTest(name), tempfile.TemporaryDirectory() as tmp:
+                output = io.StringIO()
+                previous = Path.cwd()
+                os.chdir(tmp)
+                try:
+                    with (
+                        patch.dict(os.environ, env, clear=True),
+                        patch.dict(sys.modules, _deepagents_stub_modules(_SilentAgent())),
+                        patch.object(sys, "argv", ["deepagents_runner.py", prompt]),
+                        patch.object(deepagents_runner, "_install_termination_handlers"),
+                        patch.object(deepagents_runner, "_create_claude_subscription_model",
+                                     side_effect=model_error, return_value=object()),
+                        patch.object(deepagents_runner, "_run_supplemental_audit"),
+                        contextlib.redirect_stdout(output),
+                    ):
+                        returncode = deepagents_runner.main()
+                finally:
+                    os.chdir(previous)
+                parser = CLIEventParser("codex", source_engine="deepagents")
+                parser.feed(output.getvalue())
+                self.assertNotEqual(returncode, 0)
+                self.assertIn(reason, parser.terminal_error or "")
 
 
 if __name__ == "__main__":

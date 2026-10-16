@@ -1941,7 +1941,7 @@ def main() -> int:
     _install_termination_handlers()
     prompt = sys.argv[1] if len(sys.argv) > 1 else ""
     if not prompt.strip():
-        emit_item({"type": "error", "message": "empty prompt"})
+        emit_item({"type": "error", "message": "empty prompt", "terminal": True})
         return 2
 
     workspace = Path.cwd().resolve()
@@ -1958,6 +1958,7 @@ def main() -> int:
             {
                 "type": "error",
                 "message": "Codex and Claude account routes cannot both be active",
+                "terminal": True,
             }
         )
         return 2
@@ -2008,19 +2009,19 @@ def main() -> int:
         try:
             deepagents_model = _create_codex_subscription_model(workspace, model)
         except Exception as exc:  # noqa: BLE001
-            emit_item({"type": "error", "message": f"{type(exc).__name__}: {exc}"})
+            emit_item({"type": "error", "message": f"{type(exc).__name__}: {exc}", "terminal": True})
             return 1
     elif claude_subscription_mode:
         try:
             deepagents_model = _create_claude_subscription_model(workspace, model)
         except Exception as exc:  # noqa: BLE001
-            emit_item({"type": "error", "message": f"{type(exc).__name__}: {exc}"})
+            emit_item({"type": "error", "message": f"{type(exc).__name__}: {exc}", "terminal": True})
             return 1
     elif _is_kimi_api_model(model):
         try:
             deepagents_model = _create_kimi_api_model(model)
         except Exception as exc:  # noqa: BLE001
-            emit_item({"type": "error", "message": f"{type(exc).__name__}: {exc}"})
+            emit_item({"type": "error", "message": f"{type(exc).__name__}: {exc}", "terminal": True})
             return 1
     else:
         deepagents_model = model
@@ -2204,7 +2205,7 @@ def main() -> int:
                 )
             )
             if not recovered:
-                emit_item({"type": "error", "message": f"{type(exc).__name__}: {exc}"})
+                emit_item({"type": "error", "message": f"{type(exc).__name__}: {exc}", "terminal": True})
                 return 1
             emit_item({
                 "type": "agent_message",
@@ -2279,6 +2280,7 @@ def main() -> int:
                             else " (lean_check was never completed)"
                         )
                     ),
+                    "terminal": True,
                 }
             )
             return 1
@@ -2326,6 +2328,7 @@ def main() -> int:
                     "DeepAgents ended without a non-empty proof.md or proof.tex "
                     "artifact"
                 ),
+                "terminal": True,
             }
         )
         return 1
@@ -2351,6 +2354,7 @@ def main() -> int:
                     "checkpoint or an explicit current-run degraded audit with "
                     "a concrete missing/failed artifact reason"
                 ),
+                "terminal": True,
             }
         )
         return 1
