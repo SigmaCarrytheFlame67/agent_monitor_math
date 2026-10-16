@@ -31,7 +31,12 @@ if __package__:
         forward_as_codex_event,
         subscription_enabled as claude_subscription_enabled,
     )
-    from .codex_backend import CodexBackendError, codex_exec, subscription_enabled
+    from .codex_backend import (
+        CodexBackendError,
+        codex_exec,
+        forward_nonterminal,
+        subscription_enabled,
+    )
     from .deepseek_harness_runner import (
         audit_requested,
         ensure_requested_outcome,
@@ -54,6 +59,7 @@ else:
     from agent_monitor.runners.codex_backend import (
         CodexBackendError,
         codex_exec,
+        forward_nonterminal,
         subscription_enabled,
     )
     from agent_monitor.runners.deepseek_harness_runner import (
@@ -74,7 +80,15 @@ def emit_item(item: dict) -> None:
 
 def chat(client, model: str, system: str, user: str, *, use_codex: bool = False, use_claude: bool = False) -> tuple[str, dict]:
     if use_codex:
-        result = codex_exec(system, user, model=model, emit_event=emit)
+        # As on the Claude route, Codex's own turn.failed never ends the run:
+        # call() reports a failure, as the run's error unless it is a
+        # tolerated audit pass.
+        result = codex_exec(
+            system,
+            user,
+            model=model,
+            emit_event=lambda event: forward_nonterminal(event, emit),
+        )
         return result.text, result.usage
 
     if use_claude:

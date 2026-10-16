@@ -24,12 +24,22 @@ from typing import Any, Callable, Iterable
 from agent_monitor.subprocess_env import child_process_env
 
 try:
-    from .codex_backend import CodexBackendError, codex_exec, subscription_enabled
+    from .codex_backend import (
+        CodexBackendError,
+        codex_exec,
+        forward_nonterminal,
+        subscription_enabled,
+    )
     from .kimi_chat_completions_proxy import KimiChatCompletionsProxy
     from .outcome_contract import ensure_requested_outcome as _ensure_outcome
     from .plain_runner import SYSTEM_PROMPT as CODEX_SYSTEM_PROMPT
 except ImportError:
-    from codex_backend import CodexBackendError, codex_exec, subscription_enabled
+    from codex_backend import (
+        CodexBackendError,
+        codex_exec,
+        forward_nonterminal,
+        subscription_enabled,
+    )
     from kimi_chat_completions_proxy import KimiChatCompletionsProxy
     from outcome_contract import ensure_requested_outcome as _ensure_outcome
     from plain_runner import SYSTEM_PROMPT as CODEX_SYSTEM_PROMPT
@@ -71,6 +81,11 @@ def emit(payload: dict) -> None:
 
 def emit_item(item: dict) -> None:
     emit({"type": "item.completed", "item": item})
+
+
+def emit_tolerated(event: dict) -> None:
+    """Emit an audit call's event; its failure is recorded, not the run's end."""
+    forward_nonterminal(event, emit)
 
 
 def _is_kimi_model(model: str | None) -> bool:
@@ -754,7 +769,7 @@ def run_codex_audit(
                     runtime_label,
                 ),
                 model=model,
-                emit_event=emit,
+                emit_event=emit_tolerated,
             )
             text = str(getattr(result, "text", "") or "").strip()
             if not text:
@@ -794,7 +809,7 @@ def run_codex_audit(
                         output_contract,
                     ),
                     model=model,
-                    emit_event=emit,
+                    emit_event=emit_tolerated,
                 )
                 repaired_text = str(getattr(repaired, "text", "") or "").strip()
                 if not repaired_text:
@@ -829,7 +844,7 @@ def run_codex_audit(
                 CODEX_SYSTEM_PROMPT,
                 _merge_prompt(documents, merge_protocol, schema, common_schema),
                 model=model,
-                emit_event=emit,
+                emit_event=emit_tolerated,
             )
             raw_merge = str(getattr(result, "text", "") or "").strip()
             if not raw_merge:
@@ -885,7 +900,7 @@ def run_codex_audit(
             CODEX_SYSTEM_PROMPT,
             _adjudication_prompt(prompt, candidate, reports, audit_status),
             model=model,
-            emit_event=emit,
+            emit_event=emit_tolerated,
         )
         final_text = str(getattr(adjudicated, "text", "") or "").strip()
         if not final_text:
@@ -934,7 +949,7 @@ def run_codex_audit(
                     runtime_label,
                 ),
                 model=model,
-                emit_event=emit,
+                emit_event=emit_tolerated,
             )
             text = str(getattr(result, "text", "") or "").strip()
             if not text:
@@ -968,7 +983,7 @@ def run_codex_audit(
                     rerun_documents, merge_protocol, schema, common_schema
                 ),
                 model=model,
-                emit_event=emit,
+                emit_event=emit_tolerated,
             )
             raw_merge = str(getattr(result, "text", "") or "").strip()
             if not raw_merge:

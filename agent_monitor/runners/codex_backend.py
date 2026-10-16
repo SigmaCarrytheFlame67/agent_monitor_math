@@ -145,6 +145,29 @@ def _legacy_landlock_notice(event: dict) -> bool:
     )
 
 
+def forward_nonterminal(event: dict, emit: Callable[[dict], None]) -> None:
+    """Forward one event of a Codex call whose failure the caller tolerates.
+
+    The run's stream parser ends the whole run on a raw ``turn.failed`` or
+    ``turn.cancelled``.  A tolerated call (an audit pass that only degrades
+    the result) shows its failure as a non-terminal error item instead; the
+    caller reports a fatal failure itself.
+    """
+    if event.get("type") in {"turn.failed", "turn.cancelled"}:
+        detail = event.get("error") or event.get("message") or event.get("type")
+        if isinstance(detail, dict):
+            detail = detail.get("message") or json.dumps(detail, ensure_ascii=False)
+        event = {
+            "type": "item.completed",
+            "item": {
+                "type": "error",
+                "message": "provider call failed: "
+                + " ".join(str(detail).split())[-1200:],
+            },
+        }
+    emit(event)
+
+
 def subscription_enabled(source_env: Mapping[str, str] | None = None) -> bool:
     source = source_env if source_env is not None else os.environ
     selected = source.get("AGENT_MONITOR_SELECTED_MODEL", "").strip().lower()

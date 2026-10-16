@@ -597,6 +597,98 @@ class MetaHarnessAuditFailureTests(unittest.TestCase):
         self.assertIn("insufficient_quota", error or "")
 
 
+class CodexAuditFailureTests(unittest.TestCase):
+    """On the Codex account route a failed audit pass streams Codex's own
+    ``turn.failed``; the runner tolerates it, so the run must not read as failed."""
+
+    PROMPT = MetaHarnessAuditFailureTests.PROMPT
+    # What codex_exec forwards for the captured 0.160.0 usage-limit stream.
+    USAGE_LIMIT_EVENTS = [
+        event
+        for event in map(json.loads, CODEX_USAGE_LIMIT_STDOUT.splitlines())
+        if not codex_backend._legacy_landlock_notice(event)
+    ]
+
+    def _run(self, runner, engine: str, fail_from: int) -> tuple[int, int, bool, str | None]:
+        calls: list[str] = []
+
+        def fake_codex_exec(system, _user, *, emit_event=None, **_kwargs):
+            calls.append(system)
+            emit = emit_event or (lambda _event: None)
+            if len(calls) >= fail_from:
+                for event in self.USAGE_LIMIT_EVENTS:
+                    emit(event)
+                raise codex_backend.CodexBackendError(
+                    "codex exec failed: " + self.USAGE_LIMIT_EVENTS[-1]["error"]["message"],
+                    kind="usage_limit",
+                )
+            text = ("SCORE: 9\nfine" if "strict proof evaluator" in system
+                    else "# Claim\nProof. Trivial.\n\nProvingConsole outcome: Partial Progress\n" + "x" * 500)
+            for event in (
+                {"type": "thread.started", "thread_id": f"t{len(calls)}"},
+                {"type": "turn.started"},
+                {"type": "item.completed", "item": {"type": "agent_message", "text": text}},
+                {"type": "turn.completed", "usage": {"input_tokens": 3, "output_tokens": 2}},
+            ):
+                emit(event)
+            return codex_backend.CodexResult(text, {"input_tokens": 3, "output_tokens": 2})
+
+        previous = Path.cwd()
+        with tempfile.TemporaryDirectory() as td:
+            output = io.StringIO()
+            os.chdir(td)
+            try:
+                with (
+                    patch.object(runner, "codex_exec", side_effect=fake_codex_exec),
+                    patch.object(sys, "argv", [runner.__name__, self.PROMPT]),
+                    patch.dict(os.environ, {"AGENT_MONITOR_CODEX_SUBSCRIPTION": "1", "METAHARNESS_ROUNDS": "1",
+                                            "PATH": os.environ.get("PATH", "")}, clear=True),
+                    redirect_stdout(output),
+                ):
+                    returncode = runner.main()
+            finally:
+                os.chdir(previous)
+            parser = CLIEventParser("codex", source_engine=engine)
+            parser.feed(output.getvalue())
+            return returncode, len(calls), (Path(td) / "proof.md").is_file(), parser.terminal_error
+
+    def test_only_a_failed_turn_is_rewritten(self) -> None:
+        projected: list[dict] = []
+        completed = {"type": "turn.completed", "usage": {"input_tokens": 3, "output_tokens": 2}}
+        for event in [*self.USAGE_LIMIT_EVENTS, completed]:
+            codex_backend.forward_nonterminal(event, projected.append)
+        self.assertFalse(any(event["type"] in {"turn.failed", "turn.cancelled"} for event in projected))
+        self.assertEqual(projected[-2]["item"]["type"], "error")
+        self.assertIn("You’ve hit your usage limit", projected[-2]["item"]["message"])
+        self.assertNotIn("terminal", projected[-2]["item"])
+        self.assertEqual(projected[-1], completed)  # the call's usage still reaches the run
+
+    def test_a_failed_meta_harness_audit_pass_leaves_the_run_finished(self) -> None:
+        from agent_monitor.runners import metaharness_runner
+
+        # Solver and evaluator succeed; every audit pass hits the usage limit.
+        returncode, calls, proof, error = self._run(metaharness_runner, "metaharness", 3)
+        self.assertGreater(calls, 3)
+        self.assertEqual((returncode, proof, error), (0, True, None))
+
+    def test_a_failed_deepseek_harness_audit_pass_leaves_the_run_finished(self) -> None:
+        from agent_monitor.runners import deepseek_harness_runner
+
+        # The proving call succeeds; every audit pass hits the usage limit.
+        returncode, calls, proof, error = self._run(deepseek_harness_runner, "deepseek_harness", 2)
+        self.assertGreater(calls, 2)
+        self.assertEqual((returncode, proof, error), (0, True, None))
+
+    def test_a_failed_proving_call_is_still_the_run_error(self) -> None:
+        from agent_monitor.runners import deepseek_harness_runner, metaharness_runner
+
+        for runner, engine in ((metaharness_runner, "metaharness"), (deepseek_harness_runner, "deepseek_harness")):
+            with self.subTest(engine=engine):
+                returncode, _, proof, error = self._run(runner, engine, 1)
+                self.assertEqual((returncode, proof), (1, False))
+                self.assertIn("You’ve hit your usage limit", error or "")
+
+
 class OpenClaudeRecoveryTests(unittest.TestCase):
     def test_a_listed_reason_keeps_the_subtype_the_retry_keys_on(self) -> None:
         for subtype, listed in (
