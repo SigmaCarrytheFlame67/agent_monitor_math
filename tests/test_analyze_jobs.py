@@ -580,6 +580,56 @@ def test_the_recheck_watchdog_follows_the_length_of_the_proof(gate, provider, mo
     assert launched[0]["timeout"] == seconds + jobs._analyze_api_timeout(False) + jobs._RECHECK_GRACE_SECONDS
 
 
+@pytest.mark.parametrize(("route", "model", "effort", "operator", "expected"), [
+    # As in the analysis: Extra high and Ultra calls on a linked account get 30 minutes.
+    ("codex_subscription", "gpt-6-sol", "max", {}, ("1800", "1800")),
+    ("claude_subscription", "claude-opus-4-8", "xhigh", {}, ("1800", "1800")),
+    ("codex_subscription", "gpt-6-sol", "high", {}, (None, None)),
+    ("api_key", "deepseek-test", "default", {}, (None, None)),
+    # An operator's limit wins, the shared Claude Code one too (the Analyze one would override it).
+    ("claude_subscription", "claude-opus-4-8", "max", {"AGENT_MONITOR_CLAUDE_TIMEOUT": "900"}, ("1800", None)),
+])
+def test_an_extra_high_or_ultra_recheck_keeps_the_long_call_limit(provider, monkeypatch, route, model, effort,
+                                                                    operator, expected):
+    names = ("AGENT_MONITOR_CODEX_TIMEOUT", "AGENT_MONITOR_MATH_HARNESS_CLAUDE_TIMEOUT")
+    for name in (*names, "AGENT_MONITOR_CLAUDE_TIMEOUT"):
+        monkeypatch.delenv(name, raising=False)
+    for name, value in operator.items():
+        monkeypatch.setenv(name, value)
+    server = provider(default_script())
+    run_id = f"analyze_recheck_effort_{route}_{effort}"
+    workspace = jobs.workspace_dir(run_id)
+    analysis_workspace(workspace, server)
+    write_record(run_id, workspace, owner_id=1, auth_route=route, model=model, reasoning_effort=effort,
+                 speed_mode="standard")
+    real_configure = jobs._configure_auth_route
+
+    def linked_account(env, *, route, user_id):
+        # No account is linked here: the route's own flag stands in for one.
+        configured = real_configure(env, route="api_key", user_id=None)
+        flag = {"codex_subscription": "AGENT_MONITOR_CODEX_SUBSCRIPTION",
+                "claude_subscription": "AGENT_MONITOR_CLAUDE_SUBSCRIPTION"}.get(route)
+        if flag:
+            configured[flag] = "1"
+        return configured
+
+    monkeypatch.setattr(jobs, "_configure_auth_route", linked_account)
+    monkeypatch.setattr(jobs, "_validate_subscription_model", lambda **_kwargs: None)
+    monkeypatch.setattr(jobs, "_user_extra_env", lambda user, *models: {"DEEPSEEK_API_KEY": "test-key"})
+    monkeypatch.setattr(analyze_runs, "availability_error", lambda user: None)
+    launched: list[dict] = []
+    monkeypatch.setattr(jobs, "_execute_recheck", lambda **kwargs: launched.append(kwargs)
+                        or jobs._update_job(kwargs["job_id"], status="finished"))
+    jobs.start_analysis_recheck(run_id, "lem:sum", user={"id": 1, "email": "a@example.test", "is_admin": True})
+    env = launched[0]["env"]
+    assert tuple(env.get(name) for name in names) == expected
+    assert env.get("AGENT_MONITOR_CLAUDE_TIMEOUT") == operator.get("AGENT_MONITOR_CLAUDE_TIMEOUT")
+    assert env.get("AGENT_MONITOR_RUN_REASONING_EFFORT") == effort
+    # The re-check's own watchdog is unchanged: every call stays capped at its deadline.
+    assert launched[0]["timeout"] == analyze_runner.RECHECK_SECONDS + jobs._analyze_api_timeout(False) \
+        + jobs._RECHECK_GRACE_SECONDS
+
+
 def test_a_recheck_that_reaches_no_model_gives_its_sponsored_start_back(gate, tmp_path):
     run_id = "analyze_recheck_refund_1"
     jobs._write_run({"run_id": run_id, "engine": "analyze", "run_kind": "analyze", "status": "finished"})
