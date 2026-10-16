@@ -341,6 +341,7 @@ class FormalHarnessRoutePersistenceTests(unittest.TestCase):
                 ),
                 patch("agent_monitor.claude_login.account_home", return_value=account_home),
                 patch("agent_monitor.claude_login.account_login_ready", return_value=True),
+                patch("agent_monitor.auth.is_operator_account", return_value=True),
                 patch("agent_monitor.engines_registry._cli_available", return_value=(True, "echo {prompt}")),
                 patch.object(lean_verify, "toolchain_status", return_value=toolchain),
                 patch("agent_monitor.lean_verify.threading.Thread", FakeThread),

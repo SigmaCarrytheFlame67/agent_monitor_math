@@ -103,6 +103,7 @@ class SubscriptionRouteElanHomeTests(unittest.TestCase):
             with (
                 patch.object(claude_login, "account_home", return_value=account_home),
                 patch.object(claude_login, "account_login_ready", return_value=True),
+                patch("agent_monitor.auth.is_operator_account", return_value=True),
                 patch.dict(os.environ, {"ELAN_HOME": "/opt/server-elan"}),
             ):
                 configured = jobs._configure_auth_route(
@@ -130,6 +131,7 @@ class SubscriptionRouteElanHomeTests(unittest.TestCase):
             with (
                 patch.object(codex_login, "account_home", return_value=Path(tmp)),
                 patch.object(codex_login, "account_login_ready", return_value=True),
+                patch("agent_monitor.auth.is_operator_account", return_value=True),
                 patch.dict(os.environ, {"ELAN_HOME": "/opt/server-elan"}),
             ):
                 configured = jobs._configure_auth_route(

@@ -31,6 +31,12 @@ def _engine_info(engine: str) -> dict:
 
 
 class ClaudeReauthRouteMatrixTests(unittest.TestCase):
+    def setUp(self) -> None:
+        # USER is the administrator, whose subscription routes reach the login check.
+        operator = patch("agent_monitor.auth.is_operator_account", return_value=True)
+        operator.start()
+        self.addCleanup(operator.stop)
+
     def test_marker_blocks_every_primary_and_continuation_harness_prelaunch(
         self,
     ) -> None:

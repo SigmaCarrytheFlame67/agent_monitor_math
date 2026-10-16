@@ -315,6 +315,7 @@ class CodexDerivedSubscriptionTests(unittest.TestCase):
                     "agent_monitor.codex_login.account_home",
                     return_value=account_home,
                 ) as account,
+                patch("agent_monitor.auth.is_operator_account", return_value=True),
                 patch.object(
                     proof_graph,
                     "_run_codex_prompt_env",

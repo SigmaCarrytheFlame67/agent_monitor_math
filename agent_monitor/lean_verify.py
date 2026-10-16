@@ -2699,6 +2699,14 @@ def _llm_environment(
             "codex": "codex_subscription",
             "claude": "claude_subscription",
         }.get(selected_runtime, "api_key")
+        owner_id = (user or {}).get("id") or (run_record or {}).get("owner_id")
+        if route != "api_key" and owner_id is not None:
+            from agent_monitor.auth import is_operator_account
+
+            if not is_operator_account(owner_id):
+                # A member's runtime is always the API route: a setting stored
+                # before subscriptions became administrator-only never counts.
+                route = "api_key"
     if route in {"claude_subscription", "codex_subscription"}:
         env = _configure_auth_route(
             env,

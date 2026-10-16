@@ -832,8 +832,13 @@ def _claude_account_ready(user: dict[str, Any] | None) -> bool:
     if not user or user.get("id") is None:
         return False
     from agent_monitor import claude_login
+    from agent_monitor.auth import is_operator_account
 
-    return claude_login.account_login_ready(claude_login.account_home(user["id"]))
+    # Only the administrator may use a subscription, so a member's sign-in
+    # from before that policy never pulls its DAG work off the API route.
+    return is_operator_account(user["id"]) and claude_login.account_login_ready(
+        claude_login.account_home(user["id"])
+    )
 
 
 def _run_claude_prompt(
@@ -899,8 +904,12 @@ def _codex_account_ready(user: dict[str, Any] | None) -> bool:
     if not user or user.get("id") is None:
         return False
     from agent_monitor import codex_login
+    from agent_monitor.auth import is_operator_account
 
-    return codex_login.account_login_ready(codex_login.account_home(user["id"]))
+    # As for Claude: an API failure never falls back to a member's sign-in.
+    return is_operator_account(user["id"]) and codex_login.account_login_ready(
+        codex_login.account_home(user["id"])
+    )
 
 
 def _run_codex_prompt_env(

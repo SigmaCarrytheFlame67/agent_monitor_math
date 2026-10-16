@@ -1223,3 +1223,132 @@ def test_queued_feedback_continues_with_the_owners_real_role(monkeypatch, tmp_pa
     jobs._queue_human_feedback(workspace, "Try induction.")
     jobs._launch_pending_feedback("plain_run", owner_id=5, model=None, max_iterations=4)
     assert jobs._drain_human_feedback(workspace) == ["Try induction."]
+
+
+_GRAPH_JSON = json.dumps({
+    "title": "Identity",
+    "nodes": [{"id": "n1", "kind": "conclusion", "label": "identity", "statement": "1 = 1"}],
+    "edges": [],
+})
+
+
+def _leftover_sign_ins(monkeypatch, tmp_path, *users) -> None:
+    """Each account keeps a ChatGPT and a Claude Code sign-in on the server."""
+    from agent_monitor import claude_login, codex_login
+
+    monkeypatch.setenv("AGENT_MONITOR_CODEX_ACCOUNT_HOME", str(tmp_path / "codex"))
+    monkeypatch.setenv("AGENT_MONITOR_CLAUDE_ACCOUNT_HOME", str(tmp_path / "claude"))
+    monkeypatch.setattr(claude_login, "account_login_ready", lambda _home: True)
+    for user in users:
+        home = codex_login.account_home(int(user["id"]))
+        home.mkdir(parents=True)
+        (home / "auth.json").write_text(
+            json.dumps({"tokens": {"access_token": "chatgpt-oauth"}}), encoding="utf-8"
+        )
+
+
+def test_subscription_routes_bind_only_an_administrators_sign_in(monkeypatch, tmp_path):
+    admin = auth.register("owner@example.test", "long-enough-password")
+    member = auth.register("member@example.test", "long-enough-password")
+    _leftover_sign_ins(monkeypatch, tmp_path, admin, member)
+    for route in ("codex_subscription", "claude_subscription", "dual_subscription"):
+        configured = jobs._configure_auth_route({}, route=route, user_id=admin["id"])
+        assert configured["AGENT_MONITOR_AUTH_MODE"] != "api_key"
+        # A member's sign-in linked before the policy, and an account that no
+        # longer exists, never reach a subscription route, whoever asks.
+        for user_id in (member["id"], 999):
+            with pytest.raises(ValueError, match="administrator"):
+                jobs._configure_auth_route({}, route=route, user_id=user_id)
+
+
+def test_a_members_leftover_sign_ins_never_carry_its_dag_or_formal_work(monkeypatch, tmp_path):
+    from types import SimpleNamespace
+
+    from agent_monitor import auto_pipeline, codex_login, lean_verify, proof_graph
+    from agent_monitor.runners import claude_backend
+
+    admin = auth.register("owner@example.test", "long-enough-password")
+    member = auth.register("member@example.test", "long-enough-password")
+    _leftover_sign_ins(monkeypatch, tmp_path, admin, member)
+    codex_calls: list[dict] = []
+    claude_calls: list[dict] = []
+    monkeypatch.setattr(
+        proof_graph, "_run_codex_prompt_env",
+        lambda env, *_args, **_kwargs: codex_calls.append(env) or _GRAPH_JSON,
+    )
+    monkeypatch.setattr(
+        claude_backend, "claude_exec",
+        lambda *_args, source_env, **_kwargs: claude_calls.append(source_env)
+        or SimpleNamespace(text=_GRAPH_JSON, model="sonnet", usage=None, cost_usd=None),
+    )
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    (workspace / "proof.md").write_text("Since 1 = 1, the claim holds.", encoding="utf-8")
+    api_run = {"run_id": "plain_member", "owner_id": member["id"], "auth_route": "api_key",
+               "model": "gpt-6-astra"}
+
+    # Asking for Codex on the member's own API-key run.
+    with pytest.raises(ValueError, match="administrator"):
+        proof_graph.generate(workspace=workspace, run_record=api_run, user=member, model="codex")
+
+    # A rebuild whose API call fails reports that failure; it never moves to Codex.
+    def no_key(*_args, **_kwargs):
+        raise ValueError("No API key configured")
+
+    monkeypatch.setattr(proof_graph, "_call_llm", no_key)
+    with pytest.raises(ValueError, match="No API key configured"):
+        proof_graph.generate(workspace=workspace, run_record=api_run, user=member)
+
+    # Runs recorded on a subscription before the policy, from the member's
+    # session and from the automatic pipeline (whose owner has no role flag).
+    for route in ("codex_subscription", "claude_subscription"):
+        record = {**api_run, "auth_route": route}
+        for user in (member, auto_pipeline._run_user(member["id"], record)):
+            with pytest.raises(ValueError, match="administrator"):
+                proof_graph.generate(workspace=workspace, run_record=record, user=user)
+            with pytest.raises(ValueError, match="administrator"):
+                lean_verify._llm_environment(user, record)
+    # Formal Lean's Codex step (repair, questions and audit when no API answers).
+    monkeypatch.setattr(
+        "agent_monitor.engines_registry.build_cli_command", lambda *_args, **_kwargs: ["codex", "exec"]
+    )
+    monkeypatch.setattr(
+        lean_verify.subprocess, "run",
+        lambda *_args, **_kwargs: pytest.fail("Formal Lean ran Codex on a member's sign-in"),
+    )
+    with pytest.raises(ValueError, match="administrator"):
+        lean_verify._codex_subscription_interaction(
+            workspace=workspace, user=member, run_record={**api_run, "auth_route": "codex_subscription"},
+            prompt="Is the proof complete?", lean_source="theorem t : True := trivial", edit=False,
+        )
+    assert codex_calls == [] and claude_calls == []
+
+    # The administrator's subscription runs, rebuilt the same way, keep their account.
+    admin_run = {**api_run, "owner_id": admin["id"], "auth_route": "codex_subscription"}
+    admin_owner = auto_pipeline._run_user(admin["id"], admin_run)
+    proof_graph.generate(workspace=workspace, run_record=admin_run, user=admin_owner)
+    assert codex_calls[0]["CODEX_HOME"] == str(codex_login.account_home(admin["id"]))
+    env = lean_verify._llm_environment(admin_owner, admin_run)
+    assert env["AGENT_MONITOR_CODEX_SUBSCRIPTION"] == "1"
+
+
+def test_a_members_stored_runtime_never_selects_a_subscription_for_formal_work(
+    monkeypatch, tmp_path
+):
+    from agent_monitor import lean_verify
+
+    monkeypatch.setenv("AGENT_MONITOR_DATA_ENCRYPTION_KEY", Fernet.generate_key().decode("ascii"))
+    auth.register("owner@example.test", "long-enough-password")
+    member = auth.register("member@example.test", "long-enough-password")
+    _leftover_sign_ins(monkeypatch, tmp_path, member)
+    # Records from before runs pinned their route follow the stored runtime.
+    unpinned = {"run_id": "plain_old", "owner_id": member["id"], "model": "gpt-6-astra"}
+    for runtime in ("codex", "claude"):
+        auth.set_user_env(int(member["id"]), {
+            "AGENT_MONITOR_ACCOUNT_RUNTIME": runtime, "OPENAI_API_KEY": "sk-member-own-key",
+        })
+        env = lean_verify._llm_environment(member, unpinned)
+        assert env["OPENAI_API_KEY"] == "sk-member-own-key"
+        for name in ("CODEX_HOME", "CLAUDE_CONFIG_DIR", "AGENT_MONITOR_CODEX_SUBSCRIPTION",
+                     "AGENT_MONITOR_CLAUDE_SUBSCRIPTION"):
+            assert name not in env

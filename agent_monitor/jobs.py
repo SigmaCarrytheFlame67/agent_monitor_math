@@ -1060,6 +1060,16 @@ def _configure_auth_route(
     _scrub_provider_route_env(configured)
     if user_id is None:
         raise ValueError("A signed-in ProvingConsole account is required for subscription mode")
+    from agent_monitor.auth import is_operator_account
+
+    if not is_operator_account(user_id):
+        # Subscriptions and Max are the administrator's alone, whichever path
+        # (run, continuation, DAG or Formal work) asks: the stored role decides,
+        # so a sign-in a member linked before that policy is never used.
+        raise ValueError(
+            account_policy.member_route_error({"id": user_id}, route)
+            or "Account subscriptions are limited to the site administrator"
+        )
 
     if route == cgm_max.ROUTE:
         from agent_monitor import claude_login, codex_login

@@ -399,6 +399,12 @@ def _accounts(tmp: Path, *, codex: bool = True, claude: bool = True, codex_model
 
 
 class MaxJobTests(unittest.TestCase):
+    def setUp(self) -> None:
+        # Max binds only an administrator's accounts; _ADMIN has no database row.
+        operator = patch("agent_monitor.auth.is_operator_account", return_value=True)
+        operator.start()
+        self.addCleanup(operator.stop)
+
     def _start(self, tmp: Path, *, user=_ADMIN, engine="kimi", model="max", accounts=None, **kwargs):
         written: list[dict] = []
         workspace = tmp / "workspace"

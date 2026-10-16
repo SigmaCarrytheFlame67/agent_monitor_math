@@ -5989,6 +5989,7 @@ class HumanInterventionRegressionTests(unittest.TestCase):
                 patch.object(jobs, "_user_extra_env", return_value={}),
                 patch("agent_monitor.codex_login.account_home", return_value=Path("/tmp/codex-owner")),
                 patch("agent_monitor.codex_login.account_login_ready", return_value=True),
+                patch("agent_monitor.auth.is_operator_account", return_value=True),
                 patch("agent_monitor.jobs.threading.Thread", FakeThread),
             ):
                 result = jobs.continue_run(

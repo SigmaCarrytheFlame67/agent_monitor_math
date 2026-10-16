@@ -69,6 +69,7 @@ class RuntimeRouteFailClosedTests(unittest.TestCase):
             tempfile.TemporaryDirectory() as tmp,
             patch("agent_monitor.claude_login.account_home", return_value=Path(tmp)),
             patch("agent_monitor.claude_login.account_login_ready", return_value=True),
+            patch("agent_monitor.auth.is_operator_account", return_value=True),
         ):
             configured = jobs._configure_auth_route(
                 polluted, route="claude_subscription", user_id=17
