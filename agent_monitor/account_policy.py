@@ -207,18 +207,40 @@ def member_run_model(
 ) -> str | None:
     """The model a member's ``engine`` run uses when the request names none.
 
-    An own-key engine has no included model, so a blank request (the Projects
-    page's "Default account model") means the member's saved default model,
-    when that is one the engine accepts (a new account's is Kimi K3).
+    A blank request (the Projects page's "Default account model") means the
+    default model the console offers: the member's saved default, or, when
+    the member's keys (or the sponsored Kimi K3 service) cannot run that, the
+    first model of the account's API keys they can run.  Only a model the
+    engine accepts, and never Max.  When nothing else runs, a saved default
+    the engine accepts stays, so the refusal names the key it needs (a new
+    account's default is Kimi K3).
     """
-    if str(model or "").strip() or not is_member(user) or engine not in OWN_KEY_ENGINES:
+    if (
+        str(model or "").strip()
+        or not is_member(user)
+        or engine not in dict(_OWN_KEY_CHOICES)
+    ):
         return model
-    from agent_monitor.settings import resolved_user_env
+    from agent_monitor import cgm_max
+    from agent_monitor.jobs import _api_keys_run, _sponsored_broker_serves
+    from agent_monitor.settings import get_settings, resolved_user_env
 
-    saved = str(resolved_user_env(user).get("AGENT_MONITOR_MODEL") or "").strip()
-    if not saved or member_model_error(user, engine, saved):
-        return model
-    return saved
+    env = resolved_user_env(user)
+    saved = str(env.get("AGENT_MONITOR_MODEL") or "").strip()
+
+    def accepted(candidate: str) -> bool:
+        return (
+            bool(candidate)
+            and not cgm_max.is_max_model(candidate)
+            and not member_model_error(user, engine, candidate)
+        )
+
+    for candidate in (saved, *get_settings(user)["api_models"]):
+        if accepted(candidate) and (
+            _api_keys_run(env, candidate) or _sponsored_broker_serves(engine, candidate)
+        ):
+            return candidate
+    return saved if accepted(saved) else model
 
 
 def member_model_error(

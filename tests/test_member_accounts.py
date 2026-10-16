@@ -240,6 +240,28 @@ def test_a_member_harness_run_without_a_model_uses_the_saved_default(member_cons
     ]
 
 
+def test_a_member_blank_model_launch_runs_the_default_the_console_shows(member_console):
+    # A new account's saved default is Kimi K3; with only an OpenAI key (and
+    # no sponsored service) the console offers the first OpenAI model, and the
+    # Projects page's "Default account model" must launch on the same one.
+    with running_server() as port:
+        user, cookie = _member(port)
+        auth.set_user_env(int(user["id"]), {"OPENAI_API_KEY": "sk-member-openai-123456789"})
+        _status, _headers, raw = request(port, "GET", f"{APP_MOUNT}/api/settings", headers={"Cookie": cookie})
+        launches = [
+            request(port, "POST", f"{APP_MOUNT}/api/runs",
+                    body={"engine": engine, "problem_text": "Prove it.", "model": ""},
+                    headers={"Cookie": cookie})
+            for engine in ("plain", "math_harness")
+        ]
+    shown = json.loads(raw)
+    assert (shown["saved_default_model"], shown["default_model"]) == ("kimi-k3", "gpt-6-astra")
+    assert [status for status, _headers, _raw in launches] == [200, 200], launches
+    assert [(call["engine"], call["model"]) for call in member_console["started"]] == [
+        ("plain", "gpt-6-astra"), ("math_harness", "gpt-6-astra")
+    ]
+
+
 def test_member_may_start_tool_free_engines_but_not_local_harnesses(member_console):
     with running_server() as port:
         _user, cookie = _member(port)
@@ -606,6 +628,91 @@ def test_start_job_holds_the_member_cgm_harness_to_its_own_api_key(monkeypatch):
         jobs.start_job(
             engine="math_harness", problem_text="Prove it.", model="claude-opus-4-8", user=member
         )
+
+
+def test_start_job_runs_a_member_blank_model_on_the_members_own_key(monkeypatch, tmp_path):
+    from agent_monitor import auto_pipeline
+
+    for name in ("AGENT_MONITOR_PUBLIC", "AGENT_MONITOR_MEMBER_ENGINES", "MATH_HARNESS_CMD",
+                 "PLAIN_CMD", "AGENT_MONITOR_SPONSORED_KIMI", "OPENAI_API_KEY", "KIMI_API_KEY"):
+        monkeypatch.delenv(name, raising=False)
+    monkeypatch.setenv("AGENT_MONITOR_DATA_ENCRYPTION_KEY", Fernet.generate_key().decode("ascii"))
+    auth.register("owner@example.test", "long-enough-password")
+    member = auth.register("member@example.test", "long-enough-password")
+    own_key = "sk-member-openai-123456789"
+    auth.set_user_env(int(member["id"]), {"OPENAI_API_KEY": own_key})
+    captured: list[dict] = []
+
+    class FakeThread:
+        def __init__(self, *, kwargs=None, **_rest):
+            captured.append(kwargs or {})
+
+        def start(self):
+            return None
+
+    monkeypatch.setattr(jobs, "workspace_dir", lambda _run_id: tmp_path)
+    monkeypatch.setattr(jobs, "_write_run", lambda _run: None)
+    monkeypatch.setattr(jobs, "_JOBS", {})
+    monkeypatch.setattr(jobs, "_STOP_EVENTS", {})
+    monkeypatch.setattr(jobs.threading, "Thread", FakeThread)
+    monkeypatch.setattr(auto_pipeline, "start", lambda **_kwargs: None)
+
+    # The saved default (a new account's Kimi K3) has no key here, so the
+    # blank model is the first model of the member's own OpenAI key.
+    for engine in ("plain", "math_harness"):
+        job = jobs.start_job(engine=engine, problem_text="Prove it.", user=member)
+        assert (job["engine"], job["model"], job["auth_route"]) == (engine, "gpt-6-astra", "api_key")
+        assert captured[-1]["extra_env"]["OPENAI_API_KEY"] == own_key
+
+    # With no key left, the refusal names what is missing.
+    auth.set_user_env(int(member["id"]), {}, clear=["OPENAI_API_KEY"])
+    with pytest.raises(ValueError, match="Kimi K3 requires your own API key"):
+        jobs.start_job(engine="plain", problem_text="Prove it.", user=member)
+    with pytest.raises(ValueError, match="Choose a model from your own API keys"):
+        jobs.start_job(engine="math_harness", problem_text="Prove it.", user=member)
+
+
+def test_member_blank_model_is_the_saved_default_or_a_model_its_keys_run(monkeypatch):
+    from agent_monitor import settings, sponsored_kimi_client
+
+    for name in ("AGENT_MONITOR_PUBLIC", "AGENT_MONITOR_MEMBER_ENGINES"):
+        monkeypatch.delenv(name, raising=False)
+    member = {"id": 5, "is_admin": False}
+    env: dict[str, str] = {}
+    sponsored = [False]
+    monkeypatch.setattr(settings, "resolved_user_env", lambda _user: dict(env))
+    monkeypatch.setattr(sponsored_kimi_client, "enabled", lambda: sponsored[0])
+    monkeypatch.setattr(sponsored_kimi_client, "available", lambda **_kwargs: sponsored[0])
+
+    def resolve(saved, keys, engine, model=None):
+        env.clear()
+        env.update({"AGENT_MONITOR_MODEL": saved, **keys} if saved else keys)
+        return account_policy.member_run_model(member, engine, model)
+
+    openai = {"OPENAI_API_KEY": "sk-openai"}
+    # A saved default the member's keys run wins.
+    assert resolve("claude-opus-4-8", {"ANTHROPIC_API_KEY": "sk-ant", **openai}, "plain") == "claude-opus-4-8"
+    assert resolve("kimi-k3", {"KIMI_API_KEY": "sk-kimi", **openai}, "plain") == "kimi-k3"
+    # Otherwise the first model of the member's keys the engine accepts (never
+    # Kimi K3 for the own-key harness, never Max).
+    for saved in ("kimi-k3", "claude-opus-4-8", "max", None):
+        for engine in ("plain", "math_harness"):
+            assert resolve(saved, openai, engine) == "gpt-6-astra", (saved, engine)
+    assert resolve("kimi-k3", {"KIMI_API_KEY": "sk-kimi", **openai}, "math_harness") == "gpt-6-astra"
+    # Nothing else runs: the saved default stays where the engine takes it,
+    # so the refusal names the key it needs.
+    assert resolve("kimi-k3", {}, "plain") == "kimi-k3"
+    assert resolve("claude-opus-4-8", {}, "math_harness") == "claude-opus-4-8"
+    assert resolve("kimi-k3", {}, "math_harness") is None
+    # The sponsored service runs Kimi K3 for Plain, never for the own-key harness.
+    sponsored[0] = True
+    assert resolve("claude-opus-4-8", {}, "plain") == "kimi-k3"
+    assert resolve("kimi-k3", {}, "math_harness") is None
+    assert resolve("kimi-k3", openai, "math_harness") == "gpt-6-astra"
+    # A named model, another engine or another account is left alone.
+    assert resolve("kimi-k3", openai, "plain", "gpt-5.6-sol") == "gpt-5.6-sol"
+    assert resolve("claude-opus-4-8", openai, "kimi") is None
+    assert account_policy.member_run_model({"id": 1, "is_admin": True}, "plain", None) is None
 
 
 def test_member_cgm_harness_run_and_derived_stages_bill_only_the_members_key(
