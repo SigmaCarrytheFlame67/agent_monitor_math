@@ -1404,6 +1404,14 @@ def _run(
     try:
         sig, record = _wait_for_source(run_id, workspace, timeout=timeout)
         if not sig:
+            if str((record or {}).get("status") or "") in {"stopped", "cancelled"}:
+                _stopped_before_source(
+                    workspace,
+                    "The analysis was stopped before it published a graph"
+                    if is_analysis_run(record)
+                    else "The run was stopped before it produced a proof draft",
+                )
+                return
             still_running = str((record or {}).get("status") or "") not in _TERMINAL
             missing = (
                 (
@@ -1638,6 +1646,30 @@ def reconcile_orphaned(workspace: Path, detail: str) -> bool:
         return False
     mark_interrupted(workspace, detail)
     return True
+
+
+def _stopped_before_source(workspace: Path, detail: str) -> None:
+    """Close the stages of a run its user stopped before anything existed to
+    derive: a stop is not a failure, so nothing reads as an error."""
+    def update(state: dict[str, Any]) -> None:
+        for name in ("informal_dag", "lean", "formal_dag", "coverage"):
+            stage = state.setdefault("stages", {}).setdefault(name, {})
+            if stage.get("status") == "off":
+                continue  # an informal-only run never asked for it
+            stage.update(
+                {
+                    "status": "stopped",
+                    "outcome": "not_run",
+                    "detail": detail,
+                    "finished_at": _now(),
+                }
+            )
+        # _aggregate_status would read stages that never ran as done.
+        state["status"] = "stopped"
+        state["proof_outcome"] = "not_run"
+        state["finished_at"] = _now()
+
+    _mutate(workspace, update)
 
 
 def mark_stale(workspace: Path, detail: str = "proof.md was edited") -> None:

@@ -354,8 +354,8 @@ button.start:disabled { opacity: .4; }
 .pipeline-chip.error::before, .pipeline-chip.skipped::before { background: var(--err); }
 .pipeline-chip.stale::before { background: #a855f7; }
 .pipeline-chip .chip-state { overflow: hidden; text-overflow: ellipsis; }
-.pipeline-chip.off { opacity: .75; }
-.pipeline-chip.off::before { background: transparent; box-shadow: inset 0 0 0 1px var(--dim); }
+.pipeline-chip.off, .pipeline-chip.stopped { opacity: .75; }
+.pipeline-chip.off::before, .pipeline-chip.stopped::before { background: transparent; box-shadow: inset 0 0 0 1px var(--dim); }
 .proof-body { flex: 1; min-height: 0; position: relative; overflow-y: auto; overflow-anchor: none; scrollbar-gutter: stable; background: color-mix(in srgb, var(--bg2) 30%, var(--bg)); }
 .notion-editor-wrap { min-height: 100%; padding: 32px 8% 80px; background: var(--bg); }
 .notion-editor {
@@ -4077,7 +4077,7 @@ function renderAutoPipeline(state){
     :{informal_dag:'Informal DAG',lean:'Lean',formal_dag:'Formal DAG',coverage:'Coverage'};
   const stages=state.stages||{};
   const stageNames=['informal_dag','lean','formal_dag','coverage'];
-  const safeStatus=status=>['waiting','running','done','parsed','warning','error','skipped','stale','off'].includes(status)?status:'waiting';
+  const safeStatus=status=>['waiting','running','done','parsed','warning','error','skipped','stale','off','stopped'].includes(status)?status:'waiting';
   const statementsOnly=stage=>analysis&&stage?.result?.scope==='statements';
   const visualStatus=name=>{
     const stage=stages[name]||{};
@@ -4099,8 +4099,9 @@ function renderAutoPipeline(state){
     return '<span class="pipeline-chip '+status+'" title="'+escapeHtml(detail)+'"><span>'+labels[name]+'</span><span class="chip-state">'+escapeHtml(stateLabel)+'</span></span>';
   }).join('');
   const classify=all=>{
-    // Stages turned off for an informal-only run neither wait nor fail.
-    const values=all.filter(x=>x!=='off');
+    // Stages turned off for an informal-only run, or never run because the
+    // run was stopped, neither wait nor fail.
+    const values=all.filter(x=>x!=='off'&&x!=='stopped');
     if(values.some(x=>x==='running'||x==='waiting'))return 'pipeline-running';
     if(values.some(x=>x==='error'||x==='skipped'||x==='stale'))return 'pipeline-error';
     if(values.some(x=>x==='warning'))return 'pipeline-warning';
@@ -6026,6 +6027,14 @@ function syncLeanPipelineEmptyState(state){
     if(title)title.textContent='Formalization is off for this run';
     if(message)message.textContent='This run was started as informal only. Press ∎ Verify to translate the proof to Lean and check it.';
     if(pct)pct.textContent='Off';
+    return false;
+  }
+  if(status==='stopped'){
+    // Stopped before there was anything to derive: no failure, Verify stays usable.
+    const title=$('lean-progress-title'), message=$('lean-progress-detail'), pct=$('lean-progress-pct');
+    if(title)title.textContent=state?.run_kind==='analyze'?'Analysis stopped':'Run stopped';
+    if(message)message.textContent=String(stage.detail||'The run was stopped before it produced a proof draft').replace(/[.\s]+$/,'')+'.';
+    if(pct)pct.textContent='Stopped';
     return false;
   }
   // The pipeline state of an analysis says so (and only analyses have one with
