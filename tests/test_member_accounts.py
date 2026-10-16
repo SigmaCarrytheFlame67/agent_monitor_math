@@ -875,6 +875,44 @@ def test_public_mode_member_settings_keep_the_operators_key_and_endpoints_privat
     )
 
 
+def test_public_mode_member_settings_hide_operator_endpoints_copied_into_its_rows(monkeypatch, tmp_path):
+    from agent_monitor import claude_login, codex_login, settings
+
+    monkeypatch.setenv("AGENT_MONITOR_DATA_ENCRYPTION_KEY", Fernet.generate_key().decode("ascii"))
+    monkeypatch.setenv("AGENT_MONITOR_CODEX_ACCOUNT_HOME", str(tmp_path / "codex"))
+    monkeypatch.setenv("AGENT_MONITOR_CLAUDE_ACCOUNT_HOME", str(tmp_path / "claude"))
+    monkeypatch.setattr(claude_login, "_auth_status", lambda *_a, **_k: {"loggedIn": False})
+    monkeypatch.setattr(codex_login, "account_login_ready", lambda _home: False)
+    monkeypatch.setenv("AGENT_MONITOR_PUBLIC", "1")
+    for name in ("OPENAI_API_KEY", "OPENAI_BASE_URL", "AGENT_MONITOR_BASE_URL"):
+        monkeypatch.delenv(name, raising=False)
+    gateway = "https://internal-gw.corp.example/v1"
+    anthropic_gateway = "https://claude-gw.corp.example"
+    monkeypatch.setenv("ANTHROPIC_BASE_URL", anthropic_gateway)
+    settings.ENV_PATH.write_text(
+        "OPENAI_API_KEY=sk-secretoperatorkey1234567890\n"
+        f"OPENAI_BASE_URL={gateway}\nAGENT_MONITOR_BASE_URL={gateway}\n",
+        encoding="utf-8",
+    )
+    auth.register("owner@example.test", "long-enough-password")
+    member = auth.register("member@example.test", "long-enough-password")
+    # Saving Settings before the redaction sent every endpoint the cards
+    # showed, the operator's included, into the member's own rows.
+    auth.set_user_env(int(member["id"]), {
+        "OPENAI_BASE_URL": gateway,
+        "AGENT_MONITOR_BASE_URL": gateway,
+        "ANTHROPIC_BASE_URL": anthropic_gateway + "/",
+    })
+
+    view = settings.get_settings(member)
+    bases = {provider["id"]: provider["base_url"] for provider in view["providers"]}
+    assert (bases["openai"], bases["anthropic"]) == ("", "")
+    assert view["general"]["AGENT_MONITOR_BASE_URL"]["value"] == ""
+    assert gateway not in json.dumps(view) and anthropic_gateway not in json.dumps(view)
+    # Runs still reach the operator's endpoint, as an inherited one would.
+    assert jobs._user_extra_env(member, "gpt-6-astra")["OPENAI_BASE_URL"] == gateway
+
+
 def test_continue_on_a_running_run_uses_no_member_start(member_console, monkeypatch):
     monkeypatch.setattr(console.Handler, "_owns_run", lambda _self, _run_id, _user: True)
     calls: list = []

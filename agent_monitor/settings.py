@@ -621,13 +621,27 @@ def get_settings(user: dict[str, Any] | None = None) -> dict[str, Any]:
         from agent_monitor.auth import get_user_env
 
         own = get_user_env(int(user["id"]))
+        # Saving Settings before this redaction copied the operator's endpoints
+        # into the member's own rows; such a copy is still the operator's.
+        server = _read_env_file()
+        operator_bases = {
+            str(value).strip().rstrip("/")
+            for name in _account_base_vars()
+            for value in (os.environ.get(name), server.get(name))
+            if str(value or "").strip()
+        }
+
+        def own_base(name: str) -> bool:
+            value = str(own.get(name) or "").strip().rstrip("/")
+            return bool(value) and value not in operator_bases
+
         for provider in providers:
             spec = next(item for item in PROVIDERS if item["id"] == provider["id"])
             provider["api_key_masked"] = _provider_state(spec, own)["api_key_masked"]
             base_var = spec.get("base_var")
-            if base_var and env.get(base_var) and not own.get(base_var):
+            if base_var and env.get(base_var) and not own_base(base_var):
                 provider["base_url"] = ""
-        if not own.get("AGENT_MONITOR_BASE_URL"):
+        if not own_base("AGENT_MONITOR_BASE_URL"):
             general_env = {**env, "AGENT_MONITOR_BASE_URL": ""}
     runtime = "api" if member else account_runtime(user, env=env)
     use_codex = runtime == "codex"
