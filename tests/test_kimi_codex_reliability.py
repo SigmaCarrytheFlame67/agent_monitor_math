@@ -92,11 +92,12 @@ def run_kimi_wrapper(body: str, *, timeout: str = "60") -> tuple[int, str | None
         return status, text, stderr.getvalue()
 
 
-def run_kimi_codex_job(body: str, **extra_env: str) -> dict:
+def run_kimi_codex_job(body: str, *, on_record=None, **extra_env: str) -> dict:
     """Run a Codex CLI engine job on Kimi K3 (the wrapper) with a fake ``codex``.
 
     HOME is a scratch directory and the engine's extra PATH entries are
     dropped, so only the fake can be found, never an installed CLI.
+    ``on_record(record, bin_dir)`` sees every record the job writes.
     """
     with tempfile.TemporaryDirectory() as raw:
         root = Path(raw)
@@ -113,7 +114,11 @@ def run_kimi_codex_job(body: str, **extra_env: str) -> dict:
             ),
             patch("agent_monitor.engines_registry.engine_extra_path", return_value=[]),
             patch("agent_monitor.agent_config.persona_preamble", return_value=""),
-            patch.object(jobs, "_write_run"),
+            patch.object(
+                jobs,
+                "_write_run",
+                side_effect=lambda record: on_record and on_record(record, root / "bin"),
+            ),
         ):
             run = jobs._run_cli_engine(
                 run_id="kimi_codex_reason",
@@ -392,6 +397,97 @@ class KimiCodexFailureReasonTests(unittest.TestCase):
         )
         self.assertEqual(run["status"], "failed")
         self.assertIn("Error: loading config caused by: unexpected status 401 Unauthorized", run["error"])
+
+
+# Codex waits for the caller to have seen its first events before it ends the
+# turn, so only a caller that receives events while Codex runs can finish.
+WAITS_FOR_THE_CALLER = """\
+event({"type": "thread.started", "thread_id": "t1"})
+event({"type": "item.completed", "item": {"type": "error", "message": "`[features].use_legacy_landlock` is deprecated"}})
+event({"type": "item.completed", "item": {"type": "agent_message", "text": "Working on the lemma."}})
+go = Path(__file__).with_name("go")
+deadline = time.time() + 8
+while not go.exists() and time.time() < deadline:
+    time.sleep(0.05)
+if not go.exists():
+    sys.exit(3)
+(workspace / "proof.md").write_text(PROOF, encoding="utf-8")
+event({"type": "turn.completed", "usage": {"input_tokens": 5, "output_tokens": 3}})
+last_message.write_text("Done.")
+"""
+
+
+class CodexLiveEventTests(unittest.TestCase):
+    """Codex JSONL reaches the run while Codex works, not after it exits."""
+
+    def _codex_exec(self, root: Path, body: str, emit_event, **kwargs) -> CodexResult:
+        install_fake_codex(root / "bin", body)
+        (root / "workspace").mkdir(exist_ok=True)
+        return codex_backend.codex_exec(
+            "system",
+            "user",
+            model="kimi-k3",
+            emit_event=emit_event,
+            workspace=root / "workspace",
+            sandbox="danger-full-access",
+            enable_tools=True,
+            source_env={
+                "PATH": f"{root / 'bin'}{os.pathsep}{os.environ.get('PATH', os.defpath)}",
+                "KIMI_API_KEY": "test-key-not-real",
+                "KIMI_API_BASE": "http://127.0.0.1:9/v1",
+            },
+            **kwargs,
+        )
+
+    def test_each_event_is_delivered_as_codex_writes_it(self) -> None:
+        emitted: list[dict] = []
+        with tempfile.TemporaryDirectory() as raw:
+            root = Path(raw)
+
+            def emit(event: dict) -> None:
+                emitted.append(event)
+                if event.get("item", {}).get("type") == "agent_message":
+                    (root / "bin" / "go").touch()
+
+            result = self._codex_exec(root, WAITS_FOR_THE_CALLER, emit, timeout=30)
+        self.assertEqual(result.text, "Done.")
+        # Once each, and never the landlock deprecation notice.
+        self.assertEqual(
+            [event["type"] for event in emitted],
+            ["thread.started", "item.completed", "turn.completed"],
+        )
+
+    def test_a_timeout_keeps_the_activity_so_far(self) -> None:
+        emitted: list[dict] = []
+        with tempfile.TemporaryDirectory() as raw:
+            with self.assertRaises(CodexBackendError) as raised:
+                self._codex_exec(
+                    Path(raw),
+                    """\
+                    event({"type": "thread.started", "thread_id": "t1"})
+                    event({"type": "item.completed", "item": {"type": "agent_message", "text": "Working on the lemma."}})
+                    time.sleep(60)
+                    """,
+                    emitted.append,
+                    timeout=2,
+                )
+        self.assertEqual(raised.exception.kind, "timeout")
+        self.assertEqual(
+            [event.get("item", {}).get("text") for event in emitted],
+            [None, "Working on the lemma."],
+        )
+
+    def test_the_run_shows_kimi_codex_activity_while_it_runs(self) -> None:
+        live: list[str] = []
+
+        def on_record(record: dict, bin_dir: Path) -> None:
+            if record.get("status") == "running" and "Working on the lemma." in json.dumps(record["agents"]):
+                live.append(record["status"])
+                (bin_dir / "go").touch()
+
+        run = run_kimi_codex_job(WAITS_FOR_THE_CALLER, on_record=on_record)
+        self.assertTrue(live, "no running record showed Codex's activity")
+        self.assertEqual(run["status"], "finished", run.get("error"))
 
 
 if __name__ == "__main__":

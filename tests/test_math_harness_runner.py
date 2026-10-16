@@ -1611,7 +1611,7 @@ class MathHarnessProviderRoutingTests(unittest.TestCase):
     def test_codex_backend_command_is_tool_free_and_workspace_isolated(self) -> None:
         captured: dict[str, object] = {}
 
-        def fake_process(command, *, input, timeout, env, cwd):
+        def fake_process(command, *, input, timeout, env, cwd, on_stdout_line=None):
             if command[1:] == ["--version"]:
                 return subprocess.CompletedProcess(
                     command,

@@ -4,11 +4,14 @@ from __future__ import annotations
 import json
 import math
 import os
+import queue
 import signal
 import shutil
 import subprocess
 import sys
 import tempfile
+import threading
+import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, Mapping
@@ -443,6 +446,83 @@ def _stop_process_group(process: subprocess.Popen[str]) -> None:
     process.communicate(timeout=3)
 
 
+def _stream_output(
+    process: subprocess.Popen[str],
+    *,
+    input: str,
+    timeout: float,
+    on_stdout_line: Callable[[str], None],
+) -> tuple[str, str]:
+    """``communicate()`` that hands over each stdout line as Codex writes it.
+
+    Helper threads own the pipes: they write the prompt (it can exceed a pipe
+    buffer), drain stderr so it cannot block Codex, and queue stdout lines.
+    ``on_stdout_line`` runs here, on the calling thread, because the runners'
+    emitters are not thread-safe.
+    """
+    stdin, stdout, stderr = process.stdin, process.stdout, process.stderr
+    # _stop_process_group's communicate() then only waits for the exit.
+    process.stdin = process.stdout = process.stderr = None
+    deadline = time.monotonic() + timeout
+    lines: queue.Queue[str | None] = queue.Queue()
+    stderr_text: list[str] = []
+
+    def write_prompt() -> None:
+        try:
+            stdin.write(input)
+        except (OSError, ValueError):
+            pass  # Codex exited early; its exit status says why.
+        finally:
+            try:
+                stdin.close()
+            except (OSError, ValueError):
+                pass
+
+    def read_stdout() -> None:
+        try:
+            for line in stdout:
+                lines.put(line)
+        except (OSError, ValueError):
+            pass
+        finally:
+            lines.put(None)
+            stdout.close()
+
+    def read_stderr() -> None:
+        try:
+            stderr_text.append(stderr.read())
+        except (OSError, ValueError):
+            pass
+        finally:
+            stderr.close()
+
+    helpers = [
+        threading.Thread(target=target, name=f"codex-{target.__name__}", daemon=True)
+        for target in (write_prompt, read_stdout, read_stderr)
+    ]
+    for helper in helpers:
+        helper.start()
+    stdout_text: list[str] = []
+    while True:
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            raise subprocess.TimeoutExpired(process.args, timeout)
+        try:
+            line = lines.get(timeout=remaining)
+        except queue.Empty:
+            continue
+        if line is None:
+            break
+        stdout_text.append(line)
+        on_stdout_line(line)
+    for helper in helpers:
+        helper.join(max(0.0, deadline - time.monotonic()))
+        if helper.is_alive():
+            raise subprocess.TimeoutExpired(process.args, timeout)
+    process.wait(max(0.0, deadline - time.monotonic()))
+    return "".join(stdout_text), "".join(stderr_text)
+
+
 def _run_codex_process(
     command: list[str],
     *,
@@ -450,8 +530,13 @@ def _run_codex_process(
     timeout: float,
     env: dict[str, str],
     cwd: str | None,
+    on_stdout_line: Callable[[str], None] | None = None,
 ) -> subprocess.CompletedProcess[str]:
-    """Run Codex in its own process group so timeout cleanup is complete."""
+    """Run Codex in its own process group so timeout cleanup is complete.
+
+    With ``on_stdout_line`` each stdout line is handed over while Codex runs
+    (live activity, kept even if the call then times out).
+    """
     process = subprocess.Popen(
         command,
         stdin=subprocess.PIPE,
@@ -463,13 +548,32 @@ def _run_codex_process(
         start_new_session=os.name == "posix",
     )
     try:
-        stdout, stderr = process.communicate(input=input, timeout=timeout)
+        if on_stdout_line is None:
+            stdout, stderr = process.communicate(input=input, timeout=timeout)
+        else:
+            stdout, stderr = _stream_output(
+                process, input=input, timeout=timeout, on_stdout_line=on_stdout_line
+            )
     except BaseException:
         _stop_process_group(process)
         raise
     else:
         _stop_process_group(process)
     return subprocess.CompletedProcess(command, process.returncode, stdout, stderr)
+
+
+def _forward_events(emit_event: Callable[[dict], None]) -> Callable[[str], None]:
+    """Pass each JSONL event of Codex's stdout to ``emit_event``."""
+
+    def forward(line: str) -> None:
+        try:
+            event = json.loads(line)
+        except json.JSONDecodeError:
+            return
+        if isinstance(event, dict) and not _legacy_landlock_notice(event):
+            emit_event(event)
+
+    return forward
 
 
 def codex_exec(
@@ -631,6 +735,9 @@ def codex_exec(
                         if enable_tools and workspace is not None
                         else temp_dir
                     ),
+                    on_stdout_line=(
+                        _forward_events(emit_event) if emit_event is not None else None
+                    ),
                 )
             except subprocess.TimeoutExpired as exc:
                 raise CodexBackendError(
@@ -660,8 +767,6 @@ def codex_exec(
             if not isinstance(event, dict):
                 continue
             events.append(event)
-            if emit_event is not None and not _legacy_landlock_notice(event):
-                emit_event(event)
             if event.get("type") == "turn.completed":
                 event_usage = event.get("usage") or {}
                 for key in usage:
