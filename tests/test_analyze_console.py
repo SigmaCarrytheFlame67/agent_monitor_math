@@ -225,6 +225,24 @@ def test_sponsored_capacity_refuses_before_any_admission(analyze_console, monkey
     assert auth.guest_runs_started(guest["id"]) == 0
 
 
+def test_a_refused_guest_analysis_gives_back_its_hourly_run_slots(analyze_console, monkeypatch):
+    def refuse(**_kwargs):
+        raise ValueError("The analysis could not start")
+
+    monkeypatch.setattr(console.job_manager, "start_job", refuse)
+    client = "203.0.113.9"
+    with running_server() as port:
+        guest, cookie, _ = _issue_guest(port)
+        status, _, body = _post(port, "/api/runs", cookie, _analyze({"url": ARXIV}),
+                                headers={"X-Forwarded-For": client})
+    assert status == 400 and body["error"] == "The analysis could not start"
+    assert auth.guest_runs_started(guest["id"]) == 0
+    assert not console._GUEST_ANALYZE_WINDOWS.get(guest["id"])
+    assert not console._GUEST_RUN_WINDOWS.get(guest["id"])
+    assert not console._GUEST_RUN_CLIENT_WINDOWS.get(client)
+    assert not console._GUEST_GLOBAL_RUN_WINDOW
+
+
 def test_member_capacity_refusal_from_start_job_is_a_429(analyze_console, monkeypatch):
     def full(**_kwargs):
         raise analyze_runs.AnalyzeCapacityError(analyze_runs.DAILY_LIMIT_MESSAGE, retry_after=120)

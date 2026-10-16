@@ -1409,6 +1409,60 @@ def test_failed_guest_validation_refunds_usage(guest_console, monkeypatch):
         assert auth.guest_runs_started(guest["id"]) == 0
 
 
+def test_refused_guest_starts_give_back_the_hourly_run_slots(guest_console, monkeypatch):
+    # A guest without a key presses Prove as often as the hourly limit allows,
+    # then adds a key as the banner says: that start must still run.
+    started: list[dict] = []
+
+    def start_job(**kwargs):
+        if not settings.resolved_user_env(kwargs["user"]).get("KIMI_API_KEY"):
+            raise ValueError(
+                "Kimi K3 requires your own API key, or the sponsored Kimi service must be available"
+            )
+        started.append(kwargs)
+        return {"run_id": "kimi_keyed_run", "status": "running"}
+
+    monkeypatch.setattr(console.job_manager, "start_job", start_job)
+    monkeypatch.setattr(console.job_manager, "list_jobs", lambda **_kwargs: [])
+    client = "203.0.113.9"
+    body = {"engine": "kimi", "problem_text": "Prove it."}
+    with running_server() as port:
+        guest, cookie, _ = _issue_guest(port)
+        headers = {"Cookie": cookie, "X-Forwarded-For": client}
+        for _ in range(console.guest_runs_per_hour()):
+            status, _, raw = request(port, "POST", f"{APP_MOUNT}/api/runs", body=body, headers=headers)
+            assert status == 400 and "own API key" in raw, raw
+        assert not console._GUEST_RUN_WINDOWS.get(guest["id"])
+        assert not console._GUEST_RUN_CLIENT_WINDOWS.get(client)
+        assert not console._GUEST_GLOBAL_RUN_WINDOW
+        saved, _, saved_raw = request(
+            port, "POST", f"{APP_MOUNT}/api/settings",
+            body={"updates": {"KIMI_API_KEY": "sk-guest-kimi-123456789"}}, headers=headers,
+        )
+        assert saved == 200, saved_raw
+        status, _, raw = request(port, "POST", f"{APP_MOUNT}/api/runs", body=body, headers=headers)
+    assert status == 200, raw
+    assert len(started) == 1
+    assert auth.guest_runs_started(guest["id"]) == 1
+    assert len(console._GUEST_RUN_WINDOWS[guest["id"]]) == 1
+    assert len(console._GUEST_GLOBAL_RUN_WINDOW) == 1
+
+
+def test_a_guest_refused_by_the_session_limit_keeps_its_hourly_run_slots(guest_console, monkeypatch):
+    monkeypatch.setattr(auth, "reserve_guest_run", lambda *_args, **_kwargs: False)
+    monkeypatch.setattr(console.job_manager, "list_jobs", lambda **_kwargs: [])
+    client = "203.0.113.9"
+    with running_server() as port:
+        guest, cookie, _ = _issue_guest(port)
+        status, _, raw = request(port, "POST", f"{APP_MOUNT}/api/runs",
+                                 body={"engine": "kimi", "problem_text": "Prove it."},
+                                 headers={"Cookie": cookie, "X-Forwarded-For": client})
+    assert status == 403 and "Guest limit reached" in raw
+    assert not console._GUEST_RUN_WINDOWS.get(guest["id"])
+    assert not console._GUEST_RUN_CLIENT_WINDOWS.get(client)
+    assert not console._GUEST_GLOBAL_RUN_WINDOW
+
+
 def test_hosted_kimi_key_is_not_in_general_guest_settings(guest_console, monkeypatch):
     monkeypatch.setenv("AGENT_MONITOR_GUEST_KIMI_API_KEY", "sk-dedicated-secret-123456789")
     monkeypatch.setenv("OPENAI_API_KEY", "sk-operator-openai-123456789")

@@ -703,6 +703,24 @@ def _reserve_guest_run_slot(user_id: int, client: str | None = None) -> tuple[st
     return None, 0
 
 
+def _release_guest_run_slot(user_id: int, client: str | None = None) -> None:
+    """Give back the hourly guest run slots reserved for a start that started nothing.
+
+    Callers hold ``_GUEST_RUN_START_LOCK`` from the reservation on, so the
+    newest entries are this start's.
+    """
+    with _GUEST_RUN_START_LOCK:
+        window = _GUEST_RUN_WINDOWS.get(user_id)
+        if window:
+            window.pop()
+        if _GUEST_GLOBAL_RUN_WINDOW:
+            _GUEST_GLOBAL_RUN_WINDOW.pop()
+        if client is not None:
+            client_window = _GUEST_RUN_CLIENT_WINDOWS.get(client)
+            if client_window:
+                client_window.pop()
+
+
 def _reserve_guest_session_slot(client: str | None = None) -> tuple[bool, int]:
     """Bound anonymous account creation; existing guest sessions bypass this."""
     limit = _bounded_env_int(
@@ -2203,6 +2221,7 @@ class Handler(RunSharingMixin, ProjectsMixin, ResearchMixin, BaseHTTPRequestHand
                         return
                     if not reserve_guest_run(user_id, guest_runs_per_session(),
                                              previous_runs=job_manager.persisted_run_count(user_id)):
+                        _release_guest_run_slot(user_id, client)
                         self._send(403, json.dumps({"error": "Guest limit reached. Sign in to continue",
                                                    "login_required": True, "guest_policy": guest_policy(user)}))
                         return
@@ -2212,6 +2231,7 @@ class Handler(RunSharingMixin, ProjectsMixin, ResearchMixin, BaseHTTPRequestHand
                     except Exception:
                         release_guest_run(user_id)
                         _release_guest_analyze(user_id, client)
+                        _release_guest_run_slot(user_id, client)
                         raise
                     if client is not None and job.get("run_id"):
                         _GUEST_RUN_CLIENTS[str(job["run_id"])] = client
@@ -3777,13 +3797,17 @@ class Handler(RunSharingMixin, ProjectsMixin, ResearchMixin, BaseHTTPRequestHand
                         from agent_monitor.auth import reserve_guest_run, release_guest_run
                         if not reserve_guest_run(int(user["id"]), guest_runs_per_session(),
                                                  previous_runs=job_manager.persisted_run_count(int(user["id"]))):
+                            _release_guest_run_slot(int(user["id"]), client)
                             self._send(403, json.dumps({"error": "Guest limit reached. Sign in to continue",
                                                        "login_required": True, "guest_policy": guest_policy(user)}))
                             return
                         try:
                             job = start()
                         except Exception:
+                            # A refused start (no key, bad input) starts
+                            # nothing, so it costs no hourly run either.
                             release_guest_run(int(user["id"]))
+                            _release_guest_run_slot(int(user["id"]), client)
                             raise
                         if client is not None and job.get("run_id"):
                             _GUEST_RUN_CLIENTS[str(job["run_id"])] = client
