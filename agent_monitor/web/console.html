@@ -450,6 +450,9 @@ button.start:disabled { opacity: .4; }
 .chat-status.err .cdot { background: var(--err); animation: none; }
 .chat-status.interrupted .cdot { background: #f59e0b; animation: none; }
 .chat-status .detail { font-weight: 400; color: var(--dim); font-family: var(--mono); font-size: 10px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* A failed run's reason is the line to read: it wraps instead of being cut off. */
+.chat-status.err { align-items: baseline; }
+.chat-status.err .detail { white-space: normal; overflow-wrap: anywhere; }
 /* live telemetry: which model is answering and which tools it is touching */
 .chat-live { display: none; flex-wrap: wrap; gap: 5px; margin-top: 7px; }
 .chat-live.on { display: flex; }
@@ -4129,7 +4132,9 @@ function updateChatStatus(run){
   if(run.status==='finished'){ box.className='chat-status on done'; $('chat-stage').textContent='Finished'; $('chat-detail').textContent=''; }
   else if(run.status==='stopped'){ box.className='chat-status on'; $('chat-stage').textContent='Stopped'; $('chat-detail').textContent=''; }
   else if(run.status==='interrupted'){ box.className='chat-status on interrupted'; $('chat-stage').textContent='Interrupted'; $('chat-detail').textContent=run.interruption?.reason||'Worker is no longer active'; }
-  else if(run.status==='failed'){ box.className='chat-status on err'; $('chat-stage').textContent='Failed'; $('chat-detail').textContent=detail; }
+  // A failed run states its own reason (a timeout, the CLI's error, a usage
+  // limit, a reconnect request) rather than the log's last line.
+  else if(run.status==='failed'){ const why=String(run.error||'').trim()||detail; box.className='chat-status on err'; $('chat-stage').textContent='Failed'; $('chat-detail').textContent=why.length>240?why.slice(0,239)+'…':why; $('chat-detail').title=why; }
   else { box.className='chat-status on'; $('chat-stage').textContent=label+'…'; $('chat-detail').textContent=detail; }
   const recheck=run.analyze?.recheck;
   if(recheck?.status==='running'){ box.className='chat-status on'; $('chat-stage').textContent='Re-checking…'; $('chat-detail').textContent=String(recheck.label||recheck.node_id||''); }
