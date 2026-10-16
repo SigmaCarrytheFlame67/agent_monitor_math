@@ -4186,7 +4186,12 @@ def _run_cli_engine(
     """Run an external CLI harness (codex / openclaude / openhands / …) live."""
     import subprocess
 
-    from agent_monitor.engines_registry import CLI_ENGINES, build_cli_command, proof_prompt
+    from agent_monitor.engines_registry import (
+        CLI_ENGINES,
+        build_cli_command,
+        discard_prompt_file,
+        proof_prompt,
+    )
 
     spec = CLI_ENGINES.get(engine) or {}
     # Keep execution-only library/persona context out of the user-visible
@@ -4548,6 +4553,7 @@ def _run_cli_engine(
         )
     except OSError as exc:
         _remove_codex_api_home(codex_api_home)
+        discard_prompt_file(workspace)
         label = str(spec.get("label") or engine)
         reason = f"{label} could not start: {exc.strerror or exc}"
         if getattr(exc, "errno", None) == errno.E2BIG:
@@ -4646,6 +4652,9 @@ def _run_cli_engine(
             proc.stdout.close()
         _unregister_proc(run_id)
         _remove_codex_api_home(codex_api_home)
+        # A wrapper that ended, or was stopped, before reading its prompt
+        # file leaves it behind.
+        discard_prompt_file(workspace)
     if engine == "openhands":
         parser.finalize_openhands()
     elif engine == "openclaw":

@@ -101,6 +101,31 @@ class ClaudeRegistryRuntimeTests(unittest.TestCase):
                 self.assertEqual(claude_runner.main(), 0)
         self.assertEqual(prompts, ["Prove it.\r\n证明", "Prove that."])
 
+    def test_whatever_the_agent_left_under_the_prompt_file_name_is_replaced(self) -> None:
+        # The workspace is the agent's: an earlier turn of the run may have
+        # made a directory, or a link, where the next prompt file goes.
+        with patch(
+            "agent_monitor.engines_registry.which_tool", return_value="/bin/claude"
+        ), patch.dict(os.environ), tempfile.TemporaryDirectory() as td, tempfile.TemporaryDirectory() as outside:
+            os.environ.pop("CLAUDE_CMD", None)
+            (Path(outside) / "keep.txt").write_text("keep", encoding="utf-8")
+            for name, leave in (
+                ("directory", lambda path: (path / "notes").mkdir(parents=True)),
+                ("link to a directory", lambda path: path.symlink_to(outside, target_is_directory=True)),
+            ):
+                with self.subTest(name):
+                    workspace = Path(td) / name.replace(" ", "-")
+                    workspace.mkdir()
+                    leave(workspace / ".agent-monitor-prompt")
+                    command = build_cli_command(
+                        "claude", prompt="Prove it.", workspace=workspace, problem_file=workspace / "problem.txt"
+                    )
+                    assert command is not None
+                    path = Path(command[command.index("--prompt-file") + 1])
+                    self.assertFalse(path.is_symlink())
+                    self.assertEqual(path.read_text(encoding="utf-8"), "Prove it.")
+            self.assertEqual(sorted(p.name for p in Path(outside).iterdir()), ["keep.txt"])
+
 
 class WrapperPromptFileTests(unittest.TestCase):
     """The Python wrappers that also run on a Claude Code or Codex account

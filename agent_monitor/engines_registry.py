@@ -583,7 +583,7 @@ def supported_models(engine_id: str) -> list[str]:
 
 # Where ``{prompt_file}`` puts the task prompt.  A dot-file, which the run's
 # file list and export skip (the prompt can carry the agent profile); the
-# wrapper deletes it once read.
+# wrapper deletes it once read, the console once the wrapper has ended.
 PROMPT_FILENAME = ".agent-monitor-prompt"
 
 
@@ -595,11 +595,24 @@ def _write_prompt_file(workspace: Path, prompt: str) -> Path:
     afresh, never through a link an earlier agent left in the workspace.
     """
     path = Path(workspace).absolute() / PROMPT_FILENAME
-    path.unlink(missing_ok=True)
+    # The workspace is the agent's: it may have left anything under this name.
+    if path.is_dir() and not path.is_symlink():
+        shutil.rmtree(path)
+    else:
+        path.unlink(missing_ok=True)
     flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0)
     with os.fdopen(os.open(path, flags, 0o600), "w", encoding="utf-8", newline="") as handle:
         handle.write(prompt)
     return path
+
+
+def discard_prompt_file(workspace: Path) -> None:
+    """Remove a prompt file its wrapper never read (it could not start, or was
+    stopped first)."""
+    try:
+        (Path(workspace) / PROMPT_FILENAME).unlink(missing_ok=True)
+    except OSError:
+        pass
 
 
 def build_cli_command(

@@ -982,6 +982,20 @@ class CliEngineFailureDetailTests(unittest.TestCase):
         self.assertIn("agent profile", run["error"])
         self.assertIn("only an excerpt", run["error"])
 
+    def test_a_prompt_file_the_wrapper_never_read_is_removed(self) -> None:
+        # It holds the agent profile; the wrapper removes it only once read.
+        for name, command in (
+            ("could not start", "/nonexistent/python --prompt-file {prompt_file}"),
+            ("ended without reading it", f"{sys.executable} -c pass --prompt-file {{prompt_file}}"),
+        ):
+            with self.subTest(name), tempfile.TemporaryDirectory() as tmp, patch.dict(
+                os.environ, {"PLAIN_CMD": command}
+            ), patch("agent_monitor.agent_config.persona_preamble", return_value=""), patch.object(jobs, "_write_run"):
+                run = jobs._run_cli_engine(run_id="plain_unread", engine="plain", problem_id="p",
+                                           problem_text="Prove it.", started=time.time(), workspace=Path(tmp))
+                self.assertEqual(run["status"], "failed")
+                self.assertEqual(list(Path(tmp).iterdir()), [])
+
 
 
 class IMProofClaudeUsageTests(unittest.TestCase):
