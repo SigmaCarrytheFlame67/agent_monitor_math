@@ -27,8 +27,27 @@ def _emit_raw(line: str) -> None:
     sys.stdout.flush()
 
 
+def _task_prompt(argv: list[str]) -> str:
+    """``--prompt-file PATH`` (the registry's command), else one argument (an
+    operator's ``CLAUDE_CMD`` that still passes ``{prompt}``)."""
+    if len(argv) > 2 and argv[1] == "--prompt-file":
+        path = Path(argv[2])
+        try:
+            with path.open(encoding="utf-8", newline="") as handle:
+                return handle.read()
+        finally:
+            # The workspace is Claude's: the prompt (agent profile included)
+            # must not stay there.
+            path.unlink(missing_ok=True)
+    return argv[1] if len(argv) > 1 else ""
+
+
 def main() -> int:
-    prompt = sys.argv[1] if len(sys.argv) > 1 else ""
+    try:
+        prompt = _task_prompt(sys.argv)
+    except (OSError, UnicodeDecodeError) as exc:
+        print(f"[agent-monitor] Claude Code could not read its task prompt: {exc}", file=sys.stderr, flush=True)
+        return 2
     if not prompt.strip():
         print("Claude Code received an empty proof prompt", file=sys.stderr, flush=True)
         return 2

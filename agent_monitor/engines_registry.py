@@ -4,7 +4,7 @@ External harnesses (Codex CLI, OpenClaude, OpenHands) run as
 subprocesses inside the per-run workspace. Command templates can be overridden
 via environment variables so users can adapt to their local install.
 
-Template placeholders: {prompt} {workspace} {problem_file} {model_args}
+Template placeholders: {prompt} {prompt_file} {workspace} {problem_file} {model_args}
 """
 from __future__ import annotations
 
@@ -208,9 +208,10 @@ CLI_ENGINES: dict[str, dict[str, Any]] = {
         "binary": "claude",
         "binary_candidates": ["~/.local/bin/claude", "~/.npm-global/bin/claude"],
         "cmd_env": "CLAUDE_CMD",
+        # The prompt goes in a file: one argv string is limited to 128 KiB.
         "default_cmd": (
             "{python} -u "
-            "{root}/agent_monitor/runners/claude_runner.py {prompt}"
+            "{root}/agent_monitor/runners/claude_runner.py --prompt-file {prompt_file}"
         ),
         "install_hint": "Install the official Claude Code CLI and link a Claude Pro / Max account",
         "parser_style": "claude",
@@ -580,6 +581,27 @@ def supported_models(engine_id: str) -> list[str]:
     return list((CLI_ENGINES.get(engine_id) or {}).get("supported_models") or [])
 
 
+# Where ``{prompt_file}`` puts the task prompt.  A dot-file, which the run's
+# file list and export skip (the prompt can carry the agent profile); the
+# wrapper deletes it once read.
+PROMPT_FILENAME = ".agent-monitor-prompt"
+
+
+def _write_prompt_file(workspace: Path, prompt: str) -> Path:
+    """Write the task prompt for a wrapper that reads it from a file.
+
+    One argv string is limited to 128 KiB on Linux, which a long problem in a
+    3-byte script (Chinese, Japanese, Korean) exceeds.  The file is created
+    afresh, never through a link an earlier agent left in the workspace.
+    """
+    path = Path(workspace).absolute() / PROMPT_FILENAME
+    path.unlink(missing_ok=True)
+    flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0)
+    with os.fdopen(os.open(path, flags, 0o600), "w", encoding="utf-8", newline="") as handle:
+        handle.write(prompt)
+    return path
+
+
 def build_cli_command(
     engine_id: str,
     *,
@@ -588,7 +610,11 @@ def build_cli_command(
     problem_file: Path,
     model: str | None = None,
 ) -> list[str] | None:
-    """Resolve a CLI engine's command as argv list, or None if unavailable."""
+    """Resolve a CLI engine's command as argv list, or None if unavailable.
+
+    ``{prompt_file}`` writes the prompt to a file in ``workspace`` (see
+    ``_write_prompt_file``) and stands for its path.
+    """
     spec = CLI_ENGINES.get(engine_id)
     if not spec:
         return None
@@ -596,6 +622,7 @@ def build_cli_command(
     if not ok or not template:
         return None
     argv: list[str] = []
+    prompt_path: Path | None = None
     for token in shlex.split(template):
         if token == "{model_args}":
             if model:
@@ -607,6 +634,9 @@ def build_cli_command(
         token = token.replace("{workspace}", str(workspace))
         token = token.replace("{ws_name}", workspace.name)
         token = token.replace("{problem_file}", str(problem_file))
+        if "{prompt_file}" in token:
+            prompt_path = prompt_path or _write_prompt_file(workspace, prompt)
+            token = token.replace("{prompt_file}", str(prompt_path))
         if "{prompt}" in token:
             token = token.replace("{prompt}", prompt)
         argv.append(token)

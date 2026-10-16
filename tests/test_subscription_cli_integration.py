@@ -340,6 +340,34 @@ class ClaudePromptOnStdinTests(unittest.TestCase):
         self.assertFalse(any("证明" in arg for arg in seen["argv"]))
         self.assertIn("be brief", seen["argv"])  # the system prompt stays an option
 
+    def test_a_long_problem_reaches_claude_code_through_the_native_engine(self) -> None:
+        # The console starts claude_runner with the registry's own command;
+        # that hop must not put the prompt in argv either.
+        problem = "设 n 为偶数，证明：" * 9_000  # 90,000 characters, 270 KB of UTF-8
+        proof = "# Claim\n\nThe statement holds.\n\n## Proof\n\n" + "Each step follows. " * 30 + "\n"
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "config").mkdir()
+            workspace = root / "workspace"
+            workspace.mkdir()
+            fake = _fake_claude_cli(root / "bin", _success("Done."), proof=proof)
+            extra_env = {**_claude_env(str(root / "config")),
+                         "PATH": os.pathsep.join([str(fake.parent), "/usr/bin", "/bin"])}
+            # HOME keeps the registry's ~/.local/bin (a real install) off PATH.
+            with patch.dict(os.environ, {"HOME": str(root)}), patch(
+                "agent_monitor.engines_registry.which_tool", return_value=str(fake)
+            ), patch("agent_monitor.agent_config.persona_preamble", return_value=""), patch.object(jobs, "_write_run"):
+                os.environ.pop("CLAUDE_CMD", None)
+                run = jobs._run_cli_engine(run_id="claude_long", engine="claude", problem_id="p",
+                                           problem_text=problem, started=time.time(),
+                                           workspace=workspace, extra_env=extra_env)
+            calls = _fake_claude_calls(fake)
+            leftovers = sorted(path.name for path in workspace.iterdir())
+        self.assertEqual(run["status"], "finished", run.get("error"))
+        self.assertEqual(len(calls), 1)
+        self.assertIn(problem, calls[0]["stdin"])
+        self.assertEqual(leftovers, ["proof.md"])  # the prompt file is gone
+
 
 class CodexFailureReportingTests(unittest.TestCase):
     def test_usage_limit_is_reported_cleanly_and_typed(self) -> None:
@@ -908,6 +936,7 @@ class CliEngineFailureDetailTests(unittest.TestCase):
         self.assertIn("reconnect Claude Code in Settings", run["error"])
 
     def test_a_prompt_too_large_for_the_command_line_is_explained(self) -> None:
+        # An engine (or an operator's CLAUDE_CMD) that still passes {prompt}.
         with tempfile.TemporaryDirectory() as tmp, patch(
             "agent_monitor.engines_registry.build_cli_command",
             return_value=[sys.executable, "-c", "pass", "x" * 200_000],
@@ -916,6 +945,10 @@ class CliEngineFailureDetailTests(unittest.TestCase):
                                        problem_text="Prove it.", started=time.time(), workspace=Path(tmp))
         self.assertEqual(run["status"], "failed")
         self.assertIn("too large to pass on the command line", run["error"])
+        # Attaching helps only because an excerpt is sent, and the profile
+        # and library context count too.
+        self.assertIn("agent profile", run["error"])
+        self.assertIn("only an excerpt", run["error"])
 
 
 

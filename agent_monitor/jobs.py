@@ -4551,11 +4551,15 @@ def _run_cli_engine(
         label = str(spec.get("label") or engine)
         reason = f"{label} could not start: {exc.strerror or exc}"
         if getattr(exc, "errno", None) == errno.E2BIG:
-            # Linux limits one command-line argument to 128 KiB.
+            # Linux limits one command-line argument to 128 KiB.  The prompt
+            # also holds the agent profile and library context, and up to
+            # 40,000 characters of attachment excerpts.
             reason = (
                 f"{label} could not start: the task prompt is too large to pass "
-                "on the command line; shorten the problem text or attach the "
-                "long material as a file"
+                "on the command line (it holds the problem text plus the agent "
+                "profile, library context and attachment excerpts); shorten the "
+                "problem text, or move long material into an attachment, of "
+                "which only an excerpt is included"
             )
         return _flush(f"failed to launch: {exc}", status="failed", error=reason)
 

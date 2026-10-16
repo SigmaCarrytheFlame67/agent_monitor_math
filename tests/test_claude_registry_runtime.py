@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import os
+import stat
 import sys
 import tempfile
 import unittest
@@ -13,6 +15,7 @@ from agent_monitor.engines_registry import (
     build_cli_command,
     list_engines,
 )
+from agent_monitor.runners import claude_runner
 
 
 class ClaudeRegistryRuntimeTests(unittest.TestCase):
@@ -44,6 +47,46 @@ class ClaudeRegistryRuntimeTests(unittest.TestCase):
         self.assertEqual(by_id["claude"]["auth_modes"], ["claude_subscription"])
         self.assertTrue(by_id["claude"]["claude_subscription_supported"])
         self.assertFalse(by_id["claude"]["subscription_supported"])
+
+    def test_the_task_prompt_reaches_the_runner_in_a_private_file(self) -> None:
+        # One argv string is limited to 128 KiB on Linux: 50,000 characters
+        # of a 3-byte script are 150 KB.
+        prompt = "Prove it.\r\n" + "证明：" * 50_000
+        with patch(
+            "agent_monitor.engines_registry.which_tool", return_value="/bin/claude"
+        ), patch.dict(os.environ), tempfile.TemporaryDirectory() as td:
+            os.environ.pop("CLAUDE_CMD", None)
+            workspace = Path(td)
+            command = build_cli_command(
+                "claude", prompt=prompt, workspace=workspace, problem_file=workspace / "problem.txt"
+            )
+            assert command is not None
+            self.assertFalse(any("证明" in arg for arg in command))
+            self.assertLess(max(len(arg.encode("utf-8")) for arg in command), 4096)
+            path = Path(command[command.index("--prompt-file") + 1])
+            self.assertTrue(path.is_absolute())
+            self.assertEqual(path.parent.resolve(), workspace.resolve())
+            # A dot-file: the run's file list and export never show it.
+            self.assertTrue(path.name.startswith("."))
+            self.assertEqual(stat.S_IMODE(path.stat().st_mode), 0o600)
+            self.assertEqual(path.read_bytes(), prompt.encode("utf-8"))
+
+    def test_the_runner_reads_then_removes_its_prompt_file(self) -> None:
+        prompts: list[str] = []
+
+        def proof(prompt, *_args, **_kwargs):
+            prompts.append(prompt)
+
+        with tempfile.TemporaryDirectory() as td, patch.object(claude_runner, "claude_proof", side_effect=proof):
+            path = Path(td) / ".prompt"
+            path.write_bytes("Prove it.\r\n证明".encode("utf-8"))
+            with patch.object(sys, "argv", ["claude_runner.py", "--prompt-file", str(path)]):
+                self.assertEqual(claude_runner.main(), 0)
+            self.assertFalse(path.exists())
+            # An operator's CLAUDE_CMD that still passes {prompt} keeps working.
+            with patch.object(sys, "argv", ["claude_runner.py", "Prove that."]):
+                self.assertEqual(claude_runner.main(), 0)
+        self.assertEqual(prompts, ["Prove it.\r\n证明", "Prove that."])
 
 
 if __name__ == "__main__":
