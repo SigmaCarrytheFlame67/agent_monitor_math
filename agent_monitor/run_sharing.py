@@ -169,8 +169,10 @@ def _agent_output(item):
     text = item.get('summary') or item.get('output_text') or item.get('response_text') or item.get('final_text') or item.get('output')
     text = text if isinstance(text, str) else ''
     role = str(item.get('role') or '').lower()
+    # Roles, tool lists and labels mark tool steps; a leading '$ ' does not
+    # (mathematics often starts that way). Hermes calls read '▸ name(args)'.
     tool = (role in _TOOL_ROLES or str(item.get('pipeline_stage') or '').lower() == 'act' or bool(item.get('tools'))
-            or text.lstrip().startswith(('$ ', '▸ ', 'edited: ')))
+            or text.lstrip().startswith('▸ '))
     if tool:
         lines = [line for line in text.strip().splitlines() if line.strip()]
         calls = [line for line in lines if line.startswith('▸ ')] or lines[:1]
@@ -969,14 +971,21 @@ def _lean_summary(record):
             'generated_at': record.get('generated_at') or ''}
 
 
-def _clean_legacy_graph(record):
+def _clean_legacy_graph(record, *, steps):
+    """Explore/Facts statements of older shares were raw step output: clean
+    them like steps. Outline, Formal and Manuscript statements are
+    mathematics: only server paths go."""
     if not isinstance(record, dict) or not isinstance(record.get('graph'), dict):
         return record
     nodes = []
     for node in record['graph'].get('nodes') or []:
         if isinstance(node, dict) and isinstance(node.get('statement'), str):
-            tool = bool(_TOOL_LABEL.search(str(node.get('label') or '')))
-            node = {**node, 'statement': _agent_output({'summary': node['statement'], 'role': 'tool' if tool else ''})}
+            if steps:
+                tool = bool(_TOOL_LABEL.search(str(node.get('label') or '')))
+                statement = _agent_output({'summary': node['statement'], 'role': 'tool' if tool else ''})
+            else:
+                statement = _redact(node['statement'], 20_000)
+            node = {**node, 'statement': statement}
         nodes.append(node)
     return {**record, 'graph': {**record['graph'], 'nodes': nodes}}
 
@@ -1015,7 +1024,8 @@ def console_view(snap):
         # like step output (Explore statements were raw step output).
         run_ids = {str(agent.get('id') or '').split('::')[0] for agent in _items(snap.get('agents'), 100)
                    if isinstance(agent, dict) and '::' in str(agent.get('id') or '')}
-        graphs = _neutral({mode: _clean_legacy_graph(record) for mode, record in graphs.items()}, run_ids)
+        graphs = _neutral({mode: _clean_legacy_graph(record, steps=mode in {'explore', 'facts'})
+                           for mode, record in graphs.items()}, run_ids)
     agents = []
     for index, agent in enumerate(_items(snap.get('agents'), 100), 1):
         if not isinstance(agent, dict):

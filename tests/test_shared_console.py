@@ -425,3 +425,13 @@ def test_older_shares_clean_their_explore_graph_text_and_ids():
     assert node['id'] == 'shared::iter-1'
     assert node['statement'] == '▸ write_file({"path": "…/proof.md"})\n(tool output is not included in shared snapshots)'
     assert rid not in json.dumps(view) and 'PRIVATE' not in json.dumps(view)
+
+
+
+def test_mathematics_starting_with_a_formula_is_never_taken_for_tool_output():
+    math = '$ m+n $ is even.\nProof: write m = 2a and n = 2b.'
+    assert shares._agent_output({'role': 'assistant', 'output': math}) == math
+    snap = {'version': 2, 'title': 'Old', 'status': 'finished', 'agents': [],
+            'graphs': {'outline': {'kind': 'outline', 'status': 'parsed', 'graph_role': 'proof-outline',
+                                   'graph': {'nodes': [{'id': 'a', 'label': 'Lemma (tool)', 'statement': math}], 'edges': []}}}}
+    assert shares.console_view(snap)['graphs']['informal']['graph']['nodes'][0]['statement'] == math
