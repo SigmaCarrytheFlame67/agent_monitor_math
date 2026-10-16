@@ -5756,6 +5756,8 @@ function renderDag(d){
       :d.model==='analyze-graph'?' · the manuscript’s structure (verdicts in Manuscript mode; not a certificate)':'';
     dagStatus(kindLbl+' · '+(graph.title?graph.title+' · ':'')+(graph.nodes||[]).length+' nodes'+assurance+derived+' · '+(d.model||'')+' · '+(d.generated_at||'').replace('T',' ').replace('Z',''));
   }
+  // A shared snapshot keeps at most 100 nodes of a graph: say so.
+  if(d.truncated&&Number(d.counts?.nodes)>(graph.nodes||[]).length)dagStatus($('dag-meta').textContent+' · snapshot shows '+(graph.nodes||[]).length+' of '+Number(d.counts.nodes)+' nodes');
   dagDisplayedRunId=runId; dagDisplayedMode=dagMode; dagDisplayedEngineView=dagEngineView;
   $('dag-empty').style.display='none';
   const stage=$('dag-stage'); stage.style.display='block'; stage.classList.toggle('lean',isLean); stage.classList.toggle('compiler-facts',isCompiler); stage.classList.toggle('engine-graph',isEngine); stage.classList.toggle('cgm-workflow',isWorkflow); stage.classList.toggle('analysis-graph',isAnalysis);
