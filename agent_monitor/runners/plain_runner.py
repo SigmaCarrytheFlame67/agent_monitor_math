@@ -370,13 +370,13 @@ def main() -> int:
             except APIBackendError as exc:
                 emit_item({"type": "error", "message": str(exc), "terminal": True})
                 return 1
+            # Both replies are billed: sum every count, cached and reasoning too.
+            counts = dict.fromkeys(["input_tokens", "output_tokens", *result.usage, *repaired.usage])
             result = type(result)(
                 text=normalize_proof_markdown(repaired.text),
                 usage={
-                    "input_tokens": int(result.usage.get("input_tokens") or 0)
-                    + int(repaired.usage.get("input_tokens") or 0),
-                    "output_tokens": int(result.usage.get("output_tokens") or 0)
-                    + int(repaired.usage.get("output_tokens") or 0),
+                    name: int(result.usage.get(name) or 0) + int(repaired.usage.get(name) or 0)
+                    for name in counts
                 },
                 model=repaired.model,
                 provider=repaired.provider,

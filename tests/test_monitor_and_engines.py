@@ -757,6 +757,40 @@ class ProviderRoutingRegressionTests(unittest.TestCase):
             completed[-1]["usage"], {"input_tokens": 24, "output_tokens": 6}
         )
 
+    def test_plain_api_retry_keeps_cached_and_reasoning_counts(self) -> None:
+        dirty = api_backend.APIResult(
+            text="<function_calls><invoke name=\"bash\"></invoke></function_calls>",
+            usage={"input_tokens": 10, "output_tokens": 2, "cached_input_tokens": 8, "reasoning_output_tokens": 1},
+            model="gpt-6-astra",
+            provider="openai",
+        )
+        clean = api_backend.APIResult(
+            text="# Counterexample\n\nThe claim is false. ∎",
+            usage={"input_tokens": 14, "output_tokens": 4, "cached_input_tokens": 12, "reasoning_output_tokens": 3},
+            model="gpt-6-astra",
+            provider="openai",
+        )
+        events: list[dict] = []
+        previous = Path.cwd()
+        with tempfile.TemporaryDirectory() as tmp:
+            try:
+                os.chdir(tmp)
+                with (
+                    patch.dict(os.environ, {"PLAIN_MODEL": "gpt-6-astra"}, clear=True),
+                    patch.object(sys, "argv", ["plain_runner.py", "refute this"]),
+                    patch.object(plain_runner, "api_chat", side_effect=[dirty, clean]),
+                    patch.object(plain_runner, "emit", side_effect=events.append),
+                ):
+                    self.assertEqual(plain_runner.main(), 0)
+            finally:
+                os.chdir(previous)
+        completed = [event for event in events if event.get("type") == "turn.completed"]
+        # Both billed replies count, cached input at the cache rate included.
+        self.assertEqual(
+            completed[-1]["usage"],
+            {"input_tokens": 24, "output_tokens": 6, "cached_input_tokens": 20, "reasoning_output_tokens": 4},
+        )
+
     def test_selected_api_model_is_routed_to_each_cli_runner(self) -> None:
         for engine, key, value in (
             ("plain", "PLAIN_MODEL", "claude-haiku-4-5"),
