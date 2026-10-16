@@ -2200,3 +2200,21 @@ def test_finished_guest_run_starts_its_derived_pipeline_immediately(
     record["status"] = "finished"
     jobs._notify_guest_completion("kimi_run", guest["id"], tmp_path)
     assert len(started) == 1
+
+
+def test_enabled_records_of_the_operators_runs_reach_only_the_operators_runs(tmp_path: Path):
+    from unittest.mock import patch
+
+    record = {"id": "memory_run_codex_adhoc_1", "type": "memory", "name": "Run p1 (codex)",
+              "content": "Problem: the operator's private problem", "source": "run:codex_adhoc_1"}
+    notes = {"id": "memory_notes", "type": "memory", "name": "Notes", "content": "Shared notes"}
+    with patch.object(library, "enabled_items",
+                      side_effect=lambda item_type=None: [record, notes] if item_type == "memory" else []):
+        member_ctx = library.compose_context(run_memories=False)
+        operator_ctx = library.compose_context()
+        library.materialize(tmp_path / "member", run_memories=False)
+        library.materialize(tmp_path / "operator")
+    assert "private problem" not in member_ctx and "Shared notes" in member_ctx
+    assert "private problem" in operator_ctx
+    assert "private problem" not in (tmp_path / "member" / "_library" / "MEMORY.md").read_text()
+    assert "private problem" in (tmp_path / "operator" / "_library" / "MEMORY.md").read_text()

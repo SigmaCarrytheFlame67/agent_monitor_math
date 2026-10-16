@@ -2326,8 +2326,15 @@ def _execute_job_body(
                 raise LookupError("user library disabled for isolated Kimi service")
             from agent_monitor import library as user_library
 
-            materialized = user_library.materialize(ws)
-            lib_ctx = user_library.compose_context()
+            # Records of the operator's own runs reach only the operator's runs.
+            if owner_id is None:
+                operator_run = True
+            else:
+                from agent_monitor.auth import is_operator_account
+
+                operator_run = is_operator_account(int(owner_id))
+            materialized = user_library.materialize(ws, run_memories=operator_run)
+            lib_ctx = user_library.compose_context(run_memories=operator_run)
             library_snapshot = user_library.get_library()
             runtime_library = {
                 "materialized": list(materialized.get("written") or []),

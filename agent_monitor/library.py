@@ -1076,14 +1076,17 @@ def get_library() -> dict[str, Any]:
     return {"items": items, "counts": counts, "settings": data["settings"]}
 
 
+def _run_memory(item: dict[str, Any]) -> bool:
+    """An automatic record of one of the operator's runs."""
+    return str(item.get("source") or "").startswith("run:") or str(
+        item.get("id") or ""
+    ).startswith("memory_run_")
+
+
 def without_run_memories(payload: dict[str, Any]) -> dict[str, Any]:
     """The library without its automatic run records, for accounts that are
     not the operator: each one quotes an operator run's problem and answer."""
-    items = [
-        item for item in payload.get("items") or []
-        if not str(item.get("source") or "").startswith("run:")
-        and not str(item.get("id") or "").startswith("memory_run_")
-    ]
+    items = [item for item in payload.get("items") or [] if not _run_memory(item)]
     counts = {t: sum(1 for i in items if i.get("type") == t) for t in VALID_TYPES}
     return {**payload, "items": items, "counts": counts}
 
@@ -1219,9 +1222,13 @@ def _safe_name(name: str) -> str:
     return "".join(c if c.isalnum() or c in "-_" else "_" for c in name)[:60] or "item"
 
 
-def materialize(workspace: Path) -> dict[str, Any]:
-    """Write enabled library items into <workspace>/_library/ for agent access."""
-    memories = enabled_items("memory")
+def materialize(workspace: Path, *, run_memories: bool = True) -> dict[str, Any]:
+    """Write enabled library items into <workspace>/_library/ for agent access.
+
+    ``run_memories=False`` (a run that is not the operator's) leaves out the
+    automatic records of the operator's runs.
+    """
+    memories = [m for m in enabled_items("memory") if run_memories or not _run_memory(m)]
     skills = enabled_items("skill")
     tools = enabled_items("tool")
     if not (memories or skills or tools):
@@ -1300,9 +1307,9 @@ def materialize(workspace: Path) -> dict[str, Any]:
     return {"written": written}
 
 
-def compose_context() -> str:
+def compose_context(*, run_memories: bool = True) -> str:
     """Build the USER LIBRARY prompt block (empty string when nothing enabled)."""
-    memories = enabled_items("memory")
+    memories = [m for m in enabled_items("memory") if run_memories or not _run_memory(m)]
     skills = enabled_items("skill")
     tools = enabled_items("tool")
     if not (memories or skills or tools):
