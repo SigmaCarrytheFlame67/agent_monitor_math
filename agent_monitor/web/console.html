@@ -2422,14 +2422,18 @@ function renderRunTuning(){
   $('run-thinking-ticks').innerHTML=reasoning.map(()=>'<i></i>').join('');
   $('run-thinking-min-label').textContent=reasoning[0]?.label||'Default';
   $('run-thinking-max-label').textContent=reasoning.length>1?reasoning.at(-1).label:'';
+  // Lean and DAG work of a Codex-subscription run is capped at High (cgm_max.formal_view).
+  const derivedAtHigh=runAuthRoute()==='codex_subscription'&&['xhigh','max'].includes(reasoningItem.id);
   $('run-profile-note').textContent=caps.max_mode
-    ?'Max runs Claude Code and Codex at maximum effort.'
+    ?'Max runs Claude Code and Codex at maximum effort. Formal Lean and Lean DAG run on Codex at High.'
     :caps.unsupported_engine
     ?'This engine uses its default thinking and speed settings.'
     :reasoning.length<=1&&speeds.length<=1
       ?'This model uses its default thinking and speed settings.'
     :speeds.length<=1
       ?'Thinking applies to new runs. Speed is fixed for this model.'
+    :derivedAtHigh
+      ?'Saved for this model. Applies to new runs; existing runs and continuations keep the profile they started with. Formal Lean and Lean DAG run at High, the most their Codex calls allow.'
       :'Saved for this model. Applies to new runs; existing runs, Formal Lean, Lean DAG, and continuations keep the profile they started with.';
   animateRunTuningFeedback();
 }

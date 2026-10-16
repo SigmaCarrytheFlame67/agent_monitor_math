@@ -168,7 +168,9 @@ ceilings, so an environment value can only lower them.
   and worker (Codex) models, and every call checked against its side. A
   follow-up continues as Max, or stops if either account was disconnected.
   Lean and graph work after a Max run uses the Codex account with the worker
-  model at high effort.
+  model at high effort. Derived Codex calls have a fixed per-call limit, so
+  the same cap applies after any Codex-subscription run made at extra-high or
+  maximum effort; the console's run-profile note says so.
 - Sponsored calls go through the Kimi broker's credential gateway, which runs
   at most `PUBLIC_KIMI_GATEWAY_CONCURRENCY` (default 8) upstream calls at once.
   Each guest run keeps up to 2 in flight, so a few concurrent runs can fill
