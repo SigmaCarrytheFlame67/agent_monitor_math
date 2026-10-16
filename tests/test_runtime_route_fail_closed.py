@@ -408,6 +408,32 @@ class SavedDefaultModelTests(unittest.TestCase):
         jobs._apply_selected_model_env(env, engine="math_harness", model=captured["model"])
         self.assertEqual(math_harness_runner._select_route(env).model, "claude-opus-4-8")
 
+    def test_blank_model_runs_a_saved_custom_api_model_its_keys_can_run(self) -> None:
+        from agent_monitor.runners import math_harness_runner
+        from agent_monitor.subprocess_env import child_process_env
+
+        # Settings accepts custom IDs on the API route; one that names its
+        # provider runs on that provider's key, as a listed model does.
+        for saved_model, key, provider in (
+            ("claude-opus-4-9-preview", "ANTHROPIC_API_KEY", "anthropic"),
+            ("anthropic:claude-next", "ANTHROPIC_API_KEY", "anthropic"),
+            ("openrouter/qwen/qwen4-max", "OPENROUTER_API_KEY", "openrouter"),
+        ):
+            saved = {
+                "AGENT_MONITOR_ACCOUNT_RUNTIME": "api",
+                "AGENT_MONITOR_MODEL": saved_model,
+                "OPENAI_API_KEY": "sk-openai-test",
+                key: "sk-provider-test",
+            }
+            with self.subTest(saved=saved_model):
+                captured = self._start("math_harness", saved)
+                self.assertEqual(captured["model"], saved_model)
+                env = child_process_env(extra=captured["extra_env"])
+                jobs._apply_selected_model_env(env, engine="math_harness", model=captured["model"])
+                route = math_harness_runner._select_route(env)
+                self.assertEqual(route.model, saved_model)
+                self.assertEqual(proof_graph._resolve_llm_provider(env, route.model)[0], provider)
+
     def test_a_saved_default_the_route_cannot_run_leaves_the_model_blank(self) -> None:
         for runtime, saved_model, keys in (
             # An API model left from another runtime never refuses the run.

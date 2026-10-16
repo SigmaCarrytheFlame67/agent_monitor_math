@@ -318,12 +318,12 @@ def _saved_default_model(
     Only a model the run's route can run (the requested route or, as
     ``_selected_auth_route`` picks it, the account runtime's): one of the
     linked Claude Code or Codex account that the engine supports, or on the
-    API route one of a provider the account has a key for, or Kimi K3 where
-    the sponsored service serves the engine.  Never Max, which is always a
-    deliberate choice.  Otherwise None, and the harness uses its own default.
+    API route one the account's keys can run (``_api_keys_run``), or Kimi K3
+    where the sponsored service serves the engine.  Never Max, which is always
+    a deliberate choice.  Otherwise None, and the harness uses its own default.
     """
     from agent_monitor.engines_registry import supported_models
-    from agent_monitor.settings import PROVIDERS, account_runtime, resolved_user_env
+    from agent_monitor.settings import account_runtime, resolved_user_env
 
     env = resolved_user_env(user)
     saved = str(env.get("AGENT_MONITOR_MODEL") or "").strip()
@@ -347,16 +347,26 @@ def _saved_default_model(
         return None
     if _is_kimi_model(saved) and _sponsored_broker_serves(engine, saved):
         return saved
-    keyed_models = {
-        model
-        for spec in PROVIDERS
-        if any(
-            str(env.get(name) or "").strip()
-            for name in (spec["key_var"], *(spec.get("alt_key_vars") or []))
-        )
-        for model in spec.get("models") or []
-    }
-    return saved if saved in keyed_models else None
+    return saved if _api_keys_run(env, saved) else None
+
+
+def _api_keys_run(env: dict[str, str], model: str | None) -> bool:
+    """Whether the API route can run ``model`` on the keys in ``env``.
+
+    As the API runners resolve it: the model names its provider (a listed
+    model, or a custom ID with the provider's prefix, as Settings allows) and
+    that provider's key is set.  A subscription alias such as ``opus`` names
+    no provider.
+    """
+    from agent_monitor.proof_graph import _resolve_llm_provider
+
+    if not str(model or "").strip():
+        return False
+    try:
+        _resolve_llm_provider(dict(env), model)
+    except ValueError:
+        return False
+    return True
 
 
 def _analyze_api_timeout(sponsored: bool) -> int:
