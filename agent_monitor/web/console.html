@@ -5316,8 +5316,11 @@ async function refreshDagView(){
   if(showDagUnavailable(dagUnavailableState(requestedMode,d,requestedEngineView,runEngine)))return;
   dagRunKey='';
   $('dag-empty').style.display='block'; $('dag-stage').style.display='none';
-  $('dag-empty').innerHTML='<div style="font-size:28px;opacity:.4">◆</div><div>Generating the proof graph automatically…<br/>No manual action is needed.</div>';
   const stage=requestedMode==='engine'?null:lastSandboxRun?.auto_pipeline?.stages?.[requestedMode==='informal'?'informal_dag':'formal_dag'];
+  // A run stopped before its draft builds no graph by itself.
+  $('dag-empty').innerHTML=stage?.status==='stopped'
+    ?'<div style="font-size:28px;opacity:.4">◇</div><div>'+(lastSandboxRun.auto_pipeline.run_kind==='analyze'?'Analysis stopped · no report to graph.':'Run stopped · no proof draft to graph.')+'</div>'
+    :'<div style="font-size:28px;opacity:.4">◆</div><div>Generating the proof graph automatically…<br/>No manual action is needed.</div>';
   dagStatus(stage?.detail||(requestedMode==='engine'?'waiting for engine activity':'waiting for automatic generation'));
 }
 function dagLayers(graph){

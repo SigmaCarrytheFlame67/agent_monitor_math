@@ -241,6 +241,51 @@ console.log(JSON.stringify([handled,badge,els['lean-progress-title'].textContent
             [False, "none", "Run stopped", "The run was stopped before it produced a proof draft.", "Stopped"],
         )
 
+    @unittest.skipUnless(NODE, "node is unavailable")
+    def test_dag_tab_of_a_stopped_run_promises_no_automatic_graph(self) -> None:
+        source = "\n".join(
+            _js_function(name)
+            for name in (
+                "dagStatus",
+                "setDagObservation",
+                "dagObservationText",
+                "isCompilerFactsGraph",
+                "compilerFactsPayload",
+                "dagIsCgmEngine",
+                "dagPayloadForMode",
+                "dagUnavailableState",
+                "showDagUnavailable",
+            )
+        )
+        source += "\nasync " + _js_function("refreshDagView")
+        program = f"""
+{_DOM}
+let dagRunKey='', dagRefreshSeq=0, dagDisplayedRunId='', dagDisplayedMode='', dagDisplayedEngineView='', dagMode='informal', dagEngineView='workflow', runId='run-a';
+let lastSandboxRun=null;
+const renderDag=()=>{{}}, rememberAnalysisGraph=()=>{{}};
+globalThis.fetch=async()=>({{ok:true,json:async()=>({{status:'none',kind:'informal'}})}});
+{source}
+const show=async(run_kind,status,detail)=>{{
+  lastSandboxRun={{run_id:'run-a',engine:'claude',auto_pipeline:{{run_kind,stages:{{informal_dag:{{status,detail}}}}}}}};
+  await refreshDagView();
+  return [els['dag-empty'].innerHTML.replace(/<[^>]+>/g,' ').replace(/\\s+/g,' ').trim(),els['dag-meta'].textContent];
+}};
+(async()=>console.log(JSON.stringify([
+  await show(undefined,'stopped','The run was stopped before it produced a proof draft'),
+  await show('analyze','stopped','The analysis was stopped before it published a graph'),
+  await show(undefined,'waiting','Waiting for proof.md'),
+])))();
+"""
+        self.assertEqual(
+            _run(program),
+            [
+                ["◇ Run stopped · no proof draft to graph.", "The run was stopped before it produced a proof draft"],
+                ["◇ Analysis stopped · no report to graph.", "The analysis was stopped before it published a graph"],
+                # A run still on its way keeps the automatic-generation note.
+                ["◆ Generating the proof graph automatically… No manual action is needed.", "Waiting for proof.md"],
+            ],
+        )
+
 
 if __name__ == "__main__":
     unittest.main()
