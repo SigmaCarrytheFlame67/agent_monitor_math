@@ -5700,6 +5700,7 @@ def _launch_pending_feedback(
         return None
     authors = [owner_id if entry["author_id"] is None else entry["author_id"] for entry in entries]
     started: set[int] = set()
+    dropped: set[int] = set()
     result: dict[str, Any] | None = None
     for author in dict.fromkeys(authors):
         batch = [index for index, item in enumerate(authors) if item == author]
@@ -5719,6 +5720,12 @@ def _launch_pending_feedback(
                 user=_owner_user(author),
                 problems_recorded=True,
             )
+        except account_policy.ProjectPolicyError as exc:
+            # The project's rule never lifts for this run, so the feedback
+            # would wait forever; the messages stay in the chat.
+            _append_chat(run_id, "system", f"Queued feedback was not applied: {exc}")
+            dropped.update(batch)
+            continue
         except Exception as exc:  # noqa: BLE001
             # This author's feedback waits; another author's may still start.
             _append_chat(run_id, "system", f"Queued feedback could not start yet: {exc}")
@@ -5728,7 +5735,7 @@ def _launch_pending_feedback(
         # Otherwise another continuation started first: all of it waits.
         break
     _requeue_human_feedback(
-        workspace, [entry for index, entry in enumerate(entries) if index not in started]
+        workspace, [entry for index, entry in enumerate(entries) if index not in started | dropped]
     )
     return result
 

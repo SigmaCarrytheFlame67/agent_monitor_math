@@ -149,6 +149,20 @@ def test_existing_projects_are_marked_from_their_members_and_runs(monkeypatch, t
     assert projects.create(admin, "Next", "Prove it.")["problem"] == "Prove it."
 
 
+def test_the_project_page_learns_which_engines_an_untrusted_project_may_run(monkeypatch):
+    for name in ("PLAIN_CMD", "KIMI_PROOF_CMD", "MATH_HARNESS_CMD"):
+        monkeypatch.delenv(name, raising=False)
+    admin = auth.register(ADMIN_EMAIL, PASSWORD)
+    member = auth.register("member@example.test", PASSWORD)
+    project = projects.create(admin, "Joint work", "Prove it.")
+    assert project["tool_free_engines"] is None
+    projects.join(projects.invite(project["id"], admin["id"]), member)
+    assert projects.get(project["id"], admin["id"])["tool_free_engines"] == ["kimi", "math_harness", "plain"]
+    # An operator's command makes Plain run local code.
+    monkeypatch.setenv("PLAIN_CMD", "/bin/true")
+    assert projects.get(project["id"], member["id"])["tool_free_engines"] == ["kimi", "math_harness"]
+
+
 def test_start_job_holds_a_collaborator_project_run_to_tool_free_engines(monkeypatch, tmp_path):
     _isolated_jobs(monkeypatch, tmp_path)
     threads = _record_continuations(monkeypatch)
@@ -211,10 +225,14 @@ def test_follow_ups_of_a_collaborator_project_run_stay_tool_free(monkeypatch, tm
         assert str(refusal.value) == account_policy.PROJECT_TOOL_FREE_ERROR
     # The refused message was not recorded as sent.
     assert jobs.list_chat(claude_run) == []
-    # Feedback queued earlier waits instead of starting Claude Code.
+    # Feedback queued earlier never starts Claude Code, and it does not wait
+    # for good either: the chat says why it was not applied.
     jobs._queue_human_feedback(jobs.RUNS_DIR / "workspaces" / claude_run, "Keep going.", author_id=admin["id"])
     jobs._launch_pending_feedback(claude_run, owner_id=admin["id"], model=None, max_iterations=4)
-    assert threads.launched == [] and jobs.feedback_pending(claude_run)
+    assert threads.launched == [] and not jobs.feedback_pending(claude_run)
+    assert jobs.list_chat(claude_run)[-1]["content"] == (
+        "Queued feedback was not applied: " + account_policy.PROJECT_TOOL_FREE_ERROR
+    )
 
     # A run on a tool-free engine continues, without subagents.
     assert jobs.continue_run(plain_run, user=admin)["status"] == "continuing"

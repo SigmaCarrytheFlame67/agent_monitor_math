@@ -90,7 +90,10 @@ def _payload(db, row, uid):
     text, ids = _render(json.loads(row['doc']))
     members = [dict(r) for r in db.execute('SELECT user, name, seen FROM members WHERE project=? ORDER BY seen DESC',(row['id'],))]
     runs = [dict(r) for r in db.execute('SELECT run_id,user,task,created FROM runs WHERE project=? ORDER BY created DESC LIMIT 200',(row['id'],))]
-    return {'id':row['id'],'title':row['title'],'owner_id':row['owner'],'is_owner':row['owner']==uid,'problem':text,'character_ids':ids,'revision':row['revision'],'members':members,'runs':runs}
+    from agent_monitor.account_policy import tool_free_engines
+    # The only engines an untrusted project's proofs may use, for its launch form.
+    allowed = sorted(tool_free_engines()) if _untrusted(db,row['id']) else None
+    return {'id':row['id'],'title':row['title'],'owner_id':row['owner'],'is_owner':row['owner']==uid,'problem':text,'character_ids':ids,'revision':row['revision'],'members':members,'runs':runs,'tool_free_engines':allowed}
 
 
 def create(user, title, text):
