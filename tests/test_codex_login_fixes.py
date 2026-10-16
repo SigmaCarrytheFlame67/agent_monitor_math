@@ -395,6 +395,89 @@ class CodexReauthTests(unittest.TestCase):
         self.assertEqual(env["CODEX_HOME"], str(self.home))
         self.assertNotIn("OPENAI_API_KEY", env)
 
+    def _formal_lean_codex(self, stdout: str, returncode: int, *, during=None) -> dict:
+        workspace = self.root / "formal-run"
+        workspace.mkdir(exist_ok=True)
+
+        def codex(command, *, env, **_kwargs):
+            self.assertEqual(env["CODEX_HOME"], str(self.home))
+            if during:
+                during()
+            return subprocess.CompletedProcess(command, returncode, stdout, "")
+
+        with (
+            patch.object(settings, "resolved_user_env", return_value={}),
+            patch(
+                "agent_monitor.engines_registry.build_cli_command",
+                return_value=["codex", "exec", "--json"],
+            ),
+            patch.object(codex_backend, "_run_codex_process", side_effect=codex),
+        ):
+            return lean_verify._codex_subscription_interaction(
+                workspace=workspace,
+                user=self.USER,
+                run_record={"owner_id": self.USER["id"], "auth_route": "codex_subscription"},
+                prompt="Is this proof complete?",
+                lean_source=SOURCE,
+                edit=False,
+            )
+
+    def test_formal_lean_codex_calls_flag_and_clear_the_login(self) -> None:
+        with self.assertRaisesRegex(ValueError, "(?s)Codex intervention failed .*401 Unauthorized"):
+            self._formal_lean_codex(_EXPIRED_LOGIN, 1)
+        self.assertTrue(codex_login.account_reauth_required(self.home))
+        self.assertTrue(codex_login.status(self.USER["id"])["reauth_required"])
+        # The next Formal Lean call stops before Codex runs.
+        with self.assertRaisesRegex(ValueError, "subscription is not connected"):
+            self._formal_lean_codex(_RECOVERED, 0, during=lambda: self.fail("Codex ran"))
+
+        # A completed turn (here one that raced a rejection elsewhere) clears it.
+        codex_login.clear_reauth_required(self.home)
+        result = self._formal_lean_codex(
+            _RECOVERED, 0, during=lambda: codex_login.mark_reauth_required(self.home)
+        )
+        self.assertEqual(result["answer"], "done")
+        self.assertFalse(codex_login.account_reauth_required(self.home))
+        self.assertTrue(codex_login.status(self.USER["id"])["connected"])
+
+    def _formal_lean_harness(self, env: dict[str, str], stdout: str, returncode: int) -> None:
+        workspace = self.root / "harness-run"
+        ldir = workspace / lean_verify.LEAN_DIRNAME
+        ldir.mkdir(parents=True, exist_ok=True)
+        with patch.object(lean_verify, "_harness_finish") as finish:
+            lean_verify._harness_worker(
+                workspace=workspace,
+                ldir=ldir,
+                argv=[
+                    sys.executable, "-c",
+                    "import sys; sys.stdout.write(sys.argv[1]); sys.exit(int(sys.argv[2]))",
+                    stdout, str(returncode),
+                ],
+                engine="codex",
+                label="Codex",
+                user=self.USER,
+                model="gpt-6-astra",
+                run_record={"owner_id": self.USER["id"], "auth_route": "codex_subscription"},
+                env=env,
+                problem="Prove True.",
+                informal="Trivial.",
+                base={},
+                initial_fingerprint=None,
+                audit=False,
+            )
+        self.assertEqual(finish.call_args.kwargs["exit_code"], returncode)
+
+    def test_formal_lean_codex_harness_flags_and_clears_the_login(self) -> None:
+        env = self._subscription_env()
+        self._formal_lean_harness(env, _EXPIRED_LOGIN, 1)
+        self.assertTrue(codex_login.account_reauth_required(self.home))
+        self.assertFalse(codex_login.status(self.USER["id"])["connected"])
+
+        # A harness already routed to the account completes: the login works.
+        self._formal_lean_harness(env, _RECOVERED, 0)
+        self.assertFalse(codex_login.account_reauth_required(self.home))
+        self.assertTrue(codex_login.status(self.USER["id"])["connected"])
+
 
 HTML = (Path(__file__).parents[1] / "agent_monitor" / "web" / "console.html").read_text(encoding="utf-8")
 SCRIPT = HTML.rsplit("<script>", 1)[1].split("</script>", 1)[0]

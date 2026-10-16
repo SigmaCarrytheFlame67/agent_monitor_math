@@ -4914,6 +4914,12 @@ def _codex_subscription_interaction(
             raise ValueError("Codex CLI is not installed on this server")
         from agent_monitor.runners.codex_backend import _run_codex_process
 
+        env = _harness_env(
+            "codex",
+            user,
+            run_record=run_record,
+            auth_route="codex_subscription" if recorded_route else None,
+        )
         try:
             # Its own process group: the npm launcher cannot forward SIGKILL,
             # so a timeout must stop native Codex and its tools directly.
@@ -4921,18 +4927,20 @@ def _codex_subscription_interaction(
                 argv,
                 input="",
                 timeout=timeout_s,
-                env=_harness_env(
-                    "codex",
-                    user,
-                    run_record=run_record,
-                    auth_route="codex_subscription" if recorded_route else None,
-                ),
+                env=env,
                 cwd=str(isolated),
             )
         except subprocess.TimeoutExpired as exc:
             raise ValueError(f"Codex intervention timed out after {timeout_s}s") from exc
         parser = CLIEventParser("codex")
         parser.feed((proc.stdout or "") + "\n" + (proc.stderr or ""))
+        if env.get("CODEX_HOME"):
+            # Settings offers Reconnect once Codex rejects a linked login.
+            codex_login.note_turn_outcome(
+                env["CODEX_HOME"],
+                completed=parser.terminal_status == "completed",
+                failure=(parser.terminal_error or "") if parser.terminal_status == "failed" else "",
+            )
         usage_ledger.record_usage(
             model=str(parser.usage.get("model") or "codex"),
             usage=usage_ledger.cli_usage(parser.usage, input_includes_cache=True),
@@ -7409,6 +7417,18 @@ def _harness_worker(
         log_path.write_text("".join(lines), encoding="utf-8")
     except OSError:
         pass
+    if engine == "codex" and env.get("CODEX_HOME"):
+        from agent_monitor import codex_login
+        from agent_monitor.cli_events import CLIEventParser
+
+        parser = CLIEventParser("codex")
+        parser.feed("".join(lines))
+        # Settings offers Reconnect once Codex rejects a linked login.
+        codex_login.note_turn_outcome(
+            env["CODEX_HOME"],
+            completed=parser.terminal_status == "completed",
+            failure=(parser.terminal_error or "") if parser.terminal_status == "failed" else "",
+        )
 
     try:
         _harness_finish(
