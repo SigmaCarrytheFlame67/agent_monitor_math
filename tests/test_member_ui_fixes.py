@@ -231,6 +231,19 @@ class LeanRefusalTests(unittest.TestCase):
         self.assertEqual(out["refusedDiagnostics"], [])
         self.assertEqual(out["failure"], ["Failed", ["lake build crashed"]])
 
+    def test_an_action_the_server_does_not_start_keeps_the_stored_result(self) -> None:
+        out = _run_node(self._program(r"""
+(async()=>{
+  CURRENT_USER={id:4,is_admin:false,guest:false};
+  next=reply(400,'No proof text yet — wait for the run to produce proof.md');
+  setLeanBadge('verified'); await leanAction('verify');
+  await new Promise(resolve=>setTimeout(resolve,10));
+  console.log(JSON.stringify([badge(),diagnostics,refreshes,statuses.at(-1)]));
+})();
+"""))
+        # The stored result is redrawn, and the reason stays on the status line.
+        self.assertEqual(out, ["Verified", [], 1, "✗ No proof text yet — wait for the run to produce proof.md"])
+
     def test_a_refusal_before_any_lean_result_explains_itself_in_the_empty_view(self) -> None:
         out = _run_node(self._program(r"""
 (async()=>{

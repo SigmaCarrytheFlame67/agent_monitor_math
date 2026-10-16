@@ -3303,12 +3303,15 @@ function clearLibForm(){
 function renderLibrary(){
   const counts=LIB.counts||{};
   document.querySelectorAll('[data-lib-count]').forEach(el=>{ el.textContent=counts[el.dataset.libCount]||0; });
+  // The operator curates the library; others read it (the server refuses their writes).
+  const curator=viewerIsAdmin();
   $('lib-auto-memory').checked=!!(LIB.settings&&LIB.settings.auto_memory);
-  $('lib-auto-wrap').style.display=libType==='memory'?'flex':'none';
+  $('lib-auto-wrap').style.display=curator&&libType==='memory'?'flex':'none';
+  document.querySelectorAll('#hub-library-pane .lib-form').forEach(form=>{ form.style.display=curator?'':'none'; });
   $('hub-library-title').textContent=HUB_TITLES[libType]||libType;
   $('hub-library-sub').textContent=LIB_HINTS[libType]||'';
   const items=(LIB.items||[]).filter(i=>i.type===libType);
-  if(!items.length){ $('lib-list').innerHTML=`<div class="lib-empty">No ${LIB_ESC(libType)} items yet — add one below.</div>`; return; }
+  if(!items.length){ $('lib-list').innerHTML=`<div class="lib-empty">No ${LIB_ESC(libType)} items yet${curator?' — add one below':''}.</div>`; return; }
   $('lib-list').innerHTML=items.map(i=>`
     <div class="lib-item ${i.enabled?'':'off'}">
       <div class="meta">
@@ -3319,9 +3322,9 @@ function renderLibrary(){
         ${i.source&&i.source!=='user'?`<div class="src">source: ${LIB_ESC(i.source)}</div>`:''}
       </div>
       ${i.runnable?`<button class="run" data-act="run" data-id="${LIB_ESC(i.id)}">Try</button>`:""}
-      <button data-act="toggle" data-id="${LIB_ESC(i.id)}">${i.enabled?'On':'Off'}</button>
+      ${curator?`<button data-act="toggle" data-id="${LIB_ESC(i.id)}">${i.enabled?'On':'Off'}</button>
       <button data-act="edit" data-id="${LIB_ESC(i.id)}">Edit</button>
-      <button data-act="del" data-id="${LIB_ESC(i.id)}" aria-label="Delete">×</button>
+      <button data-act="del" data-id="${LIB_ESC(i.id)}" aria-label="Delete">×</button>`:`<span class="src">${i.enabled?'On':'Off'}</span>`}
     </div>`).join('');
   $('lib-list').querySelectorAll('button').forEach(b=>b.onclick=async()=>{
     const item=(LIB.items||[]).find(x=>String(x.id)===b.dataset.id); if(!item)return;
@@ -6544,8 +6547,9 @@ async function leanAction(action, extra={}){
   }catch(err){
     if(actionRunId===runId){
       const message=String(err.message||err).slice(0,1200), line=(err?.limit?'⏸ ':'✗ ')+message;
-      // Refused (signed out, not this account's run to change, gone): nothing ran.
-      const refused=[401,403,404].includes(err?.status);
+      // Refused (signed out, not this account's run to change, gone) or not
+      // started (400: no proof text yet, another Lean action running): nothing ran.
+      const refused=[400,401,403,404].includes(err?.status);
       leanStatus(line);
       if((err?.limit||refused)&&action!=='revise'){
         /* Neither is a failed proof: keep the current Lean state on screen. */
@@ -6553,9 +6557,11 @@ async function leanAction(action, extra={}){
         if(action==='verify'&&priorBadge&&badge?.className==='lean-badge none'){ badge.className=priorBadge.className; badge.textContent=priorBadge.text; }
         /* The harness's start view replaced it: the refresh below redraws it. */
         if(action==='harness'){ leanRunKey=''; notStarted=line; }
+        /* A 400 can follow a stored attempt: redraw what the server kept. */
+        else if(err?.status===400){ leanRunKey=''; setTimeout(()=>{ if(actionRunId===runId){ refreshLeanView().then(()=>{ if(actionRunId===runId)leanStatus(line); }); } },0); }
         if($('lean-empty')?.style.display!=='none'){
           const title=$('lean-progress-title'), detail=$('lean-progress-detail');
-          if(title)title.textContent=refused?'Action refused':err.status===429?'Limit reached':'Action paused';
+          if(title)title.textContent=err.status===400?'Action not started':refused?'Action refused':err.status===429?'Limit reached':'Action paused';
           if(detail)detail.textContent=message;
         }
       }
