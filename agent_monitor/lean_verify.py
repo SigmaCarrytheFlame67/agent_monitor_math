@@ -7070,6 +7070,40 @@ def _running_record(
     }
 
 
+def _close_running_harness_record(
+    workspace: Path, *, state: str, notes: str, error: str = ""
+) -> bool:
+    """Replace a harness record still marked running with a terminal failure.
+
+    A result the worker already persisted is never overwritten. The Lean
+    source, attempts, chat and fidelity stay as they are, so nothing claims a
+    check that did not happen.
+    """
+    cached = load_cached(workspace)
+    if not cached:
+        return False
+    harness = cached.get("harness") if isinstance(cached.get("harness"), dict) else {}
+    if cached.get("status") != "running" and harness.get("state") != "running":
+        return False
+    record = dict(cached)
+    record["status"] = "failed"
+    record["notes"] = notes
+    record["harness"] = {
+        **harness,
+        "state": state,
+        "finished_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+    }
+    if error:
+        record["harness"]["error"] = error
+        record["log"] = (
+            str(record.get("log") or "") + f"\n[agent-monitor] harness error: {error}"
+        ).strip()[-16000:]
+    # auto_deploy treats this flag, like a running state, as active work.
+    record.pop("harness_running", None)
+    _write_cached(workspace, record)
+    return True
+
+
 def _reset_harness_log(ldir: Path) -> Path:
     """Start each harness with a fresh transcript, never a prior run's log."""
     log_path = ldir / "harness.log"
@@ -7293,6 +7327,23 @@ def _harness_worker_guarded(
     key = _harness_key(workspace)
     try:
         _harness_worker(**kwargs)
+    except Exception as exc:
+        # Still holding the reservation: never leave the record running.
+        detail = (str(exc).strip() or exc.__class__.__name__)[:300]
+        label = str(kwargs.get("label") or kwargs.get("engine") or "The")
+        try:
+            _close_running_harness_record(
+                workspace,
+                state="error",
+                notes=(
+                    f"{label} harness failed before its result was recorded: "
+                    f"{detail}. Press Compile/Check on the source below, or run it again."
+                ),
+                error=detail,
+            )
+        except (OSError, TypeError, ValueError):
+            pass
+        raise
     finally:
         with _HARNESS_LOCK:
             _HARNESS_JOBS.pop(key, None)
@@ -7500,11 +7551,17 @@ def _harness_fidelity_audit(
     from agent_monitor.jobs import _route_from_record
 
     if _route_from_record(run_record) != "codex_subscription":
-        env = _llm_environment(user, run_record)
-        guest = bool((user or {}).get("guest") or (run_record or {}).get("guest"))
+        try:
+            env = _llm_environment(user, run_record)
+            guest = bool((user or {}).get("guest") or (run_record or {}).get("guest"))
+            audit_model = _audit_model(env, model, guest=guest)
+        except Exception as exc:  # noqa: BLE001 - e.g. a sign-in revoked during
+            # the run: like a provider outage, that means "no audit", never a
+            # lost kernel-checked result.
+            return {"ok": False, "error": (str(exc).strip() or exc.__class__.__name__)[:300]}
         return _audit_faithfulness(
             env,
-            _audit_model(env, model, guest=guest),
+            audit_model,
             problem=problem,
             proof=proof,
             lean=lean,
@@ -7526,8 +7583,8 @@ def _harness_fidelity_audit(
         )
         used = str(result.get("model") or model or "Codex subscription")
         data = _extract_json_object(str(result.get("answer") or ""))
-    except (ValueError, json.JSONDecodeError, KeyError, TypeError) as exc:
-        return {"ok": False, "error": str(exc)[:300]}
+    except Exception as exc:  # noqa: BLE001 - see the direct-API branch above
+        return {"ok": False, "error": (str(exc).strip() or exc.__class__.__name__)[:300]}
     return _parse_audit_payload(data, used)
 
 
