@@ -5,6 +5,8 @@ import json
 import os
 import sys
 import tempfile
+import threading
+import time
 import unittest
 from pathlib import Path
 from unittest.mock import patch
@@ -12,6 +14,7 @@ from unittest.mock import patch
 from agent_monitor import console_server, lean_verify
 from deploy.ansatze import auto_deploy
 from tests.test_formal_harness_hardening import _checked_write
+from tests.test_formal_ui_api import SCRIPT, _js_function, _run_node
 
 
 FRESH_SOURCE = "theorem main (n : Nat) : n + 0 = n := by simp\n"
@@ -45,6 +48,21 @@ def _running_base(workspace: Path, *, engine: str = "claude") -> dict:
     )
     lean_verify._write_cached(workspace, record)
     return record
+
+
+def _js_function_with_defaults(name: str) -> str:
+    """Like _js_function, for a signature with destructured defaults."""
+    start = SCRIPT.index(f"function {name}(")
+    opening = SCRIPT.index("){", start) + 1
+    depth = 0
+    for index in range(opening, len(SCRIPT)):
+        if SCRIPT[index] == "{":
+            depth += 1
+        elif SCRIPT[index] == "}":
+            depth -= 1
+            if depth == 0:
+                return SCRIPT[start : index + 1]
+    raise AssertionError(f"unterminated JavaScript function: {name}")
 
 
 class _HarnessStateCleanup(unittest.TestCase):
@@ -340,6 +358,172 @@ class HarnessTimeoutTests(_HarnessStateCleanup):
         self.assertEqual(result["harness"]["state"], "stopped")
         self.assertFalse(result["harness"]["timed_out"])
         self.assertIn("stopped by user", result["notes"])
+
+
+
+class HarnessStopWindowTests(_HarnessStateCleanup):
+    """r2-lean-harness-5: Stop works while the agent launches or is checked."""
+
+    @staticmethod
+    def _launch(workspace: Path, argv: list[str]) -> threading.Thread:
+        """Register and start a worker exactly as _start_harness_reserved does."""
+        ldir = workspace / lean_verify.LEAN_DIRNAME
+        ldir.mkdir(exist_ok=True)
+        base = _running_base(workspace)
+        token = lean_verify._reserve_formal_operation(workspace, "harness/claude")
+        job = {
+            "engine": "claude",
+            "label": "Claude Code",
+            "started_at": time.time(),
+            "state": "running",
+            "proc": None,
+            "stopping": False,
+            "operation_token": token,
+        }
+        thread = threading.Thread(
+            target=lean_verify._harness_worker_guarded,
+            kwargs={
+                "operation_token": token,
+                "workspace": workspace,
+                "ldir": ldir,
+                "argv": argv,
+                "engine": "claude",
+                "label": "Claude Code",
+                "user": None,
+                "model": "sonnet",
+                "run_record": None,
+                "env": {"PATH": os.environ.get("PATH", "")},
+                "problem": "Prove n + 0 = n.",
+                "informal": "Simplify.",
+                "base": base,
+                "initial_fingerprint": None,
+                "audit": False,
+            },
+            daemon=True,
+        )
+        job["thread"] = thread
+        with lean_verify._HARNESS_LOCK:
+            lean_verify._HARNESS_JOBS[lean_verify._harness_key(workspace)] = job
+            thread.start()
+        return thread
+
+    def test_stop_during_launch_stops_the_agent(self) -> None:
+        real_popen = lean_verify.subprocess.Popen
+        stop_results: list[object] = []
+
+        def popen_after_stop(*args, **kwargs):
+            # Stop lands after registration, before the process exists.
+            if not stop_results:
+                try:
+                    stop_results.append(lean_verify.stop_harness(workspace))
+                except ValueError as exc:
+                    stop_results.append(exc)
+            return real_popen(*args, **kwargs)
+
+        with tempfile.TemporaryDirectory() as tmp:
+            workspace = Path(tmp).resolve()
+            started = time.monotonic()
+            with (
+                patch.object(lean_verify.subprocess, "Popen", side_effect=popen_after_stop),
+                patch.object(lean_verify, "toolchain_status", return_value={}),
+            ):
+                thread = self._launch(
+                    workspace, [sys.executable, "-c", "import time; time.sleep(6)"]
+                )
+                thread.join(15)
+            elapsed = time.monotonic() - started
+            saved = lean_verify.load_cached(workspace)
+
+        self.assertEqual(stop_results, [{"stopping": True}])
+        self.assertLess(elapsed, 5)
+        self.assertEqual(saved["status"], "stopped")
+        self.assertEqual(saved["harness"]["state"], "stopped")
+
+    def test_stop_while_the_result_is_checked_reports_finishing(self) -> None:
+        entered = threading.Event()
+        release = threading.Event()
+
+        def slow_finish(**_kwargs):
+            entered.set()
+            release.wait(10)  # the sandboxed check and the fidelity audit
+            return {}
+
+        with tempfile.TemporaryDirectory() as tmp:
+            workspace = Path(tmp).resolve()
+            with patch.object(lean_verify, "_harness_finish", side_effect=slow_finish):
+                thread = self._launch(workspace, [sys.executable, "-c", "print('done')"])
+                try:
+                    self.assertTrue(entered.wait(10))
+                    job = lean_verify.harness_job(workspace)
+                    stopped = lean_verify.stop_harness(workspace)
+                    with lean_verify._HARNESS_LOCK:
+                        flag = lean_verify._HARNESS_JOBS[
+                            lean_verify._harness_key(workspace)
+                        ]["stopping"]
+                finally:
+                    release.set()
+                    thread.join(10)
+
+        self.assertEqual(job["state"], "finishing")
+        self.assertEqual(stopped, {"stopping": False, "finishing": True})
+        self.assertFalse(flag)
+
+    def test_harness_button_is_not_a_stop_button_while_finishing(self) -> None:
+        output = _run_node(
+            """
+let CURRENT_USER={id:1,guest:false};
+let runId='run-a';
+let lastSandboxRun=null;
+let leanEngines=[{id:'claude',available:true}];
+const leanPendingRuns=new Map(), leanRunningRuns=new Map();
+const els={};
+function $(id){ return els[id]||(els[id]={id,textContent:'',title:'',disabled:false,style:{},dataset:{},value:''}); }
+$('lean-engine').value='claude';
+function fillLeanModels(){}
+"""
+            + _js_function("syncLeanControls")
+            + """
+const state=()=>({text:$('lean-harness').textContent,disabled:$('lean-harness').disabled});
+leanRunningRuns.set('run-a',{label:'Claude Code',finishing:true});
+syncLeanControls();
+const finishing=state();
+leanRunningRuns.set('run-a',{label:'Claude Code'});
+syncLeanControls();
+const running=state();
+console.log(JSON.stringify({finishing,running}));
+"""
+        )
+        self.assertNotIn("Stop", output["finishing"]["text"])
+        self.assertTrue(output["finishing"]["disabled"])
+        self.assertIn("Stop", output["running"]["text"])
+        self.assertFalse(output["running"]["disabled"])
+
+    def test_unchanged_lean_payload_still_tracks_the_harness_state(self) -> None:
+        output = _run_node(
+            """
+let runId='run-a', leanRunKey='', leanDirty=false;
+const calls=[];
+const els={};
+function $(id){ return els[id]||(els[id]={style:{},dataset:{},textContent:'',value:'',innerHTML:'',title:'',scrollTop:0,clientHeight:0,scrollHeight:0}); }
+function setLeanBadge(){} function setStatementsLeanBadge(){} function leanForAnalysis(){ return false; }
+function leanStatus(){} function leanToolchainLabel(){ return ''; } function escapeHtml(v){ return String(v); }
+function leanAttemptAxioms(){ return ''; } function leanAttemptLabel(){ return ''; } function leanEditorText(){ return ''; }
+function renderLeanFidelity(){} function renderLeanCitations(){} function renderLeanChat(){}
+function setLeanRunning(running,label,target,finishing){ calls.push([running,!!finishing]); }
+"""
+            + _js_function_with_defaults("renderLean")
+            + """
+const d={status:'running',harness_running:true,generated_at:'t',action:'harness',log:'x',
+  harness:{label:'Claude Code',state:'running'}};
+renderLean(d);
+renderLean({...d});
+renderLean({...d,harness:{label:'Claude Code',state:'finishing'}});
+console.log(JSON.stringify(calls));
+"""
+        )
+        # A quiet agent leaves the payload unchanged: polling must continue,
+        # and the move to "finishing" must still reach the Harness button.
+        self.assertEqual(output, [[True, False], [True, False], [True, True]])
 
 
 if __name__ == "__main__":

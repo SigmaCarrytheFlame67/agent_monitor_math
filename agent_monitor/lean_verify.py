@@ -6801,12 +6801,16 @@ def harness_job(workspace: Path) -> dict[str, Any] | None:
 def stop_harness(workspace: Path) -> dict[str, Any]:
     with _HARNESS_LOCK:
         job = _HARNESS_JOBS.get(_harness_key(workspace))
-        proc = job.get("proc") if job else None
-        if job:
-            job["stopping"] = True
-    if proc is None:
-        raise ValueError("No harness run in progress")
-    _terminate_process_group(proc)
+        if not job:
+            raise ValueError("No harness run in progress")
+        if job.get("state") == "finishing":
+            # The agent already exited; its result is being checked and audited.
+            return {"stopping": False, "finishing": True}
+        job["stopping"] = True
+        proc = job.get("proc")
+    # Still launching: the worker stops the agent as soon as it has a process.
+    if proc is not None:
+        _terminate_process_group(proc)
     return {"stopping": True}
 
 
@@ -7460,6 +7464,8 @@ def _harness_worker(
     except OSError as exc:
         _remove_codex_api_home(codex_api_home)
         lines.append(f"failed to launch {label}: {exc}\n")
+        with _HARNESS_LOCK:
+            stopped = bool((_HARNESS_JOBS.get(key) or {}).get("stopping"))
         _harness_finish(
             workspace=workspace,
             engine=engine,
@@ -7474,15 +7480,20 @@ def _harness_worker(
             informal=informal,
             audit=audit,
             initial_fingerprint=initial_fingerprint,
-            stopped=False,
+            stopped=stopped,
         )
         with _HARNESS_LOCK:
             _HARNESS_JOBS.pop(key, None)
         return
 
     with _HARNESS_LOCK:
-        if key in _HARNESS_JOBS:
-            _HARNESS_JOBS[key]["proc"] = proc
+        job = _HARNESS_JOBS.get(key)
+        if job is not None:
+            job["proc"] = proc
+        stop_requested = bool((job or {}).get("stopping"))
+    if stop_requested:
+        # Stop was pressed while the agent was still launching.
+        _terminate_process_group(proc)
 
     output_queue: queue.Queue[str | None] = queue.Queue()
 
@@ -7542,6 +7553,8 @@ def _harness_worker(
             job = _HARNESS_JOBS.get(key) or {}
             stopped = bool(job.get("stopping"))
             job["proc"] = None
+            # The agent is done; the Lean check and the audit run next.
+            job["state"] = "finishing"
     try:
         log_path.write_text("".join(lines), encoding="utf-8")
     except OSError:

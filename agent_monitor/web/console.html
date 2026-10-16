@@ -6081,9 +6081,11 @@ function syncLeanControls(){
   const btn=$('lean-harness');
   if(btn){
     const selected=leanEngines.find(e=>e.id===$('lean-engine')?.value);
-    btn.textContent=running?'■ Stop':'⚙ Harness';
-    btn.title=running?'Kill the running agent':selected&&!selected.available?(selected.status_detail||selected.auth_detail||'Harness unavailable'):'Run a coding agent in lean/ — it compiles, reads the errors and retries by itself';
-    btn.disabled=guest||!!pending||(!running&&(!selected||!selected.available));
+    /* Once the agent exits, its Proof.lean is checked and audited: nothing to stop. */
+    const finishing=!!running?.finishing;
+    btn.textContent=finishing?'⏳ Checking…':running?'■ Stop':'⚙ Harness';
+    btn.title=finishing?'The agent has finished; its Proof.lean is being checked':running?'Kill the running agent':selected&&!selected.available?(selected.status_detail||selected.auth_detail||'Harness unavailable'):'Run a coding agent in lean/ — it compiles, reads the errors and retries by itself';
+    btn.disabled=guest||!!pending||finishing||(!running&&(!selected||!selected.available));
     btn.style.display=guest?'none':'';
   }
   const engineSelect=$('lean-engine');
@@ -6254,7 +6256,13 @@ function renderLean(d, {forceCode=false}={}){
   const running=d.status==='running'||d.harness_running;
   const key=runId+':'+(d.generated_at||'')+':'+(d.status||'')+':'+(d.action||'')+':'+(d.chat||[]).length
     +':'+(d.citations||[]).length+':'+((d.fidelity||{}).severity||'')+':'+(running?(d.log||'').length:'');
-  if(key===leanRunKey&&!forceCode){ renderLeanChat(d.chat||[]); renderLeanFidelity(d); renderLeanCitations(d); return; }
+  if(key===leanRunKey&&!forceCode){
+    renderLeanChat(d.chat||[]); renderLeanFidelity(d); renderLeanCitations(d);
+    /* A quiet agent (or one whose result is being checked) leaves the key
+       unchanged: keep polling and track the harness state anyway. */
+    setLeanRunning(running, d.harness?.label||'Agent', runId, d.harness?.state==='finishing');
+    return;
+  }
   leanRunKey=key;
   setLeanBadge(d.status);
   // An analysis formalizes statements only: its sorry-bodied file is the
@@ -6304,7 +6312,7 @@ function renderLean(d, {forceCode=false}={}){
   renderLeanFidelity(d);
   renderLeanCitations(d);
   renderLeanChat(d.chat||[]);
-  setLeanRunning(running, hn.label||'Agent');
+  setLeanRunning(running, hn.label||'Agent', runId, hn.state==='finishing');
 }
 function leanPayloadHasDisplay(d){
   if(!d||typeof d!=='object')return false;
@@ -6360,9 +6368,9 @@ async function leanResponseJson(response,context='Formal Lean request'){
   return payload;
 }
 /* While a harness run is alive the cache file is the progress channel, so poll it. */
-function setLeanRunning(running, label, targetRunId=runId){
+function setLeanRunning(running, label, targetRunId=runId, finishing=false){
   if(!targetRunId)return;
-  if(running)leanRunningRuns.set(targetRunId,{label:label||'Agent'});
+  if(running)leanRunningRuns.set(targetRunId,{label:label||'Agent',finishing:!!finishing});
   else leanRunningRuns.delete(targetRunId);
   if(targetRunId!==runId)return;
   syncLeanControls();
@@ -6474,7 +6482,7 @@ async function leanAction(action, extra={}){
     });
     const d=await leanResponseJson(r,labels[action]||'Formal Lean request');
     if(actionRunId!==runId)return;
-    if(action==='stop_harness'){ leanStatus('stopping the agent…'); return; }
+    if(action==='stop_harness'){ leanStatus(d.finishing?'the agent has finished · checking its result…':'stopping the agent…'); return; }
     const preserveDraft=action==='revise'&&d?.interaction?.kind==='question';
     leanRunKey=''; if(!preserveDraft)leanDirty=false; renderLean(d, {forceCode:!preserveDraft});
   }catch(err){
