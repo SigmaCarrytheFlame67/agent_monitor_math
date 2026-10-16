@@ -247,5 +247,71 @@ class LeanRefusalTests(unittest.TestCase):
         )
 
 
+_VIEWERS = "[['admin',{id:1,is_admin:true,guest:false}],['member',{id:4,is_admin:false,guest:false}],['guest',{id:9,is_admin:false,guest:true}]]"
+
+
+class MemberFormalHarnessTests(unittest.TestCase):
+    """The coding-agent Formal harness is the operator's: the server refuses
+    it to members (403) as well as to guests."""
+
+    def test_only_the_operator_is_offered_the_formal_harness(self) -> None:
+        program = (
+            r"""
+let CURRENT_USER=null, runId=null, lastSandboxRun=null, leanEngines=[];
+const leanPendingRuns=new Map(), leanRunningRuns=new Map(), leanEngineByRun=new Map();
+const els={};
+function $(id){ return els[id]||(els[id]={id,textContent:'',title:'',disabled:false,style:{},dataset:{},value:'',innerHTML:''}); }
+function escapeHtml(v){ return String(v); }
+function fillLeanModels(){}
+"""
+            + "\n".join(_js_function(name) for name in ("viewerIsAdmin", "syncLeanControls", "fillLeanEngines"))
+            + r"""
+const engines=[{id:'codex',label:'Codex CLI',available:true,auth_detail:'OpenAI API key'}];
+const out={};
+for(const [label,user] of """ + _VIEWERS + r"""){
+  CURRENT_USER=user; runId='run-'+label;
+  fillLeanEngines(engines,'codex');
+  out[label]={harness:[$('lean-harness').style.display,$('lean-harness').disabled],engine:[$('lean-engine').style.display,$('lean-engine').disabled],
+    offered:leanEngines.length,mapped:leanEngineByRun.has(runId),
+    others:['lean-gen','lean-compile','lean-check','lean-audit','lean-chat-send'].map(id=>$(id).disabled)};
+}
+console.log(JSON.stringify(out));
+"""
+        )
+        out = _run_node(program)
+        self.assertEqual(
+            out["admin"],
+            {"harness": ["", False], "engine": ["", False], "offered": 1, "mapped": True, "others": [False] * 5},
+        )
+        for viewer in ("member", "guest"):
+            self.assertEqual(
+                out[viewer],
+                {"harness": ["none", True], "engine": ["none", True], "offered": 0, "mapped": False, "others": [False] * 5},
+                viewer,
+            )
+
+    def test_a_formal_failure_suggests_the_harness_only_to_the_operator(self) -> None:
+        program = (
+            r"""
+const els={}; function $(id){ return els[id]||(els[id]={textContent:''}); }
+let CURRENT_USER=null; function setLeanBadge(){} function leanStatus(){}
+"""
+            + "\n".join(_js_function(name) for name in ("viewerIsAdmin", "pipelineStageVisualStatus", "syncLeanPipelineEmptyState"))
+            + r"""
+const out={};
+for(const [label,user] of """ + _VIEWERS + r"""){
+  CURRENT_USER=user; syncLeanPipelineEmptyState({stages:{lean:{status:'error',detail:'node exited 127'}}});
+  out[label]=$('lean-progress-detail').textContent;
+}
+console.log(JSON.stringify(out));
+"""
+        )
+        out = _run_node(program)
+        self.assertTrue(out["admin"].endswith(" Retry Verify, or choose an available Harness."), out["admin"])
+        for viewer in ("member", "guest"):
+            self.assertTrue(out[viewer].endswith(" Retry Verify."), out[viewer])
+            self.assertNotIn("Harness", out[viewer])
+
+
 if __name__ == "__main__":
     unittest.main()

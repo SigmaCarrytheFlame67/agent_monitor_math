@@ -472,7 +472,7 @@ class HarnessStopWindowTests(_HarnessStateCleanup):
     def test_harness_button_is_not_a_stop_button_while_finishing(self) -> None:
         output = _run_node(
             """
-let CURRENT_USER={id:1,guest:false};
+let CURRENT_USER={id:1,guest:false,is_admin:true};
 let runId='run-a';
 let lastSandboxRun=null;
 let leanEngines=[{id:'claude',available:true}];
@@ -482,6 +482,7 @@ function $(id){ return els[id]||(els[id]={id,textContent:'',title:'',disabled:fa
 $('lean-engine').value='claude';
 function fillLeanModels(){}
 """
+            + _js_function("viewerIsAdmin")
             + _js_function("syncLeanControls")
             + """
 const state=()=>({text:$('lean-harness').textContent,disabled:$('lean-harness').disabled});
@@ -886,7 +887,7 @@ class HarnessDerivedViewTests(_HarnessStateCleanup):
     def test_harness_button_waits_for_the_pipeline_but_stop_never_does(self) -> None:
         output = _run_node(
             """
-let CURRENT_USER={id:1,guest:false};
+let CURRENT_USER={id:1,guest:false,is_admin:true};
 let runId='run-a';
 let lastSandboxRun={run_id:'run-a',auto_pipeline:{status:'running',stages:{lean:{status:'running'}}}};
 let leanEngines=[{id:'claude',available:true}];
@@ -896,6 +897,7 @@ function $(id){ return els[id]||(els[id]={id,textContent:'',title:'',disabled:fa
 $('lean-engine').value='claude';
 function fillLeanModels(){}
 """
+            + _js_function("viewerIsAdmin")
             + _js_function("syncLeanControls")
             + """
 const state=()=>({text:$('lean-harness').textContent,disabled:$('lean-harness').disabled,check:$('lean-check').disabled});

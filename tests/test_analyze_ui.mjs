@@ -331,12 +331,12 @@ test('the Lean tab of an analysis never speaks of verifying a proof (waiting, ru
   style:{},scrollTop:0,clientHeight:0,scrollHeight:0,classes:new Set(),classList:{add(...c){c.forEach(x=>els[id].classes.add(x));},remove(...c){c.forEach(x=>els[id].classes.delete(x));},toggle(){}},querySelectorAll:()=>[]});
 const $=element; let bodyClasses=new Set();
 const document={body:{classList:{contains:c=>bodyClasses.has(c)}},querySelector:()=>null};
-let lastSandboxRun=null, runId='r1', CURRENT_USER={guest:false}, leanRunKey='', leanDirty=false, statusLine='';
+let lastSandboxRun=null, runId='r1', CURRENT_USER={guest:false,is_admin:true}, leanRunKey='', leanDirty=false, statusLine='';
 const leanStatus=text=>{statusLine=String(text);}; const escapeHtml=value=>String(value);
 const LEAN_STATUS_LABEL={verified:'Verified',compiled:'Compiled',failed:'Failed',incomplete:'Incomplete (sorry)',none:'—'};
 const setLeanBadge=status=>{ element('lean-badge').className='lean-badge '+(status||'none'); element('lean-badge').textContent=LEAN_STATUS_LABEL[status]||status; };
 const leanEditorText=()=>'', leanToolchainLabel=()=>'Lean 4.14', leanAttemptAxioms=()=>'', leanAttemptLabel=()=>'', renderLeanFidelity=()=>{}, renderLeanCitations=()=>{}, renderLeanChat=()=>{}, setLeanRunning=()=>{};`
-  const out = run(['pipelineStageVisualStatus', 'leanForAnalysis', 'isAnalysisRun', 'renderLeanProgress', 'syncLeanPipelineEmptyState', 'setStatementsLeanBadge', 'renderLean'],
+  const out = run(['pipelineStageVisualStatus', 'leanForAnalysis', 'isAnalysisRun', 'renderLeanProgress', 'syncLeanPipelineEmptyState', 'setStatementsLeanBadge', 'renderLean', 'viewerIsAdmin'],
     ['LEAN_PROGRESS_STAGES', 'LEAN_ANALYSIS_STAGE_NAMES'], dom, `(()=>{
   const card=()=>[els['lean-progress-title'].textContent,els['lean-progress-detail'].textContent];
   const stages=(lean,dag)=>({informal_dag:dag||{status:'waiting'},lean,formal_dag:{status:'waiting'},coverage:{status:'waiting'}});

@@ -400,6 +400,40 @@ def test_member_cannot_connect_subscriptions_or_start_the_formal_harness(
         assert "site administrator" in json.loads(raw)["error"]
 
 
+def test_member_lean_views_offer_no_formal_harness(member_console, monkeypatch, tmp_path: Path):
+    """A member's own API key makes a harness engine "available", but the
+    server refuses members the harness: the Lean views must not offer it."""
+    from agent_monitor import lean_verify
+
+    workspace = tmp_path / "ws"
+    workspace.mkdir()
+    monkeypatch.setattr(console, "_workspace_for_run", lambda _run_id: workspace)
+    monkeypatch.setattr(console.Handler, "_owns_run", lambda _self, _run_id, _user: True)
+    codex = {"id": "codex", "label": "Codex CLI", "available": True, "auth_detail": "OpenAI API key"}
+    monkeypatch.setattr(lean_verify, "harness_engines", lambda *_args, **_kwargs: [dict(codex)])
+    monkeypatch.setattr(lean_verify, "toolchain_status", lambda: {"available": True, "version": "Lean 4.14.0"})
+
+    def views(cookie: str) -> tuple[dict, dict]:
+        run = request(port, "GET", f"{APP_MOUNT}/api/run/kimi_1/lean_verify", headers={"Cookie": cookie})
+        status = request(port, "GET", f"{APP_MOUNT}/api/lean/status", headers={"Cookie": cookie})
+        assert run[0] == 200 and status[0] == 200, (run, status)
+        return json.loads(run[2]), json.loads(status[2])
+
+    with running_server() as port:
+        _user, cookie = _member(port)
+        member_run, member_status = views(cookie)
+        _admin, token = auth.login_and_create_session("owner@example.test", "long-enough-password")
+        admin_run, admin_status = views(f"{auth.SESSION_COOKIE}={token}")
+
+    assert member_run["engines"] == [] and member_run["harness_engine"] == ""
+    assert member_status["engines"] == []
+    # Verify, Compile, Check and Audit keep the member's model choice.
+    assert "harness_models" in member_run and "harness_models" in member_status
+    # The operator is still offered the harness.
+    assert admin_run["engines"] == [codex] and admin_run["harness_engine"] == "codex"
+    assert admin_status["engines"] == [codex]
+
+
 def test_member_dag_rebuild_never_uses_a_stored_subscription_sign_in(
     member_console, monkeypatch, tmp_path: Path
 ):

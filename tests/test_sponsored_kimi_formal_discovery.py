@@ -82,7 +82,8 @@ class SponsoredKimiFormalDiscoveryTests(unittest.TestCase):
             options = lean_verify.harness_model_options(user)
 
     def test_global_status_returns_model_and_engine_catalog_together(self) -> None:
-        user = {"id": 70, "is_admin": False}
+        # The operator: members are offered no harness engine at all.
+        user = {"id": 70, "is_admin": True}
         model_options = {
             "auth_route": "api_key",
             "models": ["kimi-k3"],

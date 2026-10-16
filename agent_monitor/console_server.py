@@ -2925,8 +2925,12 @@ class Handler(RunSharingMixin, ProjectsMixin, ResearchMixin, BaseHTTPRequestHand
                 formal_options = _guest_formal_options()
             else:
                 model_options = lean_verify.harness_model_options(user)
-                engines = lean_verify.harness_engines(
-                    user, model=model_options["selected"]
+                # The coding-agent harness is the operator's alone (the POST
+                # refuses it to members), so a member is offered none.
+                engines = (
+                    []
+                    if account_policy.is_member(user)
+                    else lean_verify.harness_engines(user, model=model_options["selected"])
                 )
                 formal_options = {
                     "engines": engines,
@@ -2961,7 +2965,11 @@ class Handler(RunSharingMixin, ProjectsMixin, ResearchMixin, BaseHTTPRequestHand
                     cached.update(_guest_formal_options())
                 else:
                     model_options = lean_verify.harness_model_options(user, run_record)
-                    engines = lean_verify.harness_engines(user, run_record)
+                    engines = (
+                        []
+                        if account_policy.is_member(user)
+                        else lean_verify.harness_engines(user, run_record)
+                    )
                     cached["engines"] = engines
                     cached["harness_auth_route"] = model_options["auth_route"]
                     cached["harness_models"] = model_options["models"]

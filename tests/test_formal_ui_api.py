@@ -101,7 +101,8 @@ class FormalLeanApiTests(unittest.TestCase):
         handler = object.__new__(console_server.Handler)
         handler.path = "/api/run/formal-ui-run/lean_verify"
         handler._resolve_path = lambda: "/api/run/formal-ui-run/lean_verify"
-        handler._require_user = lambda _path: {"id": 7, "is_admin": False}
+        # The operator: members are offered no harness engine at all.
+        handler._require_user = lambda _path: {"id": 7, "is_admin": True}
         handler._owns_run = lambda _rid, _user: True
         sent: list[tuple[int, dict]] = []
         handler._send = lambda code, payload, *args, **kwargs: sent.append(
@@ -206,12 +207,12 @@ console.log(JSON.stringify(cases));
         self.assertEqual(output["ok"], "failed")
 
     def test_harness_selector_is_isolated_per_run_and_fails_closed(self) -> None:
-        source = _js_function("fillLeanEngines")
+        source = _js_function("viewerIsAdmin") + "\n" + _js_function("fillLeanEngines")
         output = _run_node(
             """
 let leanEngines=[];
 let runId='run-a';
-let CURRENT_USER={id:7,guest:false};
+let CURRENT_USER={id:7,guest:false,is_admin:true};
 const leanEngineByRun=new Map();
 const select={value:'',_html:'',set innerHTML(v){this._html=v;},get innerHTML(){return this._html;}};
 function $(id){return id==='lean-engine'?select:null;}
@@ -275,6 +276,7 @@ console.log(JSON.stringify({
     def test_pipeline_error_and_incomplete_copy_never_claim_completion(self) -> None:
         source = "\n".join(
             (
+                _js_function("viewerIsAdmin"),
                 _js_function("pipelineStageVisualStatus"),
                 _js_function("syncLeanPipelineEmptyState"),
             )
@@ -286,7 +288,7 @@ const elements={
   'lean-progress-detail':{textContent:''}
 };
 let badge='',meta='';
-let CURRENT_USER={id:7,guest:false};
+let CURRENT_USER={id:7,guest:false,is_admin:true};
 function $(id){return elements[id]||null;}
 function setLeanBadge(value){badge=value;}
 function leanStatus(value){meta=value;}

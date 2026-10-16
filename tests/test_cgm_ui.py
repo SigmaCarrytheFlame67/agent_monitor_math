@@ -602,10 +602,11 @@ console.log(JSON.stringify(out));
 
     def test_guest_lean_and_dag_actions_follow_the_policy(self) -> None:
         sync = _js_function("syncLeanControls")
-        # Harness selector and button stay sign-in only ...
-        self.assertIn("btn.disabled=guest||", sync)
-        self.assertIn("btn.style.display=guest?'none':''", sync)
-        self.assertIn("engineSelect.disabled=guest", sync)
+        # Harness selector and button stay the operator's, never a guest's ...
+        self.assertIn("const harness=viewerIsAdmin();", sync)
+        self.assertIn("btn.disabled=!harness||", sync)
+        self.assertIn("btn.style.display=harness?'':'none'", sync)
+        self.assertIn("engineSelect.disabled=!harness", sync)
         # ... while Verify / Compile / Check / Audit / feedback stay available to guests.
         self.assertIn("['lean-gen','lean-compile','lean-check','lean-audit','lean-chat-send']", sync)
         self.assertIn("el.disabled=!!pending||!!running||pipelineRunning;", sync)

@@ -6115,12 +6115,14 @@ function syncLeanPipelineEmptyState(state){
   const title=$('lean-progress-title'), message=$('lean-progress-detail');
   const beforeSource=['error','skipped','stale'].includes(lifecycle)&&!outcome;
   if(title)title.textContent=beforeSource?'Formal translation failed':'Formal verification failed';
-  if(message)message.textContent=(beforeSource?'No Proof.lean was produced. ':'Lean did not verify this proof. ')+detail+(CURRENT_USER?.guest?' Retry Verify.':' Retry Verify, or choose an available Harness.');
+  if(message)message.textContent=(beforeSource?'No Proof.lean was produced. ':'Lean did not verify this proof. ')+detail+(viewerIsAdmin()?' Retry Verify, or choose an available Harness.':' Retry Verify.');
   return true;
 }
 function leanEditorText(){ return $('lean-code')?.value||''; }
 function syncLeanControls(){
   const guest=Boolean(CURRENT_USER?.guest);
+  /* The coding-agent Harness is the operator's: guests must sign in, members get 403. */
+  const harness=viewerIsAdmin();
   const pipeline=lastSandboxRun?.run_id===runId?lastSandboxRun?.auto_pipeline:null;
   const pipelineRunning=guest&&pipeline?.status==='running';
   /* The server refuses a new harness while the pipeline may still run its Lean stage. */
@@ -6134,17 +6136,17 @@ function syncLeanControls(){
     const finishing=!!running?.finishing;
     btn.textContent=finishing?'⏳ Checking…':running?'■ Stop':'⚙ Harness';
     btn.title=finishing?'The agent has finished; its Proof.lean is being checked':running?'Kill the running agent':selected&&!selected.available?(selected.status_detail||selected.auth_detail||'Harness unavailable'):pipelineLean?'Available when the automatic Formal and DAG pipeline finishes':'Run a coding agent in lean/ — it compiles, reads the errors and retries by itself';
-    btn.disabled=guest||!!pending||finishing||(!running&&(!selected||!selected.available||pipelineLean));
-    btn.style.display=guest?'none':'';
+    btn.disabled=!harness||!!pending||finishing||(!running&&(!selected||!selected.available||pipelineLean));
+    btn.style.display=harness?'':'none';
   }
   const engineSelect=$('lean-engine');
-  if(engineSelect){engineSelect.disabled=guest;engineSelect.style.display=guest?'none':'';}
+  if(engineSelect){engineSelect.disabled=!harness;engineSelect.style.display=harness?'':'none';}
   if(guest)fillLeanModels([]);
   ['lean-gen','lean-compile','lean-check','lean-audit','lean-chat-send'].forEach(id=>{
     const el=$(id); if(!el)return;
     el.disabled=!!pending||!!running||pipelineRunning;
     /* Guests may run bounded Verify / Compile / Check / Audit / feedback actions;
-       only the coding-agent Harness needs a signed-in account. */
+       only the coding-agent Harness is the operator's. */
     if(el.dataset.baseTitle===undefined)el.dataset.baseTitle=el.title||'';
     el.title=pipelineRunning?'Available when the automatic Formal and DAG pipeline finishes':el.dataset.baseTitle;
   });
@@ -6494,7 +6496,7 @@ function fillLeanModels(list, preferred){
   sel.disabled=!models.length;
 }
 function fillLeanEngines(list,preferred=''){
-  leanEngines=CURRENT_USER?.guest?[]:(list||[]);
+  leanEngines=viewerIsAdmin()?(list||[]):[];
   const sel=$('lean-engine'); if(!sel)return;
   const keep=runId?leanEngineByRun.get(runId):'';
   sel.innerHTML=leanEngines.map(e=>{
