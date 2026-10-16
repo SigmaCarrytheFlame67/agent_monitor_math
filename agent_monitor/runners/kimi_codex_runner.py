@@ -137,7 +137,10 @@ def _normalize_informal_outcome(path: Path) -> bool:
 
 
 def main() -> int:
-    prompt = " ".join(sys.argv[1:]).strip()
+    # The console passes "-" and writes the prompt to stdin, as for native
+    # Codex: one command-line argument is limited to 128 KiB.
+    args = sys.argv[1:]
+    prompt = (sys.stdin.read() if args == ["-"] else " ".join(args)).strip()
     if not prompt:
         _report_failure("Kimi Codex runner requires a prompt")
         return 2

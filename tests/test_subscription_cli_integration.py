@@ -403,12 +403,13 @@ class ClaudePromptOnStdinTests(unittest.TestCase):
                 self.assertEqual(leftovers, ["proof.md"])  # the prompt file is gone
 
 
-def _fake_codex_cli(bin_dir: Path, *, proof: str = "") -> Path:
+def _fake_codex_cli(bin_dir: Path, *, proof: str = "", artifact: str = "proof.md") -> Path:
     """A stand-in ``codex`` with codex-cli 0.160's prompt handling: ``-`` reads
     the prompt from stdin, and a prompt argument with a stdin that is not a
     terminal also reads stdin, saying so on stderr.  It appends its argv and
     prompt to ``calls.jsonl`` beside it, writes ``proof`` (if any) to
-    ./proof.md and prints a completed turn."""
+    ./``artifact``, writes its last message where ``--output-last-message``
+    says (as the Kimi wrapper's call asks) and prints a completed turn."""
     bin_dir.mkdir(parents=True, exist_ok=True)
     fake = bin_dir / "codex"
     fake.write_text(textwrap.dedent(f"""\
@@ -423,8 +424,11 @@ def _fake_codex_cli(bin_dir: Path, *, proof: str = "") -> Path:
         with open({str(bin_dir / "calls.jsonl")!r}, "a", encoding="utf-8") as calls:
             calls.write(json.dumps({{"argv": sys.argv[1:], "prompt": prompt}}) + "\\n")
         if {proof!r}:
-            with open("proof.md", "w", encoding="utf-8") as artifact:
+            with open({artifact!r}, "w", encoding="utf-8") as artifact:
                 artifact.write({proof!r})
+        if "--output-last-message" in sys.argv:
+            with open(sys.argv[sys.argv.index("--output-last-message") + 1], "w", encoding="utf-8") as last:
+                last.write("Done.")
         for event in (
             {{"type": "thread.started", "thread_id": "01a12cde-0000-7000-8000-000000000001"}},
             {{"type": "turn.started"}},
@@ -443,12 +447,15 @@ def _fake_codex_calls(fake: Path) -> list[dict]:
 
 class CodexPromptOnStdinTests(unittest.TestCase):
     """Native Codex reads its prompt from stdin (``-``), as the CGM backend
-    does: one argv string is limited to 128 KiB, and a prompt argument with a
-    piped stdin makes Codex print "Reading additional input from stdin..."."""
+    and the Kimi Codex wrapper do: one argv string is limited to 128 KiB, and
+    a prompt argument with a piped stdin makes Codex print "Reading
+    additional input from stdin..."."""
 
     PROOF = "# Claim\n\nThe statement holds.\n\n## Proof\n\n" + "Each step follows. " * 30 + "\n"
 
-    def _native_run(self, problem: str, *, command: str = "", **extra_env: str) -> tuple[dict, list[dict]]:
+    def _native_run(
+        self, problem: str, *, command: str = "", model: str = "gpt-5.6-sol", **extra_env: str
+    ) -> tuple[dict, list[dict]]:
         """Run the codex engine on a fake ``codex``, with the registry's own
         command or an operator's ``CODEX_CMD`` (``{codex}`` names the fake)."""
         with tempfile.TemporaryDirectory() as tmp:
@@ -467,7 +474,7 @@ class CodexPromptOnStdinTests(unittest.TestCase):
                     os.environ["CODEX_CMD"] = command.replace("{codex}", str(fake))
                 run = jobs._run_cli_engine(run_id="codex_stdin", engine="codex", problem_id="p",
                                            problem_text=problem, started=time.time(), workspace=workspace,
-                                           extra_env=env, requested_model="gpt-5.6-sol")
+                                           extra_env=env, requested_model=model)
             calls = _fake_codex_calls(fake)
         return run, calls
 
@@ -479,6 +486,19 @@ class CodexPromptOnStdinTests(unittest.TestCase):
         self.assertIn(problem, calls[0]["prompt"])
         self.assertEqual(calls[0]["argv"][-1], "-")
         self.assertFalse(any("证明" in arg for arg in calls[0]["argv"]))
+
+    def test_a_long_problem_reaches_codex_on_a_kimi_model(self) -> None:
+        # The Kimi Codex wrapper reads the prompt from stdin as well, and its
+        # Codex call does the same.
+        problem = "设 n 为偶数，证明：" * 9_000
+        run, calls = self._native_run(problem, model="kimi-k3", KIMI_API_KEY="test-key-not-real",
+                                      KIMI_API_BASE="http://127.0.0.1:9/v1")
+        self.assertEqual(run["status"], "finished", run.get("error"))
+        self.assertEqual(run["runner_result"]["command"][-1], "-")
+        self.assertEqual(len(calls), 1)
+        self.assertIn(problem, calls[0]["prompt"])
+        self.assertEqual(calls[0]["argv"][-1], "-")
+        self.assertEqual(calls[0]["argv"][calls[0]["argv"].index("--model") + 1], "kimi-k3")
 
     def test_the_run_log_has_no_stdin_notice_and_tuning_precedes_the_prompt(self) -> None:
         run, calls = self._native_run(
@@ -507,45 +527,69 @@ class CodexPromptOnStdinTests(unittest.TestCase):
         self.assertIn("Prove that 2 = 2.", calls[0]["prompt"])
         self.assertLess(argv.index('model_reasoning_effort="xhigh"'), len(argv) - 1)
 
-    def test_the_formal_lean_codex_harness_reads_its_prompt_from_stdin(self) -> None:
-        # A full-size harness prompt in a 4-byte script is over 128 KiB.
-        problem, informal = "𝔽" * 6_000, "𝔽" * 30_000
-        prompt = (lean_verify.HARNESS_TASK + "\n\nPROBLEM:\n" + problem
-                  + "\n\nINFORMAL PROOF:\n" + informal)
+    # A full-size harness prompt in a 4-byte script is over 128 KiB.
+    HARNESS_PROBLEM, HARNESS_INFORMAL = "𝔽" * 6_000, "𝔽" * 30_000
+    HARNESS_PROMPT = (lean_verify.HARNESS_TASK + "\n\nPROBLEM:\n" + HARNESS_PROBLEM
+                      + "\n\nINFORMAL PROOF:\n" + HARNESS_INFORMAL)
+
+    def _formal_harness(self, model: str, *, auth_route: str, proof: str = "",
+                        **extra_env: str) -> tuple[dict, list[dict]]:
+        """Run the Formal Lean Codex harness on ``model`` with HARNESS_PROMPT
+        against a fake ``codex`` that writes ``proof`` (if any) to Proof.lean;
+        return what the worker finished with and the fake's calls."""
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp).resolve()
             workspace = root / "run"
             ldir = workspace / lean_verify.LEAN_DIRNAME
             ldir.mkdir(parents=True)
-            fake = _fake_codex_cli(root / "bin")
+            fake = _fake_codex_cli(root / "bin", proof=proof, artifact="Proof.lean")
             env = {"PATH": os.pathsep.join([str(fake.parent), "/usr/bin", "/bin"]), "HOME": str(root),
-                   run_tuning.REASONING_ENV: "xhigh"}
+                   **extra_env}
             with patch("agent_monitor.engines_registry._cli_available",
                        return_value=(True, CLI_ENGINES["codex"]["default_cmd"])):
-                argv = build_cli_command("codex", prompt=prompt, workspace=ldir, problem_file=ldir / "TASK.md")
+                argv = build_cli_command("codex", prompt=self.HARNESS_PROMPT, workspace=ldir,
+                                         problem_file=ldir / "TASK.md")
             finished: dict = {}
             token = lean_verify._reserve_formal_operation(workspace, "harness/codex")
             self.addCleanup(lean_verify._release_formal_operation, workspace, token)
             with patch.object(lean_verify, "_harness_finish", side_effect=lambda **kwargs: finished.update(kwargs) or {}):
                 lean_verify._launch_harness(
                     workspace=workspace, ldir=ldir, argv=argv, engine="codex", spec=CLI_ENGINES["codex"],
-                    selected_model="gpt-5.6-sol", prompt=prompt, harness_env=env,
-                    auth_route="codex_subscription", lean_src="", initial_fingerprint=None,
-                    user={"id": 17}, run_record=None, problem=problem, informal=informal,
-                    audit=False, run_id=None, _operation_token=token,
+                    selected_model=model, prompt=self.HARNESS_PROMPT, harness_env=env,
+                    auth_route=auth_route, lean_src="", initial_fingerprint=None,
+                    user={"id": 17}, run_record=None, problem=self.HARNESS_PROBLEM,
+                    informal=self.HARNESS_INFORMAL, audit=False, run_id=None, _operation_token=token,
                 )
                 for thread in threading.enumerate():
                     if thread.name == f"lean-harness-codex-{workspace.name}":
                         thread.join(15)
             calls = _fake_codex_calls(fake)
+        return finished, calls
+
+    def test_the_formal_lean_codex_harness_reads_its_prompt_from_stdin(self) -> None:
+        finished, calls = self._formal_harness(
+            "gpt-5.6-sol", auth_route="codex_subscription", **{run_tuning.REASONING_ENV: "xhigh"}
+        )
         self.assertEqual(len(calls), 1, finished.get("log"))
-        self.assertEqual(calls[0]["prompt"], prompt)
+        self.assertEqual(calls[0]["prompt"], self.HARNESS_PROMPT)
         argv = calls[0]["argv"]
         self.assertEqual(argv[-1], "-")
         self.assertEqual(argv[argv.index("--model") + 1], "gpt-5.6-sol")
         self.assertLess(argv.index('model_reasoning_effort="xhigh"'), len(argv) - 1)
         self.assertEqual(finished["exit_code"], 0)
         self.assertNotIn("Reading additional input", finished["log"])
+
+    def test_the_formal_lean_harness_on_a_kimi_model_reads_its_prompt_from_stdin(self) -> None:
+        finished, calls = self._formal_harness(
+            "kimi-k3", auth_route="api_key", proof="theorem main : True := trivial\n",
+            KIMI_API_KEY="test-key-not-real", KIMI_API_BASE="http://127.0.0.1:9/v1",
+            AGENT_MONITOR_KIMI_CODEX_MODE="lean",
+        )
+        self.assertEqual(len(calls), 1, finished.get("log"))
+        # After the wrapper's own system prompt.
+        self.assertTrue(calls[0]["prompt"].endswith(self.HARNESS_PROMPT.strip()))
+        self.assertEqual(calls[0]["argv"][-1], "-")
+        self.assertEqual(finished["exit_code"], 0, finished.get("log"))
 
     def test_a_formal_lean_codex_question_sends_its_prompt_on_stdin(self) -> None:
         calls: list[dict] = []

@@ -7130,6 +7130,7 @@ def _selected_harness_argv(
             "Codex Formal Lean requires an explicit model for this run route"
         )
     if _is_kimi_model(selected):
+        # The wrapper reads the prompt from stdin ("-"), as native Codex does.
         return [
             sys.executable,
             "-u",
@@ -7138,7 +7139,7 @@ def _selected_harness_argv(
                 / "runners"
                 / "kimi_codex_runner.py"
             ),
-            prompt,
+            "-",
         ]
 
     def prompt_index(argv: list[str], what: str) -> int:

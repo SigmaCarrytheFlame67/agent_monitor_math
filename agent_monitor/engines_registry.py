@@ -623,6 +623,7 @@ def discard_prompt_file(workspace: Path) -> None:
 def prompt_on_stdin(engine_id: str, argv: list[str] | None) -> bool:
     """True when a Codex command reads its task prompt from stdin (``-``).
 
+    The Kimi Codex wrapper (runners/kimi_codex_runner.py) takes ``-`` too.
     An operator's ``CODEX_CMD`` may still pass ``{prompt}`` as an argument.
     """
     return engine_id == "codex" and bool(argv) and argv[-1] == "-"

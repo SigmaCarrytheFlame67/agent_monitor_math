@@ -4586,12 +4586,13 @@ def _run_cli_engine(
         # Raw Codex CLI ignores OPENAI_BASE_URL and its modern custom-provider
         # path emits OpenAI-specific extensions.  The wrapper uses an isolated
         # Responses provider plus a loopback sanitizer, while preserving native
-        # Codex JSONL events for Conversation/Monitor/DAG.
+        # Codex JSONL events for Conversation/Monitor/DAG.  Like native Codex
+        # it reads the prompt from stdin ("-", see prompt_on_stdin).
         argv = [
             sys.executable,
             "-u",
             str(Path(__file__).resolve().parent / "runners" / "kimi_codex_runner.py"),
-            prompt,
+            "-",
         ]
     elif engine == "codex":
         from agent_monitor.run_tuning import codex_config_args

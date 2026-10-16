@@ -21,7 +21,8 @@ class KimiFormalHarnessTests(unittest.TestCase):
         )
         self.assertEqual(selected[0:2], [os.sys.executable, "-u"])
         self.assertTrue(selected[2].endswith("/runners/kimi_codex_runner.py"))
-        self.assertEqual(selected[3], "formalize")
+        # The worker sends the prompt on stdin: never in argv.
+        self.assertEqual(selected[3:], ["-"])
         native = lean_verify._selected_harness_argv(
             engine="codex",
             model="gpt-5.6-sol",
