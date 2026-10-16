@@ -310,6 +310,55 @@ def _analyze_model(user: dict[str, Any] | None, model: str | None) -> str:
     return GUEST_DEFAULT_MODEL
 
 
+def _saved_default_model(
+    user: dict[str, Any], *, engine: str, auth_route: str | None
+) -> str | None:
+    """An administrator's saved default model, for a run that names none.
+
+    Only a model the run's route can run (the requested route or, as
+    ``_selected_auth_route`` picks it, the account runtime's): one of the
+    linked Claude Code or Codex account that the engine supports, or on the
+    API route one of a provider the account has a key for, or Kimi K3 where
+    the sponsored service serves the engine.  Never Max, which is always a
+    deliberate choice.  Otherwise None, and the harness uses its own default.
+    """
+    from agent_monitor.engines_registry import supported_models
+    from agent_monitor.settings import PROVIDERS, account_runtime, resolved_user_env
+
+    env = resolved_user_env(user)
+    saved = str(env.get("AGENT_MONITOR_MODEL") or "").strip()
+    if not saved or cgm_max.is_max_model(saved):
+        return None
+    route = str(auth_route or "").strip().lower() or {
+        "api": "api_key",
+        "codex": "codex_subscription",
+        "claude": "claude_subscription",
+    }[account_runtime(user, env=env)]
+    if route in {"claude_subscription", "codex_subscription"}:
+        allowed = supported_models(engine)
+        if allowed and saved not in allowed:
+            return None
+        try:
+            _validate_subscription_model(route=route, model=saved, user=user, field="Selected model")
+        except ValueError:
+            return None
+        return saved
+    if route != "api_key":
+        return None
+    if _is_kimi_model(saved) and _sponsored_broker_serves(engine, saved):
+        return saved
+    keyed_models = {
+        model
+        for spec in PROVIDERS
+        if any(
+            str(env.get(name) or "").strip()
+            for name in (spec["key_var"], *(spec.get("alt_key_vars") or []))
+        )
+        for model in spec.get("models") or []
+    }
+    return saved if saved in keyed_models else None
+
+
 def _analyze_api_timeout(sponsored: bool) -> int:
     """The Analyze runner's per-call API timeout (it reads the same variables)."""
     from agent_monitor import kimi_k3
@@ -1353,6 +1402,16 @@ def start_job(
         model = model or GUEST_DEFAULT_MODEL
         if model != GUEST_DEFAULT_MODEL:
             raise ValueError(f"Kimi Proof uses {GUEST_DEFAULT_MODEL}")
+    if (
+        not str(model or "").strip()
+        and user is not None
+        and not is_guest
+        and not account_policy.is_member(user)
+    ):
+        # A blank model (the Projects page's "Default account model", or an
+        # API caller's) is the saved default, as it is for members.  Resolved
+        # before the provider keys are projected for it.
+        model = _saved_default_model(user, engine=engine, auth_route=auth_route) or model
 
     extra_env = _user_extra_env(user, model, subagent_model)
     if is_guest:

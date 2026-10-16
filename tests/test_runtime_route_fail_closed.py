@@ -330,5 +330,102 @@ class RuntimeRouteFailClosedTests(unittest.TestCase):
         direct_api.assert_not_called()
 
 
+class SavedDefaultModelTests(unittest.TestCase):
+    """A blank model (the Projects page's "Default account model") is the
+    administrator's saved default model when the run's route can run it."""
+
+    def tearDown(self) -> None:
+        with jobs._LOCK:
+            jobs._JOBS.clear()
+
+    def _start(self, engine: str, saved: dict, *, model: str | None = None) -> dict:
+        captured: dict = {}
+
+        class FakeThread:
+            def __init__(self, *, kwargs, **_unused):
+                captured.update(kwargs)
+
+            def start(self) -> None:
+                pass
+
+        info = {**_PLAIN, "id": engine, "label": engine}
+        with tempfile.TemporaryDirectory() as tmp:
+            with (
+                patch("agent_monitor.engines_registry.all_engine_ids", return_value={engine}),
+                patch("agent_monitor.engines_registry.list_engines", return_value=[info]),
+                patch("agent_monitor.engines_registry.supported_models", return_value=[]),
+                patch.object(settings, "resolved_user_env", return_value=dict(saved)),
+                patch.object(jobs, "workspace_dir", return_value=Path(tmp)),
+                patch.object(jobs, "_write_run"),
+                patch("agent_monitor.claude_login.account_home", return_value=Path(tmp) / "claude"),
+                patch("agent_monitor.claude_login.account_login_ready", return_value=True),
+                patch("agent_monitor.codex_login.account_home", return_value=Path(tmp) / "codex"),
+                patch("agent_monitor.codex_login.account_login_ready", return_value=True),
+                patch(
+                    "agent_monitor.codex_login.available_models",
+                    return_value=["gpt-6-astra", "gpt-5.6-sol"],
+                ),
+                patch.object(jobs.threading, "Thread", FakeThread),
+            ):
+                job = jobs.start_job(
+                    engine=engine,
+                    problem_text="Prove one equals one.",
+                    model=model,
+                    user={"id": 17, "is_admin": True},
+                    use_subagents=False,
+                )
+        self.assertEqual(job["model"], captured["model"])
+        return captured
+
+    def test_blank_model_runs_the_saved_claude_default_on_every_harness(self) -> None:
+        saved = {"AGENT_MONITOR_ACCOUNT_RUNTIME": "claude", "AGENT_MONITOR_MODEL": "opus"}
+        for engine in ("claude", "plain", "improof"):
+            with self.subTest(engine=engine):
+                captured = self._start(engine, saved)
+                self.assertEqual(captured["model"], "opus")
+                env = dict(captured["extra_env"])
+                jobs._apply_selected_model_env(env, engine=engine, model=captured["model"])
+                self.assertEqual(env["AGENT_MONITOR_CLAUDE_MODEL"], "opus")
+
+    def test_blank_model_runs_the_saved_codex_default(self) -> None:
+        saved = {"AGENT_MONITOR_ACCOUNT_RUNTIME": "codex", "AGENT_MONITOR_MODEL": "gpt-5.6-sol"}
+        captured = self._start("plain", saved)
+        self.assertEqual(captured["model"], "gpt-5.6-sol")
+
+    def test_blank_model_runs_the_saved_api_default_with_its_key(self) -> None:
+        from agent_monitor.runners import math_harness_runner
+        from agent_monitor.subprocess_env import child_process_env
+
+        saved = {
+            "AGENT_MONITOR_ACCOUNT_RUNTIME": "api",
+            "AGENT_MONITOR_MODEL": "claude-opus-4-8",
+            "ANTHROPIC_API_KEY": "sk-ant-test",
+        }
+        captured = self._start("math_harness", saved)
+        self.assertEqual(captured["model"], "claude-opus-4-8")
+        self.assertEqual(captured["extra_env"]["ANTHROPIC_API_KEY"], "sk-ant-test")
+        env = child_process_env(extra=captured["extra_env"])
+        jobs._apply_selected_model_env(env, engine="math_harness", model=captured["model"])
+        self.assertEqual(math_harness_runner._select_route(env).model, "claude-opus-4-8")
+
+    def test_a_saved_default_the_route_cannot_run_leaves_the_model_blank(self) -> None:
+        for runtime, saved_model, keys in (
+            # An API model left from another runtime never refuses the run.
+            ("claude", "claude-opus-4-8", {"ANTHROPIC_API_KEY": "sk-ant-test"}),
+            ("codex", "opus", {}),
+            ("api", "opus", {"OPENAI_API_KEY": "sk-test"}),
+            # A provider without a key, and Max, which is always chosen.
+            ("api", "claude-opus-4-8", {"OPENAI_API_KEY": "sk-test"}),
+            ("claude", "max", {}),
+        ):
+            saved = {"AGENT_MONITOR_ACCOUNT_RUNTIME": runtime, "AGENT_MONITOR_MODEL": saved_model, **keys}
+            with self.subTest(runtime=runtime, saved=saved_model):
+                self.assertIsNone(self._start("plain", saved)["model"])
+
+    def test_a_requested_model_wins_over_the_saved_default(self) -> None:
+        saved = {"AGENT_MONITOR_ACCOUNT_RUNTIME": "claude", "AGENT_MONITOR_MODEL": "opus"}
+        self.assertEqual(self._start("plain", saved, model="fable")["model"], "fable")
+
+
 if __name__ == "__main__":
     unittest.main()
