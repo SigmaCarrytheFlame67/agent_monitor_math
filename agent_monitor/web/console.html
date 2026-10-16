@@ -2773,7 +2773,9 @@ function syncRuntimeModelControls(forceDefault=false){
   const runtime=selectedAccountRuntime(), models=runtimeModelOptions(runtime);
   const lean=$('lean-model'), previousLean=lean?.value||'';
   if(CURRENT_USER?.guest)fillLeanModels([]);
-  else if(lean){
+  // A selected run's Lean models are its own route's (refreshLeanView); a
+  // Settings refresh must not swap in the account runtime's.
+  else if(lean&&!runId){
     lean.innerHTML=models.map(model=>`<option value="${LIB_ESC(model)}">${LIB_ESC(model)}</option>`).join('')||`<option value="">${LIB_ESC(runtimeDisplayName(runtime))} needs setup</option>`;
     const strong=models.find(model=>/gpt-6|fable|sol|opus|sonnet|pro|terra|luna|5\.5|5\.6|haiku/i.test(model))||models[0]||'';
     lean.value=models.includes(previousLean)?previousLean:strong;

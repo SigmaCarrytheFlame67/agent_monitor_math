@@ -325,6 +325,44 @@ console.log(JSON.stringify({incomplete,failed,startup,guestStartup}));
         self.assertIn("structure only — see Lean status for verification", HTML)
         self.assertIn("if(leanPayloadHasDisplay(d)){ renderLean(d); return; }", HTML)
 
+    def test_settings_refresh_keeps_the_selected_runs_lean_models(self) -> None:
+        source = "\n".join(
+            _js_function(name)
+            for name in (
+                "selectedAccountRuntime",
+                "runtimeDisplayName",
+                "runtimeModelOptions",
+                "fillLeanModels",
+                "syncRuntimeModelControls",
+            )
+        )
+        output = _run_node(
+            """
+let SETTINGS={account_runtime:'codex',codex_connected:true,models_by_runtime:{
+  api:['claude-opus-4-8','gpt-6-astra'],codex:['gpt-6-astra','gpt-5.6-sol'],claude:['sonnet','opus']}};
+let CURRENT_USER={id:7,guest:false}, runId='plain_api_run';
+const LIB_ESC=s=>String(s??'');
+const lean={options:[],current:'',disabled:false,
+  set innerHTML(html){this.options=[...html.matchAll(/value="([^"]*)"/g)].map(m=>m[1]);this.current=this.options[0]??'';},
+  get value(){return this.current;}, set value(v){this.current=this.options.includes(v)?v:'';}};
+function $(id){return id==='lean-model'?lean:null;}
+"""
+            + source
+            + """
+// The Lean view lists the selected API run's route (refreshLeanView).
+fillLeanModels(['claude-opus-4-8','gpt-6-astra'],'claude-opus-4-8');
+// Opening, cancelling or saving Settings syncs the launcher's runtime models.
+syncRuntimeModelControls(); syncRuntimeModelControls(true);
+const run={value:lean.value,options:lean.options};
+runId=null; syncRuntimeModelControls();
+console.log(JSON.stringify({run,noRun:{value:lean.value,options:lean.options}}));
+"""
+        )
+        # Verify and Revise keep sending the run's own route and model.
+        self.assertEqual(output["run"], {"value": "claude-opus-4-8", "options": ["claude-opus-4-8", "gpt-6-astra"]})
+        # Without a selected run the list follows the account runtime.
+        self.assertEqual(output["noRun"], {"value": "gpt-6-astra", "options": ["gpt-6-astra", "gpt-5.6-sol"]})
+
 
 if __name__ == "__main__":
     unittest.main()
