@@ -2,7 +2,10 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
+import sys
 import tempfile
+import threading
 import unittest
 from pathlib import Path
 from unittest.mock import patch
@@ -52,6 +55,21 @@ def _checked_source(source: str) -> dict:
 
 def _checked_write(_workspace: Path, source: str, _uses_mathlib: bool) -> dict:
     return _checked_source(source)
+
+
+KEPT_SOURCE = "theorem kept (n : Nat) : n + 0 = n := by simp\n"
+
+
+def _failed_write(_workspace: Path, _source: str, _uses_mathlib: bool) -> dict:
+    return {
+        "ok": False,
+        "status": "failed",
+        "exit_code": 1,
+        "duration_s": 0.01,
+        "command": ["lean-broker", "core"],
+        "stderr": "Proof.lean:1:44: error: unsolved goals",
+        "stdout": "",
+    }
 
 
 class FormalHarnessHardeningTests(unittest.TestCase):
@@ -145,6 +163,125 @@ class FormalHarnessHardeningTests(unittest.TestCase):
         self.assertFalse(result["harness"]["artifact_fresh"])
         self.assertFalse(result["harness"]["artifact_accepted"])
         self.assertIn("unchanged", result["notes"])
+        # Lean accepted the file: only the artifact was refused.
+        self.assertIn("Check passed", result["notes"])
+        self.assertNotIn("Compile/check failed", result["notes"])
+
+    @staticmethod
+    def _checked_first(workspace: Path, text: str, check=_checked_write) -> dict:
+        """Proof.lean as a Check left it."""
+        FormalHarnessHardeningTests._source(workspace, text)
+        with (
+            patch.object(lean_verify, "_write_and_run", side_effect=check),
+            patch.object(lean_verify, "toolchain_status", return_value={}),
+        ):
+            return lean_verify.compile_or_check(workspace=workspace)
+
+    @staticmethod
+    def _run_agent(
+        workspace: Path, child: str, *, check=_checked_write, audit: dict | None = None
+    ) -> dict:
+        """Launch a harness on Proof.lean as start_harness does, with ``child``
+        as the agent; return its persisted result and whether it audited."""
+        source = lean_verify.read_source(workspace)
+        _text, initial, _reason = lean_verify._regular_root_lean_artifact(workspace)
+        token = lean_verify._reserve_formal_operation(workspace, "harness/claude")
+        with (
+            patch.object(lean_verify, "_write_and_run", side_effect=check),
+            patch.object(lean_verify, "toolchain_status", return_value={}),
+            patch.object(
+                lean_verify, "_harness_fidelity_audit", return_value=audit
+            ) as audited,
+        ):
+            lean_verify._launch_harness(
+                workspace=workspace,
+                ldir=lean_verify.lean_dir(workspace),
+                argv=[sys.executable, "-c", child],
+                engine="claude",
+                spec={"label": "Claude Code"},
+                selected_model="sonnet",
+                prompt="Prove it.",
+                harness_env={"PATH": os.environ.get("PATH", "")},
+                auth_route="claude_subscription",
+                lean_src=source,
+                initial_fingerprint=initial,
+                user=None,
+                run_record=None,
+                problem="Prove n + 0 = n.",
+                informal="Simplify.",
+                audit=True,
+                run_id=None,
+                _operation_token=token,
+            )
+            for thread in threading.enumerate():
+                if thread.name == f"lean-harness-claude-{workspace.name}":
+                    thread.join(30)
+        return {**lean_verify.load_cached(workspace), "audited": audited.called}
+
+    def test_exit_zero_unchanged_artifact_keeps_its_verified_status(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            workspace = Path(tmp).resolve()
+            before = self._checked_first(workspace, KEPT_SOURCE)
+            result = self._run_agent(workspace, "print('already verified')")
+            on_disk = (lean_verify.lean_dir(workspace) / lean_verify.PROOF_FILENAME).read_bytes()
+
+        self.assertEqual(before["status"], "verified")
+        self.assertEqual(result["status"], "verified")
+        self.assertEqual(result["verified_source_sha256"], hashlib.sha256(on_disk).hexdigest())
+        # Still no new proof from the agent: nothing was accepted or audited.
+        self.assertFalse(result["harness"]["artifact_fresh"])
+        self.assertFalse(result["harness"]["artifact_accepted"])
+        self.assertFalse(result["audited"])
+        self.assertIn("unchanged", result["notes"])
+        self.assertIn("earlier Lean result stands", result["notes"])
+        self.assertNotIn("Compile/check failed", result["notes"])
+
+    def test_exit_zero_unchanged_artifact_keeps_an_unfaithful_status(self) -> None:
+        audit = {
+            "ok": True,
+            "faithful": False,
+            "severity": "major",
+            "verdict": "The theorem is not the stated problem.",
+            "issues": ["Wrong statement."],
+        }
+        write = f"import pathlib; pathlib.Path('Proof.lean').write_text({KEPT_SOURCE!r})"
+        with tempfile.TemporaryDirectory() as tmp:
+            workspace = Path(tmp).resolve()
+            self._source(workspace, "theorem old : True := by trivial\n")
+            before = self._run_agent(workspace, write, audit=audit)
+            result = self._run_agent(workspace, "print('nothing to change')")
+
+        self.assertEqual(before["status"], "unfaithful")
+        # The kernel's verified never overrides the earlier audit's verdict.
+        self.assertEqual(result["status"], "unfaithful")
+        self.assertFalse(result["audited"])
+        self.assertEqual(result["fidelity"]["audit"]["verdict"], audit["verdict"])
+        self.assertIn("earlier Lean result stands", result["notes"])
+
+    def test_unchanged_artifact_is_failed_unless_a_clean_exit_and_check_confirm_it(self) -> None:
+        cases = (
+            # A failed agent, even one that left the verified file alone.
+            ("verified", "raise SystemExit(3)", _checked_write, "Check passed"),
+            # Lean no longer accepts the file it accepted before.
+            ("verified", "print('done')", _failed_write, "Compile/check failed"),
+            # An earlier failure is never promoted by a passing check.
+            ("failed", "print('done')", _checked_write, "Check passed"),
+        )
+        for earlier, child, check, summary in cases:
+            with self.subTest(earlier=earlier, child=child):
+                with tempfile.TemporaryDirectory() as tmp:
+                    workspace = Path(tmp).resolve()
+                    before = self._checked_first(
+                        workspace,
+                        KEPT_SOURCE,
+                        _checked_write if earlier == "verified" else _failed_write,
+                    )
+                    result = self._run_agent(workspace, child, check=check)
+
+                self.assertEqual(before["status"], earlier)
+                self.assertEqual(result["status"], "failed")
+                self.assertFalse(result["harness"]["artifact_accepted"])
+                self.assertIn(summary, result["notes"])
 
     def test_symlink_artifact_is_rejected_without_following_or_compiling_it(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

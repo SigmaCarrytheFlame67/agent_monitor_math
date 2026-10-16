@@ -7476,6 +7476,10 @@ def _launch_harness(
     record["harness"]["auth_route"] = auth_route
     record["harness"]["model"] = selected_model or ""
     record["harness"]["initial_sha256"] = (initial_fingerprint or {}).get("sha256")
+    if str(prev.get("lean") or "").strip() == lean_src.strip():
+        # This record replaces the status of the very source the agent starts
+        # from; _harness_finish restores it if the agent leaves the file alone.
+        record["harness"]["initial_status"] = str(prev.get("status") or "")
     _write_cached(workspace, record)
 
     job: dict[str, Any] = {
@@ -8041,10 +8045,22 @@ def _harness_finish(
     sorry_n = _count_sorry(lean_src)
     kernel_status = _status_from_check(check, sorry_n, mode="check")
     status = kernel_status
+    kept = False
     if stopped:
         status = "stopped"
     elif not artifact_accepted:
-        status = "failed"
+        initial_status = str(previous_harness.get("initial_status") or "")
+        # A clean exit that left the file as it was keeps the status the file
+        # had before the run while Lean still bears it out; it never promotes.
+        kept = bool(
+            child_exit_ok
+            and not timed_out
+            and not artifact_fresh
+            and kernel_status in {"verified", "incomplete"}
+            and initial_status in {"verified", "unfaithful", "incomplete", "compiled"}
+            and (initial_status != "verified" or kernel_status == "verified")
+        )
+        status = initial_status if kept else "failed"
 
     attempts = list(prev.get("attempts") or [])
     attempts.append(
@@ -8097,12 +8113,19 @@ def _harness_finish(
         )
         status = _apply_fidelity(status, _fidelity_flags(lean_src), audit_result)
 
-    notes = _check_summary(lean_src, check, status)
+    # A rejected artifact's Failed or Stopped is not Lean's verdict on it.
+    notes = _check_summary(
+        lean_src, check, status if artifact_accepted or kept else kernel_status
+    )
     if rejection_reasons:
         notes = (
             "Artifact rejected: "
             + "; ".join(rejection_reasons)
-            + ". The outer Lean result is diagnostic only. "
+            + (
+                ". The earlier Lean result stands. "
+                if kept
+                else ". The outer Lean result is diagnostic only. "
+            )
             + notes
         )
     fid_note = _fidelity_summary(_fidelity_flags(lean_src), audit_result)
