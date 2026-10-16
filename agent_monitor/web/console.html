@@ -6411,7 +6411,10 @@ async function leanResponseJson(response,context='Formal Lean request'){
       error.status=response.status;
       throw error;
     }
-    throw new Error(message);
+    // Callers tell a refusal (401/403/404) from a failure by the status.
+    const error=new Error(message);
+    error.status=response.status;
+    throw error;
   }
   if(!payload||typeof payload!=='object'||Array.isArray(payload))throw new Error(`${context} returned an empty response`);
   return payload;
@@ -6517,6 +6520,7 @@ async function leanAction(action, extra={}){
   const badge=$('lean-badge'), priorBadge=badge?{className:badge.className,text:badge.textContent}:null;
   if(action==='verify')setLeanBadge('none');
   if(action==='harness')prepareLeanHarnessStart(labels.harness);
+  let notStarted='';
   try{
     const payload={action, model:$('lean-model').value||null, ...extra};
     if(CURRENT_USER?.guest)payload.model='kimi-k3';
@@ -6536,15 +6540,19 @@ async function leanAction(action, extra={}){
     leanRunKey=''; if(!preserveDraft)leanDirty=false; renderLean(d, {forceCode:!preserveDraft});
   }catch(err){
     if(actionRunId===runId){
-      const message=String(err.message||err).slice(0,1200);
-      leanStatus((err?.limit?'⏸ ':'✗ ')+message.slice(0,180));
-      if(err?.limit&&action!=='revise'){
-        /* A limit is not a failed proof: keep the current Lean state on screen. */
+      const message=String(err.message||err).slice(0,1200), line=(err?.limit?'⏸ ':'✗ ')+message;
+      // Refused (signed out, not this account's run to change, gone): nothing ran.
+      const refused=[401,403,404].includes(err?.status);
+      leanStatus(line);
+      if((err?.limit||refused)&&action!=='revise'){
+        /* Neither is a failed proof: keep the current Lean state on screen. */
         /* Undo only our own pre-request reset, never a newer refresh's badge. */
         if(action==='verify'&&priorBadge&&badge?.className==='lean-badge none'){ badge.className=priorBadge.className; badge.textContent=priorBadge.text; }
+        /* The harness's start view replaced it: the refresh below redraws it. */
+        if(action==='harness'){ leanRunKey=''; notStarted=line; }
         if($('lean-empty')?.style.display!=='none'){
           const title=$('lean-progress-title'), detail=$('lean-progress-detail');
-          if(title)title.textContent=err.status===429?'Limit reached':'Action paused';
+          if(title)title.textContent=refused?'Action refused':err.status===429?'Limit reached':'Action paused';
           if(detail)detail.textContent=message;
         }
       }
@@ -6560,7 +6568,11 @@ async function leanAction(action, extra={}){
   }
   finally{
     setLeanBusy(false, '', actionRunId, requestToken);
-    if(actionRunId===runId&&(action==='harness'||action==='stop_harness'))refreshLeanView();
+    if(actionRunId===runId&&(action==='harness'||action==='stop_harness')){
+      await refreshLeanView();
+      // Still say why the agent did not start.
+      if(notStarted&&actionRunId===runId)leanStatus(notStarted);
+    }
   }
 }
 // An analysis formalizes the statements of its main results (never proofs).

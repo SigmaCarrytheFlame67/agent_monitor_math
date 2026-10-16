@@ -10,7 +10,7 @@ from __future__ import annotations
 import re
 import unittest
 
-from test_cgm_ui import HTML, _js_function, _program, _run_node
+from test_cgm_ui import HTML, _js_const, _js_function, _program, _run_node
 
 _ACCESS_PAGE = r"""
 const classes=new Set();
@@ -143,6 +143,107 @@ console.log(JSON.stringify(made.filter(el=>el.tag==='button').map(el=>[el.textCo
         self.assertEqual(
             _run_node(program),
             [["↻ Re-check", "run-change"], ["∎ Formalize statement", "run-change"], ["Open in source", ""]],
+        )
+
+
+_LEAN_ACTION_PAGE = r"""
+let leanActionSeq=0, statuses=[], diagnostics=[], refreshes=0, leanRunKey='stored';
+const leanRunningRuns=new Map();
+function setLeanBusy(){}
+function prepareLeanHarnessStart(){ setLeanBadge('running'); }
+function leanEditorText(){ return 'theorem t : True := trivial'; }
+function leanStatus(text){ statuses.push(text); }
+function renderLean(){ throw new Error('a refusal must not render a Lean result'); }
+// As the real one does: a made-up failed result over whatever was on screen.
+function renderLeanDiagnostic(message){ diagnostics.push(message); setLeanBadge('failed'); }
+// The stored (verified) result, redrawn in full once its key was reset.
+async function refreshLeanView(){ refreshes++; if(leanRunKey===''){ leanRunKey='stored'; setLeanBadge('verified'); leanStatus('gpt-5 · verify'); } }
+for(const [id,tag] of [['lean-model','select'],['lean-engine','select'],['lean-badge','span'],['lean-empty','div'],['lean-progress-title','div'],['lean-progress-detail','div']])elements[id]=new El(tag,id);
+elements['lean-model'].value='gpt-5'; elements['lean-engine'].value='codex'; elements['lean-empty'].style.display='none';
+const reply=(status,error)=>({ok:false,status,text:async()=>JSON.stringify({error}),headers:{get:()=>null}});
+let next=null;
+async function fetch(){ return next; }
+const badge=()=>elements['lean-badge'].textContent;
+"""
+
+
+class LeanRefusalTests(unittest.TestCase):
+    """A refused Lean action says why without replacing the stored result."""
+
+    def _program(self, body: str) -> str:
+        return _program(
+            "\n".join(
+                [_js_const("LEAN_STATUS_LABEL")]
+                + [_js_function(name) for name in ("setLeanBadge", "limitMessage", "leanResponseJson", "leanAction")]
+            )
+            + _LEAN_ACTION_PAGE
+            + body
+        )
+
+    def test_every_lean_error_carries_its_http_status(self) -> None:
+        program = _js_function("limitMessage") + "\n" + _js_function("leanResponseJson") + r"""
+(async()=>{
+  const out=[];
+  for(const [status,body] of [[403,{error:'Only the member who started this run can run Lean actions on it.'}],[401,{error:'not signed in'}],[500,{}]]){
+    try{ await leanResponseJson({ok:false,status,text:async()=>JSON.stringify(body),headers:{get:()=>null}},'Compile'); }
+    catch(e){ out.push([e.message,e.status,!!e.limit]); }
+  }
+  console.log(JSON.stringify(out));
+})();
+"""
+        self.assertEqual(
+            _run_node(program),
+            [
+                ["Only the member who started this run can run Lean actions on it.", 403, False],
+                ["not signed in", 401, False],
+                ["Compile failed with HTTP 500", 500, False],
+            ],
+        )
+
+    def test_a_refused_lean_action_keeps_the_verified_result(self) -> None:
+        out = _run_node(self._program(r"""
+(async()=>{
+  CURRENT_USER={id:4,is_admin:false,guest:false};
+  const out={};
+  next=reply(403,'Only the member who started this run can run Lean actions on it.');
+  for(const action of ['compile','check','audit','verify']){ setLeanBadge('verified'); await leanAction(action); out[action]=badge(); }
+  out.status=statuses.at(-1);
+  // A refused harness start redraws the result its start view replaced, and still says why.
+  next=reply(403,'The local formal harness is limited to the site administrator');
+  setLeanBadge('verified'); await leanAction('harness');
+  out.harness=[badge(),refreshes,statuses.at(-1)];
+  next=reply(401,'not signed in'); setLeanBadge('verified'); await leanAction('check'); out.signedOut=badge();
+  next=reply(404,'run not found'); setLeanBadge('verified'); await leanAction('compile'); out.gone=badge();
+  out.refusedDiagnostics=diagnostics.slice();
+  // A real failure still explains itself in the Lean view.
+  next=reply(500,'lake build crashed'); setLeanBadge('verified'); await leanAction('compile');
+  out.failure=[badge(),diagnostics.slice()];
+  console.log(JSON.stringify(out));
+})();
+"""))
+        for action in ("compile", "check", "audit", "verify"):
+            self.assertEqual(out[action], "Verified", action)
+        self.assertEqual(out["status"], "✗ Only the member who started this run can run Lean actions on it.")
+        self.assertEqual(
+            out["harness"], ["Verified", 1, "✗ The local formal harness is limited to the site administrator"]
+        )
+        self.assertEqual((out["signedOut"], out["gone"]), ("Verified", "Verified"))
+        self.assertEqual(out["refusedDiagnostics"], [])
+        self.assertEqual(out["failure"], ["Failed", ["lake build crashed"]])
+
+    def test_a_refusal_before_any_lean_result_explains_itself_in_the_empty_view(self) -> None:
+        out = _run_node(self._program(r"""
+(async()=>{
+  CURRENT_USER={id:4,is_admin:false,guest:false};
+  elements['lean-empty'].style.display='flex'; setLeanBadge('none');
+  next=reply(403,'Only the member who started this run can run Lean actions on it.');
+  await leanAction('verify');
+  console.log(JSON.stringify([badge(),elements['lean-empty'].style.display,elements['lean-progress-title'].textContent,elements['lean-progress-detail'].textContent,diagnostics]));
+})();
+"""))
+        self.assertEqual(
+            out,
+            ["—", "flex", "Action refused", "Only the member who started this run can run Lean actions on it.", []],
         )
 
 
