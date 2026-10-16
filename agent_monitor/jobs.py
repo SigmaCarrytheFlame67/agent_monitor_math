@@ -4690,13 +4690,21 @@ def _run_cli_engine(
     failure_reason = None
     if not ok:
         label = str(spec.get("label") or engine)
+        # claude_runner's typed failure quotes the CLI's own result text and
+        # adds what a web user can do ("reconnect Claude Code in Settings"
+        # rather than the CLI's "Please run /login"), so it comes first.
+        detail = (
+            (runner_detail[-1200:] or parser.terminal_error)
+            if engine == "claude"
+            else (parser.terminal_error or runner_detail[-1200:])
+        )
         failure_reason = _cli_failure_reason(
             label=label,
             returncode=proc.returncode,
             timed_out=timed_out,
             timeout_s=timeout_s,
             proof_missing=proof_missing,
-            detail=parser.terminal_error or runner_detail[-1200:] or None,
+            detail=detail or None,
             artifact="analysis report" if analyze_run else "proof artifact",
         )
     return _flush(

@@ -144,6 +144,34 @@ def _claude_env(config: str) -> dict[str, str]:
     }
 
 
+def _fake_claude_cli(bin_dir: Path, events: tuple[dict, ...], *, exit_code: int = 0, proof: str = "") -> Path:
+    """A stand-in ``claude`` that appends its argv and stdin prompt to
+    ``calls.jsonl`` beside it, writes ``proof`` (if any) to ./proof.md, prints
+    ``events`` as stream-json and exits with ``exit_code``."""
+    bin_dir.mkdir(parents=True, exist_ok=True)
+    fake = bin_dir / "claude"
+    fake.write_text(textwrap.dedent(f"""\
+        #!{sys.executable}
+        import json, sys
+        prompt = sys.stdin.read()
+        with open({str(bin_dir / "calls.jsonl")!r}, "a", encoding="utf-8") as calls:
+            calls.write(json.dumps({{"argv": sys.argv[1:], "stdin": prompt}}) + "\\n")
+        if {proof!r}:
+            with open("proof.md", "w", encoding="utf-8") as artifact:
+                artifact.write({proof!r})
+        for event in {list(events)!r}:
+            print(json.dumps(event), flush=True)
+        sys.exit({exit_code})
+        """), encoding="utf-8")
+    fake.chmod(fake.stat().st_mode | stat.S_IXUSR)
+    return fake
+
+
+def _fake_claude_calls(fake: Path) -> list[dict]:
+    calls = fake.with_name("calls.jsonl")
+    return [json.loads(line) for line in calls.read_text(encoding="utf-8").splitlines()] if calls.exists() else []
+
+
 class ClaudeCode2_1_296FailureTests(unittest.TestCase):
     def test_every_real_auth_failure_marks_the_account_for_reconnection(self) -> None:
         for text in CLAUDE_2_1_296_AUTH_TEXTS:
@@ -854,6 +882,30 @@ class CliEngineFailureDetailTests(unittest.TestCase):
                                        problem_text="Prove it.", started=time.time(), workspace=Path(tmp))
         self.assertEqual(run["status"], "failed")
         self.assertIn("without a fresh substantive regular root proof artifact", run["error"])
+
+    def test_a_claude_sign_in_failure_tells_the_web_user_to_reconnect(self) -> None:
+        # Claude Code's own result says "Please run /login", which a web user
+        # cannot do; claude_runner's typed message says what to do instead.
+        runner = Path(claude_backend.__file__).with_name("claude_runner.py")
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "config").mkdir()
+            (root / "workspace").mkdir()
+            fake = _fake_claude_cli(root / "bin", _synthetic_failure(
+                "Not logged in · Please run /login", "authentication_failed"), exit_code=1)
+            extra_env = {**_claude_env(str(root / "config")),
+                         "PATH": os.pathsep.join([str(fake.parent), "/usr/bin", "/bin"])}
+            # HOME keeps the registry's ~/.local/bin (a real install) off PATH.
+            with patch.dict(os.environ, {"HOME": str(root)}), patch(
+                "agent_monitor.engines_registry.build_cli_command",
+                return_value=[sys.executable, "-u", str(runner), "Prove it."],
+            ), patch("agent_monitor.agent_config.persona_preamble", return_value=""), patch.object(jobs, "_write_run"):
+                run = jobs._run_cli_engine(run_id="claude_reauth", engine="claude", problem_id="p",
+                                           problem_text="Prove it.", started=time.time(),
+                                           workspace=root / "workspace", extra_env=extra_env)
+            self.assertTrue(_fake_claude_calls(fake))
+        self.assertEqual(run["status"], "failed")
+        self.assertIn("reconnect Claude Code in Settings", run["error"])
 
     def test_a_prompt_too_large_for_the_command_line_is_explained(self) -> None:
         with tempfile.TemporaryDirectory() as tmp, patch(
