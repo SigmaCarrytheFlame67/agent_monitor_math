@@ -4488,6 +4488,9 @@ def main(port: int | None = None):
     recovered = job_manager.reconcile_stale_running_runs(min_age_seconds=0)
     if recovered:
         print(f"[recovery] marked {len(recovered)} orphaned run(s) interrupted: {', '.join(recovered)}")
+    removed_logins = job_manager.remove_legacy_codex_key_homes()
+    if removed_logins:
+        print(f"[cleanup] removed {removed_logins} saved Codex API-key login(s) from the data directory")
     if start_guest_retention_thread() is not None:
         print(f"  guest run retention       -> {guest_run_retention_days()} days")
     root = f"http://localhost:{port}{BASE_PATH or ''}"

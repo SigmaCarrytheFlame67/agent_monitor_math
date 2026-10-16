@@ -3722,7 +3722,7 @@ def _hermes_text_is_error_report(result: Any) -> bool:
     return bool(text) and text == str(result.get("error") or "").strip()
 
 
-def _ensure_codex_auth(env: dict[str, str], owner_id: int | None = None) -> None:
+def _ensure_codex_auth(env: dict[str, str], owner_id: int | None = None) -> Path | None:
     """Point codex at a CODEX_HOME with valid credentials.
 
     Prefers the *run owner's* ChatGPT/OpenAI-account (OAuth) login — set up
@@ -3734,14 +3734,14 @@ def _ensure_codex_auth(env: dict[str, str], owner_id: int | None = None) -> None
     ``AGENT_MONITOR_CODEX_AUTH_MODE=apikey`` to force API-key mode even when
     an account login exists.
 
-    Falls back to a per-key CODEX_HOME (auto logged in with OPENAI_API_KEY)
-    when no account login is present (or no owner is known); keying that
-    home dir by the API key keeps different users' credentials separate and
-    auto-refreshes when a key changes in Settings.
+    Falls back to a private CODEX_HOME made for this run and logged in with
+    OPENAI_API_KEY when no account login is present (or no owner is known).
+    ``codex login`` stores the key in plaintext, so that home lives outside
+    the data directory and is returned for the caller to remove
+    (``_remove_codex_api_home``) once Codex has exited.
     """
-    import hashlib
-    import shutil
     import subprocess
+    import tempfile
 
     if owner_id is not None:
         from agent_monitor import codex_login
@@ -3752,21 +3752,18 @@ def _ensure_codex_auth(env: dict[str, str], owner_id: int | None = None) -> None
         force_apikey = mode in {"api_key", "apikey"} or not use_codex
         if not force_apikey and codex_login.account_login_ready(account_home):
             env["CODEX_HOME"] = str(account_home)
-            return
+            return None
 
     key = env.get("OPENAI_API_KEY")
     if not key:
-        return
-    home = CACHE_DIR.parent / "codex_home" / hashlib.sha256(key.encode("utf-8")).hexdigest()[:16]
-    home.mkdir(parents=True, exist_ok=True)
+        return None
+    home = Path(tempfile.mkdtemp(prefix="agent-monitor-codex-"))
     env["CODEX_HOME"] = str(home)
-    if (home / "auth.json").exists():
-        return
     from agent_monitor.engines_registry import which_tool
 
     codex = shutil.which("codex", path=env.get("PATH")) or which_tool("codex")
     if not codex:
-        return
+        return home
     try:
         from agent_monitor.subprocess_env import child_process_env
 
@@ -3785,6 +3782,41 @@ def _ensure_codex_auth(env: dict[str, str], owner_id: int | None = None) -> None
         )
     except (OSError, subprocess.TimeoutExpired):
         pass
+    return home
+
+
+def _remove_codex_api_home(home: Path | None) -> None:
+    """Delete a run's private API-key CODEX_HOME (from ``_ensure_codex_auth``)."""
+    if home is not None:
+        shutil.rmtree(home, ignore_errors=True)
+
+
+# Earlier versions kept one Codex login per API key at codex_home/<16 hex>.
+_LEGACY_CODEX_KEY_HOME = re.compile(r"[0-9a-f]{16}")
+
+
+def remove_legacy_codex_key_homes() -> int:
+    """Delete the per-key Codex logins earlier versions left in the data directory.
+
+    Each held an OpenAI key in plaintext, outside the encrypted settings, and
+    nothing removed it when the key changed. Account sign-ins (``users/``)
+    are kept. Returns how many were removed.
+    """
+    root = CACHE_DIR.parent / "codex_home"
+    try:
+        entries = list(root.iterdir())
+    except OSError:
+        return 0
+    removed = 0
+    for entry in entries:
+        if (
+            _LEGACY_CODEX_KEY_HOME.fullmatch(entry.name)
+            and entry.is_dir()
+            and not entry.is_symlink()
+        ):
+            shutil.rmtree(entry, ignore_errors=True)
+            removed += 1
+    return removed
 
 
 def _cli_failure_reason(
@@ -4471,8 +4503,9 @@ def _run_cli_engine(
     extra = engine_extra_path(engine)
     if extra:
         env["PATH"] = os.pathsep.join([*extra, env.get("PATH", "")])
+    codex_api_home = None
     if engine == "codex" and not _is_kimi_model(requested_model):
-        _ensure_codex_auth(env, owner_id)
+        codex_api_home = _ensure_codex_auth(env, owner_id)
     # Cap node heap so openclaw survives this small-RAM host (no swap).
     if engine == "openclaw":
         env.setdefault("NODE_OPTIONS", "--max-old-space-size=256")
@@ -4498,6 +4531,7 @@ def _run_cli_engine(
             start_new_session=True,
         )
     except OSError as exc:
+        _remove_codex_api_home(codex_api_home)
         label = str(spec.get("label") or engine)
         reason = f"{label} could not start: {exc.strerror or exc}"
         if getattr(exc, "errno", None) == errno.E2BIG:
@@ -4591,6 +4625,7 @@ def _run_cli_engine(
         if proc.stdout is not None:
             proc.stdout.close()
         _unregister_proc(run_id)
+        _remove_codex_api_home(codex_api_home)
     if engine == "openhands":
         parser.finalize_openhands()
     elif engine == "openclaw":
