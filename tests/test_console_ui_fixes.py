@@ -219,6 +219,46 @@ const codex=connected=>({status:connected?'success':'idle',running:false,connect
         )
         self.assertEqual(out["codexUnchanged"]["loads"], 2)
 
+    def test_a_codex_sign_in_reloads_its_models_once_the_account_catalog_is_fetched(self) -> None:
+        # codex_login saves the sign-in, then runs `codex debug models` (up to
+        # 30 s) before it reports success: polls in between say connected,
+        # and /api/settings still has the bundled fallback list.
+        program = (
+            _CARDS_DOM
+            + _js_function("selectedAccountRuntime")
+            + "\n"
+            + _sign_in_cards()
+            + r"""
+const fallback=['gpt-6.1-sol','gpt-6-astra','gpt-6-sol'], account=['gpt-7-real','gpt-5.5'];
+let catalog=[];
+const loadSettings=async()=>{ loads++; SETTINGS={...SETTINGS,codex_connected:catalog.length>0,codex_models:[...catalog],models_by_runtime:{...SETTINGS.models_by_runtime,codex:[...catalog]}}; };
+SETTINGS={account_runtime:'codex',subscription_policy:{codex:'available'},codex_connected:false,codex_models:[],models_by_runtime:{codex:[]}};
+const poll=(status,connected)=>({status,running:status==='running',connected,reauth_required:false,codex_installed:true,url:'https://auth.openai.com/codex/device',code:'ABCD-12345'});
+(async()=>{
+  const out=[];
+  await applyCodexStatus(poll('running',false)); out.push([loads,SETTINGS.codex_models]);
+  catalog=fallback;
+  await applyCodexStatus(poll('running',true)); out.push([loads,SETTINGS.codex_models]);
+  await applyCodexStatus(poll('running',true)); out.push([loads,SETTINGS.codex_models]);
+  catalog=account;
+  await applyCodexStatus(poll('success',true)); out.push([loads,SETTINGS.codex_models]);
+  // Settings reopened later: the login still reports success, nothing to reload.
+  await applyCodexStatus(poll('success',true)); out.push([loads,SETTINGS.codex_models]);
+  console.log(JSON.stringify(out));
+})().catch(error=>{console.error(error);process.exit(1);});
+"""
+        )
+        self.assertEqual(
+            _run(program),
+            [
+                [0, []],
+                [1, ["gpt-6.1-sol", "gpt-6-astra", "gpt-6-sol"]],
+                [1, ["gpt-6.1-sol", "gpt-6-astra", "gpt-6-sol"]],
+                [2, ["gpt-7-real", "gpt-5.5"]],
+                [2, ["gpt-7-real", "gpt-5.5"]],
+            ],
+        )
+
 
 
 @unittest.skipUnless(NODE, "node is unavailable")

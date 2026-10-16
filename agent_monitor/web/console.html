@@ -3086,6 +3086,9 @@ function renderCodexCard(st){
   const cp=$('codex-copy-btn'); if(cp)cp.onclick=()=>{ navigator.clipboard?.writeText(cp.dataset.code||''); cp.textContent='Copied!'; setTimeout(()=>{cp.textContent='Copy';},1500); };
 }
 async function applyCodexStatus(st){
+  // A sign-in reads as connected while the server still fetches the account's
+  // model catalog (the list until then is the bundled one); it ends with success.
+  const finished=LAST_CODEX_STATUS?.status==='running'&&st.status==='success';
   LAST_CODEX_STATUS=st;
   const wasConnected=!!SETTINGS?.codex_connected;
   if(SETTINGS){
@@ -3098,7 +3101,7 @@ async function applyCodexStatus(st){
   renderCodexCard(st);
   // Linking or unlinking an account also changes what /api/settings derives
   // from the linked accounts (Max, each runtime's thinking controls).
-  const needsModels=!!SETTINGS&&(wasConnected!==!!st.connected||!!st.connected&&!(SETTINGS.codex_models||[]).length);
+  const needsModels=!!SETTINGS&&(wasConnected!==!!st.connected||!!st.connected&&(finished||!(SETTINGS.codex_models||[]).length));
   if(needsModels)await loadSettings({keepEngine:true});
   else if(SETTINGS){ renderRuntimeSelector(); syncRuntimeModelControls(); renderEngines(); }
 }
