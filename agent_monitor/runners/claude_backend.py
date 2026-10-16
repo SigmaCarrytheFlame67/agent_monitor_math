@@ -11,6 +11,7 @@ import json
 import math
 import os
 import queue
+import re
 import shutil
 import signal
 import stat
@@ -41,7 +42,8 @@ class ClaudeBackendError(RuntimeError):
 
     ``kind`` classifies failures a caller should not simply retry: ``"auth"``
     (the linked account must be reconnected), ``"usage_limit"`` (the
-    subscription's session/weekly limit or a rate limit), ``"model"`` (the
+    subscription's session/weekly limit, or its usage credits are spent or
+    off; a transient 429 is not one), ``"model"`` (the
     account cannot use the selected model), ``"timeout"`` (no answer within
     the per-call limit); ``None`` otherwise.
     """
@@ -61,8 +63,8 @@ class ClaudeAuthenticationError(ClaudeBackendError):
 # Claude Code 2.1.x marks its own (non-model) API error messages with an
 # ``error`` category on a synthetic assistant event. ``rate_limit`` is not
 # listed: it covers every 429, including "Request rejected (429) · this may be
-# a temporary capacity issue", so only its text ("You've hit your … limit")
-# makes it a usage limit (see ``_looks_like_usage_limit``).
+# a temporary capacity issue", so only its text ("You've hit your … limit") or
+# typed cause makes it a usage limit (see ``_looks_like_usage_limit``).
 _API_ERROR_KINDS = {
     "authentication_failed": "auth",
     "oauth_org_not_allowed": "auth",
@@ -71,6 +73,30 @@ _API_ERROR_KINDS = {
     "billing_error": "usage_limit",
     "model_not_found": "model",
 }
+# How Claude Code (2.1.301) words a plan or usage-credit limit, which it files
+# under ``rate_limit`` too: the CLI's own list of opening words, plus the
+# per-model credit refusal ("Fable 5 requires usage credits.").
+_USAGE_LIMIT_PREFIXES = (
+    "You've hit your",
+    "You've reached your",
+    "You're out of usage credits",
+    "You're out of extra usage",
+    "Your org is out of usage · add funds to continue",
+    "Your org is out of usage · contact your admin",
+    "Your organization is out of usage credits",
+    "Your seat type doesn't include usage",
+    "Your seat type doesn't include extra usage",
+    "Your usage allocation has been disabled by your admin",
+    "Your group's usage limit is set to $0",
+    "Fable 5 requires usage credits",
+)
+_REQUIRES_USAGE_CREDITS = re.compile(
+    r"^(?:Fable|Haiku|Mythos|Opus|Sonnet)(?: [^·\n]{1,40})? requires usage credits\."
+)
+# 2.1.301 also copies the refusal's typed cause onto the result
+# (``api_error``); among the ``rate_limit`` refusals only these two mean the
+# account's own limit.
+_USAGE_LIMIT_API_ERRORS = frozenset({"usage_limit_reached", "model_requires_usage_credits"})
 
 
 @dataclass(frozen=True)
@@ -238,8 +264,12 @@ def _looks_like_oauth_failure(value: object) -> bool:
 
 
 def _looks_like_usage_limit(value: object) -> bool:
-    """A plan limit ("You've hit your session limit"), not a transient 429."""
-    rendered = str(value or "").strip().lower()
+    """A plan or usage-credit limit ("You've hit your session limit", "You're
+    out of usage credits"), not a transient 429."""
+    text = str(value or "").strip().replace("’", "'")
+    if text.startswith(_USAGE_LIMIT_PREFIXES) or _REQUIRES_USAGE_CREDITS.match(text):
+        return True
+    rendered = text.lower()
     return ("hit your" in rendered and "limit" in rendered) or "usage limit reached" in rendered
 
 
@@ -811,7 +841,11 @@ def _terminal_result(process: _ProcessResult) -> ClaudeResult:
         safe_subtype = subtype if subtype.lower() not in {"success", "completed"} else ""
         suffix = f" ({safe_subtype})" if safe_subtype and safe_subtype not in detail else ""
         kind = category_kind
-        if kind is None and (_looks_like_usage_limit(detail) or _looks_like_usage_limit(category_text)):
+        if kind is None and (
+            str(terminal.get("api_error") or "").strip().lower() in _USAGE_LIMIT_API_ERRORS
+            or _looks_like_usage_limit(detail)
+            or _looks_like_usage_limit(category_text)
+        ):
             kind = "usage_limit"
         raise ClaudeBackendError(f"Claude Code failed{suffix}: {detail}", kind=kind)
     if process.returncode:

@@ -88,6 +88,29 @@ CLAUDE_2_1_296_AUTH_TEXTS = (
     "Failed to authenticate: OAuth token revoked. Please log in again or contact your administrator.",
     "Login expired · Please run /login",
 )
+# Claude Code 2.1.301 files every plan and usage-credit refusal under
+# ``rate_limit``, the same category as a transient 429.
+CLAUDE_2_1_301_LIMIT_TEXTS = (
+    "You've reached your Fable limit. Run /usage-credits to keep using Fable or /model to switch models.",
+    "You're out of usage credits · resets 5pm",
+    "You're out of usage credits. /model to switch models.",
+    "You're out of extra usage · resets 5pm",
+    "Your org is out of usage · add funds to continue",
+    "Your org is out of usage · contact your admin",
+    "Your seat type doesn't include usage credits",
+    "Your seat type doesn't include extra usage",
+    "Your usage allocation has been disabled by your admin",
+    "Your group's usage limit is set to $0",
+    "Fable 5 requires usage credits. Run /usage-credits to turn them on or /model to switch models.",
+    "Opus 5.5 requires usage credits. Run /usage-credits to turn them on or /model to switch models.",
+    "Your organization is out of usage credits. Contact your admin to add more.",
+    "You’re out of usage credits · resets 5pm",  # typographic apostrophe
+)
+# The same category, but a capacity problem that the next call may not hit.
+CLAUDE_TRANSIENT_RATE_LIMIT_TEXTS = (
+    "API Error: Request rejected (429) · this may be a temporary capacity issue.",
+    "Opus is experiencing high load, please use /model to switch to Sonnet",
+)
 REFRESH_LOCK = (
     "Failed to refresh OAuth token: another Claude Code process is refreshing it or "
     "exited mid-refresh. This is usually transient; retry in a minute, and if it "
@@ -176,6 +199,34 @@ class ClaudeCode2_1_296FailureTests(unittest.TestCase):
             claude_backend._terminal_result(process)
         self.assertIsNone(raised.exception.kind)
         self.assertIn("temporary capacity issue", str(raised.exception))
+
+    def test_plan_and_usage_credit_limits_are_usage_limits(self) -> None:
+        for text in CLAUDE_2_1_301_LIMIT_TEXTS:
+            with self.subTest(text=text):
+                process = claude_backend._ProcessResult(1, "", _synthetic_failure(text, "rate_limit", status=429))
+                with self.assertRaises(claude_backend.ClaudeBackendError) as raised:
+                    claude_backend._terminal_result(process)
+                self.assertNotIsInstance(raised.exception, claude_backend.ClaudeAuthenticationError)
+                self.assertEqual(raised.exception.kind, "usage_limit")
+                self.assertIn(text, str(raised.exception))
+        for text in CLAUDE_TRANSIENT_RATE_LIMIT_TEXTS:
+            with self.subTest(text=text):
+                process = claude_backend._ProcessResult(1, "", _synthetic_failure(text, "rate_limit", status=429))
+                with self.assertRaises(claude_backend.ClaudeBackendError) as raised:
+                    claude_backend._terminal_result(process)
+                self.assertIsNone(raised.exception.kind)
+
+    def test_the_typed_limit_on_the_result_is_a_usage_limit_whatever_its_wording(self) -> None:
+        # 2.1.301 copies the refusal's typed cause onto the result; the text
+        # is only the fallback and may change.
+        for typed in ("usage_limit_reached", "model_requires_usage_credits"):
+            with self.subTest(api_error=typed):
+                events = _synthetic_failure("Weekly allowance used · back Monday", "rate_limit", status=429)
+                events = (*events[:-1], {**events[-1], "api_error": typed})
+                with self.assertRaises(claude_backend.ClaudeBackendError) as raised:
+                    claude_backend._terminal_result(claude_backend._ProcessResult(1, "", events))
+                self.assertEqual(raised.exception.kind, "usage_limit")
+                self.assertIn("Weekly allowance used", str(raised.exception))
 
     def test_max_turns_reports_the_cli_reason(self) -> None:
         process = claude_backend._ProcessResult(1, "", (
@@ -339,6 +390,16 @@ class AnalyzeSubscriptionFailureTests(unittest.TestCase):
             "Claude Code failed: You've hit your session limit · resets 11pm (UTC)", kind="usage_limit"))
         self.assertTrue(run.permanent_failure)
         self.assertIn("You've hit your session limit", message)
+
+    def test_a_spent_model_allowance_stops_the_checks_and_says_why(self) -> None:
+        process = claude_backend._ProcessResult(1, "", _synthetic_failure(
+            "You've reached your Fable limit. Run /usage-credits to keep using Fable or /model to switch models.",
+            "rate_limit", status=429))
+        with self.assertRaises(claude_backend.ClaudeBackendError) as raised:
+            claude_backend._terminal_result(process)
+        run, message = self._run(raised.exception)
+        self.assertTrue(run.permanent_failure)
+        self.assertIn("You've reached your Fable limit", message)
 
     def test_reconnect_required_stops_the_checks(self) -> None:
         run, message = self._run(codex_backend.CodexBackendError(
