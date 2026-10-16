@@ -6134,6 +6134,10 @@ def _execute_continue(
                 max_iterations=max_iterations,
                 owner_id=owner_id,
             )
+        if _stop_event(run_id).is_set() or result_run.get("status") == "stopped":
+            # A Stop wins over what the stopped engine returned (IMProof
+            # reports its killed workflow as failed), as on a first run.
+            raise StopRequested(run_id)
         result_run = _merge_continuation_run(
             previous_run_data, result_run, job_id=job_id
         )

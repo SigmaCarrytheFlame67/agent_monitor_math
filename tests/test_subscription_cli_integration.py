@@ -724,6 +724,76 @@ class InterruptedContinuationTests(unittest.TestCase):
         self.assertIs(jobs._interrupted_continuation_record(previous, unstarted, job_id="j2"), unstarted)
 
 
+class StoppedFollowUpTests(unittest.TestCase):
+    """Stop pressed during a follow-up wins over what the stopped engine returns."""
+
+    def _continue(self, engine: str, *, stopped_result) -> tuple[dict, dict, bool]:
+        run_id, job_id = f"{engine}_stopped_follow_up", f"job-{engine}-stopped"
+        root = Path(self.enterContext(tempfile.TemporaryDirectory()))
+        self.enterContext(patch.object(jobs, "RUNS_DIR", root / "runs"))
+        self.enterContext(patch.object(jobs, "CACHE_DIR", root / "cache"))
+        workspace = root / "runs" / "workspaces" / run_id
+        workspace.mkdir(parents=True)
+        (workspace / "proof.md").write_text("# Claim\n\nThe first session's proof.\n", encoding="utf-8")
+        jobs._write_run({
+            "run_id": run_id, "engine": engine, "problem_id": "p", "status": "finished",
+            "problem_text": "Prove it.", "problems": [{"text": "Prove it.", "source": "initial"}],
+            "agents": [{"trace_id": f"{run_id}::first", "output": "first session", "status": "finished"}],
+            "edges": [],
+        })
+        jobs._JOBS[job_id] = {"job_id": job_id, "run_id": run_id, "status": "running", "engine": engine}
+        self.addCleanup(jobs._JOBS.pop, job_id, None)
+        self.addCleanup(jobs._STOP_EVENTS.pop, run_id, None)
+        jobs._stop_event(run_id).clear()
+
+        def engine_stopped_by_user(*_args, **_kwargs):
+            self.assertEqual(jobs.stop_run(run_id)["status"], "stopped")
+            return stopped_result(run_id)
+
+        with (
+            patch("agent_monitor.runners.improof.run_problem", side_effect=engine_stopped_by_user),
+            patch.object(jobs, "_run_cli_engine", side_effect=engine_stopped_by_user),
+            patch.object(jobs, "_launch_pending_feedback"),
+            patch.object(auto_pipeline, "start") as derived,
+        ):
+            jobs._execute_continue(
+                job_id=job_id, run_id=run_id, engine=engine, message="Add the boundary case.",
+                problem_text="Prove it.", model=None, max_iterations=2, workspace=str(workspace),
+            )
+        return jobs._load_run_record(run_id), dict(jobs._JOBS[job_id]), derived.called
+
+    def test_a_stopped_improof_follow_up_is_not_recorded_as_failed(self) -> None:
+        # The killed workflow exits -9, which run_problem reports as failed.
+        def killed_workflow(_run_id: str) -> dict:
+            return {"engine": "improof", "status": "failed", "returncode": -9,
+                    "stdout_tail": "", "stderr_tail": ""}
+
+        run, job, derived = self._continue("improof", stopped_result=killed_workflow)
+
+        self.assertEqual(run["status"], "stopped")
+        self.assertIsNone(run.get("error"))
+        self.assertEqual(job["status"], "stopped")
+        self.assertFalse(derived)
+        self.assertEqual(run["agents"][0]["output"], "first session")
+
+    def test_a_stopped_cli_follow_up_is_not_recorded_as_finished(self) -> None:
+        def stopped_cli(run_id: str) -> dict:
+            # _run_cli_engine writes and returns the follow-up's own nodes.
+            partial = {"run_id": run_id, "status": "stopped", "agents": [
+                {"trace_id": f"{run_id}::turn-1", "output": "partial follow-up", "status": "stopped"}]}
+            jobs._write_run(dict(partial))
+            return partial
+
+        run, job, derived = self._continue("codex", stopped_result=stopped_cli)
+
+        self.assertEqual(run["status"], "stopped")
+        self.assertEqual(job["status"], "stopped")
+        self.assertFalse(derived)
+        self.assertEqual(
+            [agent["output"] for agent in run["agents"]], ["first session", "partial follow-up"]
+        )
+
+
 class MetaHarnessAuditFailureTests(unittest.TestCase):
     PROMPT = "Prove x.\n\nCANDIDATE AUDIT GATE: run the audit"
 
