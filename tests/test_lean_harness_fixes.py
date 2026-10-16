@@ -920,3 +920,66 @@ console.log(JSON.stringify({waiting,stop,off}));
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class HarnessPromptFileTests(_HarnessStateCleanup):
+    """A harness never leaves an unread prompt file in the Lean folder."""
+
+    RUN = {**_CLAUDE_RUN, "engine": "math_harness"}
+
+    def test_the_worker_removes_a_prompt_file_its_agent_never_read(self) -> None:
+        from agent_monitor.engines_registry import PROMPT_FILENAME
+
+        for finish in ({"return_value": {"harness": {}}}, {"side_effect": RuntimeError("audit setup exploded")}):
+            with self.subTest(finish=finish), tempfile.TemporaryDirectory() as tmp:
+                workspace = Path(tmp).resolve()
+                ldir = workspace / lean_verify.LEAN_DIRNAME
+                ldir.mkdir()
+                (ldir / PROMPT_FILENAME).write_text("the task", encoding="utf-8")
+                base = _running_base(workspace)
+                token = lean_verify._reserve_formal_operation(workspace, "harness/claude")
+                with patch.object(lean_verify, "_harness_finish", **finish):
+                    try:
+                        lean_verify._harness_worker_guarded(
+                            operation_token=token, workspace=workspace, ldir=ldir,
+                            argv=[sys.executable, "-c", "print('agent done')"],
+                            engine="claude", label="Claude Code", user={"id": 17}, model="sonnet",
+                            run_record=_CLAUDE_RUN, env={}, problem="Prove True.", informal="Trivial.",
+                            base=base, initial_fingerprint=None, audit=True,
+                        )
+                    except RuntimeError:
+                        pass
+                self.assertFalse((ldir / PROMPT_FILENAME).exists())
+
+    def test_a_harness_that_never_launches_leaves_no_prompt_file(self) -> None:
+        from agent_monitor.engines_registry import PROMPT_FILENAME
+
+        class BrokenThread:
+            def __init__(self, **_unused):
+                pass
+
+            def start(self) -> None:
+                raise RuntimeError("can't start new thread")
+
+        with tempfile.TemporaryDirectory() as tmp:
+            workspace = Path(tmp).resolve()
+            with (
+                patch("agent_monitor.claude_login.account_home", return_value=workspace / "c"),
+                patch("agent_monitor.claude_login.account_login_ready", return_value=True),
+                patch("agent_monitor.auth.is_operator_account", return_value=True),
+                patch(
+                    "agent_monitor.engines_registry._cli_available",
+                    return_value=(True, "{python} -c pass {prompt_file}"),
+                ),
+                patch.object(lean_verify, "toolchain_status", return_value={"available": True}),
+                patch("agent_monitor.lean_verify.threading.Thread", BrokenThread),
+                self.assertRaisesRegex(RuntimeError, "new thread"),
+            ):
+                lean_verify.start_harness(
+                    workspace=workspace, run_record=self.RUN,
+                    user={"id": 17, "is_admin": True}, engine="claude", run_id="run-derived",
+                )
+            self.assertFalse((lean_verify.lean_dir(workspace) / PROMPT_FILENAME).exists())
+            # The reservation is free again: another Lean action may start.
+            token = lean_verify._reserve_formal_operation(workspace, "after")
+            lean_verify._release_formal_operation(workspace, token)

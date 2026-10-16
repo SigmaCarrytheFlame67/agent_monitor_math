@@ -7308,7 +7308,11 @@ def _start_harness_reserved(
     finished harness that changed Proof.lean refreshes the run's derived
     formal views.
     """
-    from agent_monitor.engines_registry import CLI_ENGINES, build_cli_command
+    from agent_monitor.engines_registry import (
+        CLI_ENGINES,
+        build_cli_command,
+        discard_prompt_file,
+    )
 
     spec = CLI_ENGINES.get(engine)
     if not spec or engine in _HARNESS_EXCLUDE:
@@ -7401,6 +7405,55 @@ def _start_harness_reserved(
             f"{spec.get('label') or engine} is not configured on this server — "
             f"{spec.get('install_hint') or 'install it first'}"
         )
+    try:
+        return _launch_harness(
+            workspace=workspace,
+            ldir=ldir,
+            argv=argv,
+            engine=engine,
+            spec=spec,
+            selected_model=selected_model,
+            prompt=prompt,
+            harness_env=harness_env,
+            auth_route=auth_route,
+            lean_src=lean_src,
+            initial_fingerprint=initial_fingerprint,
+            user=user,
+            run_record=run_record,
+            problem=problem,
+            informal=informal,
+            audit=audit,
+            run_id=run_id,
+            _operation_token=_operation_token,
+        )
+    except BaseException:
+        # No worker will run: remove a prompt file nothing will read.
+        discard_prompt_file(ldir)
+        raise
+
+
+def _launch_harness(
+    *,
+    workspace: Path,
+    ldir: Path,
+    argv: list[str],
+    engine: str,
+    spec: dict[str, Any],
+    selected_model: str | None,
+    prompt: str,
+    harness_env: dict[str, str],
+    auth_route: str | None,
+    lean_src: str,
+    initial_fingerprint: dict[str, Any] | None,
+    user: dict[str, Any] | None,
+    run_record: dict[str, Any] | None,
+    problem: str,
+    informal: str,
+    audit: bool,
+    run_id: str | None,
+    _operation_token: object,
+) -> dict[str, Any]:
+    """Record the running harness and start its worker thread."""
     argv = _selected_harness_argv(
         engine=engine,
         model=selected_model,
@@ -7530,6 +7583,12 @@ def _harness_worker_guarded(
             pass
         raise
     finally:
+        from agent_monitor.engines_registry import discard_prompt_file
+
+        # A wrapper deletes its prompt file once read; an agent that never
+        # read it (another command line, or no launch) leaves it behind.
+        if kwargs.get("ldir"):
+            discard_prompt_file(Path(kwargs["ldir"]))
         with _HARNESS_LOCK:
             _HARNESS_JOBS.pop(key, None)
         _release_formal_operation(workspace, operation_token)
