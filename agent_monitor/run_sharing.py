@@ -239,6 +239,20 @@ def _withhold_lean_errors(lean):
     return lean
 
 
+_GRAPH_IDS = {'id', 'trace_id', 'source', 'target', 'from', 'to', 'kind', 'type', 'role', 'status'}
+
+
+def _withhold_graph_lines(value, key=None):
+    """Graph text (Explore statements are step output) without account lines."""
+    if isinstance(value, str):
+        return value if key in _GRAPH_IDS else _withhold_account_lines(value)
+    if isinstance(value, dict):
+        return {name: _withhold_graph_lines(entry, name) for name, entry in value.items()}
+    if isinstance(value, list):
+        return [_withhold_graph_lines(entry, key) for entry in value]
+    return value
+
+
 def _stage_detail(stage):
     """A stage chip's note without the provider error some notes quote."""
     detail = stage.get('detail')
@@ -1081,6 +1095,9 @@ def console_view(snap):
     status = _text(snap.get('status'), 80)
     # Worked examples carry a descriptive status; the console knows run states.
     status = status if status in _RUN_STATES else 'finished'
+    if status != 'finished':
+        # An unfinished run's draft can be the provider's failure message.
+        proof = _withhold_account_lines(proof)
     # Re-filtered: links made before provider errors were withheld.
     lean = _withhold_lean_errors(snap['lean_record']) if isinstance(snap.get('lean_record'), dict) else None
     if lean is None and isinstance(snap.get('lean_source'), str) and snap['lean_source'].strip():
@@ -1098,6 +1115,9 @@ def console_view(snap):
                    if isinstance(agent, dict) and '::' in str(agent.get('id') or '')}
         graphs = _neutral({mode: _clean_legacy_graph(record, steps=mode in {'explore', 'facts'})
                            for mode, record in graphs.items()}, run_ids)
+    # Every version: step output and the graphs built from it can quote a
+    # provider's account error (sign-in, limits) naming the owner's account.
+    graphs = _withhold_graph_lines(graphs)
     agents = []
     for index, agent in enumerate(_items(snap.get('agents'), 100), 1):
         if not isinstance(agent, dict):
@@ -1109,6 +1129,7 @@ def console_view(snap):
             # rules (tool output withheld, server paths and costs removed).
             tool = bool(_TOOL_LABEL.search(str(agent.get('label') or '')))
             output = _agent_output({'summary': output, 'role': 'tool' if tool else ''})
+        output = _withhold_account_lines(output)
         recorded = str(agent.get('trace_id') or agent.get('id') or '')
         step = recorded if not legacy and recorded.startswith(CONSOLE_RUN + '::') else f'{CONSOLE_RUN}::{index}'
         entry.update({'trace_id': step, 'call_seq': agent.get('call_seq') or index,

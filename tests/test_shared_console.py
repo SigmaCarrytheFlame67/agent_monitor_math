@@ -497,3 +497,26 @@ def test_shares_withhold_provider_errors_from_the_lean_record_old_links_included
     assert view['fidelity']['findings'] == ['The sign in (3) flips; the log in base 2 is fine.']
     stored = {'version': 3, 'title': 'P', 'proof': 'x', 'status': 'finished', 'lean_record': record}
     assert 'OAuth' not in json.dumps(shares.shared_payload(stored))
+
+
+def test_shares_withhold_account_errors_from_steps_chat_and_graphs_old_links_included():
+    claude = ('Failed to authenticate: OAuth session expired and could not be refreshed\n'
+              '[agent-monitor] Claude Code subscription authentication failed; reconnect Claude Code in Settings.')
+    codex = 'error · Your access token could not be refreshed. Please log out and sign in again.'
+    stored = {'version': 3, 'title': 'P', 'status': 'failed', 'proof': codex,
+              'agents': [{'trace_id': 'shared::turn-1', 'stage_name': 'turn-1 (message)', 'summary': 'Let n be odd.'},
+                         {'trace_id': 'shared::turn-2', 'stage_name': 'turn-2 (error)', 'summary': claude}],
+              'graphs': {'explore': {'status': 'recorded', 'graph': {'nodes': [
+                  {'id': 'shared::turn-2', 'statement': codex, 'label': 'turn-2'},
+                  {'id': 'shared::turn-1', 'statement': 'The sign in (3) flips; take the log in base 2.'}], 'edges': []}}},
+              'run_view': {'status': 'failed', 'error': claude}}
+    payload = shares.shared_payload(stored)
+    dumped = json.dumps(payload, ensure_ascii=False)
+    for leaked in ('OAuth', 'reconnect', 'access token', 'log out', 'subscription'):
+        assert leaked not in dumped, leaked
+    console = payload['console']
+    assert console['run']['agents'][0]['output'] == 'Let n be odd.'
+    assert console['chat'] == [{'role': 'assistant', 'content': console['run']['agents'][1]['output']}]
+    nodes = console['graphs']['engine:workflow']['graph']['nodes']
+    assert [node['id'] for node in nodes] == ['shared::turn-2', 'shared::turn-1']
+    assert nodes[1]['statement'] == 'The sign in (3) flips; take the log in base 2.'
