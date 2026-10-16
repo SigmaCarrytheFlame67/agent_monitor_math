@@ -264,14 +264,50 @@ def test_provider_failure_on_every_check_fails_the_run_but_keeps_the_structure(t
     def script(kind, node, user, headers):
         if kind == "map":
             return paper_map()
-        return (500, {"error": {"message": "upstream exploded with secret detail"}})
+        return (500, {"error": {"message": "upstream exploded"}})
 
     server = provider(script)
-    with pytest.raises(runner.AnalyzeError, match="No result could be checked"):
+    # An own key's provider says why (the key is redacted where the error is raised).
+    with pytest.raises(runner.AnalyzeError, match=re.escape(
+            "No result could be checked: Deepseek model call failed for deepseek-test (HTTP 500): upstream exploded")):
         run(tmp_path, write_request(tmp_path), own_key_env(server))
     graph = ag.load(tmp_path)
     assert graph is not None and all(node["meta"]["verdict"] == "not_checked" for node in graph["nodes"])
     assert (tmp_path / "analysis" / "report.md").is_file()
+    # A server error may pass: every result was still tried.
+    assert [seen["kind"] for seen in server.seen].count("check") == 3
+
+
+@pytest.mark.parametrize(("status", "error"), [
+    (401, {"message": "Incorrect API key provided: sk-bad.", "type": "invalid_request_error", "code": "invalid_api_key"}),
+    (429, {"message": "You exceeded your current quota, please check your plan and billing details.",
+           "type": "insufficient_quota", "code": "insufficient_quota"}),
+])
+def test_an_own_key_refusal_stops_the_checks_and_says_why(tmp_path, provider, status, error):
+    def script(kind, node, user, headers):
+        return paper_map() if kind == "map" else (status, {"error": dict(error)})
+
+    server = provider(script)
+    reason = f"Deepseek model call failed for deepseek-test (HTTP {status}): {error['message']}"
+    with pytest.raises(runner.AnalyzeError, match=re.escape(f"No result could be checked: {reason}")):
+        run(tmp_path, write_request(tmp_path), own_key_env(server, AGENT_MONITOR_ANALYZE_CONCURRENCY="1"))
+    # Every later check would be refused the same way.
+    assert [seen["kind"] for seen in server.seen] == ["map", "check"]
+    assert {node["meta"]["reason"] for node in ag.load(tmp_path)["nodes"]} == {f"Not checked: {reason}"}
+    assert "test-key" not in reason
+
+
+def test_a_rate_limited_check_does_not_stop_the_others(tmp_path, provider):
+    def script(kind, node, user, headers):
+        if kind == "check" and node == "thm:main":
+            return (429, {"error": {"message": "Rate limit reached for requests", "code": "rate_limit_exceeded"}})
+        return default_script()(kind, node, user, headers)
+
+    server = provider(script)
+    run(tmp_path, write_request(tmp_path), own_key_env(server, AGENT_MONITOR_ANALYZE_CONCURRENCY="1"))
+    assert node_meta(tmp_path, "thm:main")["reason"] == (
+        "Not checked: Deepseek model call failed for deepseek-test (HTTP 429): Rate limit reached for requests")
+    assert node_meta(tmp_path, "lem:rep")["verdict"] == node_meta(tmp_path, "lem:sum")["verdict"] == "checked"
 
 
 @pytest.mark.parametrize(

@@ -17,7 +17,11 @@ class APIBackendError(RuntimeError):
     ``failure`` carries the content-free facts of a failed sponsored Kimi call
     (``kimi_k3.CallFailure``; ``None`` otherwise).  ``usage`` totals the 2xx
     replies that came back before the call failed (an empty completion is
-    still billed).
+    still billed).  ``kind`` classifies an own key's refusal that every
+    later call would repeat, as ``CodexBackendError.kind`` does: ``"auth"``
+    (the provider rejects the key), ``"usage_limit"`` (the account is out of
+    credit or quota; a rate limit is not one), ``"model"`` (the key cannot
+    use the model); ``None`` otherwise, and always for sponsored Kimi.
     """
 
     def __init__(
@@ -26,10 +30,12 @@ class APIBackendError(RuntimeError):
         *,
         failure: object | None = None,
         usage: dict[str, int] | None = None,
+        kind: str | None = None,
     ) -> None:
         super().__init__(message)
         self.failure = failure
         self.usage = dict(usage or {})
+        self.kind = kind
 
 
 @dataclass(frozen=True)
@@ -47,6 +53,25 @@ def _safe_error(detail: object, secret: str) -> str:
     if secret:
         text = text.replace(secret, "[redacted]")
     return text[-1600:]
+
+
+_FAILURE_STATUSES = {401: "auth", 403: "auth", 402: "usage_limit", 404: "model"}
+# Some providers answer a bad key or an empty balance with HTTP 400 or 429
+# (Gemini, xAI and Anthropic; OpenAI's and Kimi's quota errors): only the
+# reply tells them from a passing failure.
+_FAILURE_MARKERS = (
+    ("auth", ("api_key_invalid", "incorrect api key")),
+    ("usage_limit", ("insufficient_quota", "exceeded_current_quota", "credit balance is too low")),
+    ("model", ("model_not_found",)),
+)
+
+
+def _failure_kind(code: int, body: object) -> str | None:
+    """Classify an own key's refusal (see ``APIBackendError.kind``)."""
+    if code in _FAILURE_STATUSES:
+        return _FAILURE_STATUSES[code]
+    text = str(body).lower()
+    return next((kind for kind, markers in _FAILURE_MARKERS if any(marker in text for marker in markers)), None)
 
 
 def _kimi_usage(body: Mapping[str, object]) -> dict[str, int]:
@@ -317,6 +342,7 @@ def api_chat(
             f"{_safe_error(detail, key)}",
             failure=kimi_k3.call_failure(code, body) if sponsored else None,
             usage=_total_usage(billed),
+            kind=None if sponsored else _failure_kind(code, body),
         )
 
     try:

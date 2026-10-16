@@ -625,5 +625,67 @@ class ApiBackendPerCallParameterTests(unittest.TestCase):
         )
 
 
+class ApiBackendFailureKindTests(unittest.TestCase):
+    """An own key's refusal that every later call would repeat says so
+    (``APIBackendError.kind``); one that may pass on a retry does not."""
+
+    def _kind(self, model: str, code: int, body: object, **env: str) -> str | None:
+        with (
+            patch.dict(api_backend.os.environ, {**_OWNER_ENV, **env}, clear=True),
+            patch("agent_monitor.settings._http_json", return_value=(code, body)),
+            patch("agent_monitor.kimi_k3.time.sleep"),
+            self.assertRaises(api_backend.APIBackendError) as raised,
+        ):
+            api_backend.api_chat("system", "problem", model=model)
+        return raised.exception.kind
+
+    def test_refusals_every_later_call_would_repeat(self) -> None:
+        cases = (
+            ("gpt-5.6-sol", 401, {"error": {"message": "Incorrect API key provided: sk-x.", "code": "invalid_api_key"}},
+             "auth"),
+            ("claude-sonnet-5", 403, {"type": "error", "error": {"type": "permission_error", "message": "denied"}},
+             "auth"),
+            ("gemini-3.6-flash", 400, {"error": {"code": 400, "message": "API key not valid. Please pass a valid API key.",
+                                                 "status": "INVALID_ARGUMENT", "details": [{"reason": "API_KEY_INVALID"}]}},
+             "auth"),
+            ("deepseek-v4-flash", 402, {"error": {"message": "Insufficient Balance", "type": "unknown_error"}},
+             "usage_limit"),
+            ("gpt-5.6-sol", 429, {"error": {"message": "You exceeded your current quota, please check your plan.",
+                                            "type": "insufficient_quota", "code": "insufficient_quota"}},
+             "usage_limit"),
+            ("claude-sonnet-5", 400, {"type": "error", "error": {
+                "type": "invalid_request_error",
+                "message": "Your credit balance is too low to access the Anthropic API."}}, "usage_limit"),
+            ("gpt-5.6-sol", 404, {"error": {"message": "The model does not exist.", "code": "model_not_found"}}, "model"),
+        )
+        for model, code, body, kind in cases:
+            with self.subTest(model=model, code=code):
+                self.assertEqual(self._kind(model, code, body), kind)
+
+    def test_failures_that_may_pass_have_no_kind(self) -> None:
+        cases = (
+            ("gpt-5.6-sol", 429, {"error": {"message": "Rate limit reached for requests", "code": "rate_limit_exceeded"}}),
+            ("gpt-5.6-sol", 500, {"error": {"message": "The server had an error"}}),
+            ("deepseek-v4-flash", 503, "Service Unavailable"),
+            ("gpt-5.6-sol", 400, {"error": {"message": "This model's maximum context length is exceeded"}}),
+            ("gpt-5.6-sol", 0, "timed out"),
+        )
+        for model, code, body in cases:
+            with self.subTest(model=model, code=code):
+                self.assertIsNone(self._kind(model, code, body))
+
+    def test_a_sponsored_refusal_keeps_its_own_failure(self) -> None:
+        with (
+            patch.dict(api_backend.os.environ, {"AGENT_MONITOR_SPONSORED_KIMI": "1"}, clear=True),
+            patch("agent_monitor.settings._http_json", return_value=(401, {"error": {"type": "unauthorized"}})),
+            self.assertRaises(api_backend.APIBackendError) as raised,
+        ):
+            api_backend.api_chat("system", "problem", model="kimi-k3",
+                                 env={"AGENT_MONITOR_SPONSORED_KIMI": "1", "KIMI_API_KEY": "broker-token",
+                                      "KIMI_API_BASE": "https://run.kimi.invalid/v1"})
+        self.assertIsNone(raised.exception.kind)
+        self.assertEqual(raised.exception.failure.kind, "unauthorized")
+
+
 if __name__ == "__main__":
     unittest.main()

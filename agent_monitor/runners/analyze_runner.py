@@ -97,8 +97,9 @@ _FOCUS_RE = re.compile(rf"\b({_KIND_WORDS})s?\s+((?:[A-Z]\.)?\d+(?:\.\d+)*[a-z]?
 _DORMANT_ENV = (
     "KIMI_BASE_URL", "HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "http_proxy", "https_proxy", "all_proxy",
 )
-# Claude Code / Codex failure kinds (ClaudeBackendError.kind,
-# CodexBackendError.kind) that every further check would hit as well.
+# Claude Code / Codex and own-key API failure kinds (ClaudeBackendError.kind,
+# CodexBackendError.kind, APIBackendError.kind) that every further check
+# would hit as well.
 _SUBSCRIPTION_STOP_KINDS = frozenset({"auth", "usage_limit", "model"})
 
 
@@ -771,7 +772,8 @@ class AnalysisRun:
         if not message:
             # A linked Claude Code / Codex account that must sign in again, has
             # reached its usage limit, or cannot use the model fails every
-            # further check the same way: say why, and start no more checks.
+            # further check the same way, as does an own API key the provider
+            # rejects or that is out of credit: say why, and start no more checks.
             cause = error.__cause__
             kind = getattr(cause, "kind", None)
             if kind in _SUBSCRIPTION_STOP_KINDS:
@@ -779,6 +781,9 @@ class AnalysisRun:
                 self.permanent_failure = True
             elif kind == "timeout":
                 message = "The model did not answer this check in time (" + " ".join(str(cause).split())[:200] + ")"
+            elif failure is None and isinstance(cause, harness.APIBackendError):
+                # An own key's provider says why (the key is redacted where it is raised).
+                message = " ".join(str(cause).split())[:400]
         if not message:
             message = "The model provider did not answer this check"
         self.provider_failure = message
