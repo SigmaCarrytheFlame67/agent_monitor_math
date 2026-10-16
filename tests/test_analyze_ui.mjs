@@ -612,21 +612,6 @@ test('TeX text accents read as letters in statements and findings; math is left 
   assert.equal(prose('A theorem of Erd\\H{o}s~and Ma\\~{n}\\\'e: $\\tilde{x}$.'), 'A theorem of Erdős and Mañé: $\\tilde{x}$.')
 })
 
-test('the shared viewer renders the report as Markdown and reads TeX references as text', () => {
-  const viewer = readFileSync(new URL('../agent_monitor/web/run-viewer.js', import.meta.url), 'utf8')
-  const text = readFileSync(new URL('../agent_monitor/web/run-viewer-text.js', import.meta.url), 'utf8')
-  // The report goes through the shared Markdown renderer (which drops the
-  // report's \| and &lt; escapes) in manuscript mode, never as raw text.
-  assert.match(viewer, /AnsatzSharedText\.render\(target, text\(value\), \{ manuscript: analysis \}\)/)
-  const sandbox = { window: {}, document: {}, NodeFilter: {}, location: { href: 'https://example.test/' } }
-  vm.runInNewContext(text, sandbox)
-  const prose = sandbox.window.AnsatzSharedText.manuscriptProse
-  // Snapshots taken before the server resolved references keep bare labels,
-  // never the commands; math is left alone.
-  assert.equal(prose("the proof of Corollary~\\ref{cor:counting}, \\cref{lem:greedy}, \\eqref{eq:x}; keep $\\ref{x}~y$"),
-    "the proof of Corollary cor:counting, lem:greedy, (eq:x); keep $\\ref{x}~y$")
-})
-
 test('model prose reads TeX cross-references as the manuscript\'s results, or bare labels, never with their commands', () => {
   const prose = run(['analysisTextAccents', 'analysisResolveRefs', 'analysisUnresolvedLabel', 'analysisModelProse', 'analysisRefLabels'], ['ANALYZE_MATH_SPLIT', ...ANALYZE_TEXT_CONSTS], '',
     `(text,graph)=>analysisModelProse(text,analysisRefLabels(graph))`)

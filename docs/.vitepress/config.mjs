@@ -1,22 +1,17 @@
 // Configure public Ansatz documentation routes, navigation, and metadata.
 import { defineConfig } from 'vitepress'
-import { copyFileSync, readFileSync, writeFileSync, mkdirSync } from 'node:fs'
-import { join, resolve } from 'node:path'
+import { writeFileSync } from 'node:fs'
+import { join } from 'node:path'
 
 export default defineConfig({
   async buildEnd(config) {
-    // Publish the Quickstart's worked example for the read-only run viewer.
-    const repo = resolve(config.root, '..')
-    const web = join(repo, 'agent_monitor/web')
+    // Shared runs now open in the console's own read-only view, which the
+    // static site cannot host; the old standalone viewer page points to the
+    // Quickstart's worked example instead.
     const base = config.site.base.replace(/\/$/, '')
-    for (const name of ['run-viewer.css', 'run-viewer.js']) copyFileSync(join(web, name), join(config.outDir, name))
-    mkdirSync(join(config.outDir, 'examples'), { recursive: true })
-    copyFileSync(join(config.root, '.vitepress/theme/quickstartExample.json'), join(config.outDir, 'examples/odd-sum.json'))
-    const html = readFileSync(join(web, 'run-viewer.html'), 'utf8')
-      .replaceAll('__DATA_URL__', base + '/examples/odd-sum.json')
-      .replaceAll('__ASSET_BASE__', base)
-      .replaceAll('__CONSOLE_URL__', base + '/guest')
-    writeFileSync(join(config.outDir, 'example-run-viewer.html'), html)
+    const target = base + '/quickstart#example'
+    writeFileSync(join(config.outDir, 'example-run-viewer.html'),
+      `<!doctype html><meta charset="utf-8"><meta name="robots" content="noindex"><meta http-equiv="refresh" content="0; url=${target}"><link rel="canonical" href="${target}"><title>Worked example · Ansätze</title><a href="${target}">The worked example is on the Quickstart page.</a>\n`)
   },
   // Preload the two body and heading fonts so they do not swap in late and reflow the page.
   transformHead({ assets }) {

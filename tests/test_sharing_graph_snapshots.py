@@ -43,7 +43,7 @@ def test_real_stored_engine_graphs_are_separate_from_outline_and_formal(workspac
     before = {str(p.relative_to(workspace)): p.read_bytes() for p in workspace.rglob('*') if p.is_file()}
     result = shares.snapshot('run-1', {'engine': 'math_harness', 'problem_text': 'An even integer.'})
     graphs = result['graphs']
-    assert result['version'] == 2 and set(graphs) == set(shares.GRAPH_MODES)
+    assert result['version'] == 3 and set(graphs) == set(shares.GRAPH_MODES)
     assert graphs['outline']['graph']['nodes'][0]['id'] == 'outline-only'
     assert graphs['facts']['graph_role'] == 'fact-dependency'
     assert graphs['explore']['graph_role'] == 'workflow'
@@ -257,7 +257,7 @@ def test_legacy_share_stays_frozen_and_only_owner_refresh_adds_graphs(workspace,
     fetched = shares.lookup(token)
     assert fetched['version'] == 1 and fetched['proof'] == 'Earlier proof' and 'graphs' not in fetched
     refreshed = shares.create('run-1', 7, shares.snapshot('run-1', {'engine': 'plain'}))
-    assert refreshed['token'] == token and shares.lookup(token)['version'] == 2
+    assert refreshed['token'] == token and shares.lookup(token)['version'] == 3
     shares.revoke('run-1', 8)
     assert shares.lookup(token) is not None
     shares.revoke('run-1', 7)

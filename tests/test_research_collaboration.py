@@ -121,7 +121,8 @@ def test_project_runs_require_membership_use_shared_problem_and_own_account(api)
     assert not projects.can_read_run(run['run_id'],3)
     result=api('GET','/api/projects/'+pid)[2];assert result['runs'][0]['user']==2
     # Project editing rights must not grant public publication rights to another author's run.
-    assert api('POST','/api/runs/'+run['run_id']+'/share',{'confirm_share':True})[0]==404
+    status,_,data=api('POST','/api/runs/'+run['run_id']+'/share',{'confirm_share':True})
+    assert status==403 and data['error']=='Only the person who started this run can share it.'
     assert api('POST','/api/runs',{'project_id':pid,'engine':'plain'},user=3)[0]==403
     assert api('POST','/api/projects/'+pid+'/edit',{'operations':[]},headers={'Origin':'https://evil.test'})[0]==403
     assert api('POST','/api/projects/'+pid+'/remove-member',{'user_id':2})[0]==200

@@ -695,6 +695,10 @@ def _merge_continuation_run(
 def _write_run_locked(run: dict[str, Any]) -> Path:
     cache = _cache_dir()
     path = cache / f"{run['run_id']}.json"
+    if run["run_id"] in _DELETED_RUNS:
+        # A worker still finishing a deleted run must not write its record
+        # back: that resurrected the run without its owner (and its share).
+        return path
     old: dict[str, Any] = {}
     if path.exists():
         try:
@@ -7077,6 +7081,10 @@ def delete_run(run_id: str) -> dict[str, Any]:
         _DELETED_RUNS.add(run_id)
         for jid in [k for k, j in _JOBS.items() if j.get("run_id") == run_id]:
             _JOBS.pop(jid, None)
+    # A deleted run's shared links end with it.
+    from agent_monitor import run_sharing
+
+    run_sharing.forget(run_id)
     if proc is not None:
         _terminate_registered_proc(proc)
 

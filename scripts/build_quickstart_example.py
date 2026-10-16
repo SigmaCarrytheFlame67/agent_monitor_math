@@ -352,7 +352,7 @@ def build(workspace: Path, record_path: Path) -> dict:
                 {"informal": lemma["label"], "lean": lemma["lean_decl"]} for lemma in lemmas
             ]},
         },
-        # Keys read by the standalone run viewer (agent_monitor/web/run-viewer.js).
+        # Shared-run snapshot keys (run_sharing.console_view reads them).
         "proof": proof_md,
         "lean_source": lean_bytes.decode("utf-8"),
         "verification": {

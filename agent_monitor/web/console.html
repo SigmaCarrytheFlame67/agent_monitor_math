@@ -1655,6 +1655,32 @@ body { background:var(--bg); }
 #view-landing > .landing-geometry,[data-theme="dark"] #view-landing > .landing-geometry { color:var(--accent); }
 .modal-backdrop { background:rgb(15 23 42 / .28); backdrop-filter:blur(4px); }
 </style>
+<style id="shared-view-style">
+/* Shared runs (/shared/<token>): the console's own run interface, read-only. */
+html.shared-view #new-proof-btn, html.shared-view #projects-link, html.shared-view #library-btn,
+html.shared-view #settings-btn, html.shared-view #agent-btn, html.shared-view #sb-user,
+html.shared-view .run-del, html.shared-view .run-act, html.shared-view #share-run-btn,
+html.shared-view #sess-stop, html.shared-view #sess-cont,
+html.shared-view #proof-edit-btn, html.shared-view #proof-save-btn, html.shared-view #proof-done-btn,
+html.shared-view #analysis-source-toggle, html.shared-view .chat-compose, html.shared-view .lean-chat-compose,
+html.shared-view #lean-model, html.shared-view #lean-model-label, html.shared-view #lean-compile, html.shared-view #lean-check, html.shared-view #lean-audit,
+html.shared-view #lean-engine, html.shared-view #lean-harness, html.shared-view #lean-gen,
+html.shared-view #dag-rebuild, html.shared-view .analysis-actions, html.shared-view #sel-pop,
+html.shared-view #view-landing { display: none !important; }
+html.shared-view #lean-code { cursor: text; }
+.shared-notice { display: flex; align-items: center; gap: 10px; padding: 7px 18px; border-bottom: 1px solid var(--border);
+  background: color-mix(in srgb, var(--accent) 5%, var(--panel)); color: var(--muted); font-size: 12px; line-height: 1.45; }
+.shared-notice .badge { flex: none; padding: 2px 8px; border: 1px solid color-mix(in srgb, var(--accent) 35%, var(--border));
+  border-radius: 999px; color: var(--accent); font-weight: 600; font-size: 11px; }
+@media (max-width: 760px) {
+  .shared-notice { padding: 6px 12px; font-size: 11px; }
+  .shared-notice .text { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+}
+.shared-unavailable { margin: 18vh auto 0; max-width: 460px; padding: 28px; text-align: center; color: var(--muted); }
+.shared-unavailable .big { font-size: 34px; opacity: .45; }
+.shared-unavailable h2 { margin: 10px 0 8px; color: var(--fg); font-size: 18px; }
+.shared-unavailable a { color: var(--accent); font-weight: 600; }
+</style>
 <style id="analyze-style">
 /* Analyze mode. Verdicts are a model verifier's judgements: checked = blue,
    gap = amber, error = red, unclear = grey, not checked = hollow. Green stays
@@ -2372,7 +2398,7 @@ window.addEventListener('message',e=>{
   }
 });
 $('monitor-frame').onload=()=>{ syncThemeToMonitor(document.documentElement.dataset.theme||'dark'); syncRunToMonitor(runId); watchMonitorFrame(); };
-(function(){ const f=$('monitor-frame'); if(f&&!f.getAttribute('src'))f.src=pcUrl('/monitor?layout=flow'); })();
+(function(){ const f=$('monitor-frame'); if(f&&!f.getAttribute('src'))f.src=globalThis.__PC_SHARED__?.monitor?globalThis.__PC_SHARED__.monitor+'?layout=flow':pcUrl('/monitor?layout=flow'); })();
 
 /* ── settings + colorful model picker ── */
 function currentModel(){ const s=$('model-select').value; return s==='__custom__'?$('model-custom').value.trim():(s||''); }
@@ -4023,7 +4049,7 @@ async function tick(){
       pollSig=sig; pollQuiet=changed?0:pollQuiet+1;
       pollDelay=nextPollDelay(pollDelay,changed);
       const refreshSide=changed||pollQuiet%POLL_SIDE_EVERY===0;
-      $('run-meta').textContent=`${run.run_id} · ${run.status} · $${Number(t.cost_usd||0).toFixed(2)}`;
+      $('run-meta').textContent=globalThis.__PC_SHARED__?`Shared snapshot · ${run.status}`:`${run.run_id} · ${run.status} · $${Number(t.cost_usd||0).toFixed(2)}`;
       setPill(run.status,(run.status||'')+' · '+(run.engine||''));
       updateChatStatus(run);
       updateProblemStrip(run);
@@ -4288,6 +4314,7 @@ function renderCitations(text){
 $('cite-toggle').onclick=()=>$('cite-strip').classList.toggle('collapsed');
 
 function updateSessionButtons(status){
+  if(globalThis.__PC_SHARED__)status='shared';
   $('sess-stop').classList.toggle('show', status==='running');
   $('sess-cont').classList.toggle('show', status==='finished'||status==='failed'||status==='stopped'||status==='interrupted');
 }
@@ -7239,7 +7266,7 @@ function isAnalysisRun(run){ return !!run&&typeof run==='object'&&(run.run_kind=
 function applyRunKindView(analysis,rid){
   document.body.classList.toggle('analysis-run',!!analysis);
   $('chat-title').textContent=analysis?'Progress':'Human in the loop';
-  $('chat-subtitle').textContent=analysis?ANALYZE_CONTINUE_NOTE:'Guide the prover — feedback continues the run';
+  $('chat-subtitle').textContent=globalThis.__PC_SHARED__?'Saved snapshot · read only':analysis?ANALYZE_CONTINUE_NOTE:'Guide the prover — feedback continues the run';
   $('proof-title').textContent=analysis?'Analysis':'Proof';
   const empty=$('proof-empty')?.lastElementChild;
   if(empty)empty.textContent=analysis?'The analysis report will appear here.':'Proof preview will appear here.';
@@ -8187,8 +8214,48 @@ function loadAnalyzeHandoff(item){
   input.focus();
   return true;
 }
-(async()=>{await loadUser();await Promise.all([loadEngines(),loadSettings()]);loadRuns();goLanding();consumeCatalogueProblem();})();
+/* A shared run (/shared/<token>): the same interface, read-only, showing the
+   owner's saved snapshot. shared-console.js answers the run's requests from
+   the snapshot and refuses everything else; no account is loaded. */
+function sharedEl(tag,cls,text){ const el=document.createElement(tag); if(cls)el.className=cls; if(text!=null)el.textContent=String(text); return el; }
+function showSharedUnavailable(message){
+  const stage=document.querySelector('.main-stage'); if(!stage)return;
+  const box=sharedEl('section','shared-unavailable');
+  box.append(sharedEl('div','big','◇'),sharedEl('h2','', 'This shared run is unavailable'),sharedEl('p','',message||'The link may have been revoked, or the run deleted.'));
+  const link=sharedEl('a','', 'Open the console');link.href=globalThis.__PC_SHARED__.console;box.append(link);
+  stage.replaceChildren(box);
+}
+async function bootSharedRun(shared){
+  CURRENT_USER={id:null,name:'Shared run',shared:true};
+  let data;
+  try{ data=await shared.snapshot(); }catch(e){ showSharedUnavailable(e.message); return; }
+  const view=data?.console||{};
+  document.title=(view.title?view.title+' · ':'')+'Shared run · Ansätze';
+  const top=document.querySelector('#view-session .session-top');
+  if(top&&!document.getElementById('shared-notice')){
+    const notice=sharedEl('div','shared-notice');notice.id='shared-notice';notice.setAttribute('role','note');
+    notice.append(sharedEl('span','badge','Read only'),sharedEl('span','text',view.notice||'Read-only snapshot selected by the run owner. It does not update as the run continues.'));
+    top.after(notice);
+  }
+  const links=document.querySelector('.sidebar-links');
+  if(links&&!links.querySelector('.shared-console-link')){ const a=sharedEl('a','shared-console-link','Open console ↗');a.href=shared.console;links.prepend(a); }
+  $('live-pill').textContent='read only';
+  const leanCode=$('lean-code'); if(leanCode)leanCode.readOnly=true;
+  await loadRuns();
+  selectRun(shared.runId,null);
+  // Links from the earlier shared viewer name a graph: open it in the DAG tab.
+  const graph={explore:['engine','workflow'],facts:['engine','facts'],outline:['informal'],formal:['formal'],compiler:['compiler'],manuscript:['analysis']}[shared.view];
+  if(graph){ setDagMode(graph[0],{refresh:false}); if(graph[1])setDagEngineView(graph[1]); goSession('dag'); return; }
+  goSession(['sandbox','lean','monitor','dag'].includes(shared.view)?shared.view:'sandbox');
+}
+if(globalThis.__PC_SHARED__){ bootSharedRun(globalThis.__PC_SHARED__); }
+else{
+// ?run=<id> (the Projects page's "Open run") opens that run once the account
+// is known; opening it earlier was undone by the landing page below.
+function requestedRunId(){ const value=new URL(location.href).searchParams.get('run'); return value&&/^[A-Za-z0-9_.-]{1,160}$/.test(value)?value:''; }
+(async()=>{await loadUser();await Promise.all([loadEngines(),loadSettings()]);loadRuns();const requested=requestedRunId();if(requested){selectRun(requested,null);goSession('sandbox');}else goLanding();consumeCatalogueProblem();})();
 setInterval(()=>{ if(!document.hidden)loadRuns().catch(()=>{}); }, 5000);
+}
 </script>
 <script id="sharing-loader">{const s=document.createElement("script");s.src=(window.__PC_BASE__||"")+"/static/sharing.js";document.body.append(s);}</script>
 <script id="landing-geometry-script">
