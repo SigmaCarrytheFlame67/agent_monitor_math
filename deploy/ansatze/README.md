@@ -372,15 +372,23 @@ untrusted. `agent_monitor/account_policy.py` and the run path enforce:
   members can open each other's runs, but only the member who started a run
   can continue, stop or change it.
 - **Projects with members run tool-free.** A run started from a project gets
-  a copy of its shared document, which every member can edit. While a project
-  has a member who is not the administrator, its runs (the administrator's
-  too), their follow-ups and their Formal harness use only `kimi`, `plain` or
-  `math_harness` on an API key, without subagents; anything else is refused
-  with HTTP 403. Coding agents and the subscription CLIs run as `ubuntu`,
-  with the administrator's sign-ins in their home, so text a member wrote must
-  not steer them. This is a security policy you can relax in code
-  (`account_policy.project_run_error`, decided at launch by
-  `projects.start_run`).
+  a copy of its shared document, which every member can edit. Once a member
+  who is not the administrator has joined (or created, or edited) a project,
+  its runs (the administrator's too), their follow-ups and their Formal
+  harness use only `kimi`, `plain` or `math_harness` on an API key, without
+  subagents; anything else is refused with HTTP 403. Coding agents and the
+  subscription CLIs run as `ubuntu`, with the administrator's sign-ins in
+  their home, so text a member wrote must not steer them. The text stays in
+  the document after the member is removed, so the project keeps the rule
+  (the `untrusted` table in `projects.sqlite3`, never cleared); to use a
+  coding agent again, copy text you have checked into a new project. When
+  that table is first created in an existing database, it lists the projects
+  whose members, or the accounts that started their runs, include a member;
+  a member removed earlier who started no run there left no record, so check
+  the documents of projects you removed members from. This is a security
+  policy you can relax in code (`account_policy.project_run_error` says what
+  such a project may run, `projects._untrusted` which projects it covers,
+  decided at launch by `projects.start_run`).
 - **Sign-ins stored before this policy.** A member who linked Claude or Codex
   before members were limited keeps that sign-in on the server until it is
   removed. It is never used for the member's runs. Settings shows a **Remove

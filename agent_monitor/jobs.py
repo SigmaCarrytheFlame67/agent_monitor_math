@@ -1352,9 +1352,10 @@ def start_job(
     options (``{"max_nodes"?, "focus"?}``); ``formalize`` defaults to false for
     it and to true for proofs.  See :mod:`agent_monitor.analyze_runs`.
 
-    ``tool_free`` marks a proof from a project with a member who is not an
-    administrator: it runs only a tool-free engine on an API key, without
-    subagents (``account_policy.PROJECT_TOOL_FREE_ERROR``, a PermissionError).
+    ``tool_free`` marks a proof from a project that has, or had, a member who
+    is not an administrator: it runs only a tool-free engine on an API key,
+    without subagents (``account_policy.PROJECT_TOOL_FREE_ERROR``, a
+    PermissionError).
     """
     from agent_monitor.engines_registry import all_engine_ids, list_engines, supported_models
 
@@ -5524,9 +5525,9 @@ def _owner_user(owner_id: int | None) -> dict[str, Any] | None:
 
 def tool_free_run(run_id: str, run: dict[str, Any]) -> bool:
     """Whether a proof's prompt carries project text that an account which is
-    not an administrator could write: it started so, or its project has such a
-    member now.  It, its follow-ups and its Formal harness stay tool-free
-    (``account_policy.PROJECT_TOOL_FREE_ERROR``)."""
+    not an administrator could write: it started so, or its project has, or
+    had, such a member.  It, its follow-ups and its Formal harness stay
+    tool-free (``account_policy.PROJECT_TOOL_FREE_ERROR``)."""
     if run.get("tool_free"):
         return True
     if run.get("run_kind") == "analyze" or run.get("engine") == _ANALYZE_ENGINE:

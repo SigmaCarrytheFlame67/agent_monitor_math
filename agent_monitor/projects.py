@@ -24,7 +24,42 @@ def connect():
     db.executescript('''CREATE TABLE IF NOT EXISTS projects (id TEXT PRIMARY KEY, title TEXT NOT NULL, owner INTEGER NOT NULL, doc TEXT NOT NULL, revision INTEGER NOT NULL DEFAULT 0, invite TEXT UNIQUE, created REAL NOT NULL);
 CREATE TABLE IF NOT EXISTS members (project TEXT NOT NULL, user INTEGER NOT NULL, name TEXT NOT NULL, seen REAL NOT NULL, PRIMARY KEY(project,user));
 CREATE TABLE IF NOT EXISTS runs (run_id TEXT PRIMARY KEY, project TEXT NOT NULL, user INTEGER NOT NULL, task TEXT NOT NULL, created REAL NOT NULL);''')
+    if not _has_untrusted(db):
+        _add_untrusted(db)
     return db
+
+
+def _has_untrusted(db):
+    return bool(db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='untrusted'").fetchone())
+
+
+def _add_untrusted(db):
+    """Create the untrusted table (see _untrusted), filled once on a database
+    from before it.  A table of its own, not a projects column, so an older
+    console still writes projects.
+
+    It lists each project with a member, or a registered run, of an account
+    that is not an operator; a member removed earlier left no other trace.
+    """
+    from agent_monitor.auth import is_operator_account
+    db.execute('BEGIN IMMEDIATE')
+    try:
+        if not _has_untrusted(db):  # another connection may have added it meanwhile
+            db.execute('CREATE TABLE untrusted (project TEXT PRIMARY KEY)')
+            for (uid,) in db.execute('SELECT user FROM members UNION SELECT user FROM runs').fetchall():
+                if not is_operator_account(uid):
+                    db.execute('INSERT OR IGNORE INTO untrusted SELECT project FROM members WHERE user=? UNION SELECT project FROM runs WHERE user=?',(uid,uid))
+        db.commit()
+    except BaseException:
+        db.rollback();raise
+
+
+def _note_writer(db, pid, uid):
+    """``uid`` can now write in the project's document: an account that is not
+    an operator marks the project untrusted for good (see _untrusted)."""
+    from agent_monitor.auth import is_operator_account
+    if not is_operator_account(uid):
+        db.execute('INSERT OR IGNORE INTO untrusted VALUES (?)',(pid,))
 
 
 def _member(db, pid, uid):
@@ -67,6 +102,7 @@ def create(user, title, text):
     with connect() as db:
         db.execute('INSERT INTO projects VALUES (?,?,?,?,0,NULL,?)',(pid,title,user['id'],json.dumps(nodes),time.time()))
         db.execute('INSERT INTO members VALUES (?,?,?,?)',(pid,user['id'],str(user.get('name') or 'Project owner')[:100],time.time()))
+        _note_writer(db,pid,user['id'])
         return _payload(db,_member(db,pid,user['id']),user['id'])
 
 
@@ -88,6 +124,7 @@ def edit(pid, uid, operations):
     with connect() as db:
         db.execute('BEGIN IMMEDIATE')
         row=_member(db,pid,uid); nodes=json.loads(row['doc']); index={n['id']:n for n in nodes}
+        _note_writer(db,pid,uid)
         for op in operations:
             if not isinstance(op,dict): raise ValueError('Invalid edit operation.')
             key=op.get('id','')
@@ -125,6 +162,7 @@ def join(token,user):
         row=db.execute('SELECT * FROM projects WHERE invite=?',(token,)).fetchone()
         if not row: raise PermissionError('Invitation unavailable or revoked.')
         db.execute('INSERT OR IGNORE INTO members VALUES (?,?,?,?)',(row['id'],user['id'],str(user.get('name') or 'Collaborator')[:100],time.time()))
+        _note_writer(db,row['id'],user['id'])
         return {'id':row['id']}
 
 
@@ -151,14 +189,17 @@ def can_read_run(rid, uid):
 
 
 def _untrusted(db, pid):
-    """A member is not an operator, so the project's runs stay tool-free
-    (account_policy.PROJECT_TOOL_FREE_ERROR)."""
+    """An account that is not an operator can write, or once could, in the
+    project's document, so its runs stay tool-free
+    (account_policy.PROJECT_TOOL_FREE_ERROR).  Removing a member keeps the
+    text it wrote and no character records its author, so the flag is never
+    cleared."""
     from agent_monitor.auth import is_operator_account
-    return any(not is_operator_account(row['user']) for row in db.execute('SELECT user FROM members WHERE project=?',(pid,)))
+    return bool(db.execute('SELECT 1 FROM untrusted WHERE project=?',(pid,)).fetchone()) or any(not is_operator_account(r['user']) for r in db.execute('SELECT user FROM members WHERE project=?',(pid,)))
 
 
 def untrusted_run(rid):
-    """Whether run ``rid`` belongs to a project with a member who is not an operator."""
+    """Whether run ``rid`` belongs to an untrusted project (see _untrusted)."""
     if not DB_PATH.exists():
         return False
     with connect() as db:
@@ -234,8 +275,8 @@ def prepare_run(body, user):
 
 
 def start_run(pid, uid, task, launch):
-    """Launch with ``launch(tool_free)``: whether the project has a member who
-    is not an operator, decided here so that a member who just joined counts."""
+    """Launch with ``launch(tool_free)``: whether the project is untrusted
+    (see _untrusted), decided here so that a member who just joined counts."""
     if not pid:
         return launch(False)
     # Serialize membership removal and run registration with launch admission.

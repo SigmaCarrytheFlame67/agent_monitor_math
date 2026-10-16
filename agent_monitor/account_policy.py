@@ -312,15 +312,18 @@ def member_run_error(
 
 # Security policy, which the site owner may relax: a run started from a
 # project gets a copy of its shared document, which any member can edit.
-# While a member is not an administrator, the project's runs, their
-# follow-ups and their Formal harness use only the tool-free engines on an
-# API key, without subagents, so text a member wrote never steers a coding
-# agent with a shell, or one signed in to the administrator's subscriptions.
+# Once a member is not an administrator (projects._untrusted: for good, as
+# its text stays after it leaves), the project's runs, their follow-ups and
+# their Formal harness use only the tool-free engines on an API key, without
+# subagents, so text a member wrote never steers a coding agent with a
+# shell, or one signed in to the administrator's subscriptions.
 PROJECT_TOOL_FREE_ERROR = (
-    "This project has members who are not site administrators, and the text "
-    "they write reaches the agent, so its runs use only tool-free engines "
-    "(Ansatz CGM or Plain) on an API key, without subagents. Coding agents, "
-    "subscriptions and Max are off for this project"
+    "Accounts that are not site administrators can write, or have written, in "
+    "this project's document, which reaches the agent, so its runs use only "
+    "tool-free engines (Ansatz CGM or Plain) on an API key, without subagents. "
+    "Coding agents, subscriptions and Max stay off for this project, even "
+    "after those members leave; to use them, copy text you have checked into "
+    "a new project"
 )
 
 
