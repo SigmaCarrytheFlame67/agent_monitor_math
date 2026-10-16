@@ -73,6 +73,211 @@ class IMProofClaudeWorkerTests(unittest.TestCase):
         self.assertFalse(kwargs["enable_tools"])
         self.assertNotIn("ANTHROPIC_API_KEY", kwargs["source_env"])
 
+    def test_failed_turn_leaves_no_previous_round_output(self) -> None:
+        # ProofStack collects critique.md whatever the exit status, so a
+        # failed round must not leave the previous round's report behind.
+        failure = worker.ClaudeBackendError(
+            "Claude Code failed: You've hit your session limit", kind="usage_limit"
+        )
+        stderr = io.StringIO()
+        with tempfile.TemporaryDirectory() as td:
+            workspace = Path(td)
+            (workspace / "critique.md").write_text("Round 1 report.\n", encoding="utf-8")
+            with (
+                patch.object(worker.Path, "cwd", return_value=workspace),
+                patch.object(worker.sys, "stdin", io.StringIO("Review the proof.")),
+                patch.object(worker.sys, "stderr", stderr),
+                patch.object(worker, "claude_exec", side_effect=failure),
+                patch.dict(
+                    os.environ,
+                    {
+                        "AGENT_MONITOR_CLAUDE_SUBSCRIPTION": "1",
+                        "CLAUDE_CONFIG_DIR": str(workspace),
+                    },
+                    clear=True,
+                ),
+            ):
+                self.assertEqual(
+                    worker.main(["--role", "critic", "--output", "critique.md"]), 1
+                )
+            self.assertFalse((workspace / "critique.md").exists())
+        self.assertIn("session limit", stderr.getvalue())
+
+
+def _cli_exit(agent: str, **payload) -> dict:
+    return {"kind": "cli.exit", "agent": agent, "payload": payload}
+
+
+_SESSION_LIMIT = "Claude Code failed: You've hit your session limit · resets 11pm (UTC)"
+
+
+class IMProofClaudeWorkerFailureTests(unittest.TestCase):
+    """A failed Author/Critic call must fail the run with Claude's reason."""
+
+    def _run(
+        self,
+        events: list[dict],
+        *,
+        returncode: int = 0,
+        draft: bool = True,
+        blobs: dict[str, str] | None = None,
+    ):
+        root = Path(self.enterContext(tempfile.TemporaryDirectory()))
+        problem = root / "problem.txt"
+        problem.write_text("Prove that one plus one equals two.", encoding="utf-8")
+        output = root / "out"
+
+        def fake_stream(command, **kwargs):
+            native = Path(
+                next(
+                    value.split("=", 1)[1]
+                    for value in command
+                    if value.startswith("workspace=")
+                )
+            )
+            if draft:
+                # The round-1 draft that later failed calls leave in place,
+                # stashed as the final solution.
+                proof = (
+                    "\\begin{document}\n\\section*{Proof}\n"
+                    + "A rigorous contradiction establishes the exact claim. " * 12
+                    + "\n\\end{document}\n"
+                )
+                (native / "answer.tex").write_text(proof, encoding="utf-8")
+                (native / "solutions").mkdir(parents=True, exist_ok=True)
+                (native / "solutions" / "demo.tex").write_text(proof, encoding="utf-8")
+            (native / "run-metadata.json").write_text(
+                json.dumps({"status": "ok", "outputs": {"solution": ""}}),
+                encoding="utf-8",
+            )
+            (native / "events.jsonl").write_text(
+                "not json\n" + "".join(json.dumps(event) + "\n" for event in events),
+                encoding="utf-8",
+            )
+            for name, text in (blobs or {}).items():
+                (native / "events_blobs").mkdir(exist_ok=True)
+                (native / "events_blobs" / name).write_text(text, encoding="utf-8")
+            return "workflow output", returncode, False
+
+        selected_env = {
+            "AGENT_MONITOR_CLAUDE_SUBSCRIPTION": "1",
+            "AGENT_MONITOR_CLAUDE_MODEL": CLAUDE_MODEL,
+            "CLAUDE_CONFIG_DIR": str(root),
+        }
+        with (
+            patch(
+                "agent_monitor.claude_login.account_environment",
+                return_value=selected_env,
+            ),
+            patch("agent_monitor.runners._stream.stream_subprocess", side_effect=fake_stream),
+        ):
+            result = improof.run_problem(
+                problem,
+                problem_id="demo",
+                output_dir=output,
+                extra_env=selected_env,
+            )
+        return result, output
+
+    def test_failed_critic_after_round_one_fails_instead_of_publishing_the_draft(self) -> None:
+        result, output = self._run(
+            [
+                _cli_exit("cfg_claude_author", exit_code=0, status="done", stderr_tail=""),
+                _cli_exit(
+                    "cfg_claude_critic",
+                    exit_code=1,
+                    status="error",
+                    stderr_tail=f"IMProof Claude critic failed: {_SESSION_LIMIT}\n",
+                ),
+                _cli_exit(
+                    "cfg_claude_author",
+                    exit_code=1,
+                    status="error",
+                    stderr_tail=f"IMProof Claude author failed: {_SESSION_LIMIT}\n",
+                ),
+            ]
+        )
+
+        self.assertEqual(result["status"], "failed")
+        self.assertNotEqual(result["returncode"], 0)
+        self.assertEqual(result["error"], f"IMProof Claude critic failed: {_SESSION_LIMIT}")
+        self.assertIn(_SESSION_LIMIT, result["stdout_tail"])
+        self.assertFalse((output / "proof.tex").exists())
+
+    def test_every_call_failing_reports_claude_reason_not_missing_artifact(self) -> None:
+        result, _output = self._run(
+            [
+                _cli_exit(
+                    "cfg_claude_author",
+                    exit_code=1,
+                    status="error",
+                    stderr_tail=f"IMProof Claude author failed: {_SESSION_LIMIT}\n",
+                ),
+            ],
+            draft=False,
+        )
+
+        self.assertEqual(result["status"], "failed")
+        self.assertEqual(result["error"], f"IMProof Claude author failed: {_SESSION_LIMIT}")
+
+    def test_timed_out_call_without_exit_code_fails_the_run(self) -> None:
+        result, output = self._run(
+            [_cli_exit("cfg_claude_critic", status="partial", reason="timeout")]
+        )
+
+        self.assertEqual(result["status"], "failed")
+        self.assertIn("critic", result["error"])
+        self.assertIn("timed out", result["error"])
+        self.assertFalse((output / "proof.tex").exists())
+
+    def test_failed_workflow_process_still_names_the_claude_failure(self) -> None:
+        result, _output = self._run(
+            [
+                _cli_exit(
+                    "cfg_claude_author",
+                    exit_code=1,
+                    status="error",
+                    stderr_tail="IMProof Claude author failed: Claude Code timed out after 600s\n",
+                ),
+            ],
+            returncode=1,
+        )
+
+        self.assertEqual(result["status"], "failed")
+        self.assertEqual(result["returncode"], 1)
+        self.assertEqual(
+            result["error"], "IMProof Claude author failed: Claude Code timed out after 600s"
+        )
+
+    def test_spilled_stderr_tail_is_read_from_its_blob(self) -> None:
+        # ProofStack moves payload strings over 2 KiB to events_blobs/.
+        stderr = "warning: noisy setup\n" * 120 + f"IMProof Claude author failed: {_SESSION_LIMIT}\n"
+        result, _output = self._run(
+            [
+                _cli_exit(
+                    "cfg_claude_author",
+                    exit_code=1,
+                    status="error",
+                    stderr_tail={"$ref": "events_blobs/author-stderr.txt"},
+                ),
+            ],
+            blobs={"author-stderr.txt": stderr},
+        )
+
+        self.assertEqual(result["error"], f"IMProof Claude author failed: {_SESSION_LIMIT}")
+
+    def test_successful_calls_keep_the_run_finished(self) -> None:
+        result, output = self._run(
+            [
+                _cli_exit("cfg_claude_author", exit_code=0, status="done", stderr_tail=""),
+                _cli_exit("cfg_claude_critic", exit_code=0, status="done", stderr_tail=""),
+            ]
+        )
+
+        self.assertEqual(result["status"], "finished")
+        self.assertIsNone(result.get("error"))
+        self.assertTrue((output / "proof.tex").is_file())
+
 
 class IMProofClaudeWorkflowTests(unittest.TestCase):
     def test_workflow_preserves_author_critic_and_final_author_dag(self) -> None:

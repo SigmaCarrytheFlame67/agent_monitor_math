@@ -126,6 +126,68 @@ def _kimi_terminal_error(native_workspace: Path, problem_id: str) -> str | None:
     return None
 
 
+_CLAUDE_WORKER_ROLES = {"cfg_claude_author": "author", "cfg_claude_critic": "critic"}
+
+
+def _event_text(native_workspace: Path, value: object) -> str:
+    """Return an event payload string, reading one ProofStack spilled to a blob."""
+    if isinstance(value, str):
+        return value
+    ref = value.get("$ref") if isinstance(value, dict) else None
+    if not isinstance(ref, str):
+        return ""
+    try:
+        root = native_workspace.resolve()
+        path = (root / ref).resolve()
+        if not path.is_relative_to(root) or not path.is_file():
+            return ""
+        return path.read_text(encoding="utf-8", errors="replace")[-4000:]
+    except (OSError, RuntimeError):
+        return ""
+
+
+def _claude_worker_failure(native_workspace: Path) -> str | None:
+    """Name the first Author/Critic call that failed, with Claude's reason.
+
+    ProofStack logs a failed worker as a ``cli.exit`` event and carries on with
+    the previous round's files, so neither its exit code nor its terminal
+    metadata shows the failure.
+    """
+    try:
+        lines = (native_workspace / "events.jsonl").read_text(
+            encoding="utf-8", errors="replace"
+        ).splitlines()
+    except OSError:
+        return None
+    for line in lines:
+        try:
+            event = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if not isinstance(event, dict) or event.get("kind") != "cli.exit":
+            continue
+        role = _CLAUDE_WORKER_ROLES.get(str(event.get("agent")))
+        payload = event.get("payload")
+        if role is None or not isinstance(payload, dict):
+            continue
+        if payload.get("status") == "done" and payload.get("exit_code") == 0:
+            continue
+        stderr = _event_text(native_workspace, payload.get("stderr_tail"))
+        marker = f"IMProof Claude {role} failed:"
+        if marker in stderr:
+            detail = stderr[stderr.rfind(marker):]
+        else:
+            said = [part.strip() for part in stderr.splitlines() if part.strip()]
+            detail = said[-1] if said else ""
+        detail = " ".join(detail.split())[:1200]
+        if detail:
+            return detail
+        if payload.get("reason") == "timeout":
+            return f"IMProof Claude {role} call timed out"
+        return f"IMProof Claude {role} call failed (exit {payload.get('exit_code')})"
+    return None
+
+
 def _claude_terminal_error(native_workspace: Path, problem_id: str) -> str | None:
     metadata_path = native_workspace / "run-metadata.json"
     try:
@@ -681,14 +743,18 @@ def run_problem(
         on_output=on_output,
     )
     terminal_error = None
-    if rc == 0 and native_workspace is not None:
+    if claude_subscription and native_workspace is not None:
+        # Whatever the workflow's exit code, a failed Author/Critic call (a
+        # usage limit, expired login, timeout) is the run's real outcome.
+        terminal_error = _claude_worker_failure(native_workspace)
+    if terminal_error is None and rc == 0 and native_workspace is not None:
         if kimi_api:
             terminal_error = _kimi_terminal_error(native_workspace, pid)
         elif claude_subscription:
             terminal_error = _claude_terminal_error(native_workspace, pid)
     if terminal_error:
         output = (output + "\n" + terminal_error).strip()
-        rc = 1
+        rc = rc or 1
     problem_text = problem_path.read_text(encoding="utf-8", errors="replace")
     published_candidate = (
         _publish_native_candidate(native_workspace, out_dir, pid)
