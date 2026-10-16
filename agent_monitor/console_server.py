@@ -3487,6 +3487,16 @@ class Handler(RunSharingMixin, ProjectsMixin, ResearchMixin, BaseHTTPRequestHand
             if kind == "analysis":
                 self._send(400, json.dumps({"error": "This run has no manuscript analysis"}))
                 return
+            if (
+                kind != "engine"
+                and job_manager.tool_free_run(rid, run_record or {})
+                and job_manager._route_from_record(run_record) != "api_key"
+            ):
+                # A tool-free project run: as for its Lean actions, no graph
+                # model call off its API route (a subscription agent can read
+                # the server's files). The engine view calls no model.
+                self._send(403, json.dumps({"error": account_policy.PROJECT_TOOL_FREE_ERROR}))
+                return
             if user.get("guest"):
                 from agent_monitor.settings import GUEST_DEFAULT_MODEL
 

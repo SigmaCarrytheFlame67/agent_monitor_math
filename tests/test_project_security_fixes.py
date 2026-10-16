@@ -455,3 +455,47 @@ def test_console_keeps_follow_ups_and_lean_agents_of_collaborator_project_runs_t
     # Model work on the API route of a tool-free run, and the model-free checker, still run.
     assert verify[0] == 200 and len(verified) == 1
     assert check[0] == 200
+
+
+def test_graph_rebuilds_of_a_collaborator_project_run_stay_off_its_subscription(
+    member_console, monkeypatch, tmp_path
+):
+    from agent_monitor import engine_graph, proof_graph
+
+    _isolated_jobs(monkeypatch, tmp_path)
+    generated: list = []
+    monkeypatch.setattr(proof_graph, "generate", lambda **kwargs: generated.append(kwargs) or {"status": "ready"})
+    rebuilt: list = []
+    monkeypatch.setattr(engine_graph, "rebuild", lambda *args, **kwargs: rebuilt.append(args) or {"status": "ready"})
+    monkeypatch.setattr(console, "_workspace_for_run", lambda run_id: jobs.RUNS_DIR / "workspaces" / run_id)
+
+    def stored_record(run_id):
+        try:
+            return jobs._load_run_record(run_id)
+        except FileNotFoundError:
+            return None
+
+    monkeypatch.setattr(console, "_run_record_for", stored_record)
+    admin, token = auth.login_and_create_session(ADMIN_EMAIL, PASSWORD)
+    cookie = {"Cookie": f"{auth.SESSION_COOKIE}={token}"}
+    with running_server() as port:
+        member, _member_cookie = _member(port)
+        pid = _project_with_member(admin, member)
+        codex_run = _stored_run("codex_p_r1", admin, engine="codex", auth_route="codex_subscription")
+        plain_run = _stored_run("plain_p_r2", admin, engine="plain", auth_route="api_key")
+        for run_id in (codex_run, plain_run):
+            projects.attach(pid, admin["id"], run_id, "Find a lemma")
+
+        def post(run_id: str, body: dict):
+            return request(port, "POST", f"{APP_MOUNT}/api/run/{run_id}/proof_graph", body=body, headers=cookie)
+
+        refused = [post(codex_run, {"kind": "informal"}), post(codex_run, {"kind": "formal"})]
+        engine_view = post(codex_run, {"kind": "engine"})
+        api_route = post(plain_run, {"kind": "informal"})
+
+    for status, _headers, raw in refused:
+        assert status == 403, raw
+        assert json.loads(raw)["error"] == account_policy.PROJECT_TOOL_FREE_ERROR
+    # The model-free engine view, and graph work on the run's API route, still run.
+    assert engine_view[0] == 200 and len(rebuilt) == 1
+    assert api_route[0] == 200 and [call["run_record"]["run_id"] for call in generated] == [plain_run]
