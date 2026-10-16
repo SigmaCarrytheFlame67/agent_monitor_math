@@ -613,6 +613,22 @@ def get_settings(user: dict[str, Any] | None = None) -> dict[str, Any]:
     # A member cannot connect or use a subscription, so its runtime is always
     # the API route and its (never linked) account homes are not probed.
     member = account_policy.is_member(user)
+    general_env = env
+    if member:
+        # Public mode lends a member the server's provider keys and endpoints
+        # (resolved_user_env).  Like a guest, it sees none of them: only a key
+        # (masked) or endpoint it saved itself.
+        from agent_monitor.auth import get_user_env
+
+        own = get_user_env(int(user["id"]))
+        for provider in providers:
+            spec = next(item for item in PROVIDERS if item["id"] == provider["id"])
+            provider["api_key_masked"] = _provider_state(spec, own)["api_key_masked"]
+            base_var = spec.get("base_var")
+            if base_var and env.get(base_var) and not own.get(base_var):
+                provider["base_url"] = ""
+        if not own.get("AGENT_MONITOR_BASE_URL"):
+            general_env = {**env, "AGENT_MONITOR_BASE_URL": ""}
     runtime = "api" if member else account_runtime(user, env=env)
     use_codex = runtime == "codex"
     use_claude = runtime == "claude"
@@ -779,7 +795,7 @@ def get_settings(user: dict[str, Any] | None = None) -> dict[str, Any]:
                 "value": (
                     default_engine
                     if k == "AGENT_MONITOR_ENGINE"
-                    else env.get(k) or ""
+                    else general_env.get(k) or ""
                 ),
                 "type": meta["type"],
             }

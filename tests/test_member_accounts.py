@@ -830,6 +830,51 @@ def test_member_settings_skip_login_probes_and_keep_the_api_runtime(monkeypatch,
     assert saved["settings"]["account_runtime"] == "codex"
 
 
+def test_public_mode_member_settings_keep_the_operators_key_and_endpoints_private(monkeypatch, tmp_path):
+    from agent_monitor import claude_login, codex_login, settings
+
+    monkeypatch.setenv("AGENT_MONITOR_DATA_ENCRYPTION_KEY", Fernet.generate_key().decode("ascii"))
+    monkeypatch.setenv("AGENT_MONITOR_CODEX_ACCOUNT_HOME", str(tmp_path / "codex"))
+    monkeypatch.setenv("AGENT_MONITOR_CLAUDE_ACCOUNT_HOME", str(tmp_path / "claude"))
+    monkeypatch.setattr(claude_login, "_auth_status", lambda *_a, **_k: {"loggedIn": False})
+    monkeypatch.setattr(codex_login, "account_login_ready", lambda _home: False)
+    monkeypatch.setenv("AGENT_MONITOR_PUBLIC", "1")
+    for name in ("OPENAI_API_KEY", "OPENAI_BASE_URL", "AGENT_MONITOR_BASE_URL"):
+        monkeypatch.delenv(name, raising=False)
+    gateway = "https://internal-gw.corp.example/v1"
+    settings.ENV_PATH.write_text(
+        "OPENAI_API_KEY=sk-secretoperatorkey1234567890\n"
+        f"OPENAI_BASE_URL={gateway}\nAGENT_MONITOR_BASE_URL={gateway}\n",
+        encoding="utf-8",
+    )
+    admin = auth.register("owner@example.test", "long-enough-password")
+    member = auth.register("member@example.test", "long-enough-password")
+
+    def openai(view: dict) -> dict:
+        return next(provider for provider in view["providers"] if provider["id"] == "openai")
+
+    view = settings.get_settings(member)
+    # The member runs on the server's key without seeing any part of it, or
+    # where the operator sends its requests (as for a guest).
+    assert openai(view)["api_key_set"] is True
+    assert [provider["api_key_masked"] for provider in view["providers"]] == [None] * len(view["providers"])
+    assert openai(view)["base_url"] == ""
+    assert view["general"]["AGENT_MONITOR_BASE_URL"]["value"] == ""
+    assert gateway not in json.dumps(view)
+    assert view["runtime_ready"] is True and "openai" in view["configured_providers"]
+    assert "gpt-6-astra" in view["api_models"]
+    # What the member saved itself still shows.
+    own_gateway = "https://member.example/v1"
+    auth.set_user_env(int(member["id"]), {"OPENAI_API_KEY": "sk-member-own-key-0000abcd", "OPENAI_BASE_URL": own_gateway})
+    assert (openai(settings.get_settings(member))["api_key_masked"], openai(settings.get_settings(member))["base_url"]) == (
+        "sk-m••••abcd", own_gateway,
+    )
+    # The administrator sees the operator's values.
+    assert (openai(settings.get_settings(admin))["api_key_masked"], openai(settings.get_settings(admin))["base_url"]) == (
+        "sk-s••••7890", gateway,
+    )
+
+
 def test_continue_on_a_running_run_uses_no_member_start(member_console, monkeypatch):
     monkeypatch.setattr(console.Handler, "_owns_run", lambda _self, _run_id, _user: True)
     calls: list = []
