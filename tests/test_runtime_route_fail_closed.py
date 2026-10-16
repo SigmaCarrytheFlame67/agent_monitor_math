@@ -230,6 +230,67 @@ class RuntimeRouteFailClosedTests(unittest.TestCase):
         codex.assert_called_once()
         direct_api.assert_not_called()
 
+    def _rebuild_dag(self, run_record: dict, call_llm) -> tuple[dict | None, list, list]:
+        """A console Rebuild ({kind} only) on an account defaulting to another
+        provider's model, with a connected Codex runtime."""
+        graph_json = '{"title":"demo","nodes":[{"id":"n1","kind":"conclusion","label":"done","statement":"1=1","citations":[]}],"edges":[]}'
+        account = {
+            "OPENAI_API_KEY": "openai-key", "ANTHROPIC_API_KEY": "anthropic-key",
+            "AGENT_MONITOR_MODEL": "gpt-6-astra", "AGENT_MONITOR_ACCOUNT_RUNTIME": "codex",
+        }
+        models: list = []
+        codex_calls: list = []
+
+        def direct(env, model, _prompt, **_kwargs):
+            models.append(model)
+            return call_llm(graph_json)
+
+        with tempfile.TemporaryDirectory() as tmp:
+            workspace = Path(tmp)
+            (workspace / "proof.md").write_text("Assume equality. Therefore one equals one.", encoding="utf-8")
+            with (
+                patch.object(settings, "resolved_user_env", return_value=account),
+                patch.object(proof_graph, "_call_llm", side_effect=direct),
+                patch.object(proof_graph, "_codex_account_ready", return_value=True),
+                patch.object(proof_graph, "_claude_account_ready", return_value=False),
+                patch.object(
+                    proof_graph, "_run_codex_prompt",
+                    side_effect=lambda *_a, **kw: codex_calls.append(kw.get("model")) or graph_json,
+                ),
+            ):
+                result = proof_graph.generate(
+                    workspace=workspace, run_record=run_record,
+                    user={"id": 17, "is_admin": True}, model=None,
+                )
+        return result, models, codex_calls
+
+    def test_recorded_api_dag_rebuild_keeps_the_runs_model_and_route(self) -> None:
+        record = {"auth_route": "api_key", "owner_id": 17,
+                  "requested_model": "claude-opus-4-8", "model": "claude-opus-4-8"}
+        result, models, codex_calls = self._rebuild_dag(
+            record, lambda graph: ("claude-opus-4-8", graph, "anthropic")
+        )
+        # The run's model, not the account's current default (gpt-6-astra).
+        self.assertEqual(models, ["claude-opus-4-8"])
+        self.assertEqual(result["model"], "claude-opus-4-8")
+        self.assertEqual(codex_calls, [])
+
+        def rate_limited(_graph):
+            raise ValueError("Anthropic model call failed for claude-opus-4-8 (HTTP 429)")
+
+        # A failed API call is reported; it never moves to the Codex subscription.
+        with self.assertRaisesRegex(ValueError, "HTTP 429"):
+            self._rebuild_dag(record, rate_limited)
+
+    def test_legacy_dag_without_a_recorded_route_keeps_the_codex_fallback(self) -> None:
+        def no_key(_graph):
+            raise ValueError("Model gpt-6-astra requires OPENAI_API_KEY")
+
+        result, models, codex_calls = self._rebuild_dag({"owner_id": 17, "model": "gpt-6-astra"}, no_key)
+        self.assertEqual(models, [None])
+        self.assertEqual(codex_calls, ["gpt-6-astra"])
+        self.assertEqual(result["model"], "gpt-6-astra")
+
     def test_recorded_codex_lean_chat_never_calls_direct_api(self) -> None:
         env = {"AGENT_MONITOR_CODEX_SUBSCRIPTION": "1", "CODEX_HOME": "/private/codex"}
         with (

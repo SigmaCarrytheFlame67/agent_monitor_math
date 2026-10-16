@@ -1869,6 +1869,14 @@ def generate(
     from agent_monitor.jobs import _route_from_record
 
     recorded_route = "api_key" if is_guest else _route_from_record(run_record)
+    if recorded_route == "api_key" and not model:
+        from agent_monitor.auto_pipeline import _api_model
+
+        # A rebuild that names no model uses the run's own model, as the
+        # automatic stages do, not the account's current default.
+        model = _api_model(
+            (run_record or {}).get("requested_model") or (run_record or {}).get("model")
+        )
     requested = str(model or "").strip().lower()
     requested_codex = requested in {"codex", "codex-cli", "codex cli"}
     requested_claude = requested in _CLAUDE_ACCOUNT_MODELS
@@ -1904,11 +1912,16 @@ def generate(
             )
         except ValueError:
             if allow_codex_fallback:
-                # Manual DAG generation may use the user's connected Codex
-                # account, subject to their preference.
+                # Manual DAG generation of a legacy run (no recorded route) may
+                # use the user's connected Codex account, subject to their
+                # preference; a run recorded on an API key stays on it.
                 from agent_monitor.settings import codex_enabled
 
-                if codex_enabled(user, env=env) and _codex_account_ready(user):
+                if (
+                    recorded_route is None
+                    and codex_enabled(user, env=env)
+                    and _codex_account_ready(user)
+                ):
                     use_codex = True
                 else:
                     raise
