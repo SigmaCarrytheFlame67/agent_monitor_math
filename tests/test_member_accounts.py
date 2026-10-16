@@ -609,6 +609,58 @@ def test_member_run_environment_drops_custom_provider_endpoints(monkeypatch):
     assert admin_env.get("OPENAI_BASE_URL") == "http://169.254.169.254/v1"
 
 
+def test_a_member_cannot_save_a_custom_base_url_its_runs_would_ignore(member_console, monkeypatch):
+    from agent_monitor import kimi_k3, settings
+
+    for name in settings._account_base_vars():
+        monkeypatch.delenv(name, raising=False)
+    monkeypatch.delenv(settings.OPERATOR_KIMI_BASE_VAR, raising=False)
+    # The operator routes OpenAI through its own gateway, which member runs keep.
+    settings.ENV_PATH.write_text("OPENAI_BASE_URL=https://gateway.example.test/v1\n", encoding="utf-8")
+    key = "sk-member-openai-123456789"
+    with running_server() as port:
+        user, cookie = _member(port)
+
+        def save(updates):
+            status, _headers, raw = request(port, "POST", f"{APP_MOUNT}/api/settings",
+                                            body={"updates": updates}, headers={"Cookie": cookie})
+            return status, json.loads(raw)
+
+        refused = [
+            save({"OPENAI_API_KEY": key, "OPENAI_BASE_URL": "http://127.0.0.1:49971/v1"}),
+            save({"ANTHROPIC_BASE_URL": "https://proxy.example.test"}),
+            save({"AGENT_MONITOR_BASE_URL": "https://proxy.example.test/v1"}),
+        ]
+        stored_after_refusals = auth.get_user_env(int(user["id"]))
+        # What a Settings form sends: the standard endpoints it shows, or the
+        # operator's own, which member runs use.
+        standard = save({"OPENAI_API_KEY": key, "OPENAI_BASE_URL": "https://api.openai.com/v1/",
+                         "KIMI_API_BASE": kimi_k3.DEFAULT_BASE_URL,
+                         "ANTHROPIC_BASE_URL": "https://api.anthropic.com"})
+        operator = save({"OPENAI_BASE_URL": "https://gateway.example.test/v1"})
+        # A custom base saved before this rule, which runs never used, goes on the next save.
+        auth.set_user_env(int(user["id"]), {"GEMINI_API_BASE": "http://127.0.0.1:49971"})
+        later = save({"AGENT_MONITOR_MODEL": "gpt-6-astra"})
+        cleared = save({"OPENAI_BASE_URL": ""})
+        owner, token = auth.login_and_create_session("owner@example.test", "long-enough-password")
+        admin = request(port, "POST", f"{APP_MOUNT}/api/settings",
+                        body={"updates": {"OPENAI_BASE_URL": "http://127.0.0.1:9/v1"}},
+                        headers={"Cookie": f"{auth.SESSION_COOKIE}={token}"})
+    for status, body in refused:
+        assert status == 400 and body["error"] == (
+            "Custom API base URLs are set by the site operator; "
+            "your runs use the provider's standard endpoint"
+        ), body
+    assert stored_after_refusals.get("OPENAI_API_KEY") is None
+    assert [standard[0], operator[0], later[0], cleared[0]] == [200, 200, 200, 200]
+    stored = auth.get_user_env(int(user["id"]))
+    assert stored["OPENAI_API_KEY"] == key and stored["AGENT_MONITOR_MODEL"] == "gpt-6-astra"
+    assert "GEMINI_API_BASE" not in stored and "OPENAI_BASE_URL" not in stored
+    # The operator keeps choosing endpoints for its own runs.
+    assert admin[0] == 200, admin[2]
+    assert auth.get_user_env(int(owner["id"]))["OPENAI_BASE_URL"] == "http://127.0.0.1:9/v1"
+
+
 def test_start_job_holds_the_member_cgm_harness_to_its_own_api_key(monkeypatch):
     for name in ("AGENT_MONITOR_MEMBER_ENGINES", "AGENT_MONITOR_PUBLIC", "MATH_HARNESS_CMD"):
         monkeypatch.delenv(name, raising=False)

@@ -259,6 +259,42 @@ def restrict_account_base_urls(
     return env
 
 
+def _member_base_url_clears(user_id: int, updates: dict[str, str]) -> list[str]:
+    """The save-time side of ``restrict_account_base_urls`` for a member.
+
+    A member's runs send its keys only to a provider's standard endpoint or
+    the operator's own, so a member saves only one of those (a Settings form
+    sends the standard endpoints it shows): another base is refused, not
+    stored and silently ignored.  Returns the member's stored bases that runs
+    ignore (saved before this rule), to be removed.
+    """
+    from agent_monitor.auth import get_user_env
+
+    server = _read_env_file()
+    standard = {
+        str(spec["base_var"]): {_default_verify_base(spec), str(spec.get("default_base") or "")}
+        for spec in PROVIDERS
+        if spec.get("base_var")
+    }
+
+    def usable(name: str, value: object) -> bool:
+        endpoints = {*standard.get(name, ()), os.environ.get(name) or server.get(name) or ""}
+        clean = str(value or "").strip().rstrip("/")
+        return not clean or clean in {str(item).strip().rstrip("/") for item in endpoints}
+
+    if any(not usable(name, updates[name]) for name in _account_base_vars() if name in updates):
+        raise PermissionError(
+            "Custom API base URLs are set by the site operator; "
+            "your runs use the provider's standard endpoint"
+        )
+    stored = get_user_env(user_id)
+    return [
+        name
+        for name in _account_base_vars()
+        if name not in updates and not usable(name, stored.get(name))
+    ]
+
+
 def hosted_guest_kimi_key() -> str:
     """The only operator credential available to the bounded guest harness."""
     if os.environ.get("AGENT_MONITOR_GUEST_HOSTED_KIMI", "1").lower() in {"0", "false", "off", "no"}:
@@ -875,9 +911,12 @@ def save_settings(body: dict[str, Any], user: dict[str, Any] | None = None) -> d
             updates.pop(key)
 
     if user is not None:
+        from agent_monitor import account_policy
         from agent_monitor.auth import set_user_env
 
         allowed = _known_env_keys()
+        if account_policy.is_member(user):
+            clear += _member_base_url_clears(int(user["id"]), updates)
         if user.get("guest"):
             requested = set(updates) | set(clear)
             disallowed = sorted(requested - GUEST_ENV_KEYS)
