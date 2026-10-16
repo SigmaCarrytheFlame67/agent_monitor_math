@@ -4,7 +4,9 @@ from __future__ import annotations
 import io
 import json
 import os
+import signal
 import tempfile
+import time
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
@@ -277,6 +279,64 @@ class IMProofClaudeWorkerFailureTests(unittest.TestCase):
         self.assertEqual(result["status"], "finished")
         self.assertIsNone(result.get("error"))
         self.assertTrue((output / "proof.tex").is_file())
+
+
+def _process_running(pid: int) -> bool:
+    try:
+        stat = Path(f"/proc/{pid}/stat").read_text(encoding="utf-8")
+    except OSError:
+        return False
+    return stat.rpartition(") ")[2].split()[0] != "Z"
+
+
+class IMProofClaudePlannerTimeoutTests(unittest.TestCase):
+    def test_planner_timeout_also_stops_the_claude_cli(self) -> None:
+        # The worker starts the CLI in its own session, out of reach of a
+        # kill of the worker's process group.
+        root = Path(self.enterContext(tempfile.TemporaryDirectory()))
+        bin_dir, home, config, workspace = (
+            root / name for name in ("bin", "home", "config", "workspace")
+        )
+        for directory in (bin_dir, home, config, workspace):
+            directory.mkdir()
+        fake = bin_dir / "claude"
+        fake.write_text(
+            '#!/bin/sh\necho $$ > "$HOME/claude.pid"\nexec sleep 120\n',
+            encoding="utf-8",
+        )
+        fake.chmod(0o755)
+        pid_file = home / "claude.pid"
+
+        def kill_leftover() -> None:
+            try:
+                os.kill(int(pid_file.read_text(encoding="utf-8")), signal.SIGKILL)
+            except (OSError, ValueError):
+                pass
+
+        self.addCleanup(kill_leftover)
+        env = {
+            "PATH": f"{bin_dir}{os.pathsep}{os.defpath}",
+            "HOME": str(home),
+            "TMPDIR": str(root),
+            "CLAUDE_CONFIG_DIR": str(config),
+            "AGENT_MONITOR_CLAUDE_SUBSCRIPTION": "1",
+            "PYTHONPATH": str(Path(__file__).resolve().parents[1]),
+        }
+        with patch.object(improof, "_PLANNER_TIMEOUT_S", 3):
+            packet = improof._research_packet(
+                problem_text="Prove that one plus one equals two.",
+                workspace=workspace,
+                env=env,
+                model=CLAUDE_MODEL,
+            )
+
+        self.assertIn("query planner timed out", packet)
+        self.assertTrue(pid_file.is_file(), "the fake Claude CLI never started")
+        pid = int(pid_file.read_text(encoding="utf-8"))
+        deadline = time.monotonic() + 5
+        while _process_running(pid) and time.monotonic() < deadline:
+            time.sleep(0.05)
+        self.assertFalse(_process_running(pid), "the Claude CLI outlived the planner timeout")
 
 
 class IMProofClaudeWorkflowTests(unittest.TestCase):

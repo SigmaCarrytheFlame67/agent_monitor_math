@@ -38,6 +38,7 @@ _AUDIT_PROMOTED_FILES = _AUDIT_CONTRACT_FILES | {
     "citation-rerun.json",
 }
 _AUDIT_GATE_MARKERS = ("$research-proof-audit", "CANDIDATE AUDIT GATE:")
+_PLANNER_TIMEOUT_S = 180
 
 _ARXIV_ABS_RE = re.compile(
     r"^https://arxiv\.org/abs/([0-9]{4}\.[0-9]{4,5}(?:v[0-9]+)?)$"
@@ -435,11 +436,19 @@ def _research_packet(
             on_start(proc)
         try:
             planner_stdout, planner_error = proc.communicate(
-                planner_prompt, timeout=180
+                planner_prompt, timeout=_PLANNER_TIMEOUT_S
             )
             planner_returncode = int(getattr(proc, "returncode", 0) or 0)
         except subprocess.TimeoutExpired:
-            os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
+            from agent_monitor.process_control import terminate_descendants
+
+            # The Claude worker starts its CLI in a new session. Stop it while
+            # it is still the worker's child, before killing the worker group.
+            terminate_descendants(proc.pid, force=True)
+            try:
+                os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
+            except OSError:
+                pass
             planner_stdout, planner_error = proc.communicate()
             planner_returncode = int(getattr(proc, "returncode", 1) or 1)
             planner_error = (planner_error + "\nquery planner timed out").strip()
