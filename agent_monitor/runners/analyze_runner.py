@@ -322,6 +322,8 @@ class AnalysisRun:
         self.stopped = False
         self.provider_failure: str | None = None
         self.permanent_failure = False
+        # Why the model could not locate results (named only if none were found).
+        self.segment_failure: str | None = None
         self.check_seq = 0
         self.attempted = False
         self.paper_map: dict[str, Any] = {}
@@ -457,9 +459,9 @@ class AnalysisRun:
                 modelled["bibliography"] = segments.get("bibliography") or {}
                 segments = modelled
         if not segments["nodes"]:
-            if self.provider_failure:
+            if self.segment_failure:
                 # The model's provider failed, which says nothing about the manuscript.
-                raise AnalyzeError(f"The results in the source could not be located: {self.provider_failure}")
+                raise AnalyzeError(f"The results in the source could not be located: {self.segment_failure}")
             raise AnalyzeError("No theorems, lemmas or other results were found in the source"
                                + (f" ({segments['warnings'][0]})" if segments["warnings"] else ""))
         _write_json(self.analysis / "segments.json", segments)
@@ -515,10 +517,12 @@ class AnalysisRun:
                 self.degraded.append("model-segmentation-incomplete")
                 if (isinstance(exc, harness.ProviderCallError) and not isinstance(exc, harness.EmptyReplyError)
                         and not self.cancel.is_set() and not self.ctx.deadline_passed()):
-                    # Say why (a lapsed sign-in, a usage limit, an invalid key), and
-                    # send no more chunks when each would be refused the same way.
-                    self._note_failure(exc)
-                    if self.permanent_failure:
+                    # Say why if nothing is located (a lapsed sign-in, a usage limit, an
+                    # invalid key).  Only a refusal every later call would repeat fails
+                    # the checks too: it stops the chunks, and the checks are not sent.
+                    self.segment_failure, permanent = self._failure_reason(exc)
+                    if permanent:
+                        self._note_failure(exc)
                         break
                 continue
             items.extend(dict(item, _chunk=(offset, len(chunk))) for item in found)
@@ -768,30 +772,36 @@ class AnalysisRun:
             return ("stopped", job, "the analysis was stopped")
         return ("failed", job, "The check failed")
 
-    def _note_failure(self, error: harness.ProviderCallError) -> str:
+    def _failure_reason(self, error: harness.ProviderCallError) -> tuple[str, bool]:
+        """A failed call's public reason (in words that fit every stage), and
+        whether every further call would fail the same way."""
         failure = getattr(error, "failure", None)
         message = ""
+        permanent = False
         if isinstance(failure, kimi_k3.CallFailure):
             message = kimi_k3.failure_message(failure, billed=self.ctx.run_processed())
-            if failure.permanent:
-                self.permanent_failure = True
+            permanent = failure.permanent
         if not message:
             # A linked Claude Code / Codex account that must sign in again, has
             # reached its usage limit, or cannot use the model fails every
-            # further check the same way, as does an own API key the provider
+            # further call the same way, as does an own API key the provider
             # rejects or that is out of credit: say why, and start no more checks.
             cause = error.__cause__
             kind = getattr(cause, "kind", None)
             if kind in _SUBSCRIPTION_STOP_KINDS:
                 message = " ".join(str(cause).split())[:400]
-                self.permanent_failure = True
+                permanent = True
             elif kind == "timeout":
-                message = "The model did not answer this check in time (" + " ".join(str(cause).split())[:200] + ")"
+                message = "The model did not answer in time (" + " ".join(str(cause).split())[:200] + ")"
             elif failure is None and isinstance(cause, harness.APIBackendError):
                 # An own key's provider says why (the key is redacted where it is raised).
                 message = " ".join(str(cause).split())[:400]
-        if not message:
-            message = "The model provider did not answer this check"
+        return message or "The model provider did not answer", permanent
+
+    def _note_failure(self, error: harness.ProviderCallError) -> str:
+        message, permanent = self._failure_reason(error)
+        if permanent:
+            self.permanent_failure = True
         self.provider_failure = message
         if "provider-failure" not in self.degraded:
             self.degraded.append("provider-failure")

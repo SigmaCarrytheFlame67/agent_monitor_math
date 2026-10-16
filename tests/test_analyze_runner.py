@@ -833,6 +833,61 @@ def test_a_refused_segmentation_call_stops_the_run_before_the_overview(tmp_path,
     assert {node["meta"]["verdict"] for node in ag.load(tmp_path)["nodes"]} == {"not_checked"}
 
 
+def prose_script(check_answer):
+    """PROSE's first chunk fails once (a provider error that may pass); each
+    other chunk locates the result its first paragraph states, with a proof."""
+
+    def script(kind, node, user, headers):
+        if kind == "segment":
+            if "Chunk 1 of" in user:
+                return 500, {"error": {"message": "upstream hiccup"}}
+            number = re.search(r"Paragraph (\d+)\.", user).group(1)
+            return json.dumps({"items": [{
+                "kind": "lemma", "label": f"Claim {number}",
+                "statement_quote": f"Paragraph {number}. Every widget carries a frobnicator along the line.",
+                "proof_start_quote": "Every widget carries a frobnicator", "proof_end_quote": "along the line.",
+                "uses": []}]})
+        if kind == "map":
+            return paper_map(main=())
+        return check_answer
+
+    return script
+
+
+def test_a_passing_failure_while_locating_results_is_no_failure_of_the_checks(tmp_path, provider):
+    server = provider(prose_script(verdict_json()))
+    outcome = run(tmp_path, write_request(tmp_path, text=PROSE), own_key_env(server))
+    assert outcome["summary"]["checked"] == 2
+    # The report says the model missed part of the text, not that a check went unanswered.
+    receipt = json.loads((tmp_path / "analysis" / "receipt.json").read_text())
+    assert receipt["degraded"] == ["model-segmentation-incomplete"]
+
+
+def test_checks_failing_later_are_not_blamed_on_a_passing_segmentation_failure(tmp_path, provider):
+    server = provider(prose_script("no verdict here"))
+    with pytest.raises(runner.AnalyzeError,
+                       match="^No result could be checked: the verifier output could not be interpreted$"):
+        run(tmp_path, write_request(tmp_path, text=PROSE), own_key_env(server))
+
+
+def test_a_failed_call_is_described_in_words_that_fit_every_stage(tmp_path, provider):
+    from agent_monitor.runners.codex_backend import CodexBackendError
+
+    analysis = runner.AnalysisRun(tmp_path, write_request(tmp_path), env=own_key_env(provider(default_script())),
+                                  sink=lambda _event: None)
+
+    def failed(cause):
+        error = harness.ProviderCallError("provider call failed")
+        error.__cause__ = cause
+        return error
+
+    # A check and the location of results alike ("could not be located: ...").
+    timeout = failed(CodexBackendError("codex exec timed out after 600s", kind="timeout"))
+    assert analysis._note_failure(timeout) == "The model did not answer in time (codex exec timed out after 600s)"
+    assert analysis._note_failure(failed(ConnectionResetError())) == "The model provider did not answer"
+    assert not analysis.permanent_failure
+
+
 SHORT_TEX =r"""\documentclass{article}
 \newtheorem{theorem}{Theorem}
 \newtheorem{lemma}[theorem]{Lemma}
