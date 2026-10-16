@@ -447,7 +447,7 @@ class ClaudeSettingsRouteTests(unittest.TestCase):
         handler.headers = {"Content-Length": str(len(body))}
         handler.rfile = io.BytesIO(body)
         handler._resolve_path = lambda: "/api/settings/claude/login/code"
-        handler._require_user = lambda _path: {"id": 42, "is_admin": False}
+        handler._require_user = lambda _path: {"id": 42, "is_admin": True}
         sent: list[tuple[int, dict]] = []
         handler._send = lambda code, payload, *args, **kwargs: sent.append((code, json.loads(payload)))
         with patch.object(claude_login, "submit_code", return_value={"status": "running"}) as submit:

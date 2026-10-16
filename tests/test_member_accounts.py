@@ -411,6 +411,62 @@ def test_member_settings_report_the_policy_without_probing_logins(member_console
         assert state["error"] == account_policy.subscription_notes()[path.split("/")[0]]
 
 
+def test_member_login_actions_run_no_cli_and_create_no_account_home(
+    member_console, monkeypatch, tmp_path: Path
+):
+    """A member's cancel, code and logout never reach the login CLIs.
+
+    Logout still removes a sign-in stored before subscriptions became
+    administrator-only, which the member's Settings card offers to remove.
+    """
+    from agent_monitor import claude_login, codex_login
+
+    calls = tmp_path / "cli-calls.log"
+    fake = tmp_path / "fake-cli"
+    fake.write_text(f'#!/bin/sh\necho "$*" >> "{calls}"\necho "{{}}"\n', encoding="utf-8")
+    fake.chmod(0o755)
+    monkeypatch.setattr(claude_login, "claude_binary", lambda: str(fake))
+    monkeypatch.setattr(codex_login, "codex_binary", lambda: str(fake))
+    monkeypatch.setattr(claude_login, "_auth_cache", {})
+    monkeypatch.setenv("AGENT_MONITOR_CLAUDE_ACCOUNT_HOME", str(tmp_path / "claude"))
+    monkeypatch.setenv("AGENT_MONITOR_CODEX_ACCOUNT_HOME", str(tmp_path / "codex"))
+    notes = account_policy.subscription_notes()
+    with running_server() as port:
+        user, cookie = _member(port)
+
+        def post(path: str, body: dict | None = None):
+            return request(port, "POST", f"{APP_MOUNT}/api/settings/{path}",
+                           body=body or {}, headers={"Cookie": cookie})
+
+        code = post("claude/login/code", {"code": "one-time-code"})
+        answers = {
+            path: post(path)
+            for path in ("claude/login/cancel", "claude/logout", "codex/login/cancel", "codex/logout")
+        }
+        homes_created = (tmp_path / "claude").exists() or (tmp_path / "codex").exists()
+        stored = [
+            claude_login.account_home(int(user["id"])) / ".credentials.json",
+            codex_login.account_home(int(user["id"])) / "auth.json",
+        ]
+        for credentials in stored:
+            credentials.parent.mkdir(parents=True, exist_ok=True)
+            credentials.write_text("{}", encoding="utf-8")
+        removed = [post("claude/logout")[0], post("codex/logout")[0]]
+        _status, _headers, raw = request(port, "GET", f"{APP_MOUNT}/api/settings", headers={"Cookie": cookie})
+
+    assert not calls.exists()
+    assert not homes_created
+    assert code[0] == 403 and json.loads(code[2])["error"] == notes["claude"]
+    for path, (status, _headers, body) in answers.items():
+        state = json.loads(body)
+        assert status == 200, path
+        assert state["policy"] == "admin_only" and state["connected"] is False
+        assert state["error"] == notes[path.split("/")[0]]
+    assert removed == [200, 200]
+    assert not any(credentials.exists() for credentials in stored)
+    assert json.loads(raw)["subscription_stored"] == {"claude": False, "codex": False}
+
+
 def test_start_job_refuses_member_harnesses_and_pins_the_api_route(monkeypatch):
     member = {"id": 5, "is_admin": False}
     with pytest.raises(ValueError, match="administrator"):

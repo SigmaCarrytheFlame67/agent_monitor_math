@@ -815,6 +815,26 @@ def _member_subscription_status(kind: str) -> dict[str, Any]:
     return status
 
 
+def _remove_member_stored_login(kind: str, user_id: int) -> None:
+    """Delete a sign-in a member linked before subscriptions became admin-only.
+
+    Only the credential file that Settings reports as stored is removed: no
+    CLI runs, and no account home is created.
+    """
+    if kind == "codex":
+        from agent_monitor import codex_login
+
+        credentials = codex_login.account_home(user_id) / "auth.json"
+    else:
+        from agent_monitor import claude_login
+
+        credentials = claude_login.account_home(user_id) / ".credentials.json"
+    try:
+        credentials.unlink()
+    except FileNotFoundError:
+        pass
+
+
 def _release_member_run_slot(user_id: int) -> None:
     """Give back the newest run start reserved for a member that started nothing."""
     with _MEMBER_RUN_LOCK:
@@ -3880,6 +3900,13 @@ class Handler(RunSharingMixin, ProjectsMixin, ResearchMixin, BaseHTTPRequestHand
                 explanation=account_policy.subscription_notes()["codex"],
             ):
                 return
+            if account_policy.is_member(user):
+                # A member links no account, so there is no login to cancel;
+                # logout only removes a sign-in stored before the policy.
+                if path.endswith("/logout"):
+                    _remove_member_stored_login("codex", int(user["id"]))
+                self._send(200, json.dumps(_member_subscription_status("codex"), ensure_ascii=False))
+                return
             # Every operation is scoped to user["id"] from the authenticated
             # session — never from the request body — so a user can only
             # ever start, poll, cancel, or disconnect their *own* Codex
@@ -3903,11 +3930,19 @@ class Handler(RunSharingMixin, ProjectsMixin, ResearchMixin, BaseHTTPRequestHand
         ):
             if self._deny_guest(user, "account connections"):
                 return
-            if path.endswith("/start") and self._deny_member(
+            if path.endswith(("/start", "/code")) and self._deny_member(
                 user,
                 "Connecting a Claude subscription",
                 explanation=account_policy.subscription_notes()["claude"],
             ):
+                return
+            if account_policy.is_member(user):
+                # As for the member's status, claude_login is never reached:
+                # its CLI probes create an account home.  Logout only removes
+                # a sign-in stored before the policy.
+                if path.endswith("/logout"):
+                    _remove_member_stored_login("claude", int(user["id"]))
+                self._send(200, json.dumps(_member_subscription_status("claude"), ensure_ascii=False))
                 return
             from agent_monitor import claude_login
 
