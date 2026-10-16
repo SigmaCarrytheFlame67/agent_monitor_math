@@ -128,6 +128,23 @@ def test_project_runs_require_membership_use_shared_problem_and_own_account(api)
     assert api('GET','/api/projects/'+pid,user=2)[0]==404
 
 
+def test_owner_only_project_actions_refuse_members_with_403(api):
+    pid=api('POST','/api/projects',{'title':'Joint work','problem':'Shared problem'})[2]['id']
+    token=api('POST','/api/projects/'+pid+'/invite',{})[2]['path'].split('/')[-1]
+    assert api('POST','/api/projects/join',{'token':token},user=2)[0]==200
+    actions=(('invite',{}),('invite',{'revoke':True}),('remove-member',{'user_id':1}),('remove-member',{'user_id':2}))
+    for action,body in actions:
+        # A member who is not the owner is forbidden; to anyone else the project does not exist.
+        status,_,data=api('POST','/api/projects/'+pid+'/'+action,body,user=2)
+        assert status==403 and data['error'].startswith('Only the '),(action,status,data)
+        status,_,data=api('POST','/api/projects/'+pid+'/'+action,body,user=3)
+        assert status==404 and data['error']=='Project not found or invitation required.',(action,status,data)
+    status,_,data=api('POST','/api/projects/'+pid+'/remove-member',{'user_id':1})
+    assert status==400 and data['error']=='The project owner cannot remove themselves.'
+    assert api('GET','/api/projects/'+pid,user=2)[0]==200
+    assert api('POST','/api/projects/join',{'token':'x'*43},user=3)[0]==404
+
+
 def test_project_members_cannot_delete_each_others_runs(api, monkeypatch):
     deleted=[]
     monkeypatch.setattr(jobs,'delete_run',lambda rid:(deleted.append(rid),{'deleted':True,'run_id':rid})[1])

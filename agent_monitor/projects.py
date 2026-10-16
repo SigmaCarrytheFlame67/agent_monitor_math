@@ -16,6 +16,11 @@ MAX_NODES = 100_000
 ID = re.compile(r'[A-Za-z0-9:_-]{1,100}')
 
 
+class NotProjectOwner(PermissionError):
+    """A member asked for an owner-only action (403); a plain PermissionError
+    means the caller is not a member, and the project stays hidden (404)."""
+
+
 def connect():
     DB_PATH.parent.mkdir(parents=True, exist_ok=True)
     fd = os.open(DB_PATH, os.O_CREAT | os.O_RDWR, 0o600); os.close(fd)
@@ -153,7 +158,7 @@ def edit(pid, uid, operations):
 def invite(pid, uid, revoke=False):
     with connect() as db:
         row=_member(db,pid,uid)
-        if row['owner']!=uid: raise PermissionError('Only the project owner can manage invitations.')
+        if row['owner']!=uid: raise NotProjectOwner('Only the project owner can manage invitations.')
         token=None if revoke else (row['invite'] or secrets.token_urlsafe(32))
         db.execute('UPDATE projects SET invite=? WHERE id=?',(token,pid))
         return token
@@ -172,7 +177,8 @@ def join(token,user):
 def remove_member(pid, uid, member):
     with connect() as db:
         row=_member(db,pid,uid)
-        if row['owner']!=uid or member==uid: raise PermissionError('Only the owner can remove other members.')
+        if row['owner']!=uid: raise NotProjectOwner('Only the owner can remove other members.')
+        if member==uid: raise ValueError('The project owner cannot remove themselves.')
         db.execute('DELETE FROM members WHERE project=? AND user=?',(pid,member))
         # Old invite links must not let removed members immediately rejoin.
         db.execute('UPDATE projects SET invite=NULL WHERE id=?',(pid,))
@@ -250,6 +256,7 @@ class ProjectsMixin:
                 remove_member(pid,user['id'],int(body.get('user_id')));result={'ok':True}
             else:
                 self._project_send(404,{'error':'Not found.'});return True
+        except NotProjectOwner as exc:self._project_send(403,{'error':str(exc)})
         except PermissionError as exc:self._project_send(404,{'error':str(exc)})
         except (ValueError,TypeError) as exc:self._project_send(400,{'error':str(exc)})
         else:self._project_send(200,result)
