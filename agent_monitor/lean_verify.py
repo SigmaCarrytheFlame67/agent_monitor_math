@@ -7640,6 +7640,10 @@ def _harness_worker(
     exit_code: int | None = None
     stopped = False
     timed_out = False
+    # What the starting source scored at launch. The agent can rewrite
+    # lean_verify.json, so the finish never reads this back from it.
+    initial_status = str((base.get("harness") or {}).get("initial_status") or "")
+    initial_audit = (base.get("fidelity") or {}).get("audit")
 
     def flush(note: str | None = None) -> None:
         rec = dict(base)
@@ -7701,6 +7705,8 @@ def _harness_worker(
             audit=audit,
             initial_fingerprint=initial_fingerprint,
             stopped=stopped,
+            initial_status=initial_status,
+            initial_audit=initial_audit,
         )
         with _HARNESS_LOCK:
             _HARNESS_JOBS.pop(key, None)
@@ -7809,6 +7815,8 @@ def _harness_worker(
             initial_fingerprint=initial_fingerprint,
             stopped=stopped,
             timeout_limit=timeout_s if timed_out else None,
+            initial_status=initial_status,
+            initial_audit=initial_audit,
         )
     finally:
         with _HARNESS_LOCK:
@@ -7917,11 +7925,15 @@ def _harness_finish(
     initial_fingerprint: dict[str, Any] | None,
     stopped: bool,
     timeout_limit: int | None = None,
+    initial_status: str = "",
+    initial_audit: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Re-check a fresh regular artifact, but never forgive a failed child.
 
     ``timeout_limit`` is the limit, in seconds, at which the worker killed a
     still-running child; a user Stop takes precedence over it.
+    ``initial_status`` and ``initial_audit`` are the status and fidelity audit
+    the starting source had at launch, as the worker holds them.
     """
     from agent_monitor.jobs import _route_from_record
 
@@ -8046,10 +8058,10 @@ def _harness_finish(
     kernel_status = _status_from_check(check, sorry_n, mode="check")
     status = kernel_status
     kept = False
+    audit_result: dict[str, Any] | None = None
     if stopped:
         status = "stopped"
     elif not artifact_accepted:
-        initial_status = str(previous_harness.get("initial_status") or "")
         # A clean exit that left the file as it was keeps the status the file
         # had before the run while Lean still bears it out; it never promotes.
         kept = bool(
@@ -8060,7 +8072,15 @@ def _harness_finish(
             and initial_status in {"verified", "unfaithful", "incomplete", "compiled"}
             and (initial_status != "verified" or kernel_status == "verified")
         )
-        status = initial_status if kept else "failed"
+        status = "failed"
+        if kept:
+            # With the audit it had at launch, never one the agent could have
+            # written into lean_verify.json since, and no better than today's
+            # red flags allow.
+            audit_result = initial_audit if isinstance(initial_audit, dict) else {}
+            status = _apply_fidelity(
+                initial_status, _fidelity_flags(lean_src), audit_result
+            )
 
     attempts = list(prev.get("attempts") or [])
     attempts.append(
@@ -8100,7 +8120,6 @@ def _harness_finish(
         }
     )
 
-    audit_result: dict[str, Any] | None = None
     if audit and artifact_accepted and status in {"verified", "incomplete"}:
         audit_result = _harness_fidelity_audit(
             workspace=workspace,
@@ -8123,7 +8142,7 @@ def _harness_finish(
             + "; ".join(rejection_reasons)
             + (
                 ". The earlier Lean result stands. "
-                if kept
+                if kept and status == initial_status
                 else ". The outer Lean result is diagnostic only. "
             )
             + notes

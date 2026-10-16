@@ -10,7 +10,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from agent_monitor import lean_broker, lean_verify
+from agent_monitor import lean_broker, lean_verify, proof_bridge
 
 
 _TOOLCHAIN_TREE = "1" * 64
@@ -70,6 +70,18 @@ def _failed_write(_workspace: Path, _source: str, _uses_mathlib: bool) -> dict:
         "stderr": "Proof.lean:1:44: error: unsolved goals",
         "stdout": "",
     }
+
+
+def _rewriting_agent(edit: str) -> str:
+    """An agent that leaves Proof.lean alone but edits ../lean_verify.json
+    (the record of the run it works on) just before it exits."""
+    return (
+        "import json, pathlib\n"
+        "path = pathlib.Path('..', 'lean_verify.json')\n"
+        "record = json.loads(path.read_text())\n"
+        f"{edit}\n"
+        "path.write_text(json.dumps(record))\n"
+    )
 
 
 class FormalHarnessHardeningTests(unittest.TestCase):
@@ -256,6 +268,85 @@ class FormalHarnessHardeningTests(unittest.TestCase):
         self.assertEqual(result["status"], "unfaithful")
         self.assertFalse(result["audited"])
         self.assertEqual(result["fidelity"]["audit"]["verdict"], audit["verdict"])
+        self.assertIn("earlier Lean result stands", result["notes"])
+
+    def test_an_agent_cannot_raise_the_kept_status_through_the_result_file(self) -> None:
+        audit = {
+            "ok": True,
+            "faithful": False,
+            "severity": "major",
+            "verdict": "The theorem is not the stated problem.",
+            "issues": ["Wrong statement."],
+        }
+        write = f"import pathlib; pathlib.Path('Proof.lean').write_text({KEPT_SOURCE!r})"
+        forge = _rewriting_agent(
+            "record['status'] = record['harness']['initial_status'] = 'verified'"
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            workspace = Path(tmp).resolve()
+            self._source(workspace, "theorem old : True := by trivial\n")
+            before = self._run_agent(workspace, write, audit=audit)
+            result = self._run_agent(workspace, forge)
+
+        self.assertEqual(before["status"], "unfaithful")
+        # What the file scored at launch is the worker's, not the agent's.
+        self.assertEqual(result["status"], "unfaithful")
+        self.assertFalse(result["harness"]["artifact_accepted"])
+        self.assertFalse(result["audited"])
+        self.assertEqual(result["fidelity"]["audit"]["verdict"], audit["verdict"])
+
+    def test_an_agent_cannot_vouch_for_a_kept_result_through_the_result_file(self) -> None:
+        faithful = {
+            "ok": True,
+            "faithful": True,
+            "severity": "none",
+            "verdict": "Faithful.",
+            "issues": [],
+        }
+        forge = _rewriting_agent(f"record['fidelity'] = {{'audit': {faithful!r}}}")
+        with tempfile.TemporaryDirectory() as tmp:
+            workspace = Path(tmp).resolve()
+            before = self._checked_first(workspace, KEPT_SOURCE)
+            result = self._run_agent(workspace, forge)
+            coverage = proof_bridge.build(workspace)
+
+        # Checked but never audited: it stays verified, and still unaudited.
+        self.assertEqual(before["status"], "verified")
+        self.assertFalse(before["fidelity"]["audit"])
+        self.assertEqual(result["status"], "verified")
+        self.assertFalse(result["fidelity"]["audit"])
+        self.assertFalse(coverage["formal_verified"])
+
+    def test_a_kept_status_is_held_to_the_current_fidelity_flags(self) -> None:
+        source = (
+            "axiom kept_ax (n : Nat) : n + 0 = n\n"
+            "theorem kept (n : Nat) : n + 0 = n := kept_ax n\n"
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            workspace = Path(tmp).resolve()
+            before = self._checked_first(workspace, source)
+            # As a release that did not yet flag the axiom recorded it.
+            lean_verify._write_cached(
+                workspace, {**lean_verify.load_cached(workspace), "status": "verified"}
+            )
+            result = self._run_agent(workspace, "print('nothing to change')")
+
+        self.assertEqual(before["status"], "unfaithful")
+        self.assertEqual(result["status"], "unfaithful")
+        self.assertFalse(result["harness"]["artifact_accepted"])
+        self.assertNotIn("earlier Lean result stands", result["notes"])
+
+    def test_exit_zero_unchanged_artifact_keeps_an_incomplete_status(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            workspace = Path(tmp).resolve()
+            before = self._checked_first(
+                workspace, "theorem kept (n : Nat) : n + 0 = n := by sorry\n"
+            )
+            result = self._run_agent(workspace, "print('still a gap')")
+
+        self.assertEqual(before["status"], "incomplete")
+        # An admitted gap is a minor flag: it never makes the file unfaithful.
+        self.assertEqual(result["status"], "incomplete")
         self.assertIn("earlier Lean result stands", result["notes"])
 
     def test_unchanged_artifact_is_failed_unless_a_clean_exit_and_check_confirm_it(self) -> None:
