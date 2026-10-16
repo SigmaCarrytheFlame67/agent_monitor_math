@@ -424,6 +424,26 @@ class ClaudeRoutePersistenceTests(unittest.TestCase):
                     self.assertEqual(result["status"], "continuing")
                     self.assertEqual(captured["model"], recorded)
 
+    def test_follow_up_keeps_the_run_model_over_one_its_engine_cannot_run(self) -> None:
+        # As at a start: the kimi engine runs only Kimi K3, and OpenClaude's
+        # Codex adapter only gpt-5.6-sol, although the account offers more.
+        admin = {"id": 17, "is_admin": True}
+        kimi_run = {
+            "engine": "kimi", "auth_route": "api_key", "credential_source": "sponsored_kimi",
+            "model": "kimi-k3", "requested_model": "kimi-k3",
+        }
+        openclaude_run = {
+            "engine": "openclaude", "auth_route": "codex_subscription",
+            "model": "gpt-5.6-sol", "requested_model": "gpt-5.6-sol",
+        }
+        plain_run = {**openclaude_run, "engine": "plain"}
+        pick = jobs._member_continuation_model
+        with patch("agent_monitor.codex_login.available_models", return_value=["gpt-6-astra", "gpt-5.6-sol"]):
+            self.assertEqual(pick(admin, "kimi", kimi_run, "gpt-6-astra"), "kimi-k3")
+            self.assertEqual(pick(admin, "openclaude", openclaude_run, "gpt-6-astra"), "gpt-5.6-sol")
+            # A model the engine supports is still taken.
+            self.assertEqual(pick(admin, "plain", plain_run, "gpt-6-astra"), "gpt-6-astra")
+
     def test_refused_chat_follow_up_records_nothing(self) -> None:
         record = {
             "run_id": "plain_unknown",

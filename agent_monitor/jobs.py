@@ -5434,14 +5434,28 @@ def _continuation_model(run_data: dict[str, Any], requested: str | None) -> str 
 
 
 def _recorded_route_runs(
-    user: dict[str, Any] | None, run_data: dict[str, Any], model: str | None
+    user: dict[str, Any] | None, engine: str, run_data: dict[str, Any], model: str | None
 ) -> bool:
-    """Whether the run's recorded route can run ``model``."""
+    """Whether the run's recorded route can run ``model`` on ``engine``.
+
+    As a start checks it: Max only on the Max route, the ``kimi`` engine only
+    Kimi K3, and a linked account only a model of its own that the engine
+    supports.  Any other API model is left to the continuation's credential
+    check.
+    """
+    from agent_monitor.engines_registry import supported_models
+    from agent_monitor.settings import GUEST_DEFAULT_MODEL
+
     route = _route_from_record(run_data)
     if cgm_max.is_max_model(model):
         return route == cgm_max.ROUTE
+    if engine == "kimi":
+        return model == GUEST_DEFAULT_MODEL
     if route not in {"claude_subscription", "codex_subscription"}:
         return True
+    allowed = supported_models(engine)
+    if allowed and model not in allowed:
+        return False
     try:
         _validate_subscription_model(route=route, model=model, user=user, field="Selected model")
     except ValueError:
@@ -5471,7 +5485,7 @@ def _member_continuation_model(
     model = _continuation_model(run_data, requested)
     if str(requested or "").strip() and (
         account_policy.member_model_error(user, engine, model)
-        or not _recorded_route_runs(user, run_data, model)
+        or not _recorded_route_runs(user, engine, run_data, model)
     ):
         model = _continuation_model(run_data, None)
     error = account_policy.member_model_error(user, engine, model)
