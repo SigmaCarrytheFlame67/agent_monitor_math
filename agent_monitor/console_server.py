@@ -3560,6 +3560,16 @@ class Handler(RunSharingMixin, ProjectsMixin, ResearchMixin, BaseHTTPRequestHand
             from agent_monitor import analyze_runs
 
             run_record = _run_record_for(rid)
+            if action not in {"compile", "check", "stop_harness"}:
+                # Model work on a member's run billed to a subscription or Max
+                # (started before subscriptions became administrator-only)
+                # would bill that sign-in and could fall back to Codex.
+                refusal = account_policy.member_continuation_error(
+                    user, job_manager._route_from_record(run_record)
+                )
+                if refusal:
+                    self._send(403, json.dumps({"error": refusal}, ensure_ascii=False))
+                    return
             if analyze_runs.is_analyze_record(run_record):
                 # An analysis formalizes the STATEMENTS of selected nodes on the
                 # server's Lean 4.14 checker (proofs are not attempted), or

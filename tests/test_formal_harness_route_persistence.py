@@ -574,7 +574,7 @@ class FormalHarnessRoutePersistenceTests(unittest.TestCase):
                 with self.assertRaisesRegex(ValueError, "cannot silently fall back"):
                     lean_verify._codex_subscription_interaction(
                         workspace=Path(tmp),
-                        user={"id": 17},
+                        user={"id": 17, "is_admin": True},
                         run_record={"auth_route": "api_key", "owner_id": 17},
                         prompt="Audit.",
                         lean_source="theorem main : True := by trivial",

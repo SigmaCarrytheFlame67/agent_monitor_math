@@ -5179,7 +5179,7 @@ theorem main : True := by
             ):
                 result = lean_verify.revise_with_feedback(
                     workspace=workspace,
-                    user={"id": 7},
+                    user={"id": 7, "is_admin": True},
                     message="replace trivial with an explicit proof term",
                 )
 
@@ -5204,7 +5204,7 @@ theorem main : True := by
                 with self.assertRaisesRegex(ValueError, "Codex is disconnected"):
                     lean_verify.revise_with_feedback(
                         workspace=workspace,
-                        user={"id": 7},
+                        user={"id": 7, "is_admin": True},
                         message="explain why the theorem is vacuous?",
                     )
 
@@ -6546,7 +6546,7 @@ class AuthenticationModeSettingsTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "Codex is turned off"):
                 lean_verify._codex_subscription_interaction(
                     workspace=Path(tmp),
-                    user={"id": 7},
+                    user={"id": 7, "is_admin": True},
                     prompt="Explain this proof.",
                     lean_source="theorem main : True := by trivial",
                     edit=False,

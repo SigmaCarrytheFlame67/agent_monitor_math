@@ -565,7 +565,7 @@ class LeanCheckerHardeningTests(unittest.TestCase):
                         ):
                             lean_verify._codex_subscription_interaction(
                                 workspace=workspace,
-                                user={"id": 7},
+                                user={"id": 7, "is_admin": True},
                                 prompt="Revise safely.",
                                 lean_source=SOURCE,
                                 edit=True,

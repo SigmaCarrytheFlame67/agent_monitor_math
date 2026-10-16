@@ -48,7 +48,7 @@ import time
 from pathlib import Path
 from typing import Any
 
-from agent_monitor import lean_broker, usage_ledger
+from agent_monitor import account_policy, lean_broker, usage_ledger
 from agent_monitor.proof_graph import (  # reuse LLM plumbing and safe reads
     CLAUDE_DERIVED_TIMEOUT_ENV,
     MAX_PROBLEM_BYTES as MAX_WORKSPACE_PROBLEM_BYTES,
@@ -4854,6 +4854,14 @@ def _intervention_lock(workspace: Path) -> threading.Lock:
         return _INTERVENTION_LOCKS.setdefault(key, threading.Lock())
 
 
+# The Codex intervention is a coding agent with a shell on this server, on a
+# linked subscription: administrator-only, like the Formal harness and the
+# local-tool engines (see account_policy).
+_MEMBER_LEAN_AGENT_ERROR = (
+    "Lean coding agents run local tools and are limited to the site administrator"
+)
+
+
 def _codex_subscription_interaction(
     *,
     workspace: Path,
@@ -4871,6 +4879,8 @@ def _codex_subscription_interaction(
     """
     if (user or {}).get("guest") or (run_record or {}).get("guest"):
         raise ValueError("Guest Formal actions use the included Kimi service")
+    if account_policy.is_member(user):
+        raise ValueError(_MEMBER_LEAN_AGENT_ERROR)
     from agent_monitor import codex_login
     from agent_monitor.cli_events import CLIEventParser
     from agent_monitor.engines_registry import build_cli_command
@@ -5013,7 +5023,7 @@ def _answer_lean_question(
             raise
         from agent_monitor.jobs import _is_kimi_model
 
-        if _is_kimi_model(effective_model):
+        if _is_kimi_model(effective_model) or account_policy.is_member(user):
             raise
         result = _codex_subscription_interaction(
             workspace=workspace,
@@ -5087,7 +5097,8 @@ def _revise_with_feedback_impl(
 
         if env.get("AGENT_MONITOR_CLAUDE_SUBSCRIPTION") == "1":
             raise
-        if _is_kimi_model(effective_model):
+        # A member keeps the model's own error: the fallback is a local agent.
+        if _is_kimi_model(effective_model) or account_policy.is_member(user):
             raise
         codex_result = _codex_subscription_interaction(
             workspace=workspace,
