@@ -246,6 +246,11 @@ class CodexReauthTests(unittest.TestCase):
         )
         accounts.start()
         self.addCleanup(accounts.stop)
+        # USER stands for the site administrator: subscription routes bind
+        # only for operator accounts.
+        operator = patch("agent_monitor.auth.is_operator_account", return_value=True)
+        operator.start()
+        self.addCleanup(operator.stop)
         self.home = codex_login.account_home(self.USER["id"])
         self.home.mkdir(parents=True)
         (self.home / "auth.json").write_text(
