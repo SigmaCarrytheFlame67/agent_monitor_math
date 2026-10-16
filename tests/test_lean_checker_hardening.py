@@ -554,9 +554,8 @@ class LeanCheckerHardeningTests(unittest.TestCase):
                             "_harness_env",
                             return_value={},
                         ),
-                        patch.object(
-                            lean_verify.subprocess,
-                            "run",
+                        patch(
+                            "agent_monitor.runners.codex_backend._run_codex_process",
                             side_effect=fake_run,
                         ),
                     ):

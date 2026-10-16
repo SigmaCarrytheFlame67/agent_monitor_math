@@ -568,7 +568,7 @@ class FormalHarnessRoutePersistenceTests(unittest.TestCase):
             with (
                 patch("agent_monitor.settings.codex_enabled", return_value=True),
                 patch("agent_monitor.codex_login.account_login_ready") as ready,
-                patch("agent_monitor.lean_verify.subprocess.run") as run,
+                patch("agent_monitor.runners.codex_backend._run_codex_process") as run,
             ):
                 with self.assertRaisesRegex(ValueError, "cannot silently fall back"):
                     lean_verify._codex_subscription_interaction(

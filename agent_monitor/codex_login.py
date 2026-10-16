@@ -103,17 +103,18 @@ def account_login_ready(home: Path) -> bool:
 
 def _installed_cli_version(codex: str) -> str:
     """Bare version (``0.160.0``) that ``codex --version`` reports."""
+    # The npm launcher cannot forward SIGKILL; this helper stops the whole
+    # process group (native codex included) when the timeout expires.
+    from agent_monitor.runners.codex_backend import _run_codex_process
+
     with tempfile.TemporaryDirectory() as isolated_home:
         try:
-            completed = subprocess.run(
+            completed = _run_codex_process(
                 [codex, "--version"],
+                input="",
+                timeout=_MODELS_REFRESH_TIMEOUT_S,
                 env={"PATH": os.environ.get("PATH", os.defpath), "HOME": isolated_home,
                      "CODEX_HOME": isolated_home, "NO_COLOR": "1"},
-                stdin=subprocess.DEVNULL,
-                capture_output=True,
-                text=True,
-                timeout=_MODELS_REFRESH_TIMEOUT_S,
-                check=False,
                 cwd=isolated_home,
             )
         except (OSError, subprocess.SubprocessError):
@@ -192,20 +193,17 @@ def refresh_models_cache(user_id: int, *, timeout: float = _MODELS_REFRESH_TIMEO
     codex = codex_binary()
     if not codex or not account_login_ready(home):
         return False
+    from agent_monitor.runners.codex_backend import _run_codex_process
     from agent_monitor.subprocess_env import child_process_env
 
     env = child_process_env()
     env["CODEX_HOME"] = str(home)
     env.setdefault("NO_COLOR", "1")
     try:
-        subprocess.run(
-            [codex, "debug", "models"],
-            env=env,
-            stdin=subprocess.DEVNULL,
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-            timeout=timeout,
-            check=False,
+        # A timeout stops native codex too (see _installed_cli_version); the
+        # rendered catalog on stdout is discarded.
+        _run_codex_process(
+            [codex, "debug", "models"], input="", timeout=timeout, env=env, cwd=None
         )
     except (OSError, subprocess.SubprocessError):
         return False

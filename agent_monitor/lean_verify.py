@@ -4912,21 +4912,22 @@ def _codex_subscription_interaction(
         )
         if not argv:
             raise ValueError("Codex CLI is not installed on this server")
+        from agent_monitor.runners.codex_backend import _run_codex_process
+
         try:
-            proc = subprocess.run(
+            # Its own process group: the npm launcher cannot forward SIGKILL,
+            # so a timeout must stop native Codex and its tools directly.
+            proc = _run_codex_process(
                 argv,
-                cwd=str(isolated),
+                input="",
+                timeout=timeout_s,
                 env=_harness_env(
                     "codex",
                     user,
                     run_record=run_record,
                     auth_route="codex_subscription" if recorded_route else None,
                 ),
-                stdin=subprocess.DEVNULL,
-                capture_output=True,
-                text=True,
-                timeout=timeout_s,
-                check=False,
+                cwd=str(isolated),
             )
         except subprocess.TimeoutExpired as exc:
             raise ValueError(f"Codex intervention timed out after {timeout_s}s") from exc

@@ -497,14 +497,13 @@ class CodexModelCatalogTests(unittest.TestCase):
                 patch.object(codex_login, "account_home", return_value=home),
                 patch.object(codex_login, "account_login_ready", return_value=True),
                 patch.object(codex_login, "codex_binary", return_value="/usr/bin/codex"),
-                patch.object(codex_login.subprocess, "run", side_effect=fake_run),
+                patch("agent_monitor.runners.codex_backend._run_codex_process", side_effect=fake_run),
             ):
                 self.assertTrue(codex_login.refresh_models_cache(5))
                 models = codex_login.available_models(5)
         self.assertEqual(models, ["gpt-6-astra", "gpt-6-sol"])
         self.assertEqual(calls[0]["argv"], ["/usr/bin/codex", "debug", "models"])
         self.assertEqual(calls[0]["env"]["CODEX_HOME"], str(home))
-        self.assertEqual(calls[0]["stdout"], subprocess.DEVNULL)
         self.assertIn("timeout", calls[0])
 
     def test_refresh_is_skipped_without_a_login_or_cli_and_never_raises(self) -> None:
@@ -512,14 +511,17 @@ class CodexModelCatalogTests(unittest.TestCase):
             with (
                 patch.object(codex_login, "account_home", return_value=Path(tmp)),
                 patch.object(codex_login, "codex_binary", return_value="/usr/bin/codex"),
-                patch.object(codex_login.subprocess, "run") as run,
+                patch("agent_monitor.runners.codex_backend._run_codex_process") as run,
             ):
                 with patch.object(codex_login, "account_login_ready", return_value=False):
                     self.assertFalse(codex_login.refresh_models_cache(5))
                 run.assert_not_called()
                 with (
                     patch.object(codex_login, "account_login_ready", return_value=True),
-                    patch.object(codex_login.subprocess, "run", side_effect=subprocess.TimeoutExpired("codex", 30)),
+                    patch(
+                        "agent_monitor.runners.codex_backend._run_codex_process",
+                        side_effect=subprocess.TimeoutExpired("codex", 30),
+                    ),
                 ):
                     self.assertFalse(codex_login.refresh_models_cache(5))
 
