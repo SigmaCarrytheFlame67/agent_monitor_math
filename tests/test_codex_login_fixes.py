@@ -218,6 +218,26 @@ _USAGE_LIMIT = _stream(
 )
 
 
+def _turn_failed(message: str) -> str:
+    return _stream(
+        {"type": "turn.started"},
+        {"type": "error", "message": message},
+        {"type": "turn.failed", "error": {"message": message}},
+    )
+
+
+# codex exec 0.160 once the saved ChatGPT login can no longer be refreshed.
+_REFRESH_FAILED = "Your access token could not be refreshed. Please log out and sign in again."
+# The same, after a newer sign-in replaced the login while the turn ran.
+_REPLACED = (
+    "Your access token could not be refreshed because you have since logged out "
+    "or signed in to another account. Please sign in again."
+)
+_RECONNECT_ADVICE = (
+    "; reconnect Codex (ChatGPT) in Settings (the linked account needs a new sign-in) and retry."
+)
+
+
 def _fake_codex_exec(stdout: str, returncode: int):
     def run(command, **_kwargs):
         if command[1:] == ["--version"]:
@@ -347,8 +367,11 @@ class CodexReauthTests(unittest.TestCase):
         self.assertFalse(result["connected"])
         self.assertFalse(result["reauth_required"])
 
-    def _run_codex_engine(self, extra_env: dict[str, str], stdout: str, returncode: int) -> dict:
-        workspace = self.root / f"run-{returncode}"
+    def _run_codex_engine(
+        self, extra_env: dict[str, str], stdout: str, returncode: int, *, name: str = ""
+    ) -> dict:
+        name = name or str(returncode)
+        workspace = self.root / f"run-{name}"
         workspace.mkdir()
         command = [
             sys.executable,
@@ -367,7 +390,7 @@ class CodexReauthTests(unittest.TestCase):
             patch.object(jobs, "_write_run"),
         ):
             return jobs._run_cli_engine(
-                run_id=f"codex_reauth_{returncode}",
+                run_id=f"codex_reauth_{name}",
                 engine="codex",
                 problem_id="reauth",
                 problem_text="Prove it.",
@@ -392,6 +415,36 @@ class CodexReauthTests(unittest.TestCase):
         self._run_codex_engine(extra_env, _RECOVERED, 0)
         self.assertFalse(codex_login.account_reauth_required(self.home))
         self.assertTrue(codex_login.status(self.USER["id"])["connected"])
+
+    def test_a_rejected_login_tells_the_run_to_reconnect_codex_in_settings(self) -> None:
+        failed = self._run_codex_engine(
+            self._subscription_env(), _turn_failed(_REFRESH_FAILED), 1, name="refresh"
+        )
+        self.assertEqual(
+            failed["error"],
+            "Codex CLI exited with code 1: Your access token could not be refreshed. "
+            "Please log out and sign in again" + _RECONNECT_ADVICE,
+        )
+        self.assertTrue(codex_login.account_reauth_required(self.home))
+
+        # Nothing to reconnect: a usage limit, a login a newer sign-in already
+        # replaced, or a run on its own API-key home rather than the account.
+        codex_login.clear_reauth_required(self.home)
+        others = {
+            "limit": self._run_codex_engine(self._subscription_env(), _USAGE_LIMIT, 1, name="limit"),
+            "replaced": self._run_codex_engine(
+                self._subscription_env(), _turn_failed(_REPLACED), 1, name="replaced"
+            ),
+            "api-key": self._run_codex_engine(
+                {"AGENT_MONITOR_AUTH_MODE": "api_key"}, _turn_failed(_REFRESH_FAILED), 1, name="api-key"
+            ),
+        }
+        for kind, run in others.items():
+            with self.subTest(kind=kind):
+                self.assertEqual(run["status"], "failed")
+                self.assertNotIn("reconnect Codex", run["error"])
+        self.assertIn(_REFRESH_FAILED, others["api-key"]["error"])
+        self.assertFalse(codex_login.account_reauth_required(self.home))
 
     def test_a_flagged_login_never_switches_a_routed_run_to_an_api_key(self) -> None:
         env = self._subscription_env()

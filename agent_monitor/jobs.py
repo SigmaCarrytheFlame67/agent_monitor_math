@@ -4789,11 +4789,12 @@ def _run_cli_engine(
         _persist_openclaw_final_answer(parser, workspace)
     if stopped or stop_ev.is_set():
         return _flush(parser.output(), status="stopped")
+    reconnect_codex = False
     if engine == "codex" and not _is_kimi_model(requested_model) and env.get("CODEX_HOME"):
         from agent_monitor import codex_login
 
         # Settings offers Reconnect once Codex rejects a linked login.
-        codex_login.note_turn_outcome(
+        reconnect_codex = codex_login.note_turn_outcome(
             env["CODEX_HOME"],
             completed=parser.terminal_status == "completed",
             failure=(parser.terminal_error or "") if parser.terminal_status == "failed" else "",
@@ -4838,6 +4839,13 @@ def _run_cli_engine(
             if engine == "claude"
             else (parser.terminal_error or runner_detail[-1200:])
         )
+        if reconnect_codex and detail:
+            # Likewise for a linked Codex login, instead of its CLI's "Please
+            # log out and sign in again".
+            detail = (
+                detail.rstrip(". ") + "; reconnect Codex (ChatGPT) in Settings "
+                "(the linked account needs a new sign-in) and retry."
+            )
         failure_reason = _cli_failure_reason(
             label=label,
             returncode=proc.returncode,

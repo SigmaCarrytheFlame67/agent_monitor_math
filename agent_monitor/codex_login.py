@@ -140,13 +140,14 @@ def clear_reauth_required(home: str | Path) -> None:
         pass
 
 
-def note_turn_outcome(home: str | Path, *, completed: bool, failure: str = "") -> None:
+def note_turn_outcome(home: str | Path, *, completed: bool, failure: str = "") -> bool:
     """Keep a linked account's reconnect flag in step with its last Codex turn.
 
     Codex's final 401 or failed token refresh (an expired or revoked login)
     flags the account, so Settings offers Reconnect and subscription routes
     refuse it; a completed turn clears the flag. A usage limit, a transient
     error, or an API-key or temporary CODEX_HOME never flags anything.
+    Returns True when this turn flagged the account.
     """
     from agent_monitor.runners.codex_backend import _failure_kind
 
@@ -154,7 +155,7 @@ def note_turn_outcome(home: str | Path, *, completed: bool, failure: str = "") -
     match = re.fullmatch(r"user_(\d+)", path.name)
     try:
         if not match or path.resolve() != account_home(int(match.group(1))).resolve():
-            return
+            return False
         if completed:
             clear_reauth_required(path)
         elif (
@@ -163,8 +164,10 @@ def note_turn_outcome(home: str | Path, *, completed: bool, failure: str = "") -
             and "signed in to another account" not in failure
         ):
             mark_reauth_required(path)
+            return True
     except OSError:
         pass
+    return False
 
 
 def _installed_cli_version(codex: str) -> str:
