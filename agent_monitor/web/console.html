@@ -4331,7 +4331,8 @@ function problemItems(run){
 function updateProblemStrip(run){
   const row=$('problem-message-row'); if(row) row.style.display='none';
   lastSandboxRun=run;
-  if(CURRENT_USER?.guest)syncLeanControls();
+  /* The Lean controls follow the run's pipeline state. */
+  syncLeanControls();
 }
 
 /* ── prompt strip: the full text sent to the engine (persona + instructions + problem) ── */
@@ -6075,7 +6076,10 @@ function syncLeanPipelineEmptyState(state){
 function leanEditorText(){ return $('lean-code')?.value||''; }
 function syncLeanControls(){
   const guest=Boolean(CURRENT_USER?.guest);
-  const pipelineRunning=guest&&lastSandboxRun?.run_id===runId&&lastSandboxRun?.auto_pipeline?.status==='running';
+  const pipeline=lastSandboxRun?.run_id===runId?lastSandboxRun?.auto_pipeline:null;
+  const pipelineRunning=guest&&pipeline?.status==='running';
+  /* The server refuses a new harness while the pipeline may still run its Lean stage. */
+  const pipelineLean=pipeline?.status==='running'&&pipeline?.stages?.lean?.status!=='off';
   const pending=runId?leanPendingRuns.get(runId):null;
   const running=runId?leanRunningRuns.get(runId):null;
   const btn=$('lean-harness');
@@ -6084,8 +6088,8 @@ function syncLeanControls(){
     /* Once the agent exits, its Proof.lean is checked and audited: nothing to stop. */
     const finishing=!!running?.finishing;
     btn.textContent=finishing?'⏳ Checking…':running?'■ Stop':'⚙ Harness';
-    btn.title=finishing?'The agent has finished; its Proof.lean is being checked':running?'Kill the running agent':selected&&!selected.available?(selected.status_detail||selected.auth_detail||'Harness unavailable'):'Run a coding agent in lean/ — it compiles, reads the errors and retries by itself';
-    btn.disabled=guest||!!pending||finishing||(!running&&(!selected||!selected.available));
+    btn.title=finishing?'The agent has finished; its Proof.lean is being checked':running?'Kill the running agent':selected&&!selected.available?(selected.status_detail||selected.auth_detail||'Harness unavailable'):pipelineLean?'Available when the automatic Formal and DAG pipeline finishes':'Run a coding agent in lean/ — it compiles, reads the errors and retries by itself';
+    btn.disabled=guest||!!pending||finishing||(!running&&(!selected||!selected.available||pipelineLean));
     btn.style.display=guest?'none':'';
   }
   const engineSelect=$('lean-engine');

@@ -1349,6 +1349,15 @@ def _preferred_formal_harness_engine(
     return available[0] if available else ""
 
 
+def _pipeline_may_run_lean(workspace: Path) -> bool:
+    """Whether the run's automatic pipeline is running with formal stages on."""
+    from agent_monitor import auto_pipeline
+
+    state = auto_pipeline.load_state(workspace) or {}
+    lean = (state.get("stages") or {}).get("lean") or {}
+    return state.get("status") == "running" and lean.get("status") != "off"
+
+
 WORKSPACES_ROOT = (RUNS_DIR / "workspaces").resolve()
 _TEXT_SUFFIXES = {".tex", ".txt", ".md", ".py", ".json", ".yaml", ".yml", ".log", ".sty", ".bib"}
 
@@ -3608,6 +3617,15 @@ class Handler(RunSharingMixin, ProjectsMixin, ResearchMixin, BaseHTTPRequestHand
                 if len(feedback) > GUEST_MAX_FEEDBACK_CHARACTERS:
                     self._send(400, json.dumps({"error": "Feedback is too large for a guest action"}))
                     return
+            if action == "harness" and _pipeline_may_run_lean(ws):
+                # Its Lean stage would fail on the harness's reservation, or
+                # regenerate over the harness's Proof.lean. Stop is never refused.
+                self._send(
+                    409,
+                    json.dumps({"error": "Wait for the automatic Formal and DAG pipeline to finish"}),
+                    headers={"Retry-After": "20"},
+                )
+                return
             if not self._admit_guest_derived_action(user, ws):
                 return
             slot = _GuestDerivedSlot(int(user["id"])) if user.get("guest") else None
@@ -4089,6 +4107,7 @@ class Handler(RunSharingMixin, ProjectsMixin, ResearchMixin, BaseHTTPRequestHand
                     engine=str(body.get("engine") or "codex").strip().lower(),
                     model=model,
                     lean=lean_arg,
+                    run_id=rid,
                 )
             elif action == "stop_harness":
                 result = lean_verify.stop_harness(ws)

@@ -1,6 +1,7 @@
 """Formal Lean coding-agent harness lifecycle regressions."""
 from __future__ import annotations
 
+import io
 import json
 import os
 import sys
@@ -11,7 +12,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from agent_monitor import console_server, lean_verify
+from agent_monitor import auto_pipeline, console_server, lean_verify
 from deploy.ansatze import auto_deploy
 from tests.test_formal_harness_hardening import _checked_write
 from tests.test_formal_ui_api import SCRIPT, _js_function, _run_node
@@ -730,6 +731,191 @@ class ClaudeHarnessTranscriptTests(unittest.TestCase):
             contents,
             ["Not logged in · Please run /login", "Reached the maximum number of turns (40)"],
         )
+
+
+
+class HarnessDerivedViewTests(_HarnessStateCleanup):
+    """r2-lean-harness-2: a harness result reaches the pipeline's views."""
+
+    RUN = {**_CLAUDE_RUN, "engine": "math_harness"}
+
+    def _run_worker(self, workspace: Path, child: str) -> list[dict]:
+        ldir = workspace / lean_verify.LEAN_DIRNAME
+        ldir.mkdir(exist_ok=True)
+        (ldir / lean_verify.PROOF_FILENAME).write_text(
+            "theorem old : True := by trivial\n", encoding="utf-8"
+        )
+        _source, initial, _reason = lean_verify._regular_root_lean_artifact(workspace)
+        base = _running_base(workspace)
+        refreshes: list[dict] = []
+
+        def refresh(**kwargs):
+            # The harness reservation must be released before the refresh.
+            probe = lean_verify._reserve_formal_operation(workspace, "probe")
+            lean_verify._release_formal_operation(workspace, probe)
+            refreshes.append(kwargs)
+            return True
+
+        token = lean_verify._reserve_formal_operation(workspace, "harness/claude")
+        with (
+            patch.object(lean_verify, "_write_and_run", side_effect=_checked_write),
+            patch.object(lean_verify, "toolchain_status", return_value={}),
+            patch.object(auto_pipeline, "refresh_formal", side_effect=refresh),
+        ):
+            lean_verify._harness_worker_guarded(
+                operation_token=token,
+                run_id="run-derived",
+                workspace=workspace,
+                ldir=ldir,
+                argv=[sys.executable, "-c", child],
+                engine="claude",
+                label="Claude Code",
+                user={"id": 17, "is_admin": True},
+                model="sonnet",
+                run_record=self.RUN,
+                env={"PATH": os.environ.get("PATH", "")},
+                problem="Prove n + 0 = n.",
+                informal="Simplify.",
+                base=base,
+                initial_fingerprint=initial,
+                audit=False,
+            )
+        return refreshes
+
+    def test_a_harness_that_changed_proof_lean_refreshes_the_formal_views(self) -> None:
+        child = f"import pathlib; pathlib.Path('Proof.lean').write_text({FRESH_SOURCE!r})"
+        with tempfile.TemporaryDirectory() as tmp:
+            workspace = Path(tmp).resolve()
+            refreshes = self._run_worker(workspace, child)
+            saved = lean_verify.load_cached(workspace)
+
+        self.assertEqual(saved["status"], "verified")
+        self.assertEqual(
+            refreshes,
+            [{
+                "run_id": "run-derived",
+                "workspace": workspace,
+                "owner_id": 17,
+                "model": "sonnet",
+                "engine": "math_harness",
+            }],
+        )
+
+    def test_an_unchanged_proof_lean_spends_no_refresh(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            refreshes = self._run_worker(Path(tmp).resolve(), "print('nothing to do')")
+
+        self.assertEqual(refreshes, [])
+
+    def test_start_harness_hands_the_run_id_to_its_worker(self) -> None:
+        captured: dict = {}
+
+        class FakeThread:
+            def __init__(self, *, kwargs, **_unused):
+                captured.update(kwargs)
+
+            def start(self) -> None:
+                pass
+
+        with tempfile.TemporaryDirectory() as tmp:
+            with (
+                patch("agent_monitor.claude_login.account_home", return_value=Path(tmp) / "c"),
+                patch("agent_monitor.claude_login.account_login_ready", return_value=True),
+                patch("agent_monitor.auth.is_operator_account", return_value=True),
+                patch("agent_monitor.engines_registry._cli_available", return_value=(True, "echo {prompt}")),
+                patch.object(lean_verify, "toolchain_status", return_value={"available": True}),
+                patch("agent_monitor.lean_verify.threading.Thread", FakeThread),
+            ):
+                lean_verify.start_harness(
+                    workspace=Path(tmp),
+                    run_record=self.RUN,
+                    user={"id": 17, "is_admin": True},
+                    engine="claude",
+                    run_id="run-derived",
+                )
+
+        self.assertEqual(captured["run_id"], "run-derived")
+
+    def _post_harness(self, workspace: Path, pipeline: dict) -> tuple[list, object]:
+        auto_pipeline._write_state(workspace, pipeline)
+        body = json.dumps({"action": "harness", "engine": "claude", "model": "sonnet"}).encode()
+        handler = object.__new__(console_server.Handler)
+        handler.path = "/api/run/run-derived/lean_verify"
+        handler.headers = {"Content-Length": str(len(body))}
+        handler.rfile = io.BytesIO(body)
+        handler._resolve_path = lambda: "/api/run/run-derived/lean_verify"
+        handler._reject_cross_origin_write = lambda: False
+        handler._require_user = lambda _path: {"id": 17, "is_admin": True}
+        handler._owns_run = lambda _rid, _user: True
+        sent: list = []
+        handler._send = lambda code, payload, *args, **kwargs: sent.append(
+            (code, json.loads(payload), kwargs.get("headers") or {})
+        )
+        with (
+            patch.object(console_server, "_workspace_for_run", return_value=workspace),
+            patch.object(console_server, "_run_record_for", return_value=self.RUN),
+            patch.object(
+                lean_verify, "start_harness", return_value={"status": "running"}
+            ) as start,
+        ):
+            handler.do_POST()
+        return sent, start
+
+    def test_harness_waits_while_the_pipeline_may_still_run_its_lean_stage(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            sent, start = self._post_harness(
+                Path(tmp),
+                {"status": "running", "stages": {"lean": {"status": "waiting"}}},
+            )
+
+        start.assert_not_called()
+        self.assertEqual(sent[0][0], 409)
+        self.assertIn("pipeline", sent[0][1]["error"])
+        self.assertEqual(sent[0][2].get("Retry-After"), "20")
+
+    def test_harness_starts_when_formal_stages_are_off(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            sent, start = self._post_harness(
+                Path(tmp),
+                {"status": "running", "stages": {"lean": {"status": "off"}}},
+            )
+
+        self.assertEqual(sent[0][0], 200)
+        self.assertEqual(start.call_args.kwargs["run_id"], "run-derived")
+
+    def test_harness_button_waits_for_the_pipeline_but_stop_never_does(self) -> None:
+        output = _run_node(
+            """
+let CURRENT_USER={id:1,guest:false};
+let runId='run-a';
+let lastSandboxRun={run_id:'run-a',auto_pipeline:{status:'running',stages:{lean:{status:'running'}}}};
+let leanEngines=[{id:'claude',available:true}];
+const leanPendingRuns=new Map(), leanRunningRuns=new Map();
+const els={};
+function $(id){ return els[id]||(els[id]={id,textContent:'',title:'',disabled:false,style:{},dataset:{},value:''}); }
+$('lean-engine').value='claude';
+function fillLeanModels(){}
+"""
+            + _js_function("syncLeanControls")
+            + """
+const state=()=>({text:$('lean-harness').textContent,disabled:$('lean-harness').disabled,check:$('lean-check').disabled});
+syncLeanControls();
+const waiting=state();
+leanRunningRuns.set('run-a',{label:'Claude Code'});
+syncLeanControls();
+const stop=state();
+leanRunningRuns.delete('run-a');
+lastSandboxRun.auto_pipeline.stages.lean.status='off';
+syncLeanControls();
+const off=state();
+console.log(JSON.stringify({waiting,stop,off}));
+"""
+        )
+        self.assertTrue(output["waiting"]["disabled"])
+        self.assertFalse(output["waiting"]["check"])  # admins' other actions unchanged
+        self.assertIn("Stop", output["stop"]["text"])
+        self.assertFalse(output["stop"]["disabled"])
+        self.assertFalse(output["off"]["disabled"])
 
 
 if __name__ == "__main__":

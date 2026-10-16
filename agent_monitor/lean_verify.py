@@ -7298,12 +7298,15 @@ def _start_harness_reserved(
     model: str | None = None,
     lean: str | None = None,
     audit: bool = True,
+    run_id: str | None = None,
     _operation_token: object,
 ) -> dict[str, Any]:
     """Launch a coding agent on Proof.lean in the background.
 
     Returns immediately with a ``running`` record; the selected model is bound
-    to both the harness process and its post-run audit.
+    to both the harness process and its post-run audit. With ``run_id`` a
+    finished harness that changed Proof.lean refreshes the run's derived
+    formal views.
     """
     from agent_monitor.engines_registry import CLI_ENGINES, build_cli_command
 
@@ -7435,6 +7438,7 @@ def _start_harness_reserved(
         target=_harness_worker_guarded,
         kwargs={
             "operation_token": _operation_token,
+            "run_id": run_id,
             "workspace": workspace,
             "ldir": ldir,
             "argv": argv,
@@ -7473,6 +7477,7 @@ def start_harness(
     model: str | None = None,
     lean: str | None = None,
     audit: bool = True,
+    run_id: str | None = None,
 ) -> dict[str, Any]:
     """Reserve a proof workspace and launch its Formal Lean harness."""
     if (user or {}).get("guest") or (run_record or {}).get("guest"):
@@ -7488,6 +7493,7 @@ def start_harness(
             model=model,
             lean=lean,
             audit=audit,
+            run_id=run_id,
             _operation_token=token,
         )
     except BaseException:
@@ -7498,13 +7504,14 @@ def start_harness(
 def _harness_worker_guarded(
     *,
     operation_token: object,
+    run_id: str | None = None,
     **kwargs,
 ) -> None:
     """Release a cross-thread harness reservation on every worker exit path."""
     workspace = Path(kwargs["workspace"])
     key = _harness_key(workspace)
     try:
-        _harness_worker(**kwargs)
+        result = _harness_worker(**kwargs)
     except Exception as exc:
         # Still holding the reservation: never leave the record running.
         detail = (str(exc).strip() or exc.__class__.__name__)[:300]
@@ -7526,6 +7533,22 @@ def _harness_worker_guarded(
         with _HARNESS_LOCK:
             _HARNESS_JOBS.pop(key, None)
         _release_formal_operation(workspace, operation_token)
+    if run_id and ((result or {}).get("harness") or {}).get("artifact_fresh"):
+        # A new Proof.lean: re-derive the run's Lean, formal DAG and coverage
+        # stages as a manual Check does (only now, with the reservation free).
+        from agent_monitor import auto_pipeline
+
+        run_record = kwargs.get("run_record") or {}
+        try:
+            auto_pipeline.refresh_formal(
+                run_id=run_id,
+                workspace=workspace,
+                owner_id=(kwargs.get("user") or {}).get("id") or run_record.get("owner_id"),
+                model=kwargs.get("model") or result.get("model"),
+                engine=str(run_record.get("engine") or "unknown"),
+            )
+        except Exception:  # noqa: BLE001 - the harness result is already saved
+            pass
 
 
 def _harness_worker(
@@ -7544,7 +7567,8 @@ def _harness_worker(
     base: dict[str, Any],
     initial_fingerprint: dict[str, Any] | None,
     audit: bool,
-) -> None:
+) -> dict[str, Any]:
+    """Run the agent to its end and return the persisted result."""
     key = _harness_key(workspace)
     timeout_s = int(os.environ.get("AGENT_MONITOR_LEAN_HARNESS_TIMEOUT", "1200"))
     log_path = ldir / "harness.log"
@@ -7599,7 +7623,7 @@ def _harness_worker(
         lines.append(f"failed to launch {label}: {exc}\n")
         with _HARNESS_LOCK:
             stopped = bool((_HARNESS_JOBS.get(key) or {}).get("stopping"))
-        _harness_finish(
+        result = _harness_finish(
             workspace=workspace,
             engine=engine,
             label=label,
@@ -7617,7 +7641,7 @@ def _harness_worker(
         )
         with _HARNESS_LOCK:
             _HARNESS_JOBS.pop(key, None)
-        return
+        return result
 
     with _HARNESS_LOCK:
         job = _HARNESS_JOBS.get(key)
@@ -7706,7 +7730,7 @@ def _harness_worker(
         )
 
     try:
-        _harness_finish(
+        return _harness_finish(
             workspace=workspace,
             engine=engine,
             label=label,
