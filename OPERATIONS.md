@@ -137,6 +137,10 @@ ceilings, so an environment value can only lower them.
   abandoned. Stop sends SIGTERM: the runner abandons its in-flight calls,
   publishes nothing and exits 143 (`kimi` and `math_harness` alike); any
   other failure exits 1.
+- A run writes `proof.md` only when it publishes, so the derived-views
+  pipeline (Lean and the DAGs) waits at least the run's outer watchdog, which
+  follows `AGENT_MONITOR_CGM_MAX_SECONDS`, plus 300 s
+  (`AGENT_MONITOR_AUTO_PIPELINE_TIMEOUT`, default 7200 s, only raises it).
 - Every published run carries `math_harness/project/engine_receipt.json`.
   The current writer records receipt schema 3 (schema 4 for Max, below) with verification policy
   `solved-first-topological-waves-stop-on-target@1` (the first block, in the

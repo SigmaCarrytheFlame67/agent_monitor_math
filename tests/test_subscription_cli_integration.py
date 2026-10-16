@@ -391,6 +391,31 @@ class AutoPipelineWaitsForLongRunsTests(unittest.TestCase):
             auto_pipeline._run("claude-run", Path(raw), 1, "opus", "claude")
         self.assertEqual(waits, [60.0])
 
+    def test_a_cgm_run_is_awaited_for_its_own_wall_clock(self) -> None:
+        # A CGM run writes proof.md only when it publishes, which may be as late
+        # as its watchdog: past the two-hour default once the operator raises
+        # AGENT_MONITOR_CGM_MAX_SECONDS to its four-hour ceiling.
+        waits: list[float] = []
+        with tempfile.TemporaryDirectory() as raw, patch.dict(
+            os.environ,
+            {"AGENT_MONITOR_AUTO_PIPELINE_TIMEOUT": "7200", "AGENT_MONITOR_CGM_MAX_SECONDS": "14400"},
+        ), patch.object(jobs, "_load_run_record", return_value={"engine": "math_harness", "auth_route": "api_key"}), patch.object(
+            auto_pipeline, "_run_record", return_value={"status": "running", "engine": "math_harness"}
+        ), patch.object(
+            auto_pipeline, "_wait_for_source",
+            side_effect=lambda *_a, timeout: waits.append(timeout) or ("", {"status": "running"}),
+        ):
+            watchdogs = [jobs._cli_timeout_seconds(engine, dict(os.environ)) for engine in ("math_harness", "kimi")]
+            for engine in ("math_harness", "kimi"):
+                auto_pipeline._run(f"{engine}-run", Path(raw), 1, "gpt-6-astra", engine)
+            # A longer operator wait is never shortened.
+            os.environ["AGENT_MONITOR_AUTO_PIPELINE_TIMEOUT"] = "20000"
+            auto_pipeline._run("cgm-run", Path(raw), 1, "gpt-6-astra", "math_harness")
+        self.assertGreater(min(watchdogs), 14_400)
+        for wait, watchdog in zip(waits[:2], watchdogs, strict=True):
+            self.assertGreater(wait, watchdog)
+        self.assertEqual(waits[2], 20000.0)
+
 
 class ClaudeDerivedModelTests(unittest.TestCase):
     def test_resolved_model_names_route_to_their_alias(self) -> None:

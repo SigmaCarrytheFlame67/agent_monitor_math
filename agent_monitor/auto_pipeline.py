@@ -1336,6 +1336,18 @@ def max_run_wait_seconds() -> float:
     return float(cgm_max.RUN_SECONDS + 300 + 300)
 
 
+def cgm_run_wait_seconds(engine: str) -> float:
+    """How long the pipeline waits for a CGM run (``math_harness``, ``kimi``):
+    its outer watchdog under the console's budgets, and the record write.
+
+    The run's own environment only lowers that bound (guest and sponsored
+    profiles), so the console's environment gives an upper bound.
+    """
+    from agent_monitor.jobs import _cli_timeout_seconds
+
+    return float(_cli_timeout_seconds(engine, dict(os.environ)) + 300)
+
+
 def _is_max_run(run_id: str) -> bool:
     """Whether ``run_id`` is a Max run (``_run_record`` returns its worker view)."""
     try:
@@ -1380,6 +1392,14 @@ def _run(
         # when it publishes; giving up at the default two hours left every
         # long Max run without derived views ("produced no proof draft").
         timeout = max(timeout, max_run_wait_seconds())
+    else:
+        from agent_monitor.jobs import _CGM_ENGINES
+
+        if engine in _CGM_ENGINES:
+            # A CGM run also publishes proof.md only at its end, which an
+            # operator-raised wall clock (AGENT_MONITOR_CGM_MAX_SECONDS) can
+            # put past the default wait.
+            timeout = max(timeout, cgm_run_wait_seconds(engine))
     processed_sig = ""
     try:
         sig, record = _wait_for_source(run_id, workspace, timeout=timeout)
