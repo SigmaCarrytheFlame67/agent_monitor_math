@@ -6551,7 +6551,8 @@ async function sendChat(){
   chatAttachments.lock(true);
   try{
     const attachments=await chatAttachments.payload();
-    const r=await fetch('/api/runs/'+encodeURIComponent(targetRun)+'/chat',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({message:text,attachments,model:currentModel()||null})});
+    // No model: a follow-up keeps the run's own; the launcher's is for new runs.
+    const r=await fetch('/api/runs/'+encodeURIComponent(targetRun)+'/chat',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({message:text,attachments})});
     const d=await r.json(); if(!r.ok)throw new Error(d.error);
     if(runId!==targetRun)return;
     $('chat-input').value=''; chatAttachments.clear();

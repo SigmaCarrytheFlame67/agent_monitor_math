@@ -5303,8 +5303,9 @@ def _continuation_model(run_data: dict[str, Any], requested: str | None) -> str 
         # A Max run continues as Max; its two models come from the route plan.
         return cgm_max.MODEL_ID
     if explicit:
-        # Explicit input is validated against the recorded route below; never
-        # reinterpret an invalid user selection as another account model.
+        # Explicit input is checked against the recorded route by the caller
+        # (``_member_continuation_model``); never reinterpret a selection as
+        # another account model.
         return explicit
     live = run_data.get("live") or {}
     agents = run_data.get("agents") or []
@@ -5340,6 +5341,22 @@ def _continuation_model(run_data: dict[str, Any], requested: str | None) -> str 
     return None
 
 
+def _recorded_route_runs(
+    user: dict[str, Any] | None, run_data: dict[str, Any], model: str | None
+) -> bool:
+    """Whether the run's recorded route can run ``model``."""
+    route = _route_from_record(run_data)
+    if cgm_max.is_max_model(model):
+        return route == cgm_max.ROUTE
+    if route not in {"claude_subscription", "codex_subscription"}:
+        return True
+    try:
+        _validate_subscription_model(route=route, model=model, user=user, field="Selected model")
+    except ValueError:
+        return False
+    return True
+
+
 def _member_continuation_model(
     user: dict[str, Any] | None,
     engine: str,
@@ -5349,18 +5366,21 @@ def _member_continuation_model(
     """The continuation's model, after refusing what a member may not run.
 
     A member continues only on an engine and recorded route it may start
-    (never a subscription or Max).  The chat composer sends the launcher's
-    current model, which may belong to the other Ansatz CGM engine (Kimi K3,
-    or a model from the member's own keys); a model the member may not run on
-    this engine leaves the run on its recorded model.  For every other
-    account this is ``_continuation_model``.
+    (never a subscription or Max).  A requested model the account may not run
+    on this engine, or that the run's recorded route cannot run, leaves the
+    run on its recorded model: an older console's chat composer sends the
+    launcher's current model, which may belong to another route or to the
+    other Ansatz CGM engine (Kimi K3, or a model from the member's own keys).
     """
     route_error = account_policy.member_continuation_error(user, _route_from_record(run_data))
     error = account_policy.member_engine_error(user, engine) or route_error
     if error:
         raise ValueError(error)
     model = _continuation_model(run_data, requested)
-    if str(requested or "").strip() and account_policy.member_model_error(user, engine, model):
+    if str(requested or "").strip() and (
+        account_policy.member_model_error(user, engine, model)
+        or not _recorded_route_runs(user, run_data, model)
+    ):
         model = _continuation_model(run_data, None)
     error = account_policy.member_model_error(user, engine, model)
     if error:
@@ -5614,8 +5634,8 @@ def send_human_message(
     if retired_error:
         raise ValueError(retired_error)
     _refuse_analyze_continuation({**recorded, "engine": recorded_engine})
+    model = _member_continuation_model(user, recorded_engine, recorded, model)
     if account_policy.is_member(user):
-        model = _member_continuation_model(user, recorded_engine, recorded, model)
         feedback_error = account_policy.member_feedback_error(
             message,
             run_feedback_chars=_human_feedback_chars(recorded),

@@ -1,12 +1,39 @@
 from __future__ import annotations
 
 import json
+import shutil
+import subprocess
 import tempfile
 import unittest
 from pathlib import Path
 from unittest.mock import patch
 
 from agent_monitor import jobs, monitor_overview
+
+
+HTML = (
+    Path(__file__).parents[1] / "agent_monitor" / "web" / "console.html"
+).read_text(encoding="utf-8")
+SCRIPT = HTML.rsplit("<script>", 1)[1].split("</script>", 1)[0]
+NODE = shutil.which("node")
+if not NODE and Path("/home/ubuntu/.local/node24/bin/node").is_file():
+    NODE = "/home/ubuntu/.local/node24/bin/node"
+
+
+def _js_function(name: str) -> str:
+    function_start = SCRIPT.index(f"function {name}(")
+    start = function_start - 6 if SCRIPT[function_start - 6 : function_start] == "async " else function_start
+    opening = SCRIPT.index("{", SCRIPT.index(")", function_start))
+    depth = 0
+    for index in range(opening, len(SCRIPT)):
+        char = SCRIPT[index]
+        if char == "{":
+            depth += 1
+        elif char == "}":
+            depth -= 1
+            if depth == 0:
+                return SCRIPT[start : index + 1]
+    raise AssertionError(f"unterminated JavaScript function: {name}")
 
 
 _ENGINE = {
@@ -322,6 +349,126 @@ class ClaudeRoutePersistenceTests(unittest.TestCase):
         self.assertEqual(captured["extra_env"]["AGENT_MONITOR_AUTH_MODE"], "claude_subscription")
         self.assertNotIn("ANTHROPIC_API_KEY", captured["extra_env"])
         self.assertEqual(jobs._JOBS[result["job_id"]]["auth_route"], "claude_subscription")
+
+    def _follow_up(self, send, route: str, recorded_model: str, sent_model: str) -> tuple[dict, dict]:
+        """Continue a finished run with ``sent_model``; return the result and thread kwargs."""
+        captured: dict = {}
+
+        class FakeThread:
+            def __init__(self, *, kwargs, **_unused):
+                captured.update(kwargs)
+
+            def start(self) -> None:
+                pass
+
+        record = {
+            "run_id": "plain_follow_up",
+            "engine": "plain",
+            "owner_id": 17,
+            "auth_route": route,
+            "problem_id": "demo",
+            "problem_text": "Prove 1 = 1.",
+            "problems": [{"text": "Prove 1 = 1.", "source": "initial"}],
+            "model": recorded_model,
+            "requested_model": recorded_model,
+            "live": {"model": recorded_model, "auth_mode": jobs._live_auth_mode(route)},
+        }
+        with tempfile.TemporaryDirectory() as tmp:
+            runs = Path(tmp)
+            (runs / "workspaces" / "plain_follow_up").mkdir(parents=True)
+            with (
+                patch.object(jobs, "RUNS_DIR", runs),
+                patch.object(jobs, "_run_is_active", return_value=None),
+                patch.object(jobs, "_load_run_record", side_effect=lambda _run_id: json.loads(json.dumps(record))),
+                patch.object(jobs, "_write_run"),
+                patch.object(jobs, "_write_session_problems"),
+                patch.object(jobs, "_append_chat", return_value={}),
+                patch.object(jobs, "_user_extra_env", return_value={"HOME": "/server"}),
+                patch("agent_monitor.engines_registry.list_engines", return_value=[dict(_ENGINE)]),
+                patch("agent_monitor.codex_login.account_home", return_value=runs / "codex-home"),
+                patch("agent_monitor.codex_login.account_login_ready", return_value=True),
+                patch(
+                    "agent_monitor.codex_login.available_models",
+                    return_value=["gpt-6-astra", "gpt-5.6-sol"],
+                ),
+                patch("agent_monitor.claude_login.account_home", return_value=runs / "claude-home"),
+                patch("agent_monitor.claude_login.account_login_ready", return_value=True),
+                patch("agent_monitor.jobs.threading.Thread", FakeThread),
+            ):
+                result = send("plain_follow_up", sent_model)
+        with jobs._LOCK:
+            job = jobs._JOBS.pop(result["job_id"])
+        self.assertEqual(job["model"], captured["model"])
+        return result, captured
+
+    def test_follow_up_keeps_the_run_model_over_one_its_route_cannot_run(self) -> None:
+        # An older console sends the new-run launcher's model with every chat
+        # message; a model of another route leaves the run on its own model.
+        admin = {"id": 17, "is_admin": True}
+        senders = {
+            "chat": lambda run_id, model: jobs.send_human_message(
+                run_id, "Check the endpoint.", model=model, user=admin
+            ),
+            "continue": lambda run_id, model: jobs.continue_run(run_id, model=model, user=admin),
+        }
+        for name, send in senders.items():
+            for route, recorded, sent in (
+                ("codex_subscription", "gpt-6-astra", "opus"),
+                ("codex_subscription", "gpt-6-astra", "max"),
+                ("codex_subscription", "gpt-6-astra", "kimi-k3"),
+                ("claude_subscription", "sonnet", "gpt-6-astra"),
+                ("claude_subscription", "sonnet", "max"),
+            ):
+                with self.subTest(path=name, route=route, sent=sent):
+                    result, captured = self._follow_up(send, route, recorded, sent)
+                    self.assertEqual(result["status"], "continuing")
+                    self.assertEqual(captured["model"], recorded)
+
+    def test_refused_chat_follow_up_records_nothing(self) -> None:
+        record = {
+            "run_id": "plain_unknown",
+            "engine": "plain",
+            "owner_id": 17,
+            "auth_route": "claude_subscription",
+            "problems": [{"text": "Prove 1 = 1.", "source": "initial"}],
+            "live": {"model": "claude-unknown-9", "auth_mode": "claude_subscription"},
+        }
+        with tempfile.TemporaryDirectory() as tmp:
+            runs = Path(tmp)
+            (runs / "workspaces" / "plain_unknown").mkdir(parents=True)
+            with (
+                patch.object(jobs, "RUNS_DIR", runs),
+                patch.object(jobs, "_load_run_record", return_value=record),
+                patch.object(jobs, "_write_run") as write_run,
+                patch.object(jobs, "_append_chat") as append_chat,
+            ):
+                with self.assertRaisesRegex(ValueError, "unsupported Claude account model"):
+                    jobs.send_human_message(
+                        "plain_unknown", "Check the endpoint.", user={"id": 17, "is_admin": True}
+                    )
+        append_chat.assert_not_called()
+        write_run.assert_not_called()
+
+    def test_chat_composer_does_not_send_the_launcher_model(self) -> None:
+        if not NODE:
+            self.skipTest("node is unavailable")
+        program = f"""
+let runId='plain_run', sent=null;
+const nodes={{'chat-input':{{value:'Check the endpoint.'}},'chat-send':{{disabled:false}},'chat-msgs':{{innerHTML:''}}}};
+const $=id=>nodes[id];
+const chatAttachments={{files:[],busy:false,lock(){{}},clear(){{}},async payload(){{return [];}}}};
+const currentModel=()=>'opus', renderChat=()=>{{}}, setPill=()=>{{}}, startPolling=()=>{{}}, escapeHtml=s=>s;
+globalThis.fetch=async(url,init)=>{{sent={{url,body:JSON.parse(init.body)}};return {{ok:true,json:async()=>({{status:'queued',messages:[]}})}};}};
+{_js_function("sendChat")}
+sendChat().then(()=>console.log(JSON.stringify(sent)));
+"""
+        result = subprocess.run([NODE, "-e", program], capture_output=True, text=True, check=False)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        sent = json.loads(result.stdout)
+        self.assertEqual(sent["url"], "/api/runs/plain_run/chat")
+        # The follow-up keeps the run's model; the launcher's is for new runs.
+        self.assertEqual(sent["body"], {"message": "Check the endpoint.", "attachments": []})
+
     def test_continuation_merge_keeps_previous_route_over_runner_output(self) -> None:
         merged = jobs._merge_continuation_run(
             {
