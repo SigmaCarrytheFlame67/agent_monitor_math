@@ -58,6 +58,12 @@ def _kimi_usage(body: Mapping[str, object]) -> dict[str, int]:
         return {}
 
 
+def _usage_detail(usage: Mapping[str, object], details: str, name: str) -> int:
+    """One count from an OpenAI-style usage ``*_details`` object (0 if absent)."""
+    value = usage.get(details)
+    return int(value.get(name) or 0) if isinstance(value, Mapping) else 0
+
+
 def _total_usage(parts: list[dict[str, int]]) -> dict[str, int]:
     """Token counts summed over every billed reply of one call."""
     total: dict[str, int] = {}
@@ -317,9 +323,15 @@ def api_chat(
         if provider == "openai":
             text = _openai_response_text(body)
             raw_usage = body.get("usage") or {}
+            # Codex semantics, as the CGM event stream expects: the cached and
+            # reasoning parts are inside the input and output totals.
             usage = {
                 "input_tokens": int(raw_usage.get("input_tokens") or 0),
                 "output_tokens": int(raw_usage.get("output_tokens") or 0),
+                "cached_input_tokens": _usage_detail(raw_usage, "input_tokens_details", "cached_tokens"),
+                "reasoning_output_tokens": _usage_detail(
+                    raw_usage, "output_tokens_details", "reasoning_tokens"
+                ),
             }
         elif provider == "kimi":
             text = kimi_k3.response_text(body)
@@ -356,6 +368,10 @@ def api_chat(
             usage = {
                 "input_tokens": int(raw_usage.get("prompt_tokens") or 0),
                 "output_tokens": int(raw_usage.get("completion_tokens") or 0),
+                "cached_input_tokens": _usage_detail(raw_usage, "prompt_tokens_details", "cached_tokens"),
+                "reasoning_output_tokens": _usage_detail(
+                    raw_usage, "completion_tokens_details", "reasoning_tokens"
+                ),
             }
     except (AttributeError, KeyError, TypeError, ValueError) as exc:
         raise APIBackendError(

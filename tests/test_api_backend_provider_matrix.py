@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import unittest
 import traceback
 from typing import Any
@@ -411,6 +412,57 @@ class ApiBackendProviderMatrixTests(unittest.TestCase):
 
         self.assertNotIn(secret, rendered)
         self.assertIn("[redacted]", rendered)
+
+    def test_cached_and_reasoning_tokens_reach_a_cgm_runs_usage(self) -> None:
+        from agent_monitor import usage_ledger
+        from agent_monitor.cli_events import CLIEventParser
+        from agent_monitor.runners import math_harness_runner
+
+        replies = {
+            "openai": ("gpt-5.6-sol", {
+                "output": [{"content": [{"type": "output_text", "text": "Proof text"}]}],
+                "usage": {
+                    "input_tokens": 2000,
+                    "output_tokens": 300,
+                    "input_tokens_details": {"cached_tokens": 1536},
+                    "output_tokens_details": {"reasoning_tokens": 200},
+                },
+            }),
+            "xai": ("grok-4.5", {
+                "choices": [{"message": {"role": "assistant", "content": "Proof text"}}],
+                "usage": {
+                    "prompt_tokens": 2000,
+                    "completion_tokens": 300,
+                    "prompt_tokens_details": {"cached_tokens": 1536},
+                    "completion_tokens_details": {"reasoning_tokens": 200},
+                },
+            }),
+        }
+        for provider, (model, reply) in replies.items():
+            with self.subTest(provider=provider):
+                with (
+                    patch.dict(api_backend.os.environ, _OWNER_ENV, clear=True),
+                    patch("agent_monitor.settings._http_json", return_value=(200, reply)),
+                ):
+                    result = api_backend.api_chat("System", "User", model=model)
+                # Lean and graph calls book the same reply with these counts.
+                derived = usage_ledger.http_usage(provider, reply)
+                self.assertEqual(
+                    (result.usage["cached_input_tokens"], result.usage["reasoning_output_tokens"]),
+                    (derived["cached_input_tokens"], derived["reasoning_tokens"]),
+                )
+                # A CGM run books it from its event stream: cached input is
+                # priced at the cache rate, and reasoning is recorded.
+                events: list[dict] = []
+                math_harness_runner._emit_stage_usage(
+                    "worker-1", math_harness_runner._clean_usage(result.usage), out=events.append
+                )
+                parser = CLIEventParser("codex", source_engine="math_harness")
+                parser.feed("".join(json.dumps(event) + "\n" for event in events))
+                self.assertEqual(
+                    {name: parser.usage[name] for name in ("input_tokens", "cache_read_tokens", "reasoning_tokens")},
+                    {"input_tokens": 2000, "cache_read_tokens": 1536, "reasoning_tokens": 200},
+                )
 
 
 class ApiBackendPerCallParameterTests(unittest.TestCase):
