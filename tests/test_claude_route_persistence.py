@@ -442,7 +442,8 @@ class ClaudeRoutePersistenceTests(unittest.TestCase):
                 patch.object(jobs, "_write_run") as write_run,
                 patch.object(jobs, "_append_chat") as append_chat,
             ):
-                with self.assertRaisesRegex(ValueError, "unsupported Claude account model"):
+                # A follow-up offers no model choice: the way on is a new run.
+                with self.assertRaisesRegex(ValueError, "unsupported Claude account model.*start a new run"):
                     jobs.send_human_message(
                         "plain_unknown", "Check the endpoint.", user={"id": 17, "is_admin": True}
                     )

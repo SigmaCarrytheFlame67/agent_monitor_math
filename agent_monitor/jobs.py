@@ -5409,9 +5409,11 @@ def _continuation_model(run_data: dict[str, Any], requested: str | None) -> str 
             str(candidate or "").strip() not in {"", "—"}
             for candidate in candidates
         ):
+            # The console's follow-ups keep the run's model and offer no
+            # choice, so point to a new run rather than ask for a model.
             raise ValueError(
-                "This run stored an unsupported Claude account model; "
-                "choose sonnet, opus, fable, or claude-haiku-4-5"
+                "This run stored an unsupported Claude account model and cannot "
+                "continue; start a new run on sonnet, opus, fable, or claude-haiku-4-5"
             )
         return None
     for candidate in candidates:
