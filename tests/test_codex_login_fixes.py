@@ -1,10 +1,4 @@
-"""Codex sign-in state and Formal Lean Codex timeouts.
-
-The npm-installed ``codex`` is a Node launcher (``bin/codex.js``) that runs the
-native binary as a child and forwards only SIGINT/SIGTERM/SIGHUP to it, so a
-timeout that SIGKILLs the launcher alone leaves native Codex running.  The fake
-launcher below behaves the same way, and its native child records its pid.
-"""
+"""Codex sign-in state and Formal Lean Codex timeouts."""
 from __future__ import annotations
 
 import os
@@ -20,6 +14,10 @@ from agent_monitor import codex_login, lean_verify
 
 SOURCE = "theorem main : True := by trivial\n"
 
+# The npm-installed ``codex`` is a Node launcher (``bin/codex.js``) that runs
+# the native binary as a child and forwards only SIGINT/SIGTERM/SIGHUP to it,
+# so a timeout that SIGKILLs the launcher alone leaves native Codex running.
+# This fake launcher behaves the same way; its native child records its pid.
 _NATIVE = """
 import os, sys, time
 from pathlib import Path
@@ -119,6 +117,69 @@ class CodexLauncherTimeoutTests(unittest.TestCase):
             with patch.object(codex_login, "_MODELS_REFRESH_TIMEOUT_S", 2):
                 self.assertEqual(codex_login._installed_cli_version(str(launcher)), "")
             self._assert_native_stopped(pidfile)
+
+
+# What ``codex login --device-auth`` prints before it waits for approval.
+_DEVICE_PROMPT = """
+echo "Welcome to Codex [v0.160.0]"
+echo "1. Open this link in your browser and sign in to your account"
+echo "   https://auth.openai.com/codex/device"
+echo "2. Enter this one-time code (expires in 15 minutes)"
+echo "   ABCD-12345"
+echo "Continue only if you started this login in Codex. If a website or another person gave you this code, cancel."
+"""
+# Captured from codex-cli 0.160.0 when auth.openai.com cannot be reached.
+_UNREACHABLE = (
+    "Error logging in with device code: error sending request for url "
+    "(https://auth.openai.com/api/accounts/deviceauth/usercode)"
+)
+
+
+class CodexLoginFailureReasonTests(unittest.TestCase):
+    USER_ID = 4242
+
+    def _login(self, script: str) -> dict:
+        with tempfile.TemporaryDirectory() as raw:
+            root = Path(raw)
+            codex = root / "codex"
+            codex.write_text("#!/bin/sh\n" + script, encoding="utf-8")
+            codex.chmod(0o755)
+            self.addCleanup(lambda: codex_login._states.pop(self.USER_ID, None))
+            with (
+                patch.dict(os.environ, {"AGENT_MONITOR_CODEX_ACCOUNT_HOME": str(root / "users")}),
+                patch.object(codex_login, "codex_binary", return_value=str(codex)),
+            ):
+                status = codex_login.start_login(self.USER_ID)
+                deadline = time.monotonic() + 10
+                while status["running"] and time.monotonic() < deadline:
+                    time.sleep(0.05)
+                    status = codex_login.status(self.USER_ID)
+        self.assertEqual(status["status"], "error")
+        self.assertFalse(status["connected"])
+        return status
+
+    def test_failed_sign_in_reports_codex_reason(self) -> None:
+        status = self._login(f'echo "{_UNREACHABLE}"\nexit 1\n')
+        self.assertEqual(status["error"], f"codex login exited with code 1: {_UNREACHABLE}")
+
+    def test_reason_after_the_device_prompt_is_reported_without_the_link_or_code(self) -> None:
+        status = self._login(
+            _DEVICE_PROMPT
+            + 'echo "Error logging in with device code: device auth timed out" >&2\nexit 1\n'
+        )
+        self.assertEqual(
+            status["error"],
+            "codex login exited with code 1: "
+            "Error logging in with device code: device auth timed out",
+        )
+
+    def test_exit_without_a_reason_keeps_the_exit_code_message(self) -> None:
+        status = self._login(_DEVICE_PROMPT + "exit 3\n")
+        self.assertEqual(status["error"], "codex login exited with code 3")
+
+    def test_success_exit_without_a_saved_login_is_explained(self) -> None:
+        status = self._login('echo "Successfully logged in"\nexit 0\n')
+        self.assertIn("no ChatGPT sign-in was saved", status.get("error") or "")
 
 
 if __name__ == "__main__":

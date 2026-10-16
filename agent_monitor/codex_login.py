@@ -232,6 +232,18 @@ def status(user_id: int) -> dict[str, Any]:
     return _augment(user_id, st)
 
 
+def _failure_reason(lines: list[str]) -> str:
+    """Codex's own error line (``Error logging in with device code: ...``).
+
+    The sign-in link, one-time code and notices printed before it are not a
+    reason, so only a line that reports an error qualifies.
+    """
+    for line in reversed(lines):
+        if "error" in line.lower():
+            return " ".join(line.split())[:300]
+    return ""
+
+
 def _reader(proc: subprocess.Popen, home: Path, user_id: int) -> None:
     lines: list[str] = []
     try:
@@ -271,8 +283,12 @@ def _reader(proc: subprocess.Popen, home: Path, user_id: int) -> None:
             st["status"] = "success"
         else:
             st["status"] = "error"
-            if rc != 0 and not st.get("error"):
-                st["error"] = f"codex login exited with code {rc}"
+            if not st.get("error"):
+                if rc == 0:
+                    st["error"] = "codex login finished but no ChatGPT sign-in was saved"
+                else:
+                    reason = _failure_reason(lines)
+                    st["error"] = f"codex login exited with code {rc}" + (f": {reason}" if reason else "")
 
 
 def start_login(user_id: int) -> dict[str, Any]:
