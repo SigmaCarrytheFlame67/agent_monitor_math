@@ -371,6 +371,16 @@ untrusted. `agent_monitor/account_policy.py` and the run path enforce:
   started before this policy); the refusal says so. In a shared project,
   members can open each other's runs, but only the member who started a run
   can continue, stop or change it.
+- **Projects with members run tool-free.** A run started from a project gets
+  a copy of its shared document, which every member can edit. While a project
+  has a member who is not the administrator, its runs (the administrator's
+  too), their follow-ups and their Formal harness use only `kimi`, `plain` or
+  `math_harness` on an API key, without subagents; anything else is refused
+  with HTTP 403. Coding agents and the subscription CLIs run as `ubuntu`,
+  with the administrator's sign-ins in their home, so text a member wrote must
+  not steer them. This is a security policy you can relax in code
+  (`account_policy.project_run_error`, decided at launch by
+  `projects.start_run`).
 - **Sign-ins stored before this policy.** A member who linked Claude or Codex
   before members were limited keeps that sign-in on the server until it is
   removed. It is never used for the member's runs. Settings shows a **Remove

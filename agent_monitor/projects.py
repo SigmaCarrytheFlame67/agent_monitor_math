@@ -150,6 +150,22 @@ def can_read_run(rid, uid):
         return bool(db.execute('SELECT 1 FROM runs r JOIN members m ON m.project=r.project WHERE r.run_id=? AND m.user=?',(rid,uid)).fetchone())
 
 
+def _untrusted(db, pid):
+    """A member is not an operator, so the project's runs stay tool-free
+    (account_policy.PROJECT_TOOL_FREE_ERROR)."""
+    from agent_monitor.auth import is_operator_account
+    return any(not is_operator_account(row['user']) for row in db.execute('SELECT user FROM members WHERE project=?',(pid,)))
+
+
+def untrusted_run(rid):
+    """Whether run ``rid`` belongs to a project with a member who is not an operator."""
+    if not DB_PATH.exists():
+        return False
+    with connect() as db:
+        row=db.execute('SELECT project FROM runs WHERE run_id=?',(rid,)).fetchone()
+        return bool(row) and _untrusted(db,row['project'])
+
+
 class ProjectsMixin:
     def _project_send(self, status, value):
         self._send(status,json.dumps(value,ensure_ascii=False),headers={'Cache-Control':'no-store','Referrer-Policy':'no-referrer','X-Robots-Tag':'noindex,nofollow'})
@@ -218,11 +234,13 @@ def prepare_run(body, user):
 
 
 def start_run(pid, uid, task, launch):
+    """Launch with ``launch(tool_free)``: whether the project has a member who
+    is not an operator, decided here so that a member who just joined counts."""
     if not pid:
-        return launch()
+        return launch(False)
     # Serialize membership removal and run registration with launch admission.
     with connect() as db:
         db.execute('BEGIN IMMEDIATE');_member(db,pid,uid)
-        job=launch()
+        job=launch(_untrusted(db,pid))
         db.execute('INSERT INTO runs VALUES (?,?,?,?,?)',(job['run_id'],pid,uid,str(task or '')[:2000],time.time()))
         return job

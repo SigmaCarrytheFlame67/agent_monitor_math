@@ -281,8 +281,9 @@ def member_continuation_error(
 ) -> str | None:
     """Why a member may not continue a run recorded on ``auth_route``, or None.
 
-    A project collaborator can open the administrator's runs; one billed to a
-    subscription or to Max stays the administrator's to continue.
+    A run billed to a subscription or to Max (a member's own, started before
+    subscriptions became administrator-only) stays the administrator's to
+    continue.
     """
     if not is_member(user):
         return None
@@ -307,6 +308,46 @@ def member_run_error(
         or member_route_error(user, auth_route)
         or member_model_error(user, engine, model)
     )
+
+
+# Security policy, which the site owner may relax: a run started from a
+# project gets a copy of its shared document, which any member can edit.
+# While a member is not an administrator, the project's runs, their
+# follow-ups and their Formal harness use only the tool-free engines on an
+# API key, without subagents, so text a member wrote never steers a coding
+# agent with a shell, or one signed in to the administrator's subscriptions.
+PROJECT_TOOL_FREE_ERROR = (
+    "This project has members who are not site administrators, and the text "
+    "they write reaches the agent, so its runs use only tool-free engines "
+    "(Ansatz CGM or Plain) on an API key, without subagents. Coding agents, "
+    "subscriptions and Max are off for this project"
+)
+
+
+def tool_free_engines() -> frozenset[str]:
+    """The tool-free proof engines, less any an operator command replaces."""
+    return frozenset(
+        engine
+        for engine in MEMBER_PROOF_ENGINES
+        if not os.environ.get(_COMMAND_OVERRIDES[engine], "").strip()
+    )
+
+
+def project_run_error(
+    engine: str, *, model: str | None = None, auth_route: str | None = None
+) -> str | None:
+    """Why a run that carries a non-administrator's project text may not use
+    this engine, model and route, or None when it may."""
+    from agent_monitor import cgm_max
+
+    route = str(auth_route or "").strip().lower()
+    if (
+        engine in tool_free_engines()
+        and route in {"", "api_key"}
+        and not cgm_max.is_max_model(model)
+    ):
+        return None
+    return PROJECT_TOOL_FREE_ERROR
 
 
 def member_feedback_error(

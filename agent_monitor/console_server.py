@@ -2153,7 +2153,9 @@ class Handler(RunSharingMixin, ProjectsMixin, ResearchMixin, BaseHTTPRequestHand
                 body.get("project_id"),
                 user["id"],
                 body.get("project_task"),
-                lambda: job_manager.start_job(
+                # An analysis never receives the project's document, so the
+                # tool-free rule for project proofs does not apply.
+                lambda _tool_free: job_manager.start_job(
                     engine="analyze",
                     run_kind="analyze",
                     source=body.get("source"),
@@ -3570,6 +3572,14 @@ class Handler(RunSharingMixin, ProjectsMixin, ResearchMixin, BaseHTTPRequestHand
                 if refusal:
                     self._send(403, json.dumps({"error": refusal}, ensure_ascii=False))
                     return
+                # A tool-free project run: no coding-agent harness, and no
+                # model work off its API route (the Codex fallback included).
+                if job_manager.tool_free_run(rid, run_record or {}) and (
+                    action == "harness"
+                    or job_manager._route_from_record(run_record) != "api_key"
+                ):
+                    self._send(403, json.dumps({"error": account_policy.PROJECT_TOOL_FREE_ERROR}))
+                    return
             if analyze_runs.is_analyze_record(run_record):
                 # An analysis formalizes the STATEMENTS of selected nodes on the
                 # server's Lean 4.14 checker (proofs are not attempted), or
@@ -3686,7 +3696,7 @@ class Handler(RunSharingMixin, ProjectsMixin, ResearchMixin, BaseHTTPRequestHand
                 max_iterations = max(1, min(max_iterations, guest_max_iterations()))
             try:
                 def start() -> dict:
-                    return research_projects.start_run(body.get("project_id"), user["id"], body.get("project_task"), lambda: job_manager.start_job(
+                    return research_projects.start_run(body.get("project_id"), user["id"], body.get("project_task"), lambda tool_free: job_manager.start_job(
                         engine=engine,
                         problem_id=body.get("problem_id"),
                         problem_text=body.get("problem_text"),
@@ -3711,6 +3721,7 @@ class Handler(RunSharingMixin, ProjectsMixin, ResearchMixin, BaseHTTPRequestHand
                         ),
                         # Only an explicit false turns automatic formalization off.
                         formalize=body.get("formalize") is not False,
+                        tool_free=tool_free,
                     ))
 
                 if user.get("guest"):
@@ -3772,6 +3783,10 @@ class Handler(RunSharingMixin, ProjectsMixin, ResearchMixin, BaseHTTPRequestHand
                         # A refused start (no key, bad input) starts nothing.
                         self._release_member_run(user)
                         raise
+            except PermissionError as exc:
+                # The project's tool-free rule, or a membership just removed.
+                self._send(403, json.dumps({"error": str(exc)}, ensure_ascii=False))
+                return
             except Exception as exc:  # noqa: BLE001
                 self._send(400, json.dumps({"error": str(exc)}, ensure_ascii=False))
                 return
@@ -3823,6 +3838,11 @@ class Handler(RunSharingMixin, ProjectsMixin, ResearchMixin, BaseHTTPRequestHand
                 self._release_member_run(user)
                 self._send(404, json.dumps({"error": str(exc)}))
                 return
+            except PermissionError as exc:
+                # The project's tool-free rule (account_policy).
+                self._release_member_run(user)
+                self._send(403, json.dumps({"error": str(exc)}))
+                return
             except ValueError as exc:
                 # A refused continuation (retired engine, member policy, a
                 # disconnected account) is the caller's error, as for /chat.
@@ -3867,6 +3887,11 @@ class Handler(RunSharingMixin, ProjectsMixin, ResearchMixin, BaseHTTPRequestHand
                     user=user,
                     attachments=body.get("attachments"),
                 )
+            except PermissionError as exc:
+                # The project's tool-free rule (account_policy).
+                self._release_member_run(user)
+                self._send(403, json.dumps({"error": str(exc)}))
+                return
             except (ValueError, FileNotFoundError) as exc:
                 self._release_member_run(user)
                 self._send(400, json.dumps({"error": str(exc)}))

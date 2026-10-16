@@ -699,7 +699,7 @@ def _write_run_locked(run: dict[str, Any]) -> Path:
         "owner_id", "owner", "created_at", "problem_id",
         "guest", "use_subagents", "subagent_model", "auth_route", "credential_source",
         "model", "requested_model", "reasoning_effort", "speed_mode", "max_iterations", "formalize",
-        "route_plan", "run_kind", "analyze",
+        "route_plan", "run_kind", "analyze", "tool_free",
         "engine_impl", "engine_impl_version", "artifact_schema", "graph_schema",
     ):
         if run.get(k) in (None, "", "continue") and old.get(k) not in (None, "", "continue"):
@@ -1343,6 +1343,7 @@ def start_job(
     run_kind: str | None = None,
     source: object = None,
     analyze: object = None,
+    tool_free: bool = False,
 ) -> dict[str, Any]:
     """Start one run (``run_kind`` ``"prove"``, the default, or ``"analyze"``).
 
@@ -1350,6 +1351,10 @@ def start_job(
     ``{"text", "format"?}``) or manuscript ``attachments``, and ``analyze``
     options (``{"max_nodes"?, "focus"?}``); ``formalize`` defaults to false for
     it and to true for proofs.  See :mod:`agent_monitor.analyze_runs`.
+
+    ``tool_free`` marks a proof from a project with a member who is not an
+    administrator: it runs only a tool-free engine on an API key, without
+    subagents (``account_policy.PROJECT_TOOL_FREE_ERROR``, a PermissionError).
     """
     from agent_monitor.engines_registry import all_engine_ids, list_engines, supported_models
 
@@ -1392,6 +1397,14 @@ def start_job(
         subagent_model = None
     elif formalize is None:
         formalize = True
+    tool_free = tool_free and kind == "prove"
+    if tool_free:
+        refusal = account_policy.project_run_error(engine, model=model, auth_route=auth_route)
+        if refusal:
+            raise PermissionError(refusal)
+        use_subagents = False
+        subagent_model = None
+        auth_route = "api_key"
     max_plan: dict[str, Any] | None = None
     if cgm_max.is_max_model(model) or str(auth_route or "").strip().lower() == cgm_max.ROUTE:
         # Max: Claude Code leads and Codex works, on the run owner's two linked
@@ -1557,8 +1570,9 @@ def start_job(
             auth_modes=auth_modes,
             user=user,
             env=extra_env,
-            # A member's runtime is always the API route, whatever it stored.
-            enforce_account_runtime=not account_policy.is_member(user),
+            # A member's runtime (and a tool-free run's) is always the API
+            # route, whatever the account stored.
+            enforce_account_runtime=not (account_policy.is_member(user) or tool_free),
         )
     if route not in auth_modes and route != cgm_max.ROUTE:
         raise ValueError(
@@ -1719,6 +1733,7 @@ def start_job(
             analyze_request=analyze_request,
             analyze_route=analyze_route,
             analyze_caps=analyze_caps,
+            tool_free=tool_free,
         )
     except BaseException:
         if gate_key is not None:
@@ -1753,6 +1768,7 @@ def _start_job_launch(
     analyze_request: dict[str, Any] | None,
     analyze_route: str,
     analyze_caps: dict[str, int],
+    tool_free: bool = False,
 ) -> dict[str, Any]:
     """The launch half of :func:`start_job`: credentials, workspace, record,
     worker thread and derived pipeline (everything validated already)."""
@@ -1865,6 +1881,9 @@ def _start_job_launch(
             # False keeps the run informal: the derived pipeline skips Lean.
             "formalize": bool(formalize),
             **analyze_fields,
+            # Its prompt carries a non-administrator's project text for good,
+            # whoever belongs to the project later (see tool_free_run).
+            **({"tool_free": True} if tool_free else {}),
             **(
                 {
                     "route_plan": {
@@ -5503,6 +5522,35 @@ def _owner_user(owner_id: int | None) -> dict[str, Any] | None:
     return {"id": owner_id, "is_admin": is_operator_account(int(owner_id))}
 
 
+def tool_free_run(run_id: str, run: dict[str, Any]) -> bool:
+    """Whether a proof's prompt carries project text that an account which is
+    not an administrator could write: it started so, or its project has such a
+    member now.  It, its follow-ups and its Formal harness stay tool-free
+    (``account_policy.PROJECT_TOOL_FREE_ERROR``)."""
+    if run.get("tool_free"):
+        return True
+    if run.get("run_kind") == "analyze" or run.get("engine") == _ANALYZE_ENGINE:
+        return False  # an analysis never receives the project's document
+    from agent_monitor import projects
+
+    return projects.untrusted_run(run_id)
+
+
+def _tool_free_follow_up(
+    run_id: str, run: dict[str, Any], engine: str, model: str | None
+) -> bool:
+    """Whether a follow-up must stay tool-free; PermissionError when this
+    one would use a tool engine, a subscription or Max."""
+    if not tool_free_run(run_id, run):
+        return False
+    refusal = account_policy.project_run_error(
+        engine, model=model, auth_route=_route_from_record(run)
+    )
+    if refusal:
+        raise PermissionError(refusal)
+    return True
+
+
 def _feedback_entries(raw: str) -> list[dict[str, Any]]:
     """Parse queued feedback lines into ``content``/``author_id``/``ts`` entries."""
     entries: list[dict[str, Any]] = []
@@ -5749,6 +5797,7 @@ def send_human_message(
         )
         if feedback_error:
             raise ValueError(feedback_error)
+    _tool_free_follow_up(run_id, recorded, recorded_engine, model)
 
     attached = research_attachments.save(ws, attachment_batch)
     display_message = message or (
@@ -5839,6 +5888,8 @@ def _continue_with_message(
 
     _stop_event(run_id).clear()
     engine = run_data.get("engine") or run_id.split("_", 1)[0]
+    # Re-checked at launch, after send_human_message's check.
+    tool_free = _tool_free_follow_up(run_id, run_data, engine, effective_model)
     first_problem = _problem_item_text(problems[0]) if problems else (
         run_data.get("problem_text") or message
     )
@@ -5871,7 +5922,7 @@ def _continue_with_message(
     })
 
     _append_chat(run_id, "system", "Continuing proof with your feedback…")
-    continued_subagents = bool(run_data.get("use_subagents", True))
+    continued_subagents = bool(run_data.get("use_subagents", True)) and not tool_free
     continue_env["AGENT_MONITOR_USE_SUBAGENTS"] = "1" if continued_subagents else "0"
     continued_subagent_model = run_data.get("subagent_model") if continued_subagents else None
     if continued_subagent_model:
@@ -6807,6 +6858,7 @@ def _continue_claimed_run(
     if retired_error:
         raise ValueError(retired_error)
     effective_model = _member_continuation_model(user, engine, run_data, model)
+    tool_free = _tool_free_follow_up(run_id, run_data, engine, effective_model)
     problems = ensure_problems(run_data, run_id)
     first_problem = _problem_item_text(problems[0]) if problems else (
         run_data.get("problem_text") or ""
@@ -6825,7 +6877,7 @@ def _continue_claimed_run(
         user=user,
         env=_user_extra_env(user, effective_model, run_data.get("subagent_model")),
     )
-    continued_subagents = bool(run_data.get("use_subagents", True))
+    continued_subagents = bool(run_data.get("use_subagents", True)) and not tool_free
     continue_env["AGENT_MONITOR_USE_SUBAGENTS"] = "1" if continued_subagents else "0"
     continued_subagent_model = run_data.get("subagent_model") if continued_subagents else None
     if continued_subagent_model:
