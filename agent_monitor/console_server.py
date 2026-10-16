@@ -2957,11 +2957,10 @@ class Handler(RunSharingMixin, ProjectsMixin, ResearchMixin, BaseHTTPRequestHand
                 cached["harness"] = {**(cached.get("harness") or {}), **job}
             elif cached.get("status") == "running":
                 # The worker died without writing a final record (restart, OOM).
+                # Persist that too: a running record counts as active work.
+                lean_verify.reconcile_orphaned_harness(ws)
                 cached["status"] = "failed"
-                cached["notes"] = (
-                    "Harness run did not finish — the server may have restarted. "
-                    "Press Compile/Check on the source below, or run it again."
-                )
+                cached["notes"] = lean_verify.HARNESS_INTERRUPTED_NOTE
             self._send(200, json.dumps(cached, ensure_ascii=False))
             return
 
@@ -4560,6 +4559,14 @@ def main(port: int | None = None):
     recovered = job_manager.reconcile_stale_running_runs(min_age_seconds=0)
     if recovered:
         print(f"[recovery] marked {len(recovered)} orphaned run(s) interrupted: {', '.join(recovered)}")
+    from agent_monitor import lean_verify
+
+    closed_harnesses = lean_verify.reconcile_orphaned_harnesses(WORKSPACES_ROOT)
+    if closed_harnesses:
+        print(
+            f"[recovery] closed {len(closed_harnesses)} interrupted Formal Lean "
+            f"harness record(s): {', '.join(closed_harnesses)}"
+        )
     removed_logins = job_manager.remove_legacy_codex_key_homes()
     if removed_logins:
         print(f"[cleanup] removed {removed_logins} saved Codex API-key login(s) from the data directory")

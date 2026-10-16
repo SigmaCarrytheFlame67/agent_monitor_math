@@ -1,13 +1,15 @@
 """Formal Lean coding-agent harness lifecycle regressions."""
 from __future__ import annotations
 
+import json
 import sys
 import tempfile
 import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from agent_monitor import lean_verify
+from agent_monitor import console_server, lean_verify
+from deploy.ansatze import auto_deploy
 from tests.test_formal_harness_hardening import _checked_write
 
 
@@ -150,6 +152,114 @@ class AuditSetupFailureTests(_HarnessStateCleanup):
         self.assertIn("audit setup exploded", saved["notes"])
         self.assertIn("audit setup exploded", saved["log"])
         self.assertEqual(saved["lean"], base["lean"])
+
+
+
+class OrphanedHarnessRecordTests(_HarnessStateCleanup):
+    """r2-lean-harness-0: a restart must not leave a harness running for good."""
+
+    @staticmethod
+    def _orphan(root: Path, run_id: str) -> Path:
+        workspace = root / run_id
+        workspace.mkdir()
+        record = _running_base(workspace)
+        record["attempts"] = [{"round": 0, "action": "check"}]
+        record["chat"] = [{"role": "user", "content": "Prove it."}]
+        lean_verify._write_cached(workspace, record)
+        return workspace
+
+    def test_startup_sweep_closes_records_left_running_by_a_previous_process(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            workspace = self._orphan(root, "run-orphan")
+            finished = root / "run-finished"
+            finished.mkdir()
+            lean_verify._write_cached(finished, {"status": "verified", "lean": "x"})
+            self.assertTrue(auto_deploy.record_busy(lean_verify.load_cached(workspace)))
+
+            closed = lean_verify.reconcile_orphaned_harnesses(root)
+            saved = lean_verify.load_cached(workspace)
+            untouched = lean_verify.load_cached(finished)
+
+        self.assertEqual(closed, ["run-orphan"])
+        self.assertEqual(saved["status"], "failed")
+        self.assertEqual(saved["harness"]["state"], "interrupted")
+        self.assertIn("did not finish", saved["notes"])
+        self.assertEqual(saved["attempts"], [{"round": 0, "action": "check"}])
+        self.assertEqual(saved["chat"], [{"role": "user", "content": "Prove it."}])
+        self.assertIn("theorem old", saved["lean"])
+        self.assertFalse(auto_deploy.record_busy(saved))
+        self.assertEqual(untouched, {"status": "verified", "lean": "x"})
+
+    def test_a_live_harness_record_is_left_alone(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            workspace = self._orphan(Path(tmp), "run-live")
+            before = lean_verify.load_cached(workspace)
+            token = lean_verify._reserve_formal_operation(workspace, "harness/claude")
+            try:
+                self.assertFalse(lean_verify.reconcile_orphaned_harness(workspace))
+                self.assertEqual(lean_verify.reconcile_orphaned_harnesses(Path(tmp)), [])
+            finally:
+                lean_verify._release_formal_operation(workspace, token)
+            after = lean_verify.load_cached(workspace)
+
+        self.assertEqual(after, before)
+
+    def test_lean_tab_persists_the_end_of_an_orphaned_harness(self) -> None:
+        handler = object.__new__(console_server.Handler)
+        handler.path = "/api/run/run-orphan/lean_verify"
+        handler._resolve_path = lambda: "/api/run/run-orphan/lean_verify"
+        handler._require_user = lambda _path: {"id": 17, "is_admin": True}
+        handler._owns_run = lambda _rid, _user: True
+        sent: list[tuple[int, dict]] = []
+        handler._send = lambda code, payload, *args, **kwargs: sent.append(
+            (code, json.loads(payload))
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            workspace = self._orphan(Path(tmp), "run-orphan")
+            with (
+                patch.object(console_server, "_workspace_for_run", return_value=workspace),
+                patch.object(console_server, "_run_record_for", return_value=_CLAUDE_RUN),
+                patch.object(
+                    lean_verify,
+                    "harness_model_options",
+                    return_value={"auth_route": "claude_subscription", "models": [], "selected": ""},
+                ),
+                patch.object(lean_verify, "harness_engines", return_value=[]),
+            ):
+                handler.do_GET()
+            saved = lean_verify.load_cached(workspace)
+
+        self.assertEqual(sent[0][0], 200)
+        self.assertEqual(sent[0][1]["status"], "failed")
+        self.assertFalse(sent[0][1]["harness_running"])
+        self.assertEqual(saved["status"], "failed")
+        self.assertFalse(auto_deploy.record_busy(saved))
+
+    def test_console_startup_runs_the_sweep(self) -> None:
+        class Server:
+            def __init__(self, *_args) -> None:
+                pass
+
+            def serve_forever(self) -> None:
+                pass
+
+        with (
+            patch.object(console_server, "ensure_data_dirs"),
+            patch.object(console_server, "_open_account_database"),
+            patch.object(console_server.job_manager, "reconcile_stale_running_runs", return_value=[]),
+            patch.object(console_server.job_manager, "remove_legacy_codex_key_homes", return_value=0),
+            patch.object(console_server, "start_guest_retention_thread", return_value=None),
+            patch("agent_monitor.usage_ledger.start_backfill_thread"),
+            patch.object(console_server, "ConsoleHTTPServer", Server),
+            patch.object(
+                lean_verify, "reconcile_orphaned_harnesses", return_value=["run-orphan"]
+            ) as sweep,
+            patch("builtins.print"),
+        ):
+            console_server.main(port=1)
+
+        sweep.assert_called_once_with(console_server.WORKSPACES_ROOT)
 
 
 if __name__ == "__main__":

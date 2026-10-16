@@ -7104,6 +7104,47 @@ def _close_running_harness_record(
     return True
 
 
+HARNESS_INTERRUPTED_NOTE = (
+    "Harness run did not finish — the server may have restarted. "
+    "Press Compile/Check on the source below, or run it again."
+)
+
+
+def reconcile_orphaned_harness(workspace: Path) -> bool:
+    """Persist the end of a running harness record no live worker owns.
+
+    Harness workers are daemon threads of this process, so after a restart (or
+    a dead worker) the record can never finish by itself, and auto_deploy
+    waits on it for good. A live harness, like every other Lean action, holds
+    the workspace's formal reservation: taking it proves the record is an
+    orphan.
+    """
+    try:
+        token = _reserve_formal_operation(workspace, "harness recovery")
+    except ValueError:
+        return False
+    try:
+        return _close_running_harness_record(
+            workspace, state="interrupted", notes=HARNESS_INTERRUPTED_NOTE
+        )
+    except (OSError, TypeError, ValueError):
+        return False
+    finally:
+        _release_formal_operation(workspace, token)
+
+
+def reconcile_orphaned_harnesses(workspaces_root: Path) -> list[str]:
+    """At startup, close every harness record a previous process left running."""
+    closed: list[str] = []
+    for result in sorted(Path(workspaces_root).glob(f"*/{RESULT_FILENAME}")):
+        workspace = result.parent
+        if workspace.is_symlink():
+            continue
+        if reconcile_orphaned_harness(workspace):
+            closed.append(workspace.name)
+    return closed
+
+
 def _reset_harness_log(ldir: Path) -> Path:
     """Start each harness with a fresh transcript, never a prior run's log."""
     log_path = ldir / "harness.log"
