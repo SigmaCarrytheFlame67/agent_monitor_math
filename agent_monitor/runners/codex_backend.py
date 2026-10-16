@@ -781,12 +781,14 @@ def codex_exec(
         if not use_kimi:
             from agent_monitor import codex_login
 
-            # Settings offers Reconnect once Codex rejects a linked login.
-            codex_login.note_turn_outcome(
+            # Settings offers Reconnect once Codex rejects a linked login, and
+            # the error says so after Codex's own reason, as Claude Code's does.
+            if codex_login.note_turn_outcome(
                 env["CODEX_HOME"],
                 completed=(terminal_event or {}).get("type") == "turn.completed",
                 failure=failure,
-            )
+            ):
+                failure = f"{failure.rstrip('. ')}; {codex_login.RECONNECT_ADVICE}."
         if completed.returncode:
             if failure:
                 # The CLI's own reason (usage limit, expired login, model not

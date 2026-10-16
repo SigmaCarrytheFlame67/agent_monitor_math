@@ -5079,9 +5079,10 @@ def _codex_subscription_interaction(
             raise ValueError(f"Codex intervention timed out after {timeout_s}s") from exc
         parser = CLIEventParser("codex")
         parser.feed((proc.stdout or "") + "\n" + (proc.stderr or ""))
+        reconnect = False
         if env.get("CODEX_HOME"):
             # Settings offers Reconnect once Codex rejects a linked login.
-            codex_login.note_turn_outcome(
+            reconnect = codex_login.note_turn_outcome(
                 env["CODEX_HOME"],
                 completed=parser.terminal_status == "completed",
                 failure=(parser.terminal_error or "") if parser.terminal_status == "failed" else "",
@@ -5094,6 +5095,11 @@ def _codex_subscription_interaction(
         answer = parser.final_message().strip()
         if proc.returncode != 0:
             detail = (parser.output() or proc.stderr or proc.stdout or "Codex failed")[-1200:]
+            if reconnect:
+                # Codex's own reason and what to do, as a native Codex run's
+                # error says.
+                reason = (parser.terminal_error or "").rstrip(". ")
+                detail = f"{reason}; {codex_login.RECONNECT_ADVICE}."
             raise ValueError(f"Codex intervention failed (exit {proc.returncode}): {detail}")
         revised = (
             _read_optional_workspace_text(
@@ -7800,18 +7806,23 @@ def _harness_worker(
         log_path.write_text("".join(lines), encoding="utf-8")
     except OSError:
         pass
+    child_error = ""
     if engine == "codex" and env.get("CODEX_HOME"):
         from agent_monitor import codex_login
         from agent_monitor.cli_events import CLIEventParser
 
         parser = CLIEventParser("codex")
         parser.feed("".join(lines))
-        # Settings offers Reconnect once Codex rejects a linked login.
-        codex_login.note_turn_outcome(
+        # Settings offers Reconnect once Codex rejects a linked login, and the
+        # result says so, as a native Codex run's error does.
+        if codex_login.note_turn_outcome(
             env["CODEX_HOME"],
             completed=parser.terminal_status == "completed",
             failure=(parser.terminal_error or "") if parser.terminal_status == "failed" else "",
-        )
+        ):
+            child_error = (
+                f"{(parser.terminal_error or '').rstrip('. ')}; {codex_login.RECONNECT_ADVICE}"
+            )
 
     try:
         return _harness_finish(
@@ -7820,6 +7831,7 @@ def _harness_worker(
             label=label,
             log="".join(lines),
             exit_code=exit_code,
+            child_error=child_error,
             elapsed=round(time.time() - started, 1),
             user=user,
             run_record=run_record,
@@ -7930,6 +7942,7 @@ def _harness_finish(
     label: str,
     log: str,
     exit_code: int | None,
+    child_error: str = "",
     elapsed: float,
     user: dict[str, Any] | None,
     run_record: dict[str, Any] | None,
@@ -7945,6 +7958,8 @@ def _harness_finish(
 ) -> dict[str, Any]:
     """Re-check a fresh regular artifact, but never forgive a failed child.
 
+    ``child_error`` says why a failed child failed, when the user must act on
+    it (Codex rejected the linked login).
     ``timeout_limit`` is the limit, in seconds, at which the worker killed a
     still-running child; a user Stop takes precedence over it.
     ``initial_status`` and ``initial_audit`` are the status and fidelity audit
@@ -7992,11 +8007,12 @@ def _harness_finish(
         rejection_reasons.append(f"the harness exceeded its {timeout_limit}s limit")
     if not child_exit_ok and not timed_out:
         # After a timeout the exit status is only the worker's own kill.
-        rejection_reasons.append(
+        exited = (
             "the child process did not exit successfully"
             if exit_code is None
             else f"the child process exited {exit_code}"
         )
+        rejection_reasons.append(f"{exited}: {child_error}" if child_error else exited)
     if not artifact_regular:
         rejection_reasons.append(artifact_reason or "Proof.lean is not a regular root file")
     elif not lean_src:

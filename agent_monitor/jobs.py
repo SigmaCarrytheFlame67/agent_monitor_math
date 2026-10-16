@@ -4843,10 +4843,7 @@ def _run_cli_engine(
         if reconnect_codex and detail:
             # Likewise for a linked Codex login, instead of its CLI's "Please
             # log out and sign in again".
-            detail = (
-                detail.rstrip(". ") + "; reconnect Codex (ChatGPT) in Settings "
-                "(the linked account needs a new sign-in) and retry."
-            )
+            detail = f"{detail.rstrip('. ')}; {codex_login.RECONNECT_ADVICE}."
         failure_reason = _cli_failure_reason(
             label=label,
             returncode=proc.returncode,

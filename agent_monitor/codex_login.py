@@ -40,6 +40,11 @@ _ANSI_RE = re.compile(r"\x1b\[[0-9;]*[a-zA-Z]")
 _CODE_RE = re.compile(r"^[A-Z0-9]{3,6}-[A-Z0-9]{3,6}$")
 _MAX_OUTPUT_CHARS = 4000
 _REAUTH_MARKER_NAME = ".agent-monitor-reauth-required.json"
+# What an error adds after Codex's own reason ("Please log out and sign in
+# again") once note_turn_outcome has flagged the linked login.
+RECONNECT_ADVICE = (
+    "reconnect Codex (ChatGPT) in Settings (the linked account needs a new sign-in) and retry"
+)
 
 # A newly completed device login has valid OAuth tokens before Codex has made
 # its first model-list request and written models_cache.json. Keep the first

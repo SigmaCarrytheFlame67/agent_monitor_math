@@ -446,6 +446,65 @@ class CodexReauthTests(unittest.TestCase):
         self.assertIn(_REFRESH_FAILED, others["api-key"]["error"])
         self.assertFalse(codex_login.account_reauth_required(self.home))
 
+    def test_a_rejected_login_tells_codex_backend_callers_to_reconnect_in_settings(self) -> None:
+        # CGM, Plain and Analyze on the Codex subscription report this error.
+        for returncode, prefix in ((1, "codex exec failed"), (0, "codex exec terminal event was turn.failed")):
+            codex_login.clear_reauth_required(self.home)
+            with self.subTest(returncode=returncode):
+                with self.assertRaises(codex_backend.CodexBackendError) as raised:
+                    self._exec(self.home, _turn_failed(_REFRESH_FAILED), returncode)
+                self.assertEqual(
+                    str(raised.exception),
+                    f"{prefix}: Your access token could not be refreshed. "
+                    "Please log out and sign in again" + _RECONNECT_ADVICE,
+                )
+                self.assertEqual(raised.exception.kind, "auth")
+                self.assertTrue(codex_login.account_reauth_required(self.home))
+
+        # Nothing to reconnect: a usage limit, a login a newer sign-in already
+        # replaced, or a call on an API-key home rather than the account.
+        codex_login.clear_reauth_required(self.home)
+        api_key_home = self.root / "codex_home" / "0123456789abcdef"
+        api_key_home.mkdir(parents=True)
+        for kind, home, stdout in (
+            ("limit", self.home, _USAGE_LIMIT),
+            ("replaced", self.home, _turn_failed(_REPLACED)),
+            ("api-key", api_key_home, _turn_failed(_REFRESH_FAILED)),
+        ):
+            with self.subTest(kind=kind):
+                with self.assertRaises(codex_backend.CodexBackendError) as raised:
+                    self._exec(home, stdout, 1)
+                self.assertNotIn("reconnect Codex", str(raised.exception))
+        self.assertFalse(codex_login.account_reauth_required(self.home))
+
+    def test_a_rejected_login_tells_formal_lean_codex_to_reconnect_in_settings(self) -> None:
+        harness_env = self._subscription_env()  # a harness already routed to the account
+        with self.assertRaises(ValueError) as raised:
+            self._formal_lean_codex(_turn_failed(_REFRESH_FAILED), 1)
+        self.assertEqual(
+            str(raised.exception),
+            "Codex intervention failed (exit 1): Your access token could not be refreshed. "
+            "Please log out and sign in again" + _RECONNECT_ADVICE,
+        )
+        codex_login.clear_reauth_required(self.home)
+        harness = self._formal_lean_harness(harness_env, _turn_failed(_REFRESH_FAILED), 1, finish=True)
+        self.assertIn(
+            "rejected its artifact: the child process exited 1: Your access token could not be "
+            "refreshed. Please log out and sign in again" + _RECONNECT_ADVICE.rstrip(".") + ";",
+            harness["notes"],
+        )
+        self.assertTrue(codex_login.account_reauth_required(self.home))
+
+        # A usage limit flags nothing, so neither result mentions Settings.
+        codex_login.clear_reauth_required(self.home)
+        with self.assertRaises(ValueError) as raised:
+            self._formal_lean_codex(_USAGE_LIMIT, 1)
+        self.assertNotIn("reconnect Codex", str(raised.exception))
+        harness = self._formal_lean_harness(harness_env, _USAGE_LIMIT, 1, finish=True)
+        self.assertIn("the child process exited 1;", harness["notes"])
+        self.assertNotIn("reconnect Codex", harness["notes"])
+        self.assertFalse(codex_login.account_reauth_required(self.home))
+
     def test_a_flagged_login_never_switches_a_routed_run_to_an_api_key(self) -> None:
         env = self._subscription_env()
         codex_login.mark_reauth_required(self.home)
@@ -539,11 +598,17 @@ class CodexReauthTests(unittest.TestCase):
         self.assertFalse(codex_login.account_reauth_required(self.home))
         self.assertTrue(codex_login.status(self.USER["id"])["connected"])
 
-    def _formal_lean_harness(self, env: dict[str, str], stdout: str, returncode: int) -> None:
+    def _formal_lean_harness(
+        self, env: dict[str, str], stdout: str, returncode: int, *, finish: bool = False
+    ) -> dict | None:
+        """Run the harness worker on a child that prints ``stdout``; with
+        ``finish`` its own finish step runs too, and the result it recorded
+        is returned."""
         workspace = self.root / "harness-run"
         ldir = workspace / lean_verify.LEAN_DIRNAME
         ldir.mkdir(parents=True, exist_ok=True)
-        with patch.object(lean_verify, "_harness_finish") as finish:
+        real_finish = lean_verify._harness_finish if finish else None
+        with patch.object(lean_verify, "_harness_finish", wraps=real_finish) as finish_step:
             lean_verify._harness_worker(
                 workspace=workspace,
                 ldir=ldir,
@@ -564,7 +629,8 @@ class CodexReauthTests(unittest.TestCase):
                 initial_fingerprint=None,
                 audit=False,
             )
-        self.assertEqual(finish.call_args.kwargs["exit_code"], returncode)
+        self.assertEqual(finish_step.call_args.kwargs["exit_code"], returncode)
+        return lean_verify.load_cached(workspace) if finish else None
 
     def test_formal_lean_codex_harness_flags_and_clears_the_login(self) -> None:
         env = self._subscription_env()
