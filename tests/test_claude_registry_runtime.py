@@ -1,13 +1,19 @@
 from __future__ import annotations
 
+import contextlib
+import io
 import os
 import stat
 import sys
 import tempfile
+import time
+import types
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import patch
 
+from agent_monitor import jobs
 from agent_monitor.engines_registry import (
     CLAUDE_SUBSCRIPTION_ENGINES,
     CLI_ENGINES,
@@ -15,7 +21,14 @@ from agent_monitor.engines_registry import (
     build_cli_command,
     list_engines,
 )
-from agent_monitor.runners import claude_runner
+from agent_monitor.runners import (
+    claude_runner,
+    deepagents_runner,
+    kimi_runner,
+    metaharness_runner,
+    plain_runner,
+)
+from agent_monitor.runners import math_harness_runner as harness
 
 
 class ClaudeRegistryRuntimeTests(unittest.TestCase):
@@ -87,6 +100,124 @@ class ClaudeRegistryRuntimeTests(unittest.TestCase):
             with patch.object(sys, "argv", ["claude_runner.py", "Prove that."]):
                 self.assertEqual(claude_runner.main(), 0)
         self.assertEqual(prompts, ["Prove it.\r\n证明", "Prove that."])
+
+
+class WrapperPromptFileTests(unittest.TestCase):
+    """The Python wrappers that also run on a Claude Code or Codex account
+    (and Kimi) get their prompt in a file too."""
+
+    # One argv string is limited to 128 KiB on Linux: 50,000 characters of a
+    # 3-byte script are 150 KB.
+    PROMPT = "Prove it.\r\n" + "证明：" * 50_000
+
+    def test_the_registry_hands_each_wrapper_a_long_prompt_in_a_private_file(self) -> None:
+        for engine in ("plain", "metaharness", "deepagents", "kimi"):
+            with self.subTest(engine=engine), patch(
+                "agent_monitor.engines_registry._cli_available",
+                return_value=(True, CLI_ENGINES[engine]["default_cmd"]),
+            ), tempfile.TemporaryDirectory() as td:
+                workspace = Path(td)
+                command = build_cli_command(
+                    engine, prompt=self.PROMPT, workspace=workspace, problem_file=workspace / "problem.txt"
+                )
+                assert command is not None
+                self.assertLess(max(len(arg.encode("utf-8")) for arg in command), 4096)
+                path = Path(command[command.index("--prompt-file") + 1])
+                self.assertEqual(path.parent.resolve(), workspace.resolve())
+                self.assertEqual(stat.S_IMODE(path.stat().st_mode), 0o600)
+                self.assertEqual(path.read_bytes(), self.PROMPT.encode("utf-8"))
+
+    def _main(self, runner: types.ModuleType, workspace: Path) -> int:
+        """``runner.main()`` started in ``workspace`` as the registry starts it."""
+        path = workspace / ".agent-monitor-prompt"
+        path.write_bytes(self.PROMPT.encode("utf-8"))
+        argv = [Path(runner.__file__).name, "--prompt-file", str(path)]
+        with contextlib.chdir(workspace), patch.object(sys, "argv", argv), contextlib.redirect_stdout(io.StringIO()):
+            returncode = runner.main()
+        self.assertFalse(path.exists())  # read, then removed
+        return returncode
+
+    def test_plain_reads_its_prompt_file(self) -> None:
+        prompts: list[str] = []
+
+        def claude_exec(_system, user, **_kwargs):
+            prompts.append(user)
+            return SimpleNamespace(text="# Proof\n\nIt holds.\n", usage={})
+
+        with tempfile.TemporaryDirectory() as td, patch.dict(os.environ, {}, clear=True), patch.object(
+            plain_runner, "subscription_enabled", return_value=False
+        ), patch.object(plain_runner, "claude_subscription_enabled", return_value=True), patch.object(
+            plain_runner, "claude_code_exec", side_effect=claude_exec
+        ):
+            self.assertEqual(self._main(plain_runner, Path(td)), 0)
+        self.assertEqual(prompts, [self.PROMPT])
+
+    def test_metaharness_reads_its_prompt_file(self) -> None:
+        prompts: list[str] = []
+
+        def claude_exec(_system, user, **_kwargs):
+            prompts.append(user)
+            return SimpleNamespace(text="SCORE: 9\n\n# Proof\n\nIt holds.\n", usage={})
+
+        with tempfile.TemporaryDirectory() as td, patch.dict(os.environ, {}, clear=True), patch.object(
+            metaharness_runner, "subscription_enabled", return_value=False
+        ), patch.object(metaharness_runner, "claude_subscription_enabled", return_value=True), patch.object(
+            metaharness_runner, "claude_code_exec", side_effect=claude_exec
+        ):
+            self.assertEqual(self._main(metaharness_runner, Path(td)), 0)
+        self.assertEqual(prompts[0], self.PROMPT)  # the solver's task
+
+    def test_deepagents_reads_its_prompt_file(self) -> None:
+        requests: list[str] = []
+
+        class Agent:
+            def stream(self, state, **_kwargs):
+                requests.append(state["messages"][0]["content"])
+                yield {"messages": []}
+
+        deepagents = types.ModuleType("deepagents")
+        deepagents.create_deep_agent = lambda **_kwargs: Agent()
+        filesystem = types.ModuleType("deepagents.backends.filesystem")
+        filesystem.FilesystemBackend = lambda **_kwargs: None
+        stubs = {"deepagents": deepagents, "deepagents.backends": types.ModuleType("deepagents.backends"),
+                 "deepagents.backends.filesystem": filesystem}
+        with tempfile.TemporaryDirectory() as td, patch.dict(
+            os.environ, {"AGENT_MONITOR_CLAUDE_SUBSCRIPTION": "1", "CLAUDE_CONFIG_DIR": td}, clear=True
+        ), patch.dict(sys.modules, stubs), patch.object(deepagents_runner, "_install_termination_handlers"), patch.object(
+            deepagents_runner, "_create_claude_subscription_model", return_value=object()
+        ), patch.object(deepagents_runner, "_run_supplemental_audit"):
+            self._main(deepagents_runner, Path(td))  # the stub agent writes no proof
+        self.assertEqual(len(requests), 1)
+        self.assertIn("证明：" * 50_000, requests[0])
+
+    def test_kimi_reads_its_prompt_file(self) -> None:
+        tasks: list[str] = []
+
+        def pipeline(_root, _problem, _route, *, budgets, task):
+            tasks.append(task)
+            return {"written": [], "fact_ids": [], "accepted": False, "proof_text": ""}
+
+        with tempfile.TemporaryDirectory() as td, patch.dict(
+            os.environ, {"KIMI_API_KEY": "sk-test-kimi-123456789"}, clear=True
+        ), patch.object(harness, "run_pipeline", side_effect=pipeline):
+            (Path(td) / "problem.txt").write_text("Prove it.", encoding="utf-8")
+            self.assertEqual(self._main(kimi_runner, Path(td)), 0)
+        self.assertEqual(tasks, [self.PROMPT])
+
+    def test_the_console_starts_kimi_with_a_long_prompt(self) -> None:
+        # The registry's own command, run as a script: with no key in the
+        # run's environment the runner stops right after reading its prompt.
+        with tempfile.TemporaryDirectory() as td, patch.dict(os.environ), patch(
+            "agent_monitor.agent_config.persona_preamble", return_value=""
+        ), patch.object(jobs, "_write_run"):
+            os.environ.pop("KIMI_PROOF_CMD", None)
+            run = jobs._run_cli_engine(run_id="kimi_long", engine="kimi", problem_id="p",
+                                       problem_text=self.PROMPT, started=time.time(), workspace=Path(td))
+            leftovers = list(Path(td).iterdir())
+        self.assertEqual(run["status"], "failed")
+        self.assertNotIn("too large", run["error"])
+        self.assertIn("Add a Kimi API key in Settings", str(run["agents"]))
+        self.assertEqual(leftovers, [])
 
 
 if __name__ == "__main__":

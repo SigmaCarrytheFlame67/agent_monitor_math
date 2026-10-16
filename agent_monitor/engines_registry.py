@@ -175,7 +175,7 @@ CLI_ENGINES: dict[str, dict[str, Any]] = {
         "cmd_env": "KIMI_PROOF_CMD",
         "default_cmd": (
             "{python} -u "
-            "{root}/agent_monitor/runners/kimi_runner.py {prompt}"
+            "{root}/agent_monitor/runners/kimi_runner.py --prompt-file {prompt_file}"
         ),
         "install_hint": "Add a Kimi API key in Settings",
         "ready_detail": "tool-free Kimi K3 CGM pipeline ready",
@@ -295,7 +295,7 @@ CLI_ENGINES: dict[str, dict[str, Any]] = {
         "cmd_env": "DEEPAGENTS_CMD",
         "default_cmd": (
             "{root}/engines/deepagents/.venv/bin/python -u "
-            "{root}/agent_monitor/runners/deepagents_runner.py {prompt}"
+            "{root}/agent_monitor/runners/deepagents_runner.py --prompt-file {prompt_file}"
         ),
         "install_hint": "./setup.sh  (creates engines/deepagents/.venv)",
         "parser_style": "codex",
@@ -311,7 +311,7 @@ CLI_ENGINES: dict[str, dict[str, Any]] = {
         "cmd_env": "PLAIN_CMD",
         "default_cmd": (
             "{python} -u "
-            "{root}/agent_monitor/runners/plain_runner.py {prompt}"
+            "{root}/agent_monitor/runners/plain_runner.py --prompt-file {prompt_file}"
         ),
         "install_hint": "needs OPENAI_API_KEY",
         "parser_style": "codex",
@@ -327,7 +327,7 @@ CLI_ENGINES: dict[str, dict[str, Any]] = {
         "cmd_env": "METAHARNESS_CMD",
         "default_cmd": (
             "{python} -u "
-            "{root}/agent_monitor/runners/metaharness_runner.py {prompt}"
+            "{root}/agent_monitor/runners/metaharness_runner.py --prompt-file {prompt_file}"
         ),
         "install_hint": "./setup.sh  (needs OPENAI_API_KEY)",
         "parser_style": "codex",

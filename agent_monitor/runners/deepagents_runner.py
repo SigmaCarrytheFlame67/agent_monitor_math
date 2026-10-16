@@ -8,7 +8,7 @@ events to stdout so the console's CLIEventParser builds a multi-node trace:
   {"type": "turn.completed", "usage": {...}}
 
 Executed inside engines/deepagents/.venv (created by setup.sh).
-Usage: deepagents_runner.py "<prompt>"   (cwd = run workspace)
+Usage: deepagents_runner.py --prompt-file PATH | "<prompt>"   (cwd = run workspace)
 
 Important: DeepAgents' default tool filesystem is virtual/in-memory. We mount a
 FilesystemBackend rooted at the run workspace (virtual_mode=True) so read/write
@@ -34,6 +34,7 @@ if __package__:
         normalize_requested_outcome_file,
         strip_outcome_markers,
     )
+    from .task_prompt import read_task_prompt
 else:
     # engines_registry executes this file with the DeepAgents interpreter and
     # a run workspace as cwd. Make the owning repository importable without
@@ -45,6 +46,7 @@ else:
         normalize_requested_outcome_file,
         strip_outcome_markers,
     )
+    from agent_monitor.runners.task_prompt import read_task_prompt
 
 
 _ACTIVE_CODEX_GROUPS: set[int] = set()
@@ -1939,7 +1941,17 @@ def _load_user_tools(workspace: Path) -> list:
 
 def main() -> int:
     _install_termination_handlers()
-    prompt = sys.argv[1] if len(sys.argv) > 1 else ""
+    try:
+        prompt = read_task_prompt(sys.argv)
+    except (OSError, UnicodeDecodeError) as exc:
+        emit_item(
+            {
+                "type": "error",
+                "message": f"could not read the task prompt ({type(exc).__name__})",
+                "terminal": True,
+            }
+        )
+        return 2
     if not prompt.strip():
         emit_item({"type": "error", "message": "empty prompt", "terminal": True})
         return 2

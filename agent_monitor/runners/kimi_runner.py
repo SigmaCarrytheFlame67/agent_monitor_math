@@ -20,12 +20,12 @@ No-tools guarantees (unchanged from the former draft/critique/refine runner):
 
 Model-verifier acceptance is never a Lean certificate.
 
-Usage: ``kimi_runner.py "<prompt>"`` from a run workspace that contains the
-canonical ``problem.txt``.  Emits Codex-shaped JSONL events on stdout.  Exit
-status: 0 when the pipeline published its artifacts (accepted or not), 2 for a
-missing prompt, key or attested endpoint, 143 when a stop request (SIGTERM)
-ended the run before publication (nothing is published), and 1 for any other
-failure.
+Usage: ``kimi_runner.py --prompt-file PATH`` (or ``kimi_runner.py "<prompt>"``)
+from a run workspace that contains the canonical ``problem.txt``.  Emits
+Codex-shaped JSONL events on stdout.  Exit status: 0 when the pipeline
+published its artifacts (accepted or not), 2 for a missing prompt, key or
+attested endpoint, 143 when a stop request (SIGTERM) ended the run before
+publication (nothing is published), and 1 for any other failure.
 """
 from __future__ import annotations
 
@@ -38,11 +38,13 @@ from urllib.parse import urlsplit
 
 if __package__:
     from .plain_runner import emit_item
+    from .task_prompt import read_task_prompt
 else:
     repository_root = Path(__file__).resolve().parents[2]
     if str(repository_root) not in sys.path:
         sys.path.insert(0, str(repository_root))
     from agent_monitor.runners.plain_runner import emit_item
+    from agent_monitor.runners.task_prompt import read_task_prompt
 
 
 MODEL_ID = "kimi-k3"
@@ -176,7 +178,17 @@ def main() -> int:
     thread: it intercepts SIGTERM (the console's Stop) only when it runs on the
     process main thread, which is where ``__main__`` calls this function.
     """
-    prompt = sys.argv[1] if len(sys.argv) > 1 else ""
+    try:
+        prompt = read_task_prompt(sys.argv)
+    except (OSError, UnicodeDecodeError) as exc:
+        emit_item(
+            {
+                "type": "error",
+                "message": f"Kimi could not read its task prompt ({type(exc).__name__})",
+                "terminal": True,
+            }
+        )
+        return 2
     if not prompt.strip():
         emit_item({"type": "error", "message": "Enter a problem to prove"})
         return 2

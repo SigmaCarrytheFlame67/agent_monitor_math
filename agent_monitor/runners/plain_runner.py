@@ -4,7 +4,7 @@
 One single model call: problem in, proof out. The baseline to compare every
 harness against. Streams codex-style JSONL events; writes proof.md in cwd.
 
-Usage: plain_runner.py "<prompt>"   (cwd = run workspace)
+Usage: plain_runner.py --prompt-file PATH | "<prompt>"   (cwd = run workspace)
 """
 from __future__ import annotations
 
@@ -24,6 +24,7 @@ if __package__:
     )
     from .codex_backend import CodexBackendError, codex_exec, subscription_enabled
     from .outcome_contract import canonicalize_outcome_text
+    from .task_prompt import read_task_prompt
 else:
     # The engine registry launches this file by absolute path from the run
     # workspace. Import through the package so transitive relative imports
@@ -45,6 +46,7 @@ else:
         subscription_enabled,
     )
     from agent_monitor.runners.outcome_contract import canonicalize_outcome_text
+    from agent_monitor.runners.task_prompt import read_task_prompt
 
 
 SYSTEM_PROMPT = (
@@ -255,7 +257,11 @@ def _api_chat_with_output_limit(
 
 
 def main() -> int:
-    prompt = sys.argv[1] if len(sys.argv) > 1 else ""
+    try:
+        prompt = read_task_prompt(sys.argv)
+    except (OSError, UnicodeDecodeError) as exc:
+        emit_item({"type": "error", "message": f"could not read the task prompt ({type(exc).__name__})", "terminal": True})
+        return 2
     if not prompt.strip():
         emit_item({"type": "error", "message": "empty prompt", "terminal": True})
         return 2

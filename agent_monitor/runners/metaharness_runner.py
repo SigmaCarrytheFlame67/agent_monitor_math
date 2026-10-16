@@ -12,7 +12,7 @@ Round structure (each = distinct Monitor nodes):
   3. proposer — rewrites the harness spec if the score is low
 
 Streams codex-style JSONL events to stdout for the console's CLIEventParser.
-Usage: metaharness_runner.py "<prompt>"   (cwd = run workspace)
+Usage: metaharness_runner.py --prompt-file PATH | "<prompt>"   (cwd = run workspace)
 """
 from __future__ import annotations
 
@@ -42,6 +42,7 @@ if __package__:
         ensure_requested_outcome,
         run_codex_audit,
     )
+    from .task_prompt import read_task_prompt
 else:
     # Direct registry execution starts with only this directory on sys.path.
     # Restore the repository package root before importing package-qualified
@@ -67,6 +68,7 @@ else:
         ensure_requested_outcome,
         run_codex_audit,
     )
+    from agent_monitor.runners.task_prompt import read_task_prompt
 
 
 def emit(obj: dict) -> None:
@@ -226,7 +228,11 @@ def complete_file_backed_audit(
 
 
 def main() -> int:
-    prompt = sys.argv[1] if len(sys.argv) > 1 else ""
+    try:
+        prompt = read_task_prompt(sys.argv)
+    except (OSError, UnicodeDecodeError) as exc:
+        emit_item({"type": "error", "message": f"could not read the task prompt ({type(exc).__name__})", "terminal": True})
+        return 2
     if not prompt.strip():
         emit_item({"type": "error", "message": "empty prompt", "terminal": True})
         return 2

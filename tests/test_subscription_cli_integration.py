@@ -370,6 +370,36 @@ class ClaudePromptOnStdinTests(unittest.TestCase):
         self.assertIn(problem, calls[0]["stdin"])
         self.assertEqual(leftovers, ["proof.md"])  # the prompt file is gone
 
+    def test_a_long_problem_reaches_claude_code_through_plain_and_meta_harness(self) -> None:
+        # Both also run on the linked Claude Code account; the console starts
+        # them with the registry's own command too.
+        problem = "设 n 为偶数，证明：" * 9_000  # 90,000 characters, 270 KB of UTF-8
+        # The evaluator's score ends Meta-Harness after its first round.
+        answer = "SCORE: 9\n\n# Claim\n\nThe statement holds.\n\n## Proof\n\n" + "Each step follows. " * 30 + "\n"
+        for engine in ("plain", "metaharness"):
+            with self.subTest(engine=engine), tempfile.TemporaryDirectory() as tmp:
+                root = Path(tmp)
+                (root / "config").mkdir()
+                workspace = root / "workspace"
+                workspace.mkdir()
+                fake = _fake_claude_cli(root / "bin", _success(answer))
+                extra_env = {**_claude_env(str(root / "config")),
+                             "PATH": os.pathsep.join([str(fake.parent), "/usr/bin", "/bin"])}
+                # HOME keeps the registry's ~/.local/bin (a real install) off PATH.
+                with patch.dict(os.environ, {"HOME": str(root)}), patch(
+                    "agent_monitor.agent_config.persona_preamble", return_value=""
+                ), patch.object(jobs, "_write_run"):
+                    os.environ.pop("PLAIN_CMD", None)
+                    os.environ.pop("METAHARNESS_CMD", None)
+                    run = jobs._run_cli_engine(run_id=f"{engine}_long", engine=engine, problem_id="p",
+                                               problem_text=problem, started=time.time(),
+                                               workspace=workspace, extra_env=extra_env)
+                calls = _fake_claude_calls(fake)
+                leftovers = sorted(path.name for path in workspace.iterdir())
+                self.assertEqual(run["status"], "finished", run.get("error"))
+                self.assertIn(problem, calls[0]["stdin"])
+                self.assertEqual(leftovers, ["proof.md"])  # the prompt file is gone
+
 
 class CodexFailureReportingTests(unittest.TestCase):
     def test_usage_limit_is_reported_cleanly_and_typed(self) -> None:
