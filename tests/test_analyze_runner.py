@@ -702,6 +702,36 @@ def test_guest_runs_use_guest_caps_and_skip_long_proofs(tmp_path, provider):
     assert all(seen["node"] != "lem:rep" for seen in server.seen)
 
 
+def guest_long_proof_analysis(workspace: Path, server) -> dict[str, str]:
+    """A guest analysis whose lem:rep proof needs more than one call (so it
+    was not checked); returns the analysis's route environment."""
+    long_proof = "\n\n".join(f"Step {index}. " + "word " * 400 for index in range(40))
+    text = PAPER.replace("\\begin{proof} By definition. \\end{proof}", "\\begin{proof}" + long_proof + "\\end{proof}")
+    sha = "e" * 40
+    fetcher = _FakeFetcher({f"https://raw.githubusercontent.com/o/r/{sha}/main.tex": text.encode()})
+    req = write_request(workspace, role="guest", route="sponsored_kimi", model="kimi-k3", sponsored=True,
+                        source={"kind": "url", "url": f"https://github.com/o/r/blob/{sha}/main.tex"})
+    env = sponsored_env(server, AGENT_MONITOR_GUEST="1")
+    run(workspace, req, env, fetcher=fetcher)
+    return env
+
+
+def test_a_guest_recheck_of_a_long_proof_is_refused_before_any_call(tmp_path, provider):
+    server = provider(default_script())
+    env = guest_long_proof_analysis(tmp_path, server)
+    assert node_meta(tmp_path, "lem:rep")["reason"] == runner.GUEST_TOO_LONG
+    receipt = (tmp_path / "analysis" / "receipt.json").read_bytes()
+    before = len(server.seen)
+    # A configuration refusal (exit 2): the console gives a sponsored start back.
+    with pytest.raises(runner.ConfigError, match="Too long for a guest check"):
+        recheck.run(tmp_path, "lem:rep", route_env=env, sink=lambda _event: None)
+    assert len(server.seen) == before
+    assert (tmp_path / "analysis" / "receipt.json").read_bytes() == receipt
+    # The console refuses it before the start, from the stored segments.
+    assert recheck.guest_refusal(tmp_path, "lem:rep") == runner.GUEST_TOO_LONG
+    assert recheck.guest_refusal(tmp_path, "lem:sum") == ""
+
+
 def test_members_check_long_proofs_in_parts(tmp_path, provider):
     long_proof = "\n\n".join(f"Step {index}. " + "word " * 400 for index in range(40))
     text = PAPER.replace("\\begin{proof} By definition. \\end{proof}", "\\begin{proof}" + long_proof + "\\end{proof}")

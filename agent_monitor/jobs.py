@@ -6341,6 +6341,7 @@ def start_analysis_recheck(
     """
     from agent_monitor import analyze_runs
     from agent_monitor.analyze import graph as analysis_graph
+    from agent_monitor.analyze import recheck as analyze_recheck
 
     handed_off = False
     gate_key: str | None = None
@@ -6402,6 +6403,10 @@ def start_analysis_recheck(
         model = _continuation_model(record, None)
         sponsored = str(record.get("credential_source") or "") == "sponsored_kimi"
         guest = bool(record.get("guest"))
+        too_long = analyze_recheck.guest_refusal(ws, node_id) if guest else ""
+        if too_long:
+            # As in the analysis; nothing is reserved or counted (the runner refuses it too).
+            raise analyze_runs.AnalyzeRequestError(too_long)
         if not sponsored and account_policy.member_analyze_sponsored_only(user):
             raise analyze_runs.AnalyzeRequestError(
                 "This analysis ran on an API key, which members can't use on this site; "
@@ -6423,8 +6428,6 @@ def start_analysis_recheck(
         if not sponsored and _is_kimi_model(model):
             configured["AGENT_MONITOR_KIMI_BASE_URL"] = _operator_kimi_base()
         env = _analyze_recheck_env(configured, model=model)
-        from agent_monitor.analyze import recheck as analyze_recheck
-
         # The runner's own time limit for this proof (sponsored and guest runs
         # check it in the bounded prompt budget's smaller parts).
         caps = analyze_recheck.node_caps(ws, node_id, bounded=sponsored or guest)

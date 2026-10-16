@@ -11,7 +11,8 @@ re-check to the receipt.  Other results keep their verdicts.  A re-check that
 yields no verdict (provider failure, empty or uninterpretable answer, time
 limit) keeps the previous result, logs the attempt and its calls in the
 receipt and fails; a stopped re-check changes nothing, and so does a proof
-longer than the run's call cap allows (refused before any call).
+longer than the run's call cap allows, or on a guest analysis one checked in
+more than one part (refused before any call).
 """
 from __future__ import annotations
 
@@ -72,14 +73,26 @@ def previous_results(analysis: Path, segments: Mapping[str, Any]) -> dict[str, d
     return results
 
 
+def _stored_node(workspace: Path, node_id: str) -> dict[str, Any]:
+    segments = _load_json(Path(workspace).resolve() / "analysis" / "segments.json") or {}
+    return next((item for item in segments.get("nodes") or [] if item.get("id") == node_id), {})
+
+
 def node_caps(workspace: Path, node_id: str, *, bounded: bool) -> dict[str, int]:
     """The caps a re-check of ``node_id`` runs with (``bounded``: a sponsored
     or guest run), so the console's watchdog follows its time limit."""
     from agent_monitor.runners import analyze_runner as runner
 
-    segments = _load_json(Path(workspace).resolve() / "analysis" / "segments.json") or {}
-    node = next((item for item in segments.get("nodes") or [] if item.get("id") == node_id), {})
-    return runner.recheck_caps(node, bounded=bounded)
+    return runner.recheck_caps(_stored_node(workspace, node_id), bounded=bounded)
+
+
+def guest_refusal(workspace: Path, node_id: str) -> str:
+    """Why a guest analysis refuses to re-check ``node_id`` ("" when it does
+    not): as in the analysis, its proof needs more than one call."""
+    from agent_monitor.runners import analyze_runner as runner
+
+    parts = runner.proof_parts(_stored_node(workspace, node_id), runner.prompts.BOUNDED_BUDGET)[1]
+    return runner.GUEST_TOO_LONG if len(parts) > 1 else ""
 
 
 def run(
@@ -122,8 +135,10 @@ def run(
                                caps_override=runner.recheck_caps(node, bounded=info.bounded),
                                cancel=threading.Event())
     parts = len(check.prompts_for(node, segments))
-    if parts > check.caps.max_calls and not info.guest:
-        # Nothing is sent (exit 2); a guest's long proof is refused as in an analysis.
+    # Refused before any call (exit 2), so a sponsored start comes back.
+    if info.guest and parts > 1:
+        raise runner.ConfigError(runner.GUEST_TOO_LONG)
+    if parts > check.caps.max_calls:
         raise runner.ConfigError(
             f"This proof is too long to re-check on its own: it is checked in {parts} parts, "
             f"and this analysis allows at most {check.caps.max_calls} calls")

@@ -45,11 +45,11 @@ missing one is a configuration error (exit 2), not a property of the
 manuscript.
 
 Exit status: 0 published, 2 configuration (request, route or credentials, or
-a re-check its caps cannot hold; nothing was sent to a model), 143 stopped
-by SIGTERM (results that had settled are still published), 1 any
-other failure (including when every attempted check failed: provider errors,
-empty answers, uninterpretable output or the time limit; the structure is
-still published).
+a re-check its caps or a guest's one-call limit cannot hold; nothing was sent
+to a model), 143 stopped by SIGTERM (results that had settled are still
+published), 1 any other failure (including when every attempted check failed:
+provider errors, empty answers, uninterpretable output or the time limit; the
+structure is still published).
 """
 from __future__ import annotations
 
@@ -92,6 +92,8 @@ LABEL = "Analyze"
 MAX_REPLY_BYTES = 64_000
 RECHECK_SECONDS = 900
 RECHECK_MAX_CALLS = 8
+# Guests check no proof that needs more than one call, in an analysis or a re-check.
+GUEST_TOO_LONG = "Too long for a guest check (sign in to check long proofs)"
 GITHUB_TOKEN_ENV = "AGENT_MONITOR_ANALYZE_GITHUB_TOKEN"
 _KIND_WORDS = "theorem|lemma|proposition|corollary|claim|definition|conjecture|remark|fact|observation"
 _FOCUS_RE = re.compile(rf"\b({_KIND_WORDS})s?\s+((?:[A-Z]\.)?\d+(?:\.\d+)*[a-z]?)", re.I)
@@ -629,7 +631,7 @@ class AnalysisRun:
         for node in ranked:
             prompt_list = prompts_of(node)
             if self.info.guest and len(prompt_list) > 1:
-                results[node["id"]] = _not_checked(node, "Too long for a guest check (sign in to check long proofs)")
+                results[node["id"]] = _not_checked(node, GUEST_TOO_LONG)
                 continue
             if planned_nodes >= self.caps.max_nodes:
                 results[node["id"]] = _not_checked(node, "Not checked: the result-check limit for this run was reached")

@@ -25,6 +25,7 @@ from agent_monitor.analyze import request as analysis_request  # noqa: E402
 from agent_monitor.runners import analyze_runner  # noqa: E402
 
 from test_analyze_runner import LONG_PAPER, PAPER, Provider, default_script, own_key_env  # noqa: E402
+from test_analyze_runner import guest_long_proof_analysis  # noqa: E402
 
 TOKEN = "short-lived-loopback-token-" + "y" * 20
 SECRET_PROOF = "Distributivity-unique-proof-marker-7731"
@@ -669,6 +670,35 @@ def test_a_recheck_that_reaches_no_model_gives_its_sponsored_start_back(gate, tm
     recheck = jobs._load_run_record(run_id)["analyze"]["recheck"]
     assert recheck["status"] == "failed" and "request.json is missing" in recheck["error"]
     assert not gate.holds(key) and gate.usage_today() == 0
+
+
+def test_a_guest_recheck_of_a_long_proof_gives_its_sponsored_start_back(gate, provider, tmp_path):
+    server = provider(default_script())
+    run_id = "analyze_recheck_guest_long_1"
+    workspace = jobs.workspace_dir(run_id)
+    env = guest_long_proof_analysis(workspace, server)
+    write_record(run_id, workspace, owner_id=41, guest=True, credential_source="sponsored_kimi", model="kimi-k3")
+    guest = {"id": 41, "guest": True}
+    released: list = []
+    # Refused at once, as in the analysis: nothing is reserved or counted.
+    with pytest.raises(analyze_runs.AnalyzeRequestError, match="Too long for a guest check"):
+        jobs.start_analysis_recheck(run_id, "lem:rep", user=guest, on_exit=lambda: released.append(1))
+    assert released == [1] and gate.usage_today() == 0
+    assert jobs.recheck_count(jobs._load_run_record(run_id)) == 0 and not jobs.run_is_active(run_id)
+    # The runner refuses it too, before any call (exit 2): the sponsored start comes back.
+    key = analyze_runs.recheck_key(run_id)
+    gate.reserve(key, run_id=run_id, guest=True)
+    assert (gate.usage_today(), gate.guest_usage_today()) == (1, 1)
+    before = len(server.seen)
+    (tmp_path / "server.env").touch()
+    jobs._execute_recheck(run_id=run_id, job_id="rg1", node_id="lem:rep", label="Lemma 2.1", workspace=workspace,
+                          env={**env, "AGENT_MONITOR_DATA_DIR": str(tmp_path / "data"),
+                               "AGENT_MONITOR_ENV_PATH": str(tmp_path / "server.env")},
+                          timeout=120, gate_key=key, on_exit=None, started_at=jobs._now(), model="kimi-k3")
+    recheck = jobs._load_run_record(run_id)["analyze"]["recheck"]
+    assert recheck["status"] == "failed" and recheck["error"] == analyze_runner.GUEST_TOO_LONG
+    assert len(server.seen) == before
+    assert not gate.holds(key) and (gate.usage_today(), gate.guest_usage_today()) == (0, 0)
 
 
 def test_recheck_refusals(tmp_path, provider):
