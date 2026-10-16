@@ -96,7 +96,7 @@ class CodexLauncherTimeoutTests(unittest.TestCase):
                 with self.assertRaisesRegex(ValueError, "timed out after 2s"):
                     lean_verify._codex_subscription_interaction(
                         workspace=workspace,
-                        user={"id": 7},
+                        user={"id": 7, "is_admin": True},
                         prompt="Revise the proof.",
                         lean_source=SOURCE,
                         edit=True,

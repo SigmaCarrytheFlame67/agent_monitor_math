@@ -164,6 +164,13 @@ class LongEffortTimeoutTests(unittest.TestCase):
 
     MODELS = {"codex_subscription": "gpt-6-astra", "claude_subscription": "opus"}
 
+    def setUp(self) -> None:
+        # The linked accounts are the administrator's: subscription routes
+        # bind only for operator accounts.
+        operator = patch("agent_monitor.auth.is_operator_account", return_value=True)
+        operator.start()
+        self.addCleanup(operator.stop)
+
     def tearDown(self) -> None:
         from agent_monitor import jobs
 

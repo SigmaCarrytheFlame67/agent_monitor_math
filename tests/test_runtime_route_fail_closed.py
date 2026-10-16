@@ -334,6 +334,12 @@ class SavedDefaultModelTests(unittest.TestCase):
     """A blank model (the Projects page's "Default account model") is the
     administrator's saved default model when the run's route can run it."""
 
+    def setUp(self) -> None:
+        # Subscription routes bind only for operator accounts.
+        operator = patch("agent_monitor.auth.is_operator_account", return_value=True)
+        operator.start()
+        self.addCleanup(operator.stop)
+
     def tearDown(self) -> None:
         with jobs._LOCK:
             jobs._JOBS.clear()
