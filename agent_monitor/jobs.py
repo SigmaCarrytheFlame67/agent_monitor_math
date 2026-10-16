@@ -6661,12 +6661,16 @@ def _book_recheck_usage(run_id: str, output: str, *, model: str | None) -> dict[
         usage = usage_ledger.cli_usage(raw, input_includes_cache=raw.get("input_excludes_cache") is not True)
         cost = None
         try:
+            # Priced as usage_ledger.record_usage does: the input includes the
+            # cache reads and writes (Claude's writes cost more than input).
             cached = int(usage.get("cached_input_tokens") or 0)
+            written = int(usage.get("cache_write_tokens") or 0)
             cost = _estimate_cost(
                 model,
-                input_tokens=max(0, int(usage.get("input_tokens") or 0) - cached),
+                input_tokens=max(0, int(usage.get("input_tokens") or 0) - cached - written),
                 output_tokens=int(usage.get("output_tokens") or 0),
                 cache_read=cached,
+                cache_write=written,
             )
         except Exception:  # noqa: BLE001 - a price estimate is best-effort
             cost = None

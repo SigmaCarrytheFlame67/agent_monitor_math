@@ -557,6 +557,28 @@ def test_recheck_calls_reach_the_usage_ledger(gate, provider, monkeypatch):
     assert booked["engine"][1] == 100 and record["totals"]["input_tokens"] == 100
 
 
+def test_recheck_usage_prices_cache_writes_at_their_own_rate(monkeypatch):
+    priced: list[dict] = []
+    monkeypatch.setattr(jobs, "_estimate_cost", lambda _model, **kwargs: priced.append(kwargs) or 0.01)
+
+    def book(usage: dict, model: str) -> dict:
+        output = json.dumps({"type": "turn.completed", "stage": "check-1", "usage": usage})
+        return jobs._book_recheck_usage("analyze_recheck_cache_1", output, model=model)
+
+    # Claude Code reports cache reads and writes apart from its input.
+    claude = book({"input_tokens": 10, "cache_read_tokens": 1000, "cached_input_tokens": 1000,
+                   "cache_write_tokens": 20000, "output_tokens": 500, "input_excludes_cache": True}, "claude-sonnet-5")
+    # Codex counts cached input inside its input and writes no cache.
+    codex = book({"input_tokens": 5000, "cached_input_tokens": 4000, "output_tokens": 300}, "gpt-6-sol")
+    assert priced == [
+        {"input_tokens": 10, "output_tokens": 500, "cache_read": 1000, "cache_write": 20000},
+        {"input_tokens": 1000, "output_tokens": 300, "cache_read": 4000, "cache_write": 0},
+    ]
+    # The tally keeps the input with its cache, as the run's totals do.
+    assert (claude["input_tokens"], codex["input_tokens"]) == (21010, 5000)
+    assert claude["cost_usd"] == codex["cost_usd"] == 0.01
+
+
 @pytest.mark.parametrize("node_id", ["lem:sum", "lem:rep"])
 def test_the_recheck_watchdog_follows_the_length_of_the_proof(gate, provider, monkeypatch, node_id):
     server = provider(default_script())
