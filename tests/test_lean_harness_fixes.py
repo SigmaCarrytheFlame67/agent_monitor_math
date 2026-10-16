@@ -640,5 +640,97 @@ class CodexAuditModelTests(_HarnessStateCleanup):
                 self.assertEqual(codex.call_args.kwargs["model"], expected)
 
 
+
+class ClaudeHarnessTranscriptTests(unittest.TestCase):
+    """r2-lean-harness-4: the Claude Code harness transcript reaches the UI."""
+
+    @staticmethod
+    def _summary(events: list[dict]) -> dict:
+        with tempfile.TemporaryDirectory() as tmp:
+            workspace = Path(tmp)
+            ldir = workspace / lean_verify.LEAN_DIRNAME
+            ldir.mkdir()
+            (ldir / "harness.log").write_text(
+                "\n".join(json.dumps(event) for event in events)
+                + "\n[agent-monitor] a plain runtime line\n",
+                encoding="utf-8",
+            )
+            lean_verify._write_cached(
+                workspace,
+                {"status": "verified", "harness": {"engine": "claude", "state": "finished"}},
+            )
+            return lean_verify.monitor_summary(workspace)
+
+    def test_claude_stream_json_becomes_messages_commands_and_usage(self) -> None:
+        summary = self._summary([
+            {"type": "system", "subtype": "init", "model": "claude-sonnet-5-5",
+             "tools": ["Bash", "Edit"], "session_id": "s"},
+            {"type": "assistant", "message": {"id": "m1", "role": "assistant", "content": [
+                {"type": "thinking", "thinking": "Check the file first."},
+                {"type": "text", "text": "I will run the checker."},
+                {"type": "tool_use", "id": "tu1", "name": "Bash",
+                 "input": {"command": "./check.sh", "description": "Check"}},
+            ], "usage": {"input_tokens": 10, "output_tokens": 5}}},
+            {"type": "user", "message": {"role": "user", "content": [
+                {"type": "tool_result", "tool_use_id": "tu1",
+                 "content": [{"type": "text", "text": "Proof.lean:3:2: error: unsolved goals"}],
+                 "is_error": True},
+            ]}},
+            {"type": "assistant", "message": {"id": "m2", "role": "assistant", "content": [
+                {"type": "tool_use", "id": "tu2", "name": "Edit",
+                 "input": {"file_path": "/w/lean/Proof.lean", "old_string": "a", "new_string": "b"}},
+            ]}},
+            {"type": "user", "message": {"role": "user", "content": [
+                {"type": "tool_result", "tool_use_id": "tu2", "content": "The file was updated."},
+            ]}},
+            {"type": "assistant", "message": {"id": "m3", "role": "assistant", "content": [
+                {"type": "text", "text": "Done: Proof.lean compiles with no sorry."},
+            ]}},
+            {"type": "result", "subtype": "success", "is_error": False,
+             "result": "Done: Proof.lean compiles with no sorry.", "total_cost_usd": 0.01,
+             "usage": {"input_tokens": 100, "cache_read_input_tokens": 400,
+                       "cache_creation_input_tokens": 50, "output_tokens": 60}},
+        ])
+
+        events = summary["conversation"]
+        kinds = [event["kind"] for event in events]
+        self.assertEqual(kinds[0], "runtime")
+        self.assertIn("a plain runtime line", events[0]["content"])
+        self.assertEqual(
+            kinds[1:],
+            ["reasoning", "agent_message", "command_execution", "command_execution", "agent_message"],
+        )
+        check, edit = events[3], events[4]
+        self.assertEqual(check["command"], "./check.sh")
+        self.assertIn("unsolved goals", check["content"])
+        self.assertEqual(check["status"], "failed")
+        self.assertEqual(edit["command"], "Edit /w/lean/Proof.lean")
+        self.assertEqual(edit["status"], "completed")
+        self.assertEqual(events[-1]["content"], "Done: Proof.lean compiles with no sorry.")
+        self.assertEqual(summary["conversation_event_count"], 6)
+        # The final total in the shape the monitor reads (input includes cache).
+        self.assertEqual(
+            summary["harness_usage"],
+            {"input_tokens": 550, "cached_input_tokens": 400,
+             "cache_write_input_tokens": 50, "output_tokens": 60},
+        )
+
+    def test_a_terminal_claude_error_is_shown_once(self) -> None:
+        summary = self._summary([
+            {"type": "assistant", "message": {"content": [
+                {"type": "text", "text": "Not logged in · Please run /login"}]}},
+            {"type": "result", "subtype": "success", "is_error": True,
+             "result": "Not logged in · Please run /login", "usage": {}},
+            {"type": "result", "subtype": "error_max_turns", "is_error": True,
+             "errors": ["Reached the maximum number of turns (40)"], "usage": {}},
+        ])
+
+        contents = [event["content"] for event in summary["conversation"][1:]]
+        self.assertEqual(
+            contents,
+            ["Not logged in · Please run /login", "Reached the maximum number of turns (40)"],
+        )
+
+
 if __name__ == "__main__":
     unittest.main()

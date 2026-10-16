@@ -813,12 +813,56 @@ def _write_cached(workspace: Path, value: dict[str, Any]) -> None:
             pass
 
 
-def _harness_conversation(workspace: Path, cached: dict[str, Any]) -> dict[str, Any]:
-    """Normalize a Codex-style JSONL harness log into bounded UI events.
+def _claude_tool_command(block: dict[str, Any]) -> str:
+    """One display line for a Claude tool call: its shell command, or tool and target."""
+    tool_input = block.get("input") if isinstance(block.get("input"), dict) else {}
+    if tool_input.get("command"):
+        return str(tool_input["command"])
+    target = (
+        tool_input.get("file_path") or tool_input.get("path") or tool_input.get("pattern") or ""
+    )
+    return f"{block.get('name') or 'Tool'} {target}".strip()
 
-    Started items are replaced by their completed form, so a command appears
-    once with its command, full captured output and exit state. Non-JSON stderr
-    is kept as runtime output instead of being silently discarded.
+
+def _claude_tool_output(content: Any) -> str:
+    """A Claude tool_result's content: a string, or a list of text blocks."""
+    if isinstance(content, list):
+        return "\n".join(
+            str(part.get("text") or "") for part in content if isinstance(part, dict)
+        ).strip()
+    return str(content or "")
+
+
+def _claude_usage(raw: dict[str, Any]) -> dict[str, int]:
+    """Claude's final usage in Codex's shape, the one the monitor reads.
+
+    Claude counts cache reads and writes apart from ``input_tokens``; Codex's
+    ``input_tokens`` includes the cached input.
+    """
+
+    def count(name: str) -> int:
+        try:
+            return int(raw.get(name) or 0)
+        except (TypeError, ValueError):
+            return 0
+
+    cache_read = count("cache_read_input_tokens")
+    cache_write = count("cache_creation_input_tokens")
+    return {
+        "input_tokens": count("input_tokens") + cache_read + cache_write,
+        "cached_input_tokens": cache_read,
+        "cache_write_input_tokens": cache_write,
+        "output_tokens": count("output_tokens"),
+    }
+
+
+def _harness_conversation(workspace: Path, cached: dict[str, Any]) -> dict[str, Any]:
+    """Normalize a harness log (Codex JSONL or Claude stream-json) into bounded UI events.
+
+    Started items are replaced by their completed form, and a Claude tool call
+    is paired with its result, so a command appears once with its command,
+    full captured output and exit state. Non-JSON stderr is kept as runtime
+    output instead of being silently discarded.
     """
     safe_log = _read_optional_workspace_text(
         workspace,
@@ -861,6 +905,55 @@ def _harness_conversation(workspace: Path, cached: dict[str, Any]) -> dict[str, 
                     usage[str(key)] = int(value or 0)
                 except (TypeError, ValueError):
                     continue
+        elif etype == "assistant" and isinstance(event.get("message"), dict):
+            # Claude Code stream-json (the claude and openclaude harnesses).
+            for block in event["message"].get("content") or []:
+                if not isinstance(block, dict):
+                    continue
+                kind = block.get("type")
+                if kind == "text" and str(block.get("text") or "").strip():
+                    item = {"type": "agent_message", "text": block["text"]}
+                elif kind == "thinking" and str(block.get("thinking") or "").strip():
+                    item = {"type": "reasoning", "text": block["thinking"]}
+                elif kind == "tool_use":
+                    # Its tool_result arrives in a later line, under this id.
+                    item = {
+                        "id": block.get("id"),
+                        "type": "command_execution",
+                        "command": _claude_tool_command(block),
+                        "status": "in_progress",
+                    }
+                else:
+                    continue
+                item_id = str(item.pop("id", None) or f"event_{serial}")
+                serial += 1
+                if item_id not in items:
+                    order.append(item_id)
+                items[item_id] = item
+        elif etype == "user" and isinstance(event.get("message"), dict):
+            for block in event["message"].get("content") or []:
+                if not isinstance(block, dict) or block.get("type") != "tool_result":
+                    continue
+                item = items.get(str(block.get("tool_use_id") or ""))
+                if item is not None:
+                    item["aggregated_output"] = _claude_tool_output(block.get("content"))
+                    item["status"] = "failed" if block.get("is_error") else "completed"
+        elif etype == "result":
+            # The final, authoritative total; per-message usage would double count.
+            if isinstance(event.get("usage"), dict) and event["usage"]:
+                usage = _claude_usage(event["usage"])
+            if event.get("is_error") or str(event.get("subtype") or "success") != "success":
+                errors = event.get("errors") if isinstance(event.get("errors"), list) else []
+                text = (
+                    str(event.get("result") or "").strip()
+                    or "; ".join(str(error).strip() for error in errors if str(error).strip())
+                    or str(event.get("subtype") or "Claude Code reported an error")
+                )
+                # The result usually repeats the last message: show it once.
+                if not any(str(item.get("text") or "") == text for item in items.values()):
+                    order.append(f"event_{serial}")
+                    items[f"event_{serial}"] = {"type": "error", "text": text, "status": "failed"}
+                    serial += 1
 
     conversation: list[dict[str, Any]] = []
     if runtime_lines:
