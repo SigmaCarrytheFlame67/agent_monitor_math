@@ -8264,7 +8264,14 @@ else{
 // ?run=<id> (the Projects page's "Open run") opens that run once the account
 // is known; opening it earlier was undone by the landing page below.
 function requestedRunId(){ const value=new URL(location.href).searchParams.get('run'); return value&&/^[A-Za-z0-9_.-]{1,160}$/.test(value)?value:''; }
-(async()=>{await loadUser();await Promise.all([loadEngines(),loadSettings()]);loadRuns();const requested=requestedRunId();if(requested){selectRun(requested,null);goSession('sandbox');}else goLanding();consumeCatalogueProblem();})();
+async function openRequestedRun(requested){
+  // Opened once: a reload, or deleting the run, must not open it again.
+  const url=new URL(location.href); url.searchParams.delete('run'); history.replaceState(history.state,'',url);
+  const found=await fetch('/api/run/'+encodeURIComponent(requested)).then(r=>r.ok).catch(()=>false);
+  if(found){ selectRun(requested,null); goSession('sandbox'); return; }
+  goLanding(); alert('This run is not available: it was deleted, or this account cannot open it.');
+}
+(async()=>{await loadUser();await Promise.all([loadEngines(),loadSettings()]);loadRuns();const requested=requestedRunId();if(requested)await openRequestedRun(requested);else goLanding();consumeCatalogueProblem();})();
 setInterval(()=>{ if(!document.hidden)loadRuns().catch(()=>{}); }, 5000);
 }
 </script>
