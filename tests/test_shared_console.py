@@ -471,3 +471,29 @@ def test_shares_withhold_provider_errors_from_stage_notes_old_links_included():
     assert 'OAuth' not in payload and 'reconnect' not in payload
     run = shares.console_view(stored)['run']
     assert run['error'] == shares._WITHHELD_ERROR and run['status'] == 'failed'
+
+
+def test_an_eight_character_run_id_is_replaced_without_touching_anything_else():
+    assert shares._neutral({'a': 'theorem x', 'p': 'test-run/x', 'test-run': ['test-run…']}, {'test-run'}) == {
+        'a': 'theorem x', 'p': 'shared/x', 'shared': ['shared…']}
+
+
+def test_shares_withhold_provider_errors_from_the_lean_record_old_links_included(tmp_path):
+    auth_error = ('Claude Code subscription authentication failed: OAuth session expired; '
+                  'reconnect Claude Code in Settings (the linked account needs a new sign-in) and retry.')
+    record = {'status': 'failed', 'lean': 'theorem t : True := trivial',
+              'notes': 'Claude Code harness failed before its result was recorded: ' + auth_error + ' Press Compile/Check.',
+              'log': 'lake env lean Proof.lean\nProof.lean:3:2: error: unknown identifier\n[agent-monitor] harness error: ' + auth_error,
+              'attempts': [{'action': 'verify', 'log': 'Your access token could not be refreshed. Please log out and sign in again.\nok'}],
+              'fidelity': {'audit': {'ok': False, 'error': 'Codex usage limit reached; try again later'},
+                           'findings': ['The sign in (3) flips; the log in base 2 is fine.']}}
+    view = shares._withhold_lean_errors(record)
+    dumped = json.dumps(view)
+    for leaked in ('OAuth', 'reconnect', 'access token', 'usage limit'):
+        assert leaked not in dumped, leaked
+    assert view['notes'] == shares._WITHHELD_STAGE
+    assert 'unknown identifier' in view['log'] and view['attempts'][0]['log'].endswith('\nok')
+    # Mathematics that merely sounds like an account message is kept.
+    assert view['fidelity']['findings'] == ['The sign in (3) flips; the log in base 2 is fine.']
+    stored = {'version': 3, 'title': 'P', 'proof': 'x', 'status': 'finished', 'lean_record': record}
+    assert 'OAuth' not in json.dumps(shares.shared_payload(stored))

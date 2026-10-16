@@ -196,6 +196,49 @@ _WITHHELD_STAGE = 'This stage stopped with an error. Its details are not include
 _STAGE_FAILURE = re.compile(r'\bfailed: ')
 
 
+# Lines about a provider account: its sign-in, limits, credit or keys. Only
+# phrases mathematics does not use ('the sign in (3)', 'log in base 2' stay).
+_ACCOUNT_LINE = re.compile(r'(?i)(?:subscription|oauth|reconnect|authenticat\w*|unauthori[sz]ed|sign-in|signed[- ]in|'
+                           r'sign in again|log[- ]?out|logged[- ]in|/login|usage limit|rate limit (?:reached|exceeded|hit)|'
+                           r'credit balance|quota|billing|api[ _-]?key|access token|refresh token)')
+_WITHHELD_LINE = '(a provider error; its details are not included in shared snapshots)'
+_HARNESS_FAILURE = re.compile(r'harness failed before its result was recorded:', re.I)
+
+
+def _withhold_account_lines(text):
+    if not isinstance(text, str):
+        return text
+    return '\n'.join(_WITHHELD_LINE if _ACCOUNT_LINE.search(line) else line for line in text.split('\n'))
+
+
+def _withhold_lean_errors(lean):
+    """The Lean record without provider errors: a harness or model call that
+    failed on the owner's account says so in notes, logs and the audit."""
+    if not isinstance(lean, dict):
+        return lean
+    lean = dict(lean)
+    if isinstance(lean.get('notes'), str):
+        lean['notes'] = (_WITHHELD_STAGE if _HARNESS_FAILURE.search(lean['notes'])
+                         else _withhold_account_lines(lean['notes']))
+    if isinstance(lean.get('log'), str):
+        lean['log'] = _withhold_account_lines(re.sub(r'(?m)^.*\[agent-monitor\] harness error:.*$', _WITHHELD_LINE, lean['log']))
+    if isinstance(lean.get('attempts'), list):
+        lean['attempts'] = [{**attempt, 'log': _withhold_account_lines(attempt['log'])}
+                            if isinstance(attempt, dict) and isinstance(attempt.get('log'), str) else attempt
+                            for attempt in lean['attempts']]
+    def scrub(value):
+        if isinstance(value, str):
+            return _withhold_account_lines(value)
+        if isinstance(value, dict):
+            return {key: scrub(entry) for key, entry in value.items()}
+        if isinstance(value, list):
+            return [scrub(entry) for entry in value]
+        return value
+    if isinstance(lean.get('fidelity'), dict):
+        lean['fidelity'] = scrub(lean['fidelity'])
+    return lean
+
+
 def _stage_detail(stage):
     """A stage chip's note without the provider error some notes quote."""
     detail = stage.get('detail')
@@ -207,7 +250,7 @@ def _stage_detail(stage):
     if cut:
         # 'Built structurally; semantic model analysis failed: <provider error>'
         return _redact(detail[:cut.start()] + 'failed (details are not included in shared snapshots).', 400)
-    return _redact(detail, 400)
+    return _redact(_withhold_account_lines(detail), 400)
 
 
 def _pipeline_view(state):
@@ -317,7 +360,7 @@ def _run_view(data, read):
         view['error'] = _WITHHELD_ERROR
     interruption = data.get('interruption') if isinstance(data.get('interruption'), dict) else {}
     if isinstance(interruption.get('reason'), str):
-        view['interruption'] = {'reason': _redact(interruption['reason'], 400)}
+        view['interruption'] = {'reason': _redact(_withhold_account_lines(interruption['reason']), 400)}
     view['edges'] = [{key: _text(edge.get(key), 240) for key in ('from', 'to', 'source', 'target', 'label', 'type')
                       if isinstance(edge.get(key), str)}
                      for edge in _items(data.get('edges'), 300) if isinstance(edge, dict)]
@@ -409,7 +452,7 @@ def _lean_record(read):
     citations = [_plain(item, depth=3) for item in _items(record.get('citations'), 60) if isinstance(item, dict)]
     if citations:
         out['citations'] = citations
-    return out
+    return _withhold_lean_errors(out)
 
 
 # Generic keys that never leave the owner's console, wherever they appear.
@@ -909,13 +952,14 @@ def _neutral(value, run_ids):
     if not run_ids:
         return value
     # A log line shortened inside the id keeps most of it: 'Write …/claude_adhoc_fa0fd944_c…'.
-    cut = re.compile('|'.join(re.escape(rid[:size]) + '(?=…|\\.\\.\\.)' for rid in run_ids
-                              for size in range(len(rid) - 1, max(8, len(rid) // 2) - 1, -1)))
+    prefixes = [re.escape(rid[:size]) + '(?=…|\\.\\.\\.)' for rid in run_ids
+                for size in range(len(rid) - 1, max(8, len(rid) // 2) - 1, -1)]
+    cut = re.compile('|'.join(prefixes)) if prefixes else None
     def walk(item):
         if isinstance(item, str):
             for rid in run_ids:
                 item = item.replace(rid, CONSOLE_RUN)
-            return cut.sub(CONSOLE_RUN, item)
+            return cut.sub(CONSOLE_RUN, item) if cut else item
         if isinstance(item, dict):
             return {walk(key): walk(entry) for key, entry in item.items()}
         if isinstance(item, list):
@@ -1037,7 +1081,8 @@ def console_view(snap):
     status = _text(snap.get('status'), 80)
     # Worked examples carry a descriptive status; the console knows run states.
     status = status if status in _RUN_STATES else 'finished'
-    lean = snap.get('lean_record') if isinstance(snap.get('lean_record'), dict) else None
+    # Re-filtered: links made before provider errors were withheld.
+    lean = _withhold_lean_errors(snap['lean_record']) if isinstance(snap.get('lean_record'), dict) else None
     if lean is None and isinstance(snap.get('lean_source'), str) and snap['lean_source'].strip():
         verification = snap.get('verification') if isinstance(snap.get('verification'), dict) else {}
         recorded = ' · '.join(_text(verification.get(key), 300) for key in ('version', 'result') if verification.get(key))
