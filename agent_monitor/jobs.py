@@ -1354,8 +1354,8 @@ def start_job(
 
     ``tool_free`` marks a proof from a project that has, or had, a member who
     is not an administrator: it runs only a tool-free engine on an API key,
-    without subagents (``account_policy.PROJECT_TOOL_FREE_ERROR``, a
-    PermissionError).
+    without subagents (``account_policy.PROJECT_TOOL_FREE_ERROR``, an
+    ``account_policy.ProjectPolicyError``).
     """
     from agent_monitor.engines_registry import all_engine_ids, list_engines, supported_models
 
@@ -1402,7 +1402,7 @@ def start_job(
     if tool_free:
         refusal = account_policy.project_run_error(engine, model=model, auth_route=auth_route)
         if refusal:
-            raise PermissionError(refusal)
+            raise account_policy.ProjectPolicyError(refusal)
         use_subagents = False
         subagent_model = None
         auth_route = "api_key"
@@ -5540,15 +5540,15 @@ def tool_free_run(run_id: str, run: dict[str, Any]) -> bool:
 def _tool_free_follow_up(
     run_id: str, run: dict[str, Any], engine: str, model: str | None
 ) -> bool:
-    """Whether a follow-up must stay tool-free; PermissionError when this
+    """Whether a follow-up must stay tool-free; ProjectPolicyError when this
     one would use a tool engine, a subscription or Max."""
     if not tool_free_run(run_id, run):
         return False
-    refusal = account_policy.project_run_error(
-        engine, model=model, auth_route=_route_from_record(run)
-    )
-    if refusal:
-        raise PermissionError(refusal)
+    # A follow-up keeps the run's recorded route; one never recorded would
+    # take the account's runtime, which may be a subscription.
+    route = _route_from_record(run)
+    if route != "api_key" or account_policy.project_run_error(engine, model=model, auth_route=route):
+        raise account_policy.ProjectPolicyError(account_policy.PROJECT_TOOL_FREE_ERROR)
     return True
 
 

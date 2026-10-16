@@ -3785,8 +3785,8 @@ class Handler(RunSharingMixin, ProjectsMixin, ResearchMixin, BaseHTTPRequestHand
                         # A refused start (no key, bad input) starts nothing.
                         self._release_member_run(user)
                         raise
-            except PermissionError as exc:
-                # The project's tool-free rule, or a membership just removed.
+            except account_policy.ProjectPolicyError as exc:
+                # The project's tool-free rule.
                 self._send(403, json.dumps({"error": str(exc)}, ensure_ascii=False))
                 return
             except Exception as exc:  # noqa: BLE001
@@ -3840,8 +3840,8 @@ class Handler(RunSharingMixin, ProjectsMixin, ResearchMixin, BaseHTTPRequestHand
                 self._release_member_run(user)
                 self._send(404, json.dumps({"error": str(exc)}))
                 return
-            except PermissionError as exc:
-                # The project's tool-free rule (account_policy).
+            except account_policy.ProjectPolicyError as exc:
+                # The project's tool-free rule.
                 self._release_member_run(user)
                 self._send(403, json.dumps({"error": str(exc)}))
                 return
@@ -3889,8 +3889,8 @@ class Handler(RunSharingMixin, ProjectsMixin, ResearchMixin, BaseHTTPRequestHand
                     user=user,
                     attachments=body.get("attachments"),
                 )
-            except PermissionError as exc:
-                # The project's tool-free rule (account_policy).
+            except account_policy.ProjectPolicyError as exc:
+                # The project's tool-free rule.
                 self._release_member_run(user)
                 self._send(403, json.dumps({"error": str(exc)}))
                 return

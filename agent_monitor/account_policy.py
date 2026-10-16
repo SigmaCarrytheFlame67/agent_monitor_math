@@ -327,6 +327,10 @@ PROJECT_TOOL_FREE_ERROR = (
 )
 
 
+class ProjectPolicyError(PermissionError):
+    """A run or follow-up refused by the project rule above (HTTP 403)."""
+
+
 def tool_free_engines() -> frozenset[str]:
     """The tool-free proof engines, less any an operator command replaces."""
     return frozenset(

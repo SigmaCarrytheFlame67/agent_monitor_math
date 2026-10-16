@@ -13,6 +13,7 @@ provider.
 
 from __future__ import annotations
 
+import errno
 import json
 import sqlite3
 from contextlib import closing
@@ -219,6 +220,67 @@ def test_follow_ups_of_a_collaborator_project_run_stay_tool_free(monkeypatch, tm
     assert jobs.continue_run(plain_run, user=admin)["status"] == "continuing"
     (follow_up,) = threads.launched
     assert follow_up["engine"] == "plain" and follow_up["extra_env"]["AGENT_MONITOR_USE_SUBAGENTS"] == "0"
+
+
+def test_a_tool_free_follow_up_never_takes_the_accounts_subscription(monkeypatch, tmp_path):
+    """A project run whose route was never recorded would continue on the
+    account's runtime: here the administrator's signed-in Claude Code."""
+    from agent_monitor import claude_login
+
+    _isolated_jobs(monkeypatch, tmp_path)
+    threads = _record_continuations(monkeypatch)
+    monkeypatch.setattr(jobs, "_user_extra_env", lambda *_args: {
+        "ANTHROPIC_API_KEY": ADMIN_KEY, "AGENT_MONITOR_ACCOUNT_RUNTIME": "claude",
+    })
+    monkeypatch.setattr(claude_login, "account_home", lambda user_id: tmp_path / f"claude_{user_id}")
+    monkeypatch.setattr(claude_login, "account_login_ready", lambda _home: True)
+    admin = auth.register(ADMIN_EMAIL, PASSWORD)
+    pid = _project_with_member(admin, auth.register("member@example.test", PASSWORD))
+    unpinned = _stored_run("plain_p_r1", admin, engine="plain", model="sonnet", requested_model="sonnet")
+    projects.attach(pid, admin["id"], unpinned, "Find a lemma")
+    assert jobs._route_from_record(jobs._load_run_record(unpinned)) is None
+
+    for follow_up in (
+        lambda: jobs.continue_run(unpinned, user=admin),
+        lambda: jobs.send_human_message(unpinned, "Keep going.", user=admin),
+    ):
+        with pytest.raises(account_policy.ProjectPolicyError) as refusal:
+            follow_up()
+        assert str(refusal.value) == account_policy.PROJECT_TOOL_FREE_ERROR
+    assert threads.launched == [] and jobs.list_chat(unpinned) == []
+
+
+def test_console_answers_only_the_project_rule_with_403(member_console, monkeypatch):
+    """A file the server may not open (EACCES, also a PermissionError) is a
+    server error, not the project rule."""
+    raised: dict = {"error": PermissionError(errno.EACCES, "Permission denied", "/srv/ansatze/runs")}
+
+    def fail(*_args, **_kwargs):
+        raise raised["error"]
+
+    for name in ("start_job", "continue_run", "send_human_message"):
+        monkeypatch.setattr(console.job_manager, name, fail)
+    monkeypatch.setattr(console.job_manager, "run_owner", lambda _run_id: None)
+    monkeypatch.setattr(console.job_manager, "run_is_active", lambda _run_id: False)
+    _admin, token = auth.login_and_create_session(ADMIN_EMAIL, PASSWORD)
+    cookie = {"Cookie": f"{auth.SESSION_COOKIE}={token}"}
+    with running_server() as port:
+        def statuses() -> list[int]:
+            return [
+                request(port, "POST", f"{APP_MOUNT}{path}", body=body, headers=cookie)[0]
+                for path, body in (
+                    ("/api/runs", {"engine": "plain", "model": "claude-opus-4-8", "problem_text": "Prove it."}),
+                    ("/api/runs/plain_r1/continue", {}),
+                    ("/api/runs/plain_r1/chat", {"message": "Keep going."}),
+                )
+            ]
+
+        os_error = statuses()
+        raised["error"] = account_policy.ProjectPolicyError(account_policy.PROJECT_TOOL_FREE_ERROR)
+        policy = statuses()
+
+    assert os_error == [400, 500, 500]
+    assert policy == [403, 403, 403]
 
 
 def test_console_starts_collaborator_project_runs_only_on_tool_free_engines(member_console, monkeypatch, tmp_path):
