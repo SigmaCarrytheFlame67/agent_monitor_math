@@ -12,7 +12,9 @@ import importlib.util
 import os
 import shlex
 import shutil
+import subprocess
 import sys
+import threading
 from pathlib import Path
 from typing import Any
 
@@ -195,7 +197,10 @@ CLI_ENGINES: dict[str, dict[str, Any]] = {
         # --json emits JSONL events (incl. per-turn token usage) instead of TTY text.
         # Landlock (workspace-write) denies all writes on this kernel, so run
         # unsandboxed — each run already gets its own workspace directory.
-        "default_cmd": 'codex exec --json --cd {workspace} --sandbox danger-full-access --skip-git-repo-check {model_args} {prompt}',
+        # "-" reads the prompt from stdin (see prompt_on_stdin): one argv
+        # string is limited to 128 KiB, and a prompt argument with a piped
+        # stdin makes Codex log "Reading additional input from stdin...".
+        "default_cmd": 'codex exec --json --cd {workspace} --sandbox danger-full-access --skip-git-repo-check {model_args} -',
         "install_hint": "npm install -g @openai/codex  (or: brew install --cask codex)",
     },
     "claude": {
@@ -613,6 +618,38 @@ def discard_prompt_file(workspace: Path) -> None:
         (Path(workspace) / PROMPT_FILENAME).unlink(missing_ok=True)
     except OSError:
         pass
+
+
+def prompt_on_stdin(engine_id: str, argv: list[str] | None) -> bool:
+    """True when a Codex command reads its task prompt from stdin (``-``).
+
+    An operator's ``CODEX_CMD`` may still pass ``{prompt}`` as an argument.
+    """
+    return engine_id == "codex" and bool(argv) and argv[-1] == "-"
+
+
+def send_prompt_on_stdin(proc: subprocess.Popen[str], prompt: str) -> None:
+    """Write the task prompt to ``proc``'s stdin and close it, from a thread.
+
+    The prompt can exceed the pipe buffer, and the caller must meanwhile read
+    the CLI's output and keep its stop and timeout checks running.
+    """
+    stdin = proc.stdin
+    if stdin is None:
+        return
+
+    def write() -> None:
+        try:
+            stdin.write(prompt)
+        except (OSError, ValueError):
+            pass  # The CLI exited early; its exit status says why.
+        finally:
+            try:
+                stdin.close()
+            except (OSError, ValueError):
+                pass
+
+    threading.Thread(target=write, name=f"cli-prompt-{proc.pid}", daemon=True).start()
 
 
 def build_cli_command(

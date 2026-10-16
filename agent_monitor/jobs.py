@@ -4311,7 +4311,9 @@ def _run_cli_engine(
         CLI_ENGINES,
         build_cli_command,
         discard_prompt_file,
+        prompt_on_stdin,
         proof_prompt,
+        send_prompt_on_stdin,
     )
 
     spec = CLI_ENGINES.get(engine) or {}
@@ -4596,7 +4598,8 @@ def _run_cli_engine(
 
         config_args = codex_config_args(env, requested_model)
         if config_args:
-            insert_at = len(argv) - 1 if argv and argv[-1] == prompt else len(argv)
+            # Before the prompt, or the "-" that reads it from stdin.
+            insert_at = len(argv) - 1 if argv and argv[-1] in {prompt, "-"} else len(argv)
             argv[insert_at:insert_at] = config_args
     if engine == "openclaude" and max_iterations is not None:
         env["AGENT_MONITOR_OPENCLAUDE_MAX_TURNS"] = str(
@@ -4660,12 +4663,13 @@ def _run_cli_engine(
     timeout_s = _cli_timeout_seconds(engine, env)
     stop_ev = _stop_event(run_id)
     buf: list[str] = []
+    stdin_prompt = prompt_on_stdin(engine, argv)
     try:
         proc = subprocess.Popen(
             argv,
             cwd=str(workspace),
             env=env,
-            stdin=subprocess.DEVNULL,
+            stdin=subprocess.PIPE if stdin_prompt else subprocess.DEVNULL,
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
             text=True,
@@ -4691,6 +4695,8 @@ def _run_cli_engine(
         return _flush(f"failed to launch: {exc}", status="failed", error=reason)
 
     _register_proc(run_id, proc)
+    if stdin_prompt:
+        send_prompt_on_stdin(proc, prompt)
     import queue
     import signal
     import threading

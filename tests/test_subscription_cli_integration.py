@@ -14,6 +14,7 @@ import stat
 import sys
 import tempfile
 import textwrap
+import threading
 import time
 import unittest
 from contextlib import redirect_stdout
@@ -21,8 +22,9 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
 
-from agent_monitor import auto_pipeline, cgm_max, claude_login, jobs, lean_verify, proof_graph
+from agent_monitor import auto_pipeline, cgm_max, claude_login, jobs, lean_verify, proof_graph, run_tuning
 from agent_monitor.cli_events import CLIEventParser
+from agent_monitor.engines_registry import CLI_ENGINES, build_cli_command
 from agent_monitor.runners import analyze_runner, claude_backend, codex_backend
 from agent_monitor.runners import math_harness_runner as harness
 
@@ -399,6 +401,190 @@ class ClaudePromptOnStdinTests(unittest.TestCase):
                 self.assertEqual(run["status"], "finished", run.get("error"))
                 self.assertIn(problem, calls[0]["stdin"])
                 self.assertEqual(leftovers, ["proof.md"])  # the prompt file is gone
+
+
+def _fake_codex_cli(bin_dir: Path, *, proof: str = "") -> Path:
+    """A stand-in ``codex`` with codex-cli 0.160's prompt handling: ``-`` reads
+    the prompt from stdin, and a prompt argument with a stdin that is not a
+    terminal also reads stdin, saying so on stderr.  It appends its argv and
+    prompt to ``calls.jsonl`` beside it, writes ``proof`` (if any) to
+    ./proof.md and prints a completed turn."""
+    bin_dir.mkdir(parents=True, exist_ok=True)
+    fake = bin_dir / "codex"
+    fake.write_text(textwrap.dedent(f"""\
+        #!{sys.executable}
+        import json, sys
+        prompt = sys.argv[-1]
+        if prompt == "-":
+            prompt = sys.stdin.read()
+        elif not sys.stdin.isatty():
+            sys.stderr.write("Reading additional input from stdin...\\n")
+            sys.stdin.read()
+        with open({str(bin_dir / "calls.jsonl")!r}, "a", encoding="utf-8") as calls:
+            calls.write(json.dumps({{"argv": sys.argv[1:], "prompt": prompt}}) + "\\n")
+        if {proof!r}:
+            with open("proof.md", "w", encoding="utf-8") as artifact:
+                artifact.write({proof!r})
+        for event in (
+            {{"type": "thread.started", "thread_id": "01a12cde-0000-7000-8000-000000000001"}},
+            {{"type": "turn.started"}},
+            {{"type": "item.completed", "item": {{"id": "item_0", "type": "agent_message", "text": "Done."}}}},
+            {{"type": "turn.completed", "usage": {{"input_tokens": 3, "output_tokens": 1}}}},
+        ):
+            print(json.dumps(event), flush=True)
+        """), encoding="utf-8")
+    fake.chmod(fake.stat().st_mode | stat.S_IXUSR)
+    return fake
+
+
+def _fake_codex_calls(fake: Path) -> list[dict]:
+    return _fake_claude_calls(fake)  # the same calls.jsonl beside the fake
+
+
+class CodexPromptOnStdinTests(unittest.TestCase):
+    """Native Codex reads its prompt from stdin (``-``), as the CGM backend
+    does: one argv string is limited to 128 KiB, and a prompt argument with a
+    piped stdin makes Codex print "Reading additional input from stdin..."."""
+
+    PROOF = "# Claim\n\nThe statement holds.\n\n## Proof\n\n" + "Each step follows. " * 30 + "\n"
+
+    def _native_run(self, problem: str, *, command: str = "", **extra_env: str) -> tuple[dict, list[dict]]:
+        """Run the codex engine on a fake ``codex``, with the registry's own
+        command or an operator's ``CODEX_CMD`` (``{codex}`` names the fake)."""
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            workspace = root / "workspace"
+            workspace.mkdir()
+            fake = _fake_codex_cli(root / "bin", proof=self.PROOF)
+            env = {"PATH": os.pathsep.join([str(fake.parent), "/usr/bin", "/bin"]),
+                   "CODEX_HOME": str(root / "codex-home"), **extra_env}
+            # HOME keeps the registry's ~/.npm-global/bin (a real install) off PATH.
+            with patch.dict(os.environ, {"HOME": str(root)}), patch(
+                "agent_monitor.engines_registry.which_tool", return_value=str(fake)
+            ), patch("agent_monitor.agent_config.persona_preamble", return_value=""), patch.object(jobs, "_write_run"):
+                os.environ.pop("CODEX_CMD", None)
+                if command:
+                    os.environ["CODEX_CMD"] = command.replace("{codex}", str(fake))
+                run = jobs._run_cli_engine(run_id="codex_stdin", engine="codex", problem_id="p",
+                                           problem_text=problem, started=time.time(), workspace=workspace,
+                                           extra_env=env, requested_model="gpt-5.6-sol")
+            calls = _fake_codex_calls(fake)
+        return run, calls
+
+    def test_a_long_problem_reaches_codex_through_the_native_engine(self) -> None:
+        problem = "设 n 为偶数，证明：" * 9_000  # 90,000 characters, 270 KB of UTF-8
+        run, calls = self._native_run(problem)
+        self.assertEqual(run["status"], "finished", run.get("error"))
+        self.assertEqual(len(calls), 1)
+        self.assertIn(problem, calls[0]["prompt"])
+        self.assertEqual(calls[0]["argv"][-1], "-")
+        self.assertFalse(any("证明" in arg for arg in calls[0]["argv"]))
+
+    def test_the_run_log_has_no_stdin_notice_and_tuning_precedes_the_prompt(self) -> None:
+        run, calls = self._native_run(
+            "Prove that 1 = 1.",
+            **{run_tuning.REASONING_ENV: "xhigh", run_tuning.SPEED_ENV: "fast"},
+        )
+        self.assertEqual(run["status"], "finished", run.get("error"))
+        self.assertNotIn("Reading additional input", json.dumps(run))
+        argv = calls[0]["argv"]
+        self.assertIn("Prove that 1 = 1.", calls[0]["prompt"])
+        self.assertEqual(argv[-1], "-")
+        self.assertEqual(argv[argv.index("--model") + 1], "gpt-5.6-sol")
+        self.assertLess(argv.index('model_reasoning_effort="xhigh"'), len(argv) - 1)
+        self.assertLess(argv.index('service_tier="fast"'), len(argv) - 1)
+        self.assertEqual(run["runner_result"]["command"][-1], "-")
+
+    def test_an_operator_command_with_a_prompt_argument_keeps_working(self) -> None:
+        run, calls = self._native_run(
+            "Prove that 2 = 2.",
+            command="{codex} exec --json {model_args} {prompt}",
+            **{run_tuning.REASONING_ENV: "xhigh"},
+        )
+        self.assertEqual(run["status"], "finished", run.get("error"))
+        argv = calls[0]["argv"]
+        self.assertIn("Prove that 2 = 2.", argv[-1])
+        self.assertIn("Prove that 2 = 2.", calls[0]["prompt"])
+        self.assertLess(argv.index('model_reasoning_effort="xhigh"'), len(argv) - 1)
+
+    def test_the_formal_lean_codex_harness_reads_its_prompt_from_stdin(self) -> None:
+        # A full-size harness prompt in a 4-byte script is over 128 KiB.
+        problem, informal = "𝔽" * 6_000, "𝔽" * 30_000
+        prompt = (lean_verify.HARNESS_TASK + "\n\nPROBLEM:\n" + problem
+                  + "\n\nINFORMAL PROOF:\n" + informal)
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp).resolve()
+            workspace = root / "run"
+            ldir = workspace / lean_verify.LEAN_DIRNAME
+            ldir.mkdir(parents=True)
+            fake = _fake_codex_cli(root / "bin")
+            env = {"PATH": os.pathsep.join([str(fake.parent), "/usr/bin", "/bin"]), "HOME": str(root),
+                   run_tuning.REASONING_ENV: "xhigh"}
+            with patch("agent_monitor.engines_registry._cli_available",
+                       return_value=(True, CLI_ENGINES["codex"]["default_cmd"])):
+                argv = build_cli_command("codex", prompt=prompt, workspace=ldir, problem_file=ldir / "TASK.md")
+            finished: dict = {}
+            token = lean_verify._reserve_formal_operation(workspace, "harness/codex")
+            self.addCleanup(lean_verify._release_formal_operation, workspace, token)
+            with patch.object(lean_verify, "_harness_finish", side_effect=lambda **kwargs: finished.update(kwargs) or {}):
+                lean_verify._launch_harness(
+                    workspace=workspace, ldir=ldir, argv=argv, engine="codex", spec=CLI_ENGINES["codex"],
+                    selected_model="gpt-5.6-sol", prompt=prompt, harness_env=env,
+                    auth_route="codex_subscription", lean_src="", initial_fingerprint=None,
+                    user={"id": 17}, run_record=None, problem=problem, informal=informal,
+                    audit=False, run_id=None, _operation_token=token,
+                )
+                for thread in threading.enumerate():
+                    if thread.name == f"lean-harness-codex-{workspace.name}":
+                        thread.join(15)
+            calls = _fake_codex_calls(fake)
+        self.assertEqual(len(calls), 1, finished.get("log"))
+        self.assertEqual(calls[0]["prompt"], prompt)
+        argv = calls[0]["argv"]
+        self.assertEqual(argv[-1], "-")
+        self.assertEqual(argv[argv.index("--model") + 1], "gpt-5.6-sol")
+        self.assertLess(argv.index('model_reasoning_effort="xhigh"'), len(argv) - 1)
+        self.assertEqual(finished["exit_code"], 0)
+        self.assertNotIn("Reading additional input", finished["log"])
+
+    def test_a_formal_lean_codex_question_sends_its_prompt_on_stdin(self) -> None:
+        calls: list[dict] = []
+
+        def codex(command, *, input, **_kwargs):
+            calls.append({"argv": list(command), "input": input})
+            stdout = "\n".join(json.dumps(event) for event in (
+                {"type": "item.completed", "item": {"id": "a", "type": "agent_message", "text": "It compiles."}},
+                {"type": "turn.completed", "usage": {"input_tokens": 5, "output_tokens": 2}},
+            ))
+            return codex_backend.subprocess.CompletedProcess(command, 0, stdout, "")
+
+        with tempfile.TemporaryDirectory() as tmp:
+            workspace = Path(tmp)
+            (workspace / lean_verify.LEAN_DIRNAME).mkdir()
+            with (
+                patch("agent_monitor.auth.is_operator_account", return_value=True),
+                patch("agent_monitor.codex_login.account_login_ready", return_value=True),
+                patch("agent_monitor.codex_login.account_home", return_value=workspace / "codex"),
+                patch("agent_monitor.engines_registry._cli_available",
+                      return_value=(True, CLI_ENGINES["codex"]["default_cmd"])),
+                patch.object(lean_verify, "_harness_env", return_value={"PATH": "/usr/bin:/bin"}),
+                patch.object(codex_backend, "_run_codex_process", side_effect=codex),
+            ):
+                result = lean_verify._codex_subscription_interaction(
+                    workspace=workspace,
+                    user={"id": 17, "is_admin": True},
+                    run_record={"owner_id": 17, "auth_route": "codex_subscription"},
+                    prompt="Why does line 3 need simp?",
+                    lean_source="theorem main : True := by trivial\n",
+                    edit=False,
+                    model="gpt-5.6-sol",
+                )
+        self.assertEqual(result["answer"], "It compiles.")
+        argv, sent = calls[0]["argv"], calls[0]["input"]
+        self.assertEqual(argv[-1], "-")
+        self.assertEqual(argv[argv.index("--model") + 1], "gpt-5.6-sol")
+        self.assertTrue(sent.startswith("Why does line 3 need simp?"))
+        self.assertFalse(any("line 3" in arg for arg in argv))
 
 
 class CodexFailureReportingTests(unittest.TestCase):

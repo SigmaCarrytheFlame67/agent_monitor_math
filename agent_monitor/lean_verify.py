@@ -5000,7 +5000,7 @@ def _codex_subscription_interaction(
         raise ValueError(_MEMBER_LEAN_AGENT_ERROR)
     from agent_monitor import codex_login
     from agent_monitor.cli_events import CLIEventParser
-    from agent_monitor.engines_registry import build_cli_command
+    from agent_monitor.engines_registry import build_cli_command, prompt_on_stdin
     from agent_monitor.jobs import _route_from_record
     from agent_monitor.settings import codex_enabled
 
@@ -5070,7 +5070,7 @@ def _codex_subscription_interaction(
             # so a timeout must stop native Codex and its tools directly.
             proc = _run_codex_process(
                 argv,
-                input="",
+                input=task_prompt if prompt_on_stdin("codex", argv) else "",
                 timeout=timeout_s,
                 env=env,
                 cwd=str(isolated),
@@ -7119,6 +7119,7 @@ def _selected_harness_argv(
     env: dict[str, str] | None = None,
 ) -> list[str]:
     """Bind the Formal Codex process to the exact selected model."""
+    from agent_monitor.engines_registry import prompt_on_stdin
     from agent_monitor.jobs import _is_kimi_model
 
     if engine != "codex":
@@ -7140,19 +7141,26 @@ def _selected_harness_argv(
             prompt,
         ]
 
+    def prompt_index(argv: list[str], what: str) -> int:
+        # The "-" that reads the prompt from stdin, or an operator command's
+        # prompt argument.
+        if prompt_on_stdin(engine, argv):
+            return len(argv) - 1
+        try:
+            return argv.index(prompt)
+        except ValueError as exc:
+            raise ValueError(
+                f"Codex harness command cannot bind {what} before its prompt"
+            ) from exc
+
     def with_tuning(argv: list[str]) -> list[str]:
         from agent_monitor.run_tuning import codex_config_args
 
         args = codex_config_args(env or {}, selected)
         if not args:
             return argv
-        try:
-            prompt_index = argv.index(prompt)
-        except ValueError as exc:
-            raise ValueError(
-                "Codex harness command cannot bind run tuning before its prompt"
-            ) from exc
-        argv[prompt_index:prompt_index] = args
+        index = prompt_index(argv, "run tuning")
+        argv[index:index] = args
         return argv
 
     argv = list(default)
@@ -7165,13 +7173,8 @@ def _selected_harness_argv(
         if token.startswith("--model="):
             argv[index] = f"--model={selected}"
             return with_tuning(argv)
-    try:
-        prompt_index = argv.index(prompt)
-    except ValueError as exc:
-        raise ValueError(
-            "Codex harness command cannot bind the selected model before its prompt"
-        ) from exc
-    argv[prompt_index:prompt_index] = ["--model", selected]
+    index = prompt_index(argv, "the selected model")
+    argv[index:index] = ["--model", selected]
     return with_tuning(argv)
 
 
@@ -7499,6 +7502,7 @@ def _launch_harness(
             "workspace": workspace,
             "ldir": ldir,
             "argv": argv,
+            "prompt": prompt,
             "engine": engine,
             "label": label,
             "user": user,
@@ -7630,8 +7634,15 @@ def _harness_worker(
     base: dict[str, Any],
     initial_fingerprint: dict[str, Any] | None,
     audit: bool,
+    prompt: str = "",
 ) -> dict[str, Any]:
-    """Run the agent to its end and return the persisted result."""
+    """Run the agent to its end and return the persisted result.
+
+    ``prompt`` goes on stdin when the command reads it from there (Codex's
+    ``-``); other commands carry their prompt themselves.
+    """
+    from agent_monitor.engines_registry import prompt_on_stdin, send_prompt_on_stdin
+
     key = _harness_key(workspace)
     timeout_s = int(os.environ.get("AGENT_MONITOR_LEAN_HARNESS_TIMEOUT", "1200"))
     log_path = ldir / "harness.log"
@@ -7663,6 +7674,7 @@ def _harness_worker(
     from agent_monitor.jobs import _ensure_codex_auth, _is_kimi_model, _remove_codex_api_home
 
     codex_api_home = None
+    stdin_prompt = prompt_on_stdin(engine, argv)
     try:
         if (
             engine == "codex"
@@ -7678,7 +7690,7 @@ def _harness_worker(
             argv,
             cwd=str(ldir),
             env=env,
-            stdin=subprocess.DEVNULL,
+            stdin=subprocess.PIPE if stdin_prompt else subprocess.DEVNULL,
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
             text=True,
@@ -7717,6 +7729,8 @@ def _harness_worker(
         if job is not None:
             job["proc"] = proc
         stop_requested = bool((job or {}).get("stopping"))
+    if stdin_prompt:
+        send_prompt_on_stdin(proc, prompt)
     if stop_requested:
         # Stop was pressed while the agent was still launching.
         _terminate_process_group(proc)

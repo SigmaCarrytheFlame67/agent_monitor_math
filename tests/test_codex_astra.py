@@ -68,7 +68,8 @@ def test_codex_command_passes_selected_model_explicitly(
     assert argv is not None
     model_index = argv.index("--model")
     assert argv[model_index + 1] == "gpt-6-astra"
-    assert argv[-1] == "prove it"
+    # The prompt goes on stdin ("-"), never in argv.
+    assert argv[-1] == "-" and "prove it" not in argv
     assert spec["default_cmd"].count("{model_args}") == 1
 
 
@@ -90,7 +91,7 @@ def test_codex_command_omits_model_flag_without_selection(
 
     assert argv is not None
     assert "--model" not in argv
-    assert argv[-1] == "prove it"
+    assert argv[-1] == "-" and "prove it" not in argv
 
 
 def test_latest_chat_alias_and_reasoning_models_are_routed_correctly(monkeypatch, tmp_path):
