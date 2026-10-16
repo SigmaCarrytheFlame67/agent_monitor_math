@@ -2467,6 +2467,21 @@ class Handler(RunSharingMixin, ProjectsMixin, ResearchMixin, BaseHTTPRequestHand
             return _is_operator_user(user)
         return owner == user.get("id") or _is_operator_user(user)
 
+    def _deny_run_change(self, run_id: str, user: dict, change: str) -> bool:
+        """Refuse (403) a change to a run that ``user`` may only read.
+
+        Project membership grants read access only: changing a run, or
+        spending compute and credentials on it, stays with its owner and the
+        operator.  Callers check ``_owns_run`` (404) first.
+        """
+        if self._is_run_owner(run_id, user):
+            return False
+        self._send(
+            403,
+            json.dumps({"error": f"Only the member who started this run can {change}."}),
+        )
+        return True
+
     def _send_bytes(self, code: int, body: bytes, ctype: str, *, download_name: str | None = None, headers: dict[str, str] | None = None):
         self.send_response(code)
         self.send_header("Content-Type", ctype)
@@ -3323,8 +3338,10 @@ class Handler(RunSharingMixin, ProjectsMixin, ResearchMixin, BaseHTTPRequestHand
 
         if path.startswith("/api/run/") and path.endswith("/analysis/recheck"):
             rid = path.removeprefix("/api/run/").removesuffix("/analysis/recheck")
-            if not rid or "/" in rid or not self._is_run_owner(rid, user):
+            if not rid or "/" in rid or not self._owns_run(rid, user):
                 self._send(404, json.dumps({"error": "run not found"}))
+                return
+            if self._deny_run_change(rid, user, "re-check its results"):
                 return
             self._start_analysis_recheck(rid, body, user)
             return
@@ -3361,6 +3378,8 @@ class Handler(RunSharingMixin, ProjectsMixin, ResearchMixin, BaseHTTPRequestHand
             ws = _workspace_for_run(run_id)
             if action != "file" or not separator or not ws or not self._owns_run(run_id, user):
                 self._send(404, json.dumps({"error": "workspace not found"}))
+                return
+            if self._deny_run_change(run_id, user, "edit its proof"):
                 return
             rel = str(body.get("path") or "proof.md").strip()
             if rel != "proof.md":
@@ -3443,6 +3462,8 @@ class Handler(RunSharingMixin, ProjectsMixin, ResearchMixin, BaseHTTPRequestHand
             if not ws or not self._owns_run(rid, user):
                 self._send(404, json.dumps({"error": "run not found"}))
                 return
+            if self._deny_run_change(rid, user, "rebuild its graphs"):
+                return
             run_record = _derived_record_for(rid)
             kind = str(body.get("kind") or "informal").strip().lower()
             model = str(body.get("model") or "").strip() or None
@@ -3520,6 +3541,8 @@ class Handler(RunSharingMixin, ProjectsMixin, ResearchMixin, BaseHTTPRequestHand
             ws = _workspace_for_run(rid)
             if not ws or not self._owns_run(rid, user):
                 self._send(404, json.dumps({"error": "run not found"}))
+                return
+            if self._deny_run_change(rid, user, "run Lean actions on it"):
                 return
             action = str(body.get("action") or "verify").strip().lower()
             model = str(body.get("model") or "").strip() or None
@@ -3750,6 +3773,8 @@ class Handler(RunSharingMixin, ProjectsMixin, ResearchMixin, BaseHTTPRequestHand
             if not run_id or "/" in run_id or not self._owns_run(run_id, user):
                 self._send(404, json.dumps({"error": "not found"}))
                 return
+            if self._deny_run_change(run_id, user, "stop it"):
+                return
             try:
                 result = job_manager.stop_run(run_id)
             except Exception as exc:  # noqa: BLE001
@@ -3764,6 +3789,8 @@ class Handler(RunSharingMixin, ProjectsMixin, ResearchMixin, BaseHTTPRequestHand
             run_id = path.removeprefix("/api/runs/").removesuffix("/continue")
             if not run_id or "/" in run_id or not self._owns_run(run_id, user):
                 self._send(404, json.dumps({"error": "not found"}))
+                return
+            if self._deny_run_change(run_id, user, "continue it"):
                 return
             if self._refuse_analyze_continuation(run_id):
                 return
@@ -3808,6 +3835,8 @@ class Handler(RunSharingMixin, ProjectsMixin, ResearchMixin, BaseHTTPRequestHand
             run_id = path.removeprefix("/api/runs/").removesuffix("/chat")
             if not run_id or "/" in run_id or not self._owns_run(run_id, user):
                 self._send(404, json.dumps({"error": "not found"}))
+                return
+            if self._deny_run_change(run_id, user, "send it feedback"):
                 return
             if self._refuse_analyze_continuation(run_id):
                 return
@@ -4168,8 +4197,7 @@ class Handler(RunSharingMixin, ProjectsMixin, ResearchMixin, BaseHTTPRequestHand
             if not run_id or "/" in run_id or not self._owns_run(run_id, user):
                 self._send(404, json.dumps({"error": "not found"}))
                 return
-            if not self._is_run_owner(run_id, user):
-                self._send(403, json.dumps({"error": "Only the member who started this run can delete it."}))
+            if self._deny_run_change(run_id, user, "delete it"):
                 return
             try:
                 result = job_manager.delete_run(run_id)

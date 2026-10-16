@@ -182,6 +182,7 @@ class ClaudeFormalHitlRouteTests(unittest.TestCase):
         handler._resolve_path = lambda: "/api/run/claude-demo/lean_verify"
         handler._require_user = lambda _path: {"id": 7, "is_admin": False}
         handler._owns_run = lambda _rid, _user: True
+        handler._is_run_owner = lambda _rid, _user: True
         sent: list[tuple[int, dict]] = []
         handler._send = lambda code, payload, *args, **kwargs: sent.append(
             (code, json.loads(payload))

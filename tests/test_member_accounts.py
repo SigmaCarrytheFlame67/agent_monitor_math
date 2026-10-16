@@ -360,6 +360,7 @@ def test_member_cannot_connect_subscriptions_or_start_the_formal_harness(
     workspace.mkdir()
     monkeypatch.setattr(console, "_workspace_for_run", lambda _run_id: workspace)
     monkeypatch.setattr(console.Handler, "_owns_run", lambda _self, _run_id, _user: True)
+    monkeypatch.setattr(console.Handler, "_is_run_owner", lambda _self, _run_id, _user: True)
     with running_server() as port:
         _user, cookie = _member(port)
         codex = request(port, "POST", f"{APP_MOUNT}/api/settings/codex/login/start",
@@ -915,6 +916,7 @@ def test_public_mode_member_settings_hide_operator_endpoints_copied_into_its_row
 
 def test_continue_on_a_running_run_uses_no_member_start(member_console, monkeypatch):
     monkeypatch.setattr(console.Handler, "_owns_run", lambda _self, _run_id, _user: True)
+    monkeypatch.setattr(console.Handler, "_is_run_owner", lambda _self, _run_id, _user: True)
     calls: list = []
     active = {"value": True}
     monkeypatch.setattr(console.job_manager, "run_is_active", lambda _run_id: active["value"])

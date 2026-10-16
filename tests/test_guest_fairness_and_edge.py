@@ -171,6 +171,7 @@ def test_guest_derived_actions_are_limited_per_client(
     workspace.mkdir()
     monkeypatch.setattr(console, "_workspace_for_run", lambda _rid: workspace)
     monkeypatch.setattr(console.Handler, "_owns_run", lambda _s, _r, _u: True)
+    monkeypatch.setattr(console.Handler, "_is_run_owner", lambda _s, _r, _u: True)
     monkeypatch.setattr(console, "_run_record_for", lambda _rid: {"engine": "kimi", "guest": True})
     monkeypatch.setattr(proof_graph, "generate", lambda **kw: {"kind": kw["kind"], "graph": {"nodes": []}})
     monkeypatch.setenv("AGENT_MONITOR_GUEST_DERIVED_ACTIONS_PER_CLIENT_PER_HOUR", "1")
@@ -202,6 +203,7 @@ def test_background_formal_refresh_counts_against_guest_derived_concurrency(
         workspaces[name].mkdir()
     monkeypatch.setattr(console, "_workspace_for_run", lambda rid: workspaces.get(rid))
     monkeypatch.setattr(console.Handler, "_owns_run", lambda _s, _r, _u: True)
+    monkeypatch.setattr(console.Handler, "_is_run_owner", lambda _s, _r, _u: True)
     monkeypatch.setattr(console, "_run_record_for", lambda rid: {"run_id": rid, "engine": "kimi", "guest": True})
     monkeypatch.setattr(
         lean_verify, "compile_or_check", lambda **_kw: {"status": "toolchain_missing"}
@@ -269,6 +271,7 @@ def test_guest_slot_is_released_when_the_background_refresh_fails(
     workspace.mkdir()
     monkeypatch.setattr(console, "_workspace_for_run", lambda _rid: workspace)
     monkeypatch.setattr(console.Handler, "_owns_run", lambda _s, _r, _u: True)
+    monkeypatch.setattr(console.Handler, "_is_run_owner", lambda _s, _r, _u: True)
     monkeypatch.setattr(console, "_run_record_for", lambda rid: {"run_id": rid, "engine": "kimi"})
     monkeypatch.setattr(lean_verify, "compile_or_check", lambda **_kw: {"status": "failed"})
 

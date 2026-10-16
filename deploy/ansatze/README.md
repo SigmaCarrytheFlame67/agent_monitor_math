@@ -367,8 +367,10 @@ untrusted. `agent_monitor/account_policy.py` and the run path enforce:
   and the login request is refused (HTTP 403) with the same text. Settings
   never probes a member's Claude or Codex login, a member's runtime is always
   the API route, and member runs use it without subagents. A member cannot
-  continue a run billed to a subscription or to Max (for example the
-  administrator's run in a shared project); the refusal says so.
+  continue a run billed to a subscription or to Max (for example one it
+  started before this policy); the refusal says so. In a shared project,
+  members can open each other's runs, but only the member who started a run
+  can continue, stop or change it.
 - **Sign-ins stored before this policy.** A member who linked Claude or Codex
   before members were limited keeps that sign-in on the server until it is
   removed. It is never used for the member's runs. Settings shows a **Remove

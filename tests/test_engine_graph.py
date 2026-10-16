@@ -1082,6 +1082,7 @@ class EngineGraphRouteTests(unittest.TestCase):
         handler._resolve_path = Mock(return_value=path.split("?", 1)[0])
         handler._require_user = Mock(return_value={"id": 7, "is_admin": False})
         handler._owns_run = Mock(return_value=True)
+        handler._is_run_owner = Mock(return_value=True)
         handler._send = Mock()
         return handler
 

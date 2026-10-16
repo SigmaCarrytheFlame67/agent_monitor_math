@@ -1787,6 +1787,9 @@ def _owned_guest_run(monkeypatch, workspace: Path, owner: dict) -> None:
         console.Handler, "_owns_run", lambda _self, _run_id, _user: True
     )
     monkeypatch.setattr(
+        console.Handler, "_is_run_owner", lambda _self, _run_id, _user: True
+    )
+    monkeypatch.setattr(
         console,
         "_run_record_for",
         lambda _run_id: {
