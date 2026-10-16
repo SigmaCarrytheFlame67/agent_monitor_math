@@ -39,7 +39,7 @@ def main() -> int:
         print("Claude Code received an empty proof prompt", file=sys.stderr, flush=True)
         return 2
     try:
-        claude_proof(
+        result = claude_proof(
             prompt,
             Path.cwd(),
             model=os.environ.get("AGENT_MONITOR_CLAUDE_MODEL"),
@@ -48,6 +48,8 @@ def main() -> int:
     except ClaudeBackendError as exc:
         print(f"[agent-monitor] {exc}", file=sys.stderr, flush=True)
         return 1
+    if getattr(result, "unchanged", False):
+        print("[agent-monitor] Claude Code left Proof.lean unchanged", file=sys.stderr, flush=True)
     return 0
 
 

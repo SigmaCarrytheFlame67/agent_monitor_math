@@ -120,6 +120,8 @@ class ClaudeProofResult(ClaudeResult):
     """A successful agentic run with a fresh root proof artifact."""
 
     artifact: Path
+    # A Formal harness's Claude turn that left a valid Proof.lean as it was.
+    unchanged: bool = False
 
 
 @dataclass(frozen=True)
@@ -1224,7 +1226,12 @@ def claude_proof(
         stdin_text=prompt,
     )
     _require_requested_model(result, selected_model)
-    artifact = _fresh_artifact(
+    previous = before.get("Proof.lean")
+    current = _artifact_signature(cwd / "Proof.lean", minimum=minimum) if lean_mode else None
+    # A Formal harness may find the stored Proof.lean already right. Its
+    # caller re-checks the file and keeps an earlier result only if Lean agrees.
+    unchanged = previous is not None and current is not None and current[:2] == previous[:2]
+    artifact = cwd / "Proof.lean" if unchanged else _fresh_artifact(
         cwd,
         before,
         names=names,
@@ -1245,4 +1252,5 @@ def claude_proof(
         events=result.events,
         terminal_event=result.terminal_event,
         artifact=artifact,
+        unchanged=unchanged,
     )
