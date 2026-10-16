@@ -2,13 +2,27 @@ from __future__ import annotations
 
 import io
 import json
+import os
 import tempfile
+import threading
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
 
 from agent_monitor import claude_login, console_server, settings
+
+# Stands in for `claude auth login`: prints the sign-in URL, waits for the
+# code on stdin, then stores a credential the way the real CLI does.
+FAKE_LOGIN_CLI = """#!/bin/sh
+[ "$1 $2" = "auth login" ] || exit 2
+echo "https://claude.ai/oauth/authorize?code=true&state=test"
+echo "Paste code here if prompted > "
+read -r code || exit 1
+[ -n "$code" ] || exit 1
+printf '{"claudeAiOauth":{"refreshToken":"test-refresh","refreshTokenExpiresAt":4102444800000}}' \\
+  > "$CLAUDE_CONFIG_DIR/.credentials.json"
+"""
 
 
 class ClaudeLoginTests(unittest.TestCase):
@@ -170,11 +184,122 @@ class ClaudeLoginTests(unittest.TestCase):
             ):
                 claude_login.mark_reauth_required(home)
                 with claude_login._lock:
-                    claude_login._states[7] = {"status": "running", "running": True}
+                    claude_login._states[7] = {"status": "running", "running": True, "proc": proc}
                 claude_login._reader(proc, home, 7)
             self.assertFalse((home / claude_login._REAUTH_MARKER_NAME).exists())
             with claude_login._lock:
                 self.assertEqual(claude_login._states[7]["status"], "success")
+
+    def test_a_replaced_login_reader_leaves_the_newer_login_alone(self) -> None:
+        # Cancel and Connect again while the old CLI is still being read: the
+        # old reader must not touch the new login or its reauth marker.
+        with tempfile.TemporaryDirectory() as tmp:
+            home = Path(tmp)
+            (home / ".credentials.json").write_text(
+                json.dumps(
+                    {
+                        "claudeAiOauth": {
+                            "refreshToken": "secret",
+                            "refreshTokenExpiresAt": 1_900_000_000_000,
+                        }
+                    }
+                ),
+                encoding="utf-8",
+            )
+            newer = SimpleNamespace(stdin=io.StringIO())
+            replaced = {"status": "running", "running": True, "url": None, "awaiting_code": False, "proc": newer}
+
+            def old_output():
+                yield "https://claude.ai/oauth/authorize?state=first\n"
+                with claude_login._lock:
+                    claude_login._states[7] = dict(replaced)
+                yield "https://claude.ai/oauth/authorize?state=stale\n"
+
+            old = SimpleNamespace(stdout=old_output(), wait=lambda timeout: 0)
+            with (
+                patch.object(
+                    claude_login,
+                    "_auth_status",
+                    return_value={"loggedIn": True, "authMethod": "oauth"},
+                ),
+                patch.object(claude_login.time, "time", return_value=1_800_000_000.0),
+            ):
+                claude_login.mark_reauth_required(home)
+                with claude_login._lock:
+                    claude_login._states[7] = {"status": "running", "running": True, "proc": old}
+                claude_login._reader(old, home, 7)
+            self.assertTrue((home / claude_login._REAUTH_MARKER_NAME).exists())
+            with claude_login._lock:
+                state = claude_login._states[7]
+                self.assertIs(state.get("proc"), newer)
+                self.assertEqual({k: v for k, v in state.items() if k != "proc"},
+                                 {k: v for k, v in replaced.items() if k != "proc"})
+
+    def test_connect_cancel_connect_keeps_the_second_sign_in_usable(self) -> None:
+        user_id = 71
+        with tempfile.TemporaryDirectory() as tmp:
+            fake = Path(tmp) / "claude"
+            fake.write_text(FAKE_LOGIN_CLI, encoding="utf-8")
+            fake.chmod(0o755)
+            checking = threading.Event()
+            release = threading.Event()
+
+            def auth_status(home, *, force=False):
+                # The reader's check after its CLI exits stands for the slow
+                # `claude auth status` run, and holds there until released.
+                if force and not checking.is_set():
+                    checking.set()
+                    release.wait(10)
+                signed_in = (Path(home) / ".credentials.json").is_file()
+                return {"loggedIn": signed_in, "authMethod": "claude.ai" if signed_in else "none"}
+
+            def login_proc():
+                with claude_login._lock:
+                    return claude_login._states[user_id].get("proc")
+
+            def reader_threads():
+                return {t for t in threading.enumerate() if t.name == f"claude-login-{user_id}"}
+
+            procs = []
+            # The readers must finish while the fakes are patched in: the real
+            # lookup would find an installed `claude`.
+            with (
+                patch.dict(os.environ, {"AGENT_MONITOR_CLAUDE_ACCOUNT_HOME": str(Path(tmp) / "homes")}),
+                patch.object(claude_login, "claude_binary", return_value=str(fake)),
+                patch.object(claude_login, "_auth_status", side_effect=auth_status),
+            ):
+                try:
+                    claude_login.start_login(user_id)
+                    procs.append(login_proc())
+                    old_readers = reader_threads()
+                    self.assertEqual(claude_login.cancel_login(user_id)["status"], "cancelled")
+                    self.assertTrue(checking.wait(10))
+                    self.assertEqual(claude_login.start_login(user_id)["status"], "running")
+                    procs.append(login_proc())
+                    new_readers = reader_threads() - old_readers
+                    release.set()
+                    for thread in old_readers:
+                        thread.join(10)
+                    with claude_login._lock:
+                        state = dict(claude_login._states[user_id])
+                    self.assertEqual(state["status"], "running")
+                    self.assertIs(state.get("proc"), procs[1])
+                    self.assertNotIn("error", state)
+                    claude_login.submit_code(user_id, "one-time-code")
+                    self.assertEqual(procs[1].wait(10), 0)
+                    for thread in new_readers:
+                        thread.join(10)
+                    final = claude_login.status(user_id)
+                finally:
+                    release.set()
+                    for proc in procs:
+                        if proc is not None and proc.poll() is None:
+                            proc.kill()
+                    for thread in reader_threads():
+                        thread.join(10)
+            self.assertEqual(final["status"], "success")
+            self.assertTrue(final["connected"])
+            self.assertEqual(procs[0].returncode, -15)
 
     def test_expired_refresh_token_is_fail_closed_without_model_probe(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

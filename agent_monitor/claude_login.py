@@ -398,13 +398,15 @@ def poll_login(user_id: int) -> dict[str, Any]:
 
 
 def _reader(proc: subprocess.Popen[str], home: Path, user_id: int) -> None:
+    # The user's state belongs to this process only while it holds ``proc``:
+    # a cancel or logout drops it, and a newer sign-in replaces it.
     try:
         assert proc.stdout is not None
         for raw_line in proc.stdout:
             line = _ANSI_RE.sub("", raw_line.rstrip("\r\n"))
             with _lock:
                 st = _state_for(user_id)
-                if st.get("status") != "running":
+                if st.get("proc") is not proc or st.get("status") != "running":
                     break
                 urls = _URL_RE.findall(line)
                 if urls:
@@ -422,16 +424,15 @@ def _reader(proc: subprocess.Popen[str], home: Path, user_id: int) -> None:
 
     auth = _auth_status(home, force=True)
     connected = _account_state(home, auth, ignore_marker=True)["connected"]
-    if rc == 0 and connected:
-        clear_reauth_required(home)
     with _lock:
         st = _state_for(user_id)
-        if st.get("status") == "cancelled":
+        if st.get("status") == "cancelled" or st.get("proc") is not proc:
             return
         st.pop("proc", None)
         st["running"] = False
         st["awaiting_code"] = False
         if rc == 0 and connected:
+            clear_reauth_required(home)
             st["status"] = "success"
             st.pop("error", None)
         else:
