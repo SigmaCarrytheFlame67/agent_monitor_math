@@ -105,6 +105,8 @@ CLAUDE_2_1_301_LIMIT_TEXTS = (
     "Opus 5.5 requires usage credits. Run /usage-credits to turn them on or /model to switch models.",
     "Your organization is out of usage credits. Contact your admin to add more.",
     "You’re out of usage credits · resets 5pm",  # typographic apostrophe
+    "API Error: Usage credits required for 1M context · run /usage-credits to turn them on "
+    "(they take effect in a new session), or /model to switch to standard context",
 )
 # The same category, but a capacity problem that the next call may not hit.
 CLAUDE_TRANSIENT_RATE_LIMIT_TEXTS = (
@@ -247,7 +249,7 @@ class ClaudeCode2_1_296FailureTests(unittest.TestCase):
     def test_the_typed_limit_on_the_result_is_a_usage_limit_whatever_its_wording(self) -> None:
         # 2.1.301 copies the refusal's typed cause onto the result; the text
         # is only the fallback and may change.
-        for typed in ("usage_limit_reached", "model_requires_usage_credits"):
+        for typed in ("usage_limit_reached", "model_requires_usage_credits", "long_context_credits_required"):
             with self.subTest(api_error=typed):
                 events = _synthetic_failure("Weekly allowance used · back Monday", "rate_limit", status=429)
                 events = (*events[:-1], {**events[-1], "api_error": typed})

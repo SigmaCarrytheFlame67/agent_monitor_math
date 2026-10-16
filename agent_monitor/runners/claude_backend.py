@@ -75,7 +75,8 @@ _API_ERROR_KINDS = {
 }
 # How Claude Code (2.1.301) words a plan or usage-credit limit, which it files
 # under ``rate_limit`` too: the CLI's own list of opening words, plus the
-# per-model credit refusal ("Fable 5 requires usage credits.").
+# per-model and long-context credit refusals ("Fable 5 requires usage
+# credits.", "API Error: Usage credits required for 1M context").
 _USAGE_LIMIT_PREFIXES = (
     "You've hit your",
     "You've reached your",
@@ -89,14 +90,17 @@ _USAGE_LIMIT_PREFIXES = (
     "Your usage allocation has been disabled by your admin",
     "Your group's usage limit is set to $0",
     "Fable 5 requires usage credits",
+    "API Error: Usage credits required for 1M context",
 )
 _REQUIRES_USAGE_CREDITS = re.compile(
     r"^(?:Fable|Haiku|Mythos|Opus|Sonnet)(?: [^·\n]{1,40})? requires usage credits\."
 )
 # 2.1.301 also copies the refusal's typed cause onto the result
-# (``api_error``); among the ``rate_limit`` refusals only these two mean the
+# (``api_error``); among the ``rate_limit`` refusals only these mean the
 # account's own limit.
-_USAGE_LIMIT_API_ERRORS = frozenset({"usage_limit_reached", "model_requires_usage_credits"})
+_USAGE_LIMIT_API_ERRORS = frozenset(
+    {"usage_limit_reached", "model_requires_usage_credits", "long_context_credits_required"}
+)
 
 
 @dataclass(frozen=True)
