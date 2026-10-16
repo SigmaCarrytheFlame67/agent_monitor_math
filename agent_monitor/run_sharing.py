@@ -195,11 +195,11 @@ def _pipeline_view(state):
         stage = state['stages'].get(name)
         if not isinstance(stage, dict):
             continue
-        entry = {key: _text(stage.get(key), 80) for key in ('status', 'updated_at') if isinstance(stage.get(key), str)}
+        entry = {key: _text(stage.get(key), 80) for key in ('status', 'outcome', 'updated_at') if isinstance(stage.get(key), str)}
         if isinstance(stage.get('detail'), str):
             entry['detail'] = _redact(stage['detail'], 400)
         result = stage.get('result') if isinstance(stage.get('result'), dict) else {}
-        kept = {key: _text(result.get(key), 80) for key in ('status', 'scope') if isinstance(result.get(key), str)}
+        kept = {key: _text(result.get(key), 80) for key in ('status', 'scope', 'outcome', 'proof_lean') if isinstance(result.get(key), str)}
         if kept:
             entry['result'] = kept
         stages[name] = entry
@@ -493,7 +493,7 @@ def _graph_record(mode, value=None, *, sanitized=None):
         out['reason'] = reason
         return out
     out['status'] = _text(value.get('status'), 80) or 'recorded'
-    for key in ('model', 'dependency_basis'):
+    for key in ('model', 'dependency_basis', 'generated_at'):
         if isinstance(value.get(key), str):
             out[key] = _text(value[key], 160)
     selection = value.get('selection')
@@ -575,7 +575,8 @@ def _graph_modes(workspace, data, read, result, *, safe_workspace):
         graphs['outline'] = _graph_record('outline', outline)
 
     lean = result['lean_source']
-    formal = _json_read(read, 'lean_proof_graph.json')
+    # As in the console: without Lean source there is no Formal graph.
+    formal = _json_read(read, 'lean_proof_graph.json') if lean else {}
     if lean:
         source_hashes = {hashlib.sha256(lean.encode()).hexdigest(), lean_kg.normalized_source_sha256(lean)}
         cached_source_hash = formal.get('source_sha256')
@@ -779,7 +780,12 @@ def _analysis_snapshot(run_id, data, read, graph):
         # a report written before cross-references were resolved reads as text too.
         'proof': tex_text_refs(read('analysis/report.md'), analysis_graph.ref_labels(manuscript_graph)
                                if manuscript_graph else None),
-        'agents': [],
+        # Steps by name and numbers only: verifier replies quote the manuscript.
+        'agents': [{'label': _text(item.get('stage_name') or item.get('name'), 200), 'status': _text(item.get('status'), 80),
+                    'model': _text(item.get('model'), 160), 'summary': '(not included in shared analysis snapshots)',
+                    **({'trace_id': _text(item['trace_id'], 200)} if isinstance(item.get('trace_id'), str) else {}),
+                    **_agent_details(item)}
+                   for item in (data.get('agents') or [])[:100] if isinstance(item, dict)],
         'informal_graph': shared_graph if shared_graph else {'title': '', 'nodes': [], 'edges': []},
         'formal_graph': graph('lean_proof_graph.json'), 'lean_source': lean,
         'analysis': {
@@ -847,6 +853,7 @@ def snapshot(run_id, data):
             'status': _text(item.get('status'), 80),
             'model': _text(item.get('model'), 160),
             'summary': _agent_output(item),
+            **({'trace_id': _text(item['trace_id'], 200)} if isinstance(item.get('trace_id'), str) else {}),
             **_agent_details(item),
         })
     result = {
@@ -899,7 +906,8 @@ def _console_graph(record, kind, **extra):
     graph = record.get('graph') if isinstance(record.get('graph'), dict) else {}
     if not graph.get('nodes'):
         return {'status': 'none', 'kind': kind, **({'reason': record['reason']} if isinstance(record.get('reason'), str) else {})}
-    out = {key: record[key] for key in ('status', 'graph_role', 'model', 'dependency_basis', 'selection', 'counts', 'truncated', 'provenance')
+    out = {key: record[key] for key in ('status', 'graph_role', 'model', 'dependency_basis', 'selection', 'counts', 'truncated', 'provenance',
+                                        'generated_at')
            if key in record}
     out.update({'kind': kind, 'graph': graph, **extra})
     return out
@@ -954,7 +962,9 @@ def _lean_summary(record):
         attempts.append({'action': attempt.get('action') or 'check', 'status': status,
                          'sorry_count': attempt.get('sorry_count') or 0, 'ok': bool(check.get('ok'))})
     count = record.get('attempt_count') if isinstance(record.get('attempt_count'), int) else len(attempts)
-    return {'status': record.get('status') or 'none', 'has_result': bool(record.get('lean')),
+    source = record.get('lean') if isinstance(record.get('lean'), str) else ''
+    return {'status': record.get('status') or 'none', 'has_result': bool(source),
+            'lean_lines': len(source.splitlines()), 'sorry_count': record.get('sorry_count') or 0,
             'attempt_count': max(count, len(attempts)), 'attempts': attempts, 'chat': [], 'harness_running': False,
             'generated_at': record.get('generated_at') or ''}
 
@@ -1017,7 +1027,8 @@ def console_view(snap):
             # rules (tool output withheld, server paths and costs removed).
             tool = bool(_TOOL_LABEL.search(str(agent.get('label') or '')))
             output = _agent_output({'summary': output, 'role': 'tool' if tool else ''})
-        step = agent.get('id') if not legacy and str(agent.get('id') or '').startswith(CONSOLE_RUN + '::') else f'{CONSOLE_RUN}::{index}'
+        recorded = str(agent.get('trace_id') or agent.get('id') or '')
+        step = recorded if not legacy and recorded.startswith(CONSOLE_RUN + '::') else f'{CONSOLE_RUN}::{index}'
         entry.update({'trace_id': step, 'call_seq': agent.get('call_seq') or index,
                       'stage_name': agent.get('stage_name') or agent.get('label') or 'Research step',
                       'output': output, 'model': agent.get('model') or ''})
@@ -1029,7 +1040,7 @@ def console_view(snap):
         'problem_text': problem, 'problem_preview': title, 'problem_id': CONSOLE_RUN,
         'problems': [{'text': problem, 'source': 'user'}] if problem else [],
         'agents': agents, 'edges': saved.get('edges') or [],
-        'totals': saved.get('totals') or {}, 'live': saved.get('live') or {},
+        'totals': saved.get('totals') or ({'agents': len(agents)} if legacy else {}), 'live': saved.get('live') or {},
         'lean_verification': _lean_summary(lean),
         'auto_pipeline': saved.get('auto_pipeline'), 'proof_coverage': saved.get('proof_coverage'),
         'shared': True,
@@ -1079,6 +1090,12 @@ def console_view(snap):
     if analysis:
         from agent_monitor import jobs
 
+        summary = run['analyze'].get('summary') if isinstance(run['analyze'].get('summary'), dict) else {}
+        if summary and not isinstance(summary.get('coverage'), dict):
+            # Summaries saved before coverage was recorded: checked results
+            # are those with any verdict other than "not checked".
+            checked = sum(int(summary.get(key) or 0) for key in ('checked', 'gap', 'error', 'unclear'))
+            run['analyze']['summary'] = {**summary, 'coverage': {'checked': checked, 'total': checked}}
         # The console's own closing note for an analysis, from its summary.
         chat = [{'role': 'system', 'content': jobs._analyze_chat_summary(run, status)}]
     return {
@@ -1147,7 +1164,8 @@ _THIRD_PARTY = (
 _EXTERNAL_ASSET = re.compile(r'<(?:script|link)\b[^>]*\b(?:src|href)="(?:https?:)?//', re.I)
 _INLINE_SCRIPT = re.compile(r'<script(?![^>]*\ssrc\s*=)[^>]*>(.*?)</script>', re.S | re.I)
 # Console tabs, plus the graph names links from the earlier viewer used.
-SHARED_VIEWS = ('sandbox', 'lean', 'monitor', 'dag', 'explore', 'facts', 'outline', 'formal', 'compiler', 'manuscript')
+SHARED_VIEWS = ('sandbox', 'lean', 'monitor', 'dag', 'explore', 'facts', 'outline', 'formal', 'compiler', 'manuscript',
+                'informal', 'agents', 'proof')
 
 
 def shared_page(html, *, base, data_url, monitor_url='', view='', inject_base=None):

@@ -133,7 +133,9 @@ def test_missing_fact_artifacts_and_forged_compiler_cache_fail_closed(workspace)
     result = shares.snapshot('run-1', {'engine': 'math_harness'})
     assert result['graphs']['facts']['status'] == result['graphs']['explore']['status'] == 'unavailable'
     assert result['graphs']['compiler']['status'] == 'unavailable'
-    assert result['graphs']['formal']['graph']['nodes'][0]['id'] == 'decl'
+    # Like the console, a run without Lean source has no Formal graph, so a
+    # stored graph cannot stand in for one.
+    assert result['graphs']['formal']['status'] == 'unavailable' and not result['graphs']['formal']['graph']['nodes']
 
 
 def test_only_prevalidated_source_bound_compiler_metadata_is_projected(workspace, monkeypatch):
@@ -235,7 +237,9 @@ def test_analysis_manuscript_keeps_verdicts_without_source_notes(workspace):
     assert node['verdict'] == 'checked' and node['main_result'] is True
     assert node['status'] == 'checked by a model verifier'
     assert result['graphs']['outline']['graph'] == result['graphs']['manuscript']['graph']
-    assert result['agents'] == [] and 'PRIVATE' not in json.dumps(result)
+    # Steps by name only: no transcript text.
+    assert [agent['summary'] for agent in result['agents']] == ['(not included in shared analysis snapshots)']
+    assert 'PRIVATE' not in json.dumps(result)
     assert result['graphs']['facts']['status'] == result['graphs']['explore']['status'] == 'unavailable'
 
 
