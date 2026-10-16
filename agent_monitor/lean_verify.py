@@ -4862,6 +4862,28 @@ _MEMBER_LEAN_AGENT_ERROR = (
 )
 
 
+def _codex_route_model(
+    user: dict[str, Any] | None,
+    run_record: dict[str, Any] | None,
+    model: str | None,
+) -> str | None:
+    """``model`` when the run's Codex subscription route offers it, else None.
+
+    A cached Lean model may be an API or Claude model, or a generic label
+    such as "Codex subscription"; binding it to ``codex --model`` would fail.
+    """
+    selected = str(model or "").strip()
+    if not selected:
+        return None
+    try:
+        options = harness_model_options(user, run_record)
+    except (OSError, ValueError):
+        return None
+    if options.get("auth_route") != "codex_subscription":
+        return None
+    return selected if selected in (options.get("models") or []) else None
+
+
 def _codex_subscription_interaction(
     *,
     workspace: Path,
@@ -4870,12 +4892,14 @@ def _codex_subscription_interaction(
     prompt: str,
     lean_source: str,
     edit: bool,
+    model: str | None = None,
 ) -> dict[str, Any]:
     """Run the user's OAuth Codex in a disposable copy of lean/.
 
     The real workspace is never exposed to an unsandboxed intervention call;
     edited source is copied back only after this function returns and the
-    normal checker path validates it.
+    normal checker path validates it. ``model`` (with the run's tuning) is
+    passed to Codex; without one the CLI uses its default model.
     """
     if (user or {}).get("guest") or (run_record or {}).get("guest"):
         raise ValueError("Guest Formal actions use the included Kimi service")
@@ -4932,12 +4956,22 @@ def _codex_subscription_interaction(
             raise ValueError("Codex CLI is not installed on this server")
         from agent_monitor.runners.codex_backend import _run_codex_process
 
+        selected_model = str(model or "").strip() or None
         env = _harness_env(
             "codex",
             user,
+            model=selected_model,
             run_record=run_record,
             auth_route="codex_subscription" if recorded_route else None,
         )
+        if selected_model:
+            argv = _selected_harness_argv(
+                engine="codex",
+                model=selected_model,
+                prompt=task_prompt,
+                default=argv,
+                env=env,
+            )
         try:
             # Its own process group: the npm launcher cannot forward SIGKILL,
             # so a timeout must stop native Codex and its tools directly.
@@ -4960,7 +4994,7 @@ def _codex_subscription_interaction(
                 failure=(parser.terminal_error or "") if parser.terminal_status == "failed" else "",
             )
         usage_ledger.record_usage(
-            model=str(parser.usage.get("model") or "codex"),
+            model=str(parser.usage.get("model") or selected_model or "codex"),
             usage=usage_ledger.cli_usage(parser.usage, input_includes_cache=True),
             billing="subscription",
         )
@@ -4987,7 +5021,9 @@ def _codex_subscription_interaction(
         return {
             "answer": answer[:6000],
             "lean": revised,
-            "model": str(parser.usage.get("model") or "Codex subscription"),
+            "model": str(
+                parser.usage.get("model") or selected_model or "Codex subscription"
+            ),
         }
 
 
@@ -5032,6 +5068,7 @@ def _answer_lean_question(
             prompt=prompt,
             lean_source=lean_src,
             edit=False,
+            model=_codex_route_model(user, run_record, effective_model),
         )
         return str(result["model"]), str(result["answer"])
 
@@ -5100,6 +5137,7 @@ def _revise_with_feedback_impl(
         # A member keeps the model's own error: the fallback is a local agent.
         if _is_kimi_model(effective_model) or account_policy.is_member(user):
             raise
+        codex_model = _codex_route_model(user, run_record, effective_model)
         codex_result = _codex_subscription_interaction(
             workspace=workspace,
             user=user,
@@ -5107,6 +5145,7 @@ def _revise_with_feedback_impl(
             prompt=prompt,
             lean_source=lean_src,
             edit=True,
+            model=codex_model,
         )
         codex_mode = True
         chosen_model = str(codex_result["model"])
@@ -5161,6 +5200,7 @@ def _revise_with_feedback_impl(
                     prompt=repair_prompt,
                     lean_source=lean_src,
                     edit=True,
+                    model=codex_model,
                 )
                 lean_src = str(codex_result["lean"])
                 notes = str(codex_result["answer"] or notes)
@@ -7638,6 +7678,8 @@ def _harness_fidelity_audit(
             prompt=prompt,
             lean_source=lean,
             edit=False,
+            # The harness's own model and tuning judge its fidelity.
+            model=_codex_route_model(user, run_record, model),
         )
         used = str(result.get("model") or model or "Codex subscription")
         data = _extract_json_object(str(result.get("answer") or ""))

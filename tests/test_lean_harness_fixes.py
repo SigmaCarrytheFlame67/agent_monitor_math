@@ -526,5 +526,119 @@ console.log(JSON.stringify(calls));
         self.assertEqual(output, [[True, False], [True, False], [True, True]])
 
 
+
+class CodexAuditModelTests(_HarnessStateCleanup):
+    """r2-lean-harness-3: the Codex audit runs on the harness's model."""
+
+    CODEX_RUN = {
+        "run_id": "codex-harness",
+        "owner_id": 17,
+        "auth_route": "codex_subscription",
+        "model": "gpt-5.6-sol",
+        "reasoning_effort": "high",
+        "speed_mode": "standard",
+    }
+
+    def _audit(self, model: str) -> tuple[dict, list[str]]:
+        from agent_monitor.engines_registry import CLI_ENGINES
+
+        captured: dict = {}
+        verdict = json.dumps(
+            {"faithful": True, "severity": "ok", "verdict": "matches", "issues": [],
+             "main_decl": "main", "statement_suggestion": ""}
+        )
+
+        def fake_run(argv, **_kwargs):
+            captured["argv"] = list(argv)
+            events = [
+                {"type": "item.completed",
+                 "item": {"id": "a", "type": "agent_message", "text": verdict}},
+                {"type": "turn.completed", "usage": {"input_tokens": 5, "output_tokens": 2}},
+            ]
+            return lean_verify.subprocess.CompletedProcess(
+                argv, 0, "\n".join(json.dumps(event) for event in events), ""
+            )
+
+        with tempfile.TemporaryDirectory() as tmp:
+            workspace = Path(tmp)
+            (workspace / lean_verify.LEAN_DIRNAME).mkdir()
+            with (
+                patch("agent_monitor.auth.is_operator_account", return_value=True),
+                patch("agent_monitor.codex_login.account_login_ready", return_value=True),
+                patch("agent_monitor.codex_login.account_home", return_value=workspace / "codex"),
+                patch(
+                    "agent_monitor.codex_login.available_models",
+                    return_value=["gpt-5.6-sol", "gpt-5.4-mini"],
+                ),
+                patch(
+                    "agent_monitor.engines_registry._cli_available",
+                    return_value=(True, CLI_ENGINES["codex"]["default_cmd"]),
+                ),
+                patch(
+                    "agent_monitor.runners.codex_backend._run_codex_process",
+                    side_effect=fake_run,
+                ),
+            ):
+                result = lean_verify._harness_fidelity_audit(
+                    workspace=workspace,
+                    user={"id": 17, "is_admin": True},
+                    run_record=self.CODEX_RUN,
+                    model=model,
+                    problem="Prove n + 0 = n.",
+                    proof="Simplify.",
+                    lean=FRESH_SOURCE,
+                )
+        return result, captured["argv"]
+
+    def test_audit_is_bound_to_the_harness_model_and_run_tuning(self) -> None:
+        result, argv = self._audit("gpt-5.6-sol")
+
+        self.assertTrue(result["ok"])
+        self.assertEqual(result["model"], "gpt-5.6-sol")
+        self.assertEqual(argv[argv.index("--model") + 1], "gpt-5.6-sol")
+        self.assertIn('model_reasoning_effort="high"', argv)
+        prompt_index = len(argv) - 1
+        self.assertLess(argv.index("--model"), prompt_index)
+
+    def test_audit_follows_a_harness_model_other_than_the_runs(self) -> None:
+        result, argv = self._audit("gpt-5.4-mini")
+
+        self.assertEqual(result["model"], "gpt-5.4-mini")
+        self.assertEqual(argv[argv.index("--model") + 1], "gpt-5.4-mini")
+
+    def test_question_fallback_binds_only_a_model_the_codex_route_offers(self) -> None:
+        cases = (("gpt-5.4-mini", "gpt-5.4-mini"), ("Codex subscription", None))
+        for recorded, expected in cases:
+            with self.subTest(recorded=recorded):
+                with (
+                    patch.object(lean_verify, "_llm_environment", return_value={}),
+                    patch.object(lean_verify, "_chat", side_effect=ValueError("no API key")),
+                    patch.object(
+                        lean_verify,
+                        "harness_model_options",
+                        return_value={
+                            "auth_route": "codex_subscription",
+                            "models": ["gpt-5.6-sol", "gpt-5.4-mini"],
+                            "selected": "gpt-5.6-sol",
+                        },
+                    ),
+                    patch.object(
+                        lean_verify,
+                        "_codex_subscription_interaction",
+                        return_value={"answer": "It compiles.", "lean": FRESH_SOURCE, "model": "m"},
+                    ) as codex,
+                ):
+                    lean_verify._answer_lean_question(
+                        workspace=Path("/tmp/unused-question"),
+                        user={"id": 17, "is_admin": True},
+                        run_record=self.CODEX_RUN,
+                        question="Why does line 3 need simp?",
+                        model=None,
+                        lean_src=FRESH_SOURCE,
+                        cached={"status": "verified", "model": recorded},
+                    )
+                self.assertEqual(codex.call_args.kwargs["model"], expected)
+
+
 if __name__ == "__main__":
     unittest.main()
