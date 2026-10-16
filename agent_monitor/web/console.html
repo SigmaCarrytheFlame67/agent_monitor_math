@@ -3066,10 +3066,13 @@ async function applyCodexStatus(st){
     SETTINGS.codex_connected=!!st.connected;
     SETTINGS.codex_reauth_required=!!st.reauth_required;
     if(Array.isArray(st.models)&&st.connected){ SETTINGS.codex_models=[...st.models]; SETTINGS.models_by_runtime={...(SETTINGS.models_by_runtime||{}),codex:[...st.models]}; }
+    else if(!st.connected){ SETTINGS.codex_models=[]; SETTINGS.models_by_runtime={...(SETTINGS.models_by_runtime||{}),codex:[]}; }
     if(selectedAccountRuntime()==='codex')SETTINGS.runtime_ready=!!st.connected;
   }
   renderCodexCard(st);
-  const needsModels=!!st.connected&&!!SETTINGS&&(!wasConnected||!(SETTINGS.codex_models||[]).length);
+  // Linking or unlinking an account also changes what /api/settings derives
+  // from the linked accounts (Max, each runtime's thinking controls).
+  const needsModels=!!SETTINGS&&(wasConnected!==!!st.connected||!!st.connected&&!(SETTINGS.codex_models||[]).length);
   if(needsModels)await loadSettings({keepEngine:true});
   else if(SETTINGS){ renderRuntimeSelector(); syncRuntimeModelControls(); renderEngines(); }
 }
@@ -3131,10 +3134,13 @@ function renderClaudeCard(st){
 async function applyClaudeStatus(st){
   const input=$('claude-login-code');
   const preserveInput=!!input&&(document.activeElement===input||!!input.value)&&st.status==='running'&&!st.code_submitted&&!st.connected&&!st.error;
+  const wasConnected=!!SETTINGS?.claude_connected;
   LAST_CLAUDE_STATUS=st;
   if(SETTINGS){ SETTINGS.claude_connected=!!st.connected; SETTINGS.claude_reauth_required=!!st.reauth_required; if(Array.isArray(st.models)&&st.connected){ SETTINGS.claude_models=[...st.models]; SETTINGS.models_by_runtime={...(SETTINGS.models_by_runtime||{}),claude:[...st.models]}; } else if(!st.connected){ SETTINGS.claude_models=[]; SETTINGS.models_by_runtime={...(SETTINGS.models_by_runtime||{}),claude:[]}; } if(selectedAccountRuntime()==='claude')SETTINGS.runtime_ready=!!st.connected; }
   if(!preserveInput)renderClaudeCard(st);
-  if(SETTINGS){ renderRuntimeSelector(); syncRuntimeModelControls(); renderEngines(); }
+  // As for Codex: Max and the thinking controls follow the linked accounts.
+  if(SETTINGS&&wasConnected!==!!st.connected)await loadSettings({keepEngine:true});
+  else if(SETTINGS){ renderRuntimeSelector(); syncRuntimeModelControls(); renderEngines(); }
 }
 async function refreshClaudeCard(){
   // A member's card is the policy note: there is no login to look up.
