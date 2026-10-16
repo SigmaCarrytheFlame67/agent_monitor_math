@@ -183,7 +183,7 @@ def test_new_snapshots_keep_console_details_but_nothing_private(tmp_path):
     snap = shares.snapshot('run-9', record)
     encoded = json.dumps(snap) + json.dumps(shares.shared_payload(snap))
     for secret in ('PRIVATE', 'o@example.com', '/var/lib/', '/home/ubuntu', '/opt/lean', 'cost_usd', '12.5', 'secret_stage',
-                   'lake env lean', '0.0421'):
+                   'lake env lean', '0.0421', '.codex/sessions'):
         assert secret not in encoded, secret
     view = shares.console_view(snap)
     run = view['run']
@@ -205,7 +205,8 @@ def test_new_snapshots_keep_console_details_but_nothing_private(tmp_path):
     assert lean['status'] == 'verified' and lean['lean'] == 'theorem x : True := trivial' and lean['log'] == '…/Proof.lean:1:0: info'
     assert lean['toolchain'] == {'lean_version': '4.14.0'} and lean['fidelity'] == {'verdict': 'faithful', 'issues': []}
     assert lean['attempts'][0]['check'] == {'status': 'verified', 'ok': True, 'log': 'ok'}
-    assert run['error'] == 'failed in …/x.jsonl'
+    # The error can name the owner's subscription: shares keep only that it failed.
+    assert run['error'] == 'The run stopped with an error. Its details are not included in shared snapshots.'
 
 
 def test_redaction_keeps_urls_and_relative_paths():
@@ -312,7 +313,9 @@ def test_a_large_run_record_keeps_its_link_and_can_be_shared(tmp_path, monkeypat
     assert (cache / 'big.json').stat().st_size > 10_000_000
     token = shares.create('big', 1, {'title': 'Big'})['token']
     assert shares.lookup(token)['title'] == 'Big'
-    assert shares.record('big')['run_id'] == 'big'
+    # Sharing reads the large record; frequent polls (Projects) keep the 10 MB bound.
+    assert shares.record('big', shares.RECORD_LIMIT)['run_id'] == 'big'
+    assert shares.record('big') is None
 
 
 def test_snapshot_limits_match_the_console_and_count_utf8_bytes():

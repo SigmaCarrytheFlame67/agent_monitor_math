@@ -76,12 +76,13 @@ def _record_folders():
     return (Path(os.environ.get('LLM_DASHBOARD_CACHE', str(CACHE_DIR))) / 'harness', RUNS_DIR)
 
 
-def record(run_id):
+def record(run_id, limit=10_000_000):
+    """The run's record; sharing reads up to RECORD_LIMIT, polls keep 10 MB."""
     if not RUN_ID.fullmatch(run_id) or '..' in run_id:
         return None
     for folder in _record_folders():
         try:
-            value = json.loads(_file(folder, run_id + '.json', RECORD_LIMIT))
+            value = json.loads(_file(folder, run_id + '.json', limit))
             if isinstance(value, dict):
                 return value
         except (ValueError, TypeError, RecursionError):
@@ -290,7 +291,8 @@ def _run_view(data, read):
     if roles:
         view['route_plan'] = roles
     if isinstance(data.get('error'), str) and data['error'].strip():
-        view['error'] = _redact(data['error'], 2000)
+        # The error itself can name the owner's subscription or sign-in state.
+        view['error'] = 'The run stopped with an error. Its details are not included in shared snapshots.'
     interruption = data.get('interruption') if isinstance(data.get('interruption'), dict) else {}
     if isinstance(interruption.get('reason'), str):
         view['interruption'] = {'reason': _redact(interruption['reason'], 400)}
@@ -1251,7 +1253,7 @@ class RunSharingMixin:
         # open other people's runs, but publishing them is not theirs to do.
         mine = owner == user.get('id') if owner is not None else bool(user.get('is_admin'))
         visible = mine or getattr(self, '_owns_run', lambda *_: False)(run_id, user)
-        data = record(run_id) if visible else None
+        data = record(run_id, RECORD_LIMIT) if visible else None
         if not data:
             self._share_send(404, {'error': 'Run not found.'})
             return None
