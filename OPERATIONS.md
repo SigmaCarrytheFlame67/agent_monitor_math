@@ -174,7 +174,11 @@ ceilings, so an environment value can only lower them.
   `AGENT_MONITOR_MATH_HARNESS_TIMEOUT` can raise it but never lower it, since
   a stopped run publishes nothing. The receipt is schema 4:
   transport `hybrid`, with `workflow.routes` naming the advisor (Claude Code)
-  and worker (Codex) models, and every call checked against its side. A
+  and worker (Codex) models, and every call checked against its side. When
+  an account must sign in again, reaches its usage limit or cannot use its
+  model during a run (any Claude Code or Codex route), the run says why and
+  sends that account no further verifier, repair or curator call; a verifier
+  stopped so leaves the candidate unattested, with the reason in `proof.md`. A
   follow-up continues as Max, or stops if either account was disconnected.
   Lean and graph work after a Max run uses the Codex account with the worker
   model at high effort. Derived Codex calls have a fixed per-call limit, so
