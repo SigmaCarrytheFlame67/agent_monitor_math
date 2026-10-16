@@ -644,6 +644,71 @@ def test_member_cgm_harness_run_and_derived_stages_bill_only_the_members_key(
         )
 
 
+def test_admin_run_derived_stages_keep_the_administrators_keys_and_endpoint(
+    monkeypatch, tmp_path
+):
+    """The automatic Formal, DAG and Lean stages of the administrator's run
+    resolve credentials as its manual actions do: the server .env keys, and
+    the administrator's own base URL alongside its own key."""
+    from agent_monitor import auto_pipeline, lean_verify, proof_graph, settings
+
+    for name in ("AGENT_MONITOR_PUBLIC", "OPENAI_API_KEY", "OPENAI_BASE_URL",
+                 "AGENT_MONITOR_BASE_URL", "AGENT_MONITOR_DISABLE_AUTO_PIPELINE"):
+        monkeypatch.delenv(name, raising=False)
+    monkeypatch.setenv("AGENT_MONITOR_DATA_ENCRYPTION_KEY", Fernet.generate_key().decode("ascii"))
+    settings.ENV_PATH.write_text("OPENAI_API_KEY=sk-operator-file-openai-0000\n", encoding="utf-8")
+    admin = auth.register("owner@example.test", "long-enough-password")
+    member = auth.register("member@example.test", "long-enough-password")
+    assert admin["is_admin"] and account_policy.is_member(member)
+    record = {
+        "run_id": "admin_api_run", "owner_id": admin["id"], "engine": "math_harness",
+        "model": "gpt-6-astra", "requested_model": "gpt-6-astra", "auth_route": "api_key",
+        "credential_source": "user", "status": "finished",
+    }
+    (tmp_path / "proof.md").write_text("# Proof\n\nIt holds because it holds.\n", encoding="utf-8")
+    calls: list = []
+
+    def call_llm(env, model, _prompt, **_kwargs):
+        calls.append((dict(env), model))
+        raise RuntimeError("stopped before any provider call")
+
+    monkeypatch.setattr(proof_graph, "_call_llm", call_llm)
+
+    derived_user = auto_pipeline._run_user(admin["id"], record)
+    assert not account_policy.is_member(derived_user)
+    # The administrator keeps no per-account key: the server .env key serves it.
+    assert lean_verify._llm_environment(derived_user, record)["OPENAI_API_KEY"] == (
+        "sk-operator-file-openai-0000"
+    )
+    auto_pipeline._informal_worker(tmp_path, record, derived_user, "gpt-6-astra", {}, "math_harness")
+    assert calls and calls[-1][0]["OPENAI_API_KEY"] == "sk-operator-file-openai-0000"
+
+    # A gateway key stays with its gateway: never sent to the provider's own endpoint.
+    gateway = "https://llm-gateway.example.test/v1"
+    auth.set_user_env(int(admin["id"]), {
+        "OPENAI_API_KEY": "sk-admin-gateway-key-1234567890", "OPENAI_BASE_URL": gateway,
+    })
+    lean_env = lean_verify._llm_environment(derived_user, record)
+    assert (lean_env["OPENAI_API_KEY"], lean_env.get("OPENAI_BASE_URL")) == (
+        "sk-admin-gateway-key-1234567890", gateway,
+    )
+    auto_pipeline._informal_worker(tmp_path, record, derived_user, "gpt-6-astra", {}, "math_harness")
+    graph_env, graph_model = calls[-1]
+    assert graph_model == "gpt-6-astra"
+    assert (graph_env["OPENAI_API_KEY"], graph_env.get("OPENAI_BASE_URL")) == (
+        "sk-admin-gateway-key-1234567890", gateway,
+    )
+
+    # A member and a guest run keep their own roles.
+    assert account_policy.is_member(
+        auto_pipeline._run_user(member["id"], {**record, "owner_id": member["id"]})
+    )
+    assert auto_pipeline._run_user(admin["id"], {**record, "guest": True}) == {
+        "id": admin["id"], "guest": True,
+    }
+    assert auto_pipeline._run_user(None, record) is None
+
+
 def test_member_settings_skip_login_probes_and_keep_the_api_runtime(monkeypatch, tmp_path):
     from agent_monitor import claude_login, codex_login, settings
 

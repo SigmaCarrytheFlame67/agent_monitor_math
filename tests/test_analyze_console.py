@@ -753,10 +753,10 @@ def test_switches_stop_the_automatic_statement_formalization(analyze_console, fa
     # Switched back on, the main statements are formalized as before.
     auto_pipeline._run_batch(workspace, record, member, "kimi-k3", "analyze")
     assert len(calls) == 1 and calls[0]["prove"] is False
-    # The pipeline rebuilds the owner without its admin flag (_run_user): an
-    # operator's ANALYZE_CMD (members lose Analyze) must not stop it.
+    # The run was admitted when it started: an operator's ANALYZE_CMD (members
+    # lose Analyze) must not stop the member owner's automatic formalization.
     monkeypatch.setenv("ANALYZE_CMD", "/bin/true")
-    auto_pipeline._run_batch(workspace, record, auto_pipeline._run_user(1, record), "kimi-k3", "analyze")
+    auto_pipeline._run_batch(workspace, record, auto_pipeline._run_user(5, record), "kimi-k3", "analyze")
     assert len(calls) == 2
     monkeypatch.delenv("ANALYZE_CMD")
     # A guest's analysis stops when guests are switched off.

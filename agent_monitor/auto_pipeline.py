@@ -345,15 +345,20 @@ def _run_record(run_id: str) -> dict[str, Any] | None:
 def _run_user(
     owner_id: int | None, run_record: dict[str, Any] | None
 ) -> dict[str, Any] | None:
-    """Keep the persisted guest role when background work rebuilds its owner.
+    """Keep the owner's role when background work rebuilds its owner.
 
     The guest account may already have been removed by logout or expiry. The
     run's role still applies: deriving its views must never gain an account's
     provider permissions merely because only its numeric owner was retained.
+    An administrator keeps its role (looked up, never read from the run), so
+    its automatic stages use the server keys and its own endpoints, as its
+    manual Lean and DAG actions do.
     """
     if (run_record or {}).get("guest"):
         return {"id": owner_id, "guest": True}
-    return {"id": owner_id} if owner_id is not None else None
+    from agent_monitor.jobs import _owner_user
+
+    return _owner_user(owner_id)
 
 
 def _source_signature(workspace: Path, run_record: dict[str, Any] | None) -> str:
@@ -927,9 +932,10 @@ def _analysis_batch(
         )
         return False
     # The Analyze switches cover the automatic statement formalization too.
-    # The rebuilt owner carries no admin flag (see _run_user), and the run was
-    # admitted when it started, so only the switches matter here: Analyze off,
-    # guests off for a guest's analysis, sponsored Analyze off for a sponsored one.
+    # The run was admitted when it started, so the owner's role is not checked
+    # again (a member's would refuse an operator's ANALYZE_CMD); only the
+    # switches matter here: Analyze off, guests off for a guest's analysis,
+    # sponsored Analyze off for a sponsored one.
     guest_run = bool((run_record or {}).get("guest") or (user or {}).get("guest"))
     refusal = analyze_runs.derived_work_error({"guest": True} if guest_run else None, run_record)
     if refusal is not None:
