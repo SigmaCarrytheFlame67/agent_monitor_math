@@ -661,6 +661,46 @@ def test_a_member_cannot_save_a_custom_base_url_its_runs_would_ignore(member_con
     assert auth.get_user_env(int(owner["id"]))["OPENAI_BASE_URL"] == "http://127.0.0.1:9/v1"
 
 
+def test_a_member_verifies_its_key_beside_a_stored_copy_of_the_operators_base(member_console, monkeypatch):
+    # Saving Settings before endpoints were redacted copied the operator's own
+    # base into members' rows.  Runs keep that copy, a save keeps it and the
+    # member has no field to clear it, so "Test own key" must not refuse it.
+    from agent_monitor import settings
+
+    for name in settings._account_base_vars():
+        monkeypatch.delenv(name, raising=False)
+    settings.ENV_PATH.write_text("OPENAI_BASE_URL=https://gateway.example.test/v1\n", encoding="utf-8")
+    urls: list[str] = []
+    monkeypatch.setattr(settings, "_http_json",
+                        lambda url, **_kwargs: urls.append(url) or (200, {"data": [{"id": "gpt-6-astra"}]}))
+    with running_server() as port:
+        user, cookie = _member(port)
+        auth.set_user_env(int(user["id"]), {"OPENAI_API_KEY": "sk-member-openai-123456789",
+                                            "OPENAI_BASE_URL": "https://gateway.example.test/v1/"})
+
+        def post(path, body):
+            status, _headers, raw = request(port, "POST", f"{APP_MOUNT}{path}", body=body,
+                                            headers={"Cookie": cookie})
+            return status, json.loads(raw)
+
+        saved = post("/api/settings", {"updates": {"AGENT_MONITOR_MODEL": "gpt-6-astra"}})
+        stored = auth.get_user_env(int(user["id"]))
+        verified = post("/api/settings/verify", {"provider": "openai"})
+        # Any other stored base is still refused, and never fetched.
+        auth.set_user_env(int(user["id"]), {"OPENAI_BASE_URL": "http://127.0.0.1:49971/v1"})
+        refused = post("/api/settings/verify", {"provider": "openai"})
+    assert saved[0] == 200 and stored["OPENAI_BASE_URL"] == "https://gateway.example.test/v1/"
+    shown = next(p for p in saved[1]["settings"]["providers"] if p["id"] == "openai")
+    assert shown["base_url"] == ""
+    assert verified == (200, {"ok": True, "provider": "openai", "message": "OpenAI key valid (1 models)"})
+    # The key is checked at the provider's standard endpoint, as before.
+    assert urls == ["https://api.openai.com/v1/models"]
+    assert refused[0] == 400 and refused[1]["error"] == (
+        "Custom API base URLs can be verified only by the operator; "
+        "clear the custom base to verify this key"
+    )
+
+
 def test_start_job_holds_the_member_cgm_harness_to_its_own_api_key(monkeypatch):
     for name in ("AGENT_MONITOR_MEMBER_ENGINES", "AGENT_MONITOR_PUBLIC", "MATH_HARNESS_CMD"):
         monkeypatch.delenv(name, raising=False)

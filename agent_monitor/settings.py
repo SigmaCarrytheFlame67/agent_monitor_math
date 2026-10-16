@@ -1065,10 +1065,20 @@ def verify_provider(
     elif not operator:
         # SSRF guard: a signed-in non-admin account cannot make the server
         # fetch an arbitrary URL, whether it is sent now or stored earlier.
+        # The operator's own endpoint is no custom base: this account's runs
+        # keep it (restrict_account_base_urls), a save keeps a copy stored
+        # before endpoints were redacted, and the account has no field to
+        # clear it.  The key is still checked at the built-in endpoint.
+        base_var = str(spec.get("base_var") or "")
         requested = (base_url or "").strip().rstrip("/")
-        stored = str(env.get(spec.get("base_var") or "") or "").strip().rstrip("/")
-        builtin = {default_base.rstrip("/"), str(spec.get("default_base") or "").rstrip("/")}
-        if any(value and value not in builtin for value in (requested, stored)):
+        stored = str(env.get(base_var) or "").strip().rstrip("/")
+        operator_base = os.environ.get(base_var) or _read_env_file().get(base_var) or ""
+        allowed = {
+            default_base.rstrip("/"),
+            str(spec.get("default_base") or "").rstrip("/"),
+            str(operator_base).strip().rstrip("/"),
+        }
+        if any(value and value not in allowed for value in (requested, stored)):
             return {
                 "ok": False,
                 "provider": provider_id,
