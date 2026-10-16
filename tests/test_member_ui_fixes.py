@@ -312,6 +312,22 @@ console.log(JSON.stringify(out));
             self.assertTrue(out[viewer].endswith(" Retry Verify."), out[viewer])
             self.assertNotIn("Harness", out[viewer])
 
+    def test_only_the_operator_reads_openai_models_as_codex_ready(self) -> None:
+        program = (
+            "let CURRENT_USER=null, CGM_MAX_MODEL='max';\n"
+            + _js_function("viewerIsAdmin")
+            + "\n"
+            + _js_function("modelVisual")
+            + r"""
+const out={};
+for(const [label,user] of """ + _VIEWERS + r"""){ CURRENT_USER=user; out[label]=modelVisual('gpt-5').provider; }
+console.log(JSON.stringify(out));
+"""
+        )
+        self.assertEqual(
+            _run_node(program), {"admin": "OpenAI · Codex-ready", "member": "OpenAI", "guest": "OpenAI"}
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

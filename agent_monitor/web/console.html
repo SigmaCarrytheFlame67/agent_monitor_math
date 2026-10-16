@@ -2471,7 +2471,8 @@ function modelVisual(id){
   if(s.includes('claude')||['sonnet','opus','fable'].includes(s))return {tone:'25 92% 57%',mark:'CL',glyph:'🟧',provider:'Anthropic'};
   if(s.includes('gemini'))return {tone:'145 68% 44%',mark:'GM',glyph:'🟩',provider:'Google'};
   if(s.includes('grok'))return {tone:'282 76% 61%',mark:'GX',glyph:'🟪',provider:'xAI'};
-  if(s.includes('gpt')||s.includes('codex'))return {tone:'218 88% 59%',mark:'CX',glyph:'🔵',provider:'OpenAI · Codex-ready'};
+  // Codex itself runs for the operator alone.
+  if(s.includes('gpt')||s.includes('codex'))return {tone:'218 88% 59%',mark:'CX',glyph:'🔵',provider:viewerIsAdmin()?'OpenAI · Codex-ready':'OpenAI'};
   return {tone:'265 76% 62%',mark:'AI',glyph:'🎨',provider:'Custom provider'};
 }
 function positionControlPanel(panel,trigger){

@@ -2706,7 +2706,12 @@ class Handler(RunSharingMixin, ProjectsMixin, ResearchMixin, BaseHTTPRequestHand
                 # cannot run is administrator-only, not "after sign-in".
                 after_sign_in = allowed | account_policy.member_engine_allowlist()
                 engines = [
-                    {**engine, "requires_login": engine.get("id") not in allowed}
+                    {
+                        **engine,
+                        "requires_login": engine.get("id") not in allowed,
+                        # A guest, and the member it becomes, bills an API key.
+                        "auth_modes": [mode for mode in engine.get("auth_modes") or [] if mode == "api_key"],
+                    }
                     if engine.get("id") in after_sign_in
                     else account_policy.admin_only_engine_view(engine)
                     for engine in engines

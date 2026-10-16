@@ -1372,6 +1372,20 @@ def test_guest_kimi_default_and_locked_account_engines(guest_console):
             assert status == 403, raw
 
 
+def test_guest_engines_name_only_the_api_route(guest_console):
+    """A guest, and the member it becomes on sign-up, bills an API key: the
+    engine menu must not offer Plain on "Codex / Claude Code / API"."""
+    with running_server() as port:
+        _, cookie, _ = _issue_guest(port)
+        status, _, raw = request(port, "GET", f"{APP_MOUNT}/api/engines", headers={"Cookie": cookie})
+    assert status == 200
+    engines = {engine["id"]: engine for engine in json.loads(raw)["engines"]}
+    for engine in ("kimi", "plain", "math_harness"):
+        assert engines[engine]["auth_modes"] == ["api_key"], engine
+    # Administrator-only entries still describe the engine itself.
+    assert "codex_subscription" in engines["codex"]["auth_modes"]
+
+
 def test_guest_ten_run_budget_survives_deleted_runs_and_restart(guest_console, monkeypatch):
     calls = []
     monkeypatch.setenv("AGENT_MONITOR_GUEST_RUNS_PER_HOUR", "24")
