@@ -727,7 +727,8 @@ class InterruptedContinuationTests(unittest.TestCase):
 class StoppedFollowUpTests(unittest.TestCase):
     """Stop pressed during a follow-up wins over what the stopped engine returns."""
 
-    def _continue(self, engine: str, *, stopped_result) -> tuple[dict, dict, bool]:
+    def _seed(self, engine: str) -> tuple[str, str, Path]:
+        """A finished one-session run whose follow-up job is running."""
         run_id, job_id = f"{engine}_stopped_follow_up", f"job-{engine}-stopped"
         root = Path(self.enterContext(tempfile.TemporaryDirectory()))
         self.enterContext(patch.object(jobs, "RUNS_DIR", root / "runs"))
@@ -745,14 +746,13 @@ class StoppedFollowUpTests(unittest.TestCase):
         self.addCleanup(jobs._JOBS.pop, job_id, None)
         self.addCleanup(jobs._STOP_EVENTS.pop, run_id, None)
         jobs._stop_event(run_id).clear()
+        return run_id, job_id, workspace
 
-        def engine_stopped_by_user(*_args, **_kwargs):
-            self.assertEqual(jobs.stop_run(run_id)["status"], "stopped")
-            return stopped_result(run_id)
-
+    def _execute(self, engine: str, run_id: str, job_id: str, workspace: Path, engine_run) -> bool:
+        """Run the follow-up with ``engine_run`` as its engine; True if a refresh started."""
         with (
-            patch("agent_monitor.runners.improof.run_problem", side_effect=engine_stopped_by_user),
-            patch.object(jobs, "_run_cli_engine", side_effect=engine_stopped_by_user),
+            patch("agent_monitor.runners.improof.run_problem", side_effect=engine_run),
+            patch.object(jobs, "_run_cli_engine", side_effect=engine_run),
             patch.object(jobs, "_launch_pending_feedback"),
             patch.object(auto_pipeline, "start") as derived,
         ):
@@ -760,7 +760,17 @@ class StoppedFollowUpTests(unittest.TestCase):
                 job_id=job_id, run_id=run_id, engine=engine, message="Add the boundary case.",
                 problem_text="Prove it.", model=None, max_iterations=2, workspace=str(workspace),
             )
-        return jobs._load_run_record(run_id), dict(jobs._JOBS[job_id]), derived.called
+        return derived.called
+
+    def _continue(self, engine: str, *, stopped_result) -> tuple[dict, dict, bool]:
+        run_id, job_id, workspace = self._seed(engine)
+
+        def engine_stopped_by_user(*_args, **_kwargs):
+            self.assertEqual(jobs.stop_run(run_id)["status"], "stopped")
+            return stopped_result(run_id)
+
+        derived = self._execute(engine, run_id, job_id, workspace, engine_stopped_by_user)
+        return jobs._load_run_record(run_id), dict(jobs._JOBS[job_id]), derived
 
     def test_a_stopped_improof_follow_up_is_not_recorded_as_failed(self) -> None:
         # The killed workflow exits -9, which run_problem reports as failed.
@@ -792,6 +802,34 @@ class StoppedFollowUpTests(unittest.TestCase):
         self.assertEqual(
             [agent["output"] for agent in run["agents"]], ["first session", "partial follow-up"]
         )
+
+    def test_a_stopped_follow_up_tells_the_chat_once(self) -> None:
+        def killed_workflow(_run_id: str) -> dict:
+            return {"engine": "improof", "status": "failed", "returncode": -9,
+                    "stdout_tail": "", "stderr_tail": ""}
+
+        run, _job, _derived = self._continue("improof", stopped_result=killed_workflow)
+
+        posted = [message["content"] for message in jobs.list_chat(run["run_id"])]
+        self.assertEqual(posted.count("Run stopped by user."), 1)
+
+    def test_deleting_the_run_during_a_follow_up_keeps_it_deleted(self) -> None:
+        run_id, job_id, workspace = self._seed("improof")
+        self.addCleanup(jobs._DELETED_RUNS.discard, run_id)
+
+        def engine_deleted_with_its_run(*_args, **_kwargs):
+            # delete_run stops the follow-up as Stop does, then removes it all.
+            jobs.delete_run(run_id)
+            return {"engine": "improof", "status": "failed", "returncode": -9,
+                    "stdout_tail": "", "stderr_tail": ""}
+
+        derived = self._execute("improof", run_id, job_id, workspace, engine_deleted_with_its_run)
+
+        with self.assertRaises(FileNotFoundError):
+            jobs._load_run_record(run_id)
+        self.assertFalse(workspace.exists())
+        self.assertNotIn(job_id, jobs._JOBS)
+        self.assertFalse(derived)
 
 
 class MetaHarnessAuditFailureTests(unittest.TestCase):

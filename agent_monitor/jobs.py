@@ -6175,14 +6175,19 @@ def _execute_continue(
                     f"Automatic Lean/DAG refresh could not start: {exc}",
                 )
     except StopRequested:
-        stopped_run = _interrupted_continuation_record(
-            previous_run_data, _load_run_record(run_id), job_id=job_id
-        )
-        stopped_run["status"] = "stopped"
-        stopped_run["updated_at"] = _now()
-        _write_run(stopped_run)
+        try:
+            stopped_run = _interrupted_continuation_record(
+                previous_run_data, _load_run_record(run_id), job_id=job_id
+            )
+            stopped_run["status"] = "stopped"
+            stopped_run["updated_at"] = _now()
+            _write_run(stopped_run)
+        except FileNotFoundError:
+            # The run was deleted, which stops its follow-up too.
+            pass
+        # No chat line here: stop_run has posted it, and a deleted run must not
+        # get its workspace back.
         _update_job(job_id, status="stopped")
-        _append_chat(run_id, "system", "Run stopped by user.")
     except Exception as exc:  # noqa: BLE001
         try:
             failed_run = _interrupted_continuation_record(
