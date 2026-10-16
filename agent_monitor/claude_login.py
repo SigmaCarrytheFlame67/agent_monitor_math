@@ -537,6 +537,12 @@ def submit_code(user_id: int, code: str) -> dict[str, Any]:
     value = str(code or "").strip()
     if not value or len(value) > 4096 or "\n" in value or "\r" in value:
         raise ValueError("A valid Claude authorization code is required")
+    parts = value.split("#")
+    if len(parts) < 2 or not parts[0] or not parts[1]:
+        # `claude auth login` takes only the whole code#state the sign-in page
+        # shows.  It answers anything else on stderr and keeps waiting, so the
+        # card would say "Finishing the account connection" until Cancel.
+        raise ValueError("Invalid code. Please make sure the full code was copied.")
     with _lock:
         st = _state_for(user_id)
         proc: subprocess.Popen[str] | None = st.get("proc")

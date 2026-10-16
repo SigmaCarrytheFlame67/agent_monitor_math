@@ -286,7 +286,7 @@ class ClaudeLoginTests(unittest.TestCase):
                     self.assertEqual(state["status"], "running")
                     self.assertIs(state.get("proc"), procs[1])
                     self.assertNotIn("error", state)
-                    claude_login.submit_code(user_id, "one-time-code")
+                    claude_login.submit_code(user_id, "one-time-code#state")
                     self.assertEqual(procs[1].wait(10), 0)
                     for thread in new_readers:
                         thread.join(10)
@@ -389,8 +389,8 @@ class ClaudeLoginTests(unittest.TestCase):
             "_augment",
             side_effect=lambda _uid, snapshot: claude_login._public_state(snapshot),
         ):
-            result = claude_login.submit_code(17, "one-time-secret")
-        self.assertEqual(stdin.getvalue(), "one-time-secret\n")
+            result = claude_login.submit_code(17, "one-time-secret#state")
+        self.assertEqual(stdin.getvalue(), "one-time-secret#state\n")
         self.assertNotIn("one-time-secret", json.dumps(result))
         self.assertNotIn("output", result)
         with claude_login._lock:
@@ -456,6 +456,73 @@ class ClaudeLoginFailureReasonTests(unittest.TestCase):
         self.assertEqual(
             status["error"], "claude auth login finished but no usable Claude sign-in was saved"
         )
+
+    def test_a_code_without_its_state_is_refused_and_the_sign_in_waits_for_another(self) -> None:
+        # claude 2.1.301 takes a pasted line only as code#state: it answers any
+        # other line on stderr and keeps waiting, without exiting.  This fake
+        # also records each line it reads.
+        script = """
+while true; do
+  echo "$code" >> "$CLAUDE_CONFIG_DIR/received"
+  case "$code" in ?*"#"?*) break ;; esac
+  echo "Invalid code. Please make sure the full code was copied." >&2
+  read -r code || exit 1
+done
+printf '{"claudeAiOauth":{"refreshToken":"test-refresh","refreshTokenExpiresAt":4102444800000}}' \\
+  > "$CLAUDE_CONFIG_DIR/.credentials.json"
+"""
+
+        def auth_status(home, *, force=False):
+            signed_in = (Path(home) / ".credentials.json").is_file()
+            return {"loggedIn": signed_in, "authMethod": "claude.ai" if signed_in else "none"}
+
+        def wait_for(condition) -> dict:
+            deadline = time.monotonic() + 10
+            status = claude_login.status(self.USER_ID)
+            while not condition(status) and time.monotonic() < deadline:
+                time.sleep(0.05)
+                status = claude_login.status(self.USER_ID)
+            return status
+
+        with tempfile.TemporaryDirectory() as raw:
+            root = Path(raw)
+            claude = root / "claude"
+            claude.write_text("#!/bin/sh\n" + _LOGIN_PROMPT + script, encoding="utf-8")
+            claude.chmod(0o755)
+            self.addCleanup(lambda: claude_login._states.pop(self.USER_ID, None))
+            # The reader must finish while the fakes are patched in: the real
+            # lookup would find an installed `claude`.
+            with (
+                patch.dict(os.environ, {"AGENT_MONITOR_CLAUDE_ACCOUNT_HOME": str(root / "homes")}),
+                patch.object(claude_login, "claude_binary", return_value=str(claude)),
+                patch.object(claude_login, "_auth_status", side_effect=auth_status),
+            ):
+                try:
+                    claude_login.start_login(self.USER_ID)
+                    self.assertTrue(wait_for(lambda status: status.get("awaiting_code"))["awaiting_code"])
+                    for partial in ("only-the-code", "only-the-code#", "#only-the-state"):
+                        with self.subTest(code=partial), self.assertRaisesRegex(
+                            ValueError, r"^Invalid code\. Please make sure the full code was copied"
+                        ):
+                            claude_login.submit_code(self.USER_ID, partial)
+                    waiting = claude_login.status(self.USER_ID)
+                    claude_login.submit_code(self.USER_ID, "the-code#the-state")
+                    final = wait_for(lambda status: not status["running"])
+                    received = (claude_login.account_home(self.USER_ID) / "received").read_text()
+                finally:
+                    if claude_login.status(self.USER_ID)["running"]:
+                        claude_login.cancel_login(self.USER_ID)
+                    for thread in threading.enumerate():
+                        if thread.name == f"claude-login-{self.USER_ID}":
+                            thread.join(10)
+        # The card keeps the code step, and the CLI only ever saw the whole code.
+        self.assertEqual(
+            (waiting["status"], waiting["awaiting_code"], waiting["code_submitted"]),
+            ("running", True, False),
+        )
+        self.assertEqual(final["status"], "success")
+        self.assertTrue(final["connected"])
+        self.assertEqual(received, "the-code#the-state\n")
 
 
 class ClaudeAccountRuntimeSettingsTests(unittest.TestCase):
