@@ -111,10 +111,19 @@ def _cli_exit(agent: str, **payload) -> dict:
 
 
 _SESSION_LIMIT = "Claude Code failed: You've hit your session limit · resets 11pm (UTC)"
+_CODEX_USAGE_LIMIT = (
+    "You’ve hit your usage limit. Visit https://chatgpt.com/codex/settings/usage "
+    "to purchase more credits or try again at 10:28 PM."
+)
 
 
-class IMProofClaudeWorkerFailureTests(unittest.TestCase):
-    """A failed Author/Critic call must fail the run with Claude's reason."""
+def _codex_stdout(*events: dict) -> str:
+    return "".join(json.dumps(event, ensure_ascii=False) + "\n" for event in events)
+
+
+class IMProofWorkerFailureTests(unittest.TestCase):
+    """A failed Author/Critic call (Claude Code or Codex route) must fail the
+    run with the CLI's own reason."""
 
     def _run(
         self,
@@ -123,6 +132,7 @@ class IMProofClaudeWorkerFailureTests(unittest.TestCase):
         returncode: int = 0,
         draft: bool = True,
         blobs: dict[str, str] | None = None,
+        codex: bool = False,
     ):
         root = Path(self.enterContext(tempfile.TemporaryDirectory()))
         problem = root / "problem.txt"
@@ -161,11 +171,15 @@ class IMProofClaudeWorkerFailureTests(unittest.TestCase):
                 (native / "events_blobs" / name).write_text(text, encoding="utf-8")
             return "workflow output", returncode, False
 
-        selected_env = {
-            "AGENT_MONITOR_CLAUDE_SUBSCRIPTION": "1",
-            "AGENT_MONITOR_CLAUDE_MODEL": CLAUDE_MODEL,
-            "CLAUDE_CONFIG_DIR": str(root),
-        }
+        selected_env = (
+            {"AGENT_MONITOR_CODEX_SUBSCRIPTION": "1", "CODEX_HOME": str(root)}
+            if codex
+            else {
+                "AGENT_MONITOR_CLAUDE_SUBSCRIPTION": "1",
+                "AGENT_MONITOR_CLAUDE_MODEL": CLAUDE_MODEL,
+                "CLAUDE_CONFIG_DIR": str(root),
+            }
+        )
         with (
             patch(
                 "agent_monitor.claude_login.account_environment",
@@ -274,6 +288,81 @@ class IMProofClaudeWorkerFailureTests(unittest.TestCase):
                 _cli_exit("cfg_claude_author", exit_code=0, status="done", stderr_tail=""),
                 _cli_exit("cfg_claude_critic", exit_code=0, status="done", stderr_tail=""),
             ]
+        )
+
+        self.assertEqual(result["status"], "finished")
+        self.assertIsNone(result.get("error"))
+        self.assertTrue((output / "proof.tex").is_file())
+
+    def test_failed_codex_critic_after_round_one_fails_instead_of_publishing_the_draft(
+        self,
+    ) -> None:
+        # Codex writes nothing useful to stderr: its reason is the turn.failed
+        # event on stdout, after nonfatal notices that must not be reported.
+        usage_limit = _codex_stdout(
+            {"type": "thread.started", "thread_id": "t2"},
+            {"type": "item.completed", "item": {
+                "id": "item_0", "type": "error",
+                "message": "`[features].use_legacy_landlock` is deprecated and will be removed soon.",
+            }},
+            {"type": "turn.started"},
+            {"type": "error", "message": "Reconnecting... 1/5 (stream disconnected before completion)"},
+            {"type": "error", "message": _CODEX_USAGE_LIMIT},
+            {"type": "turn.failed", "error": {"message": _CODEX_USAGE_LIMIT}},
+        )
+        result, output = self._run(
+            [
+                _cli_exit(
+                    "cfg_codex_author", exit_code=0, status="done", stderr_tail="",
+                    stdout_tail=_codex_stdout({"type": "turn.completed", "usage": {}}),
+                ),
+                _cli_exit(
+                    "cfg_codex_critic", exit_code=1, status="error",
+                    stderr_tail="Reading additional input from stdin...\n",
+                    stdout_tail=usage_limit[-1000:],
+                ),
+                _cli_exit(
+                    "cfg_codex_author", exit_code=1, status="error", stderr_tail="",
+                    stdout_tail=usage_limit[-1000:],
+                ),
+            ],
+            codex=True,
+        )
+
+        self.assertEqual(result["workflow"], "codex_author_critic")
+        self.assertEqual(result["status"], "failed")
+        self.assertNotEqual(result["returncode"], 0)
+        self.assertEqual(result["error"], f"IMProof Codex critic failed: {_CODEX_USAGE_LIMIT}")
+        self.assertFalse((output / "proof.tex").exists())
+
+    def test_codex_call_without_a_turn_failure_names_its_last_stderr_line(self) -> None:
+        result, output = self._run(
+            [
+                _cli_exit(
+                    "cfg_codex_author", exit_code=2, status="error",
+                    stderr_tail="Reading additional input from stdin...\n"
+                    "Error: unexpected argument '--frobnicate' found\n",
+                    stdout_tail="",
+                ),
+            ],
+            codex=True,
+        )
+
+        self.assertEqual(result["status"], "failed")
+        self.assertEqual(
+            result["error"],
+            "IMProof Codex author failed: Error: unexpected argument '--frobnicate' found",
+        )
+        self.assertFalse((output / "proof.tex").exists())
+
+    def test_successful_codex_calls_keep_the_run_finished(self) -> None:
+        result, output = self._run(
+            [
+                _cli_exit("cfg_codex_author", exit_code=0, status="done", stderr_tail=""),
+                _cli_exit("cfg_codex_critic", exit_code=0, status="done", stderr_tail=""),
+                _cli_exit("cfg_codex_author", exit_code=0, status="done", stderr_tail=""),
+            ],
+            codex=True,
         )
 
         self.assertEqual(result["status"], "finished")

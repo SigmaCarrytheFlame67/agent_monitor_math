@@ -127,7 +127,12 @@ def _kimi_terminal_error(native_workspace: Path, problem_id: str) -> str | None:
     return None
 
 
-_CLAUDE_WORKER_ROLES = {"cfg_claude_author": "author", "cfg_claude_critic": "critic"}
+_CLI_WORKER_ROLES = {
+    "cfg_claude_author": ("Claude", "author"),
+    "cfg_claude_critic": ("Claude", "critic"),
+    "cfg_codex_author": ("Codex", "author"),
+    "cfg_codex_critic": ("Codex", "critic"),
+}
 
 
 def _event_text(native_workspace: Path, value: object) -> str:
@@ -147,45 +152,63 @@ def _event_text(native_workspace: Path, value: object) -> str:
         return ""
 
 
-def _claude_worker_failure(native_workspace: Path) -> str | None:
-    """Name the first Author/Critic call that failed, with Claude's reason.
+def _json_lines(text: str) -> list[dict]:
+    """The JSON objects among ``text``'s lines (a tail may start mid-line)."""
+    objects = []
+    for line in text.splitlines():
+        try:
+            value = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(value, dict):
+            objects.append(value)
+    return objects
+
+
+def _cli_worker_failure(native_workspace: Path) -> str | None:
+    """Name the first Author/Critic call that failed, with the CLI's reason.
 
     ProofStack logs a failed worker as a ``cli.exit`` event and carries on with
     the previous round's files, so neither its exit code nor its terminal
     metadata shows the failure.
     """
+    from agent_monitor.runners.codex_backend import _event_failure_message
+
     try:
-        lines = (native_workspace / "events.jsonl").read_text(
-            encoding="utf-8", errors="replace"
-        ).splitlines()
+        events = _json_lines(
+            (native_workspace / "events.jsonl").read_text(encoding="utf-8", errors="replace")
+        )
     except OSError:
         return None
-    for line in lines:
-        try:
-            event = json.loads(line)
-        except json.JSONDecodeError:
+    for event in events:
+        if event.get("kind") != "cli.exit":
             continue
-        if not isinstance(event, dict) or event.get("kind") != "cli.exit":
-            continue
-        role = _CLAUDE_WORKER_ROLES.get(str(event.get("agent")))
+        worker = _CLI_WORKER_ROLES.get(str(event.get("agent")))
         payload = event.get("payload")
-        if role is None or not isinstance(payload, dict):
+        if worker is None or not isinstance(payload, dict):
             continue
         if payload.get("status") == "done" and payload.get("exit_code") == 0:
             continue
+        cli, role = worker
         stderr = _event_text(native_workspace, payload.get("stderr_tail"))
-        marker = f"IMProof Claude {role} failed:"
+        marker = f"IMProof {cli} {role} failed:"
         if marker in stderr:
+            # The Claude worker's own line, with Claude Code's reason.
             detail = stderr[stderr.rfind(marker):]
         else:
-            said = [part.strip() for part in stderr.splitlines() if part.strip()]
-            detail = said[-1] if said else ""
+            # Codex reports why its turn failed in its JSON stream on stdout.
+            stdout = _event_text(native_workspace, payload.get("stdout_tail"))
+            said = _event_failure_message(_json_lines(stdout))
+            if not said:
+                said_lines = [part.strip() for part in stderr.splitlines() if part.strip()]
+                said = said_lines[-1] if said_lines else ""
+            detail = f"{marker} {said}" if said else ""
         detail = " ".join(detail.split())[:1200]
         if detail:
             return detail
         if payload.get("reason") == "timeout":
-            return f"IMProof Claude {role} call timed out"
-        return f"IMProof Claude {role} call failed (exit {payload.get('exit_code')})"
+            return f"IMProof {cli} {role} call timed out"
+        return f"IMProof {cli} {role} call failed (exit {payload.get('exit_code')})"
     return None
 
 
@@ -752,10 +775,10 @@ def run_problem(
         on_output=on_output,
     )
     terminal_error = None
-    if claude_subscription and native_workspace is not None:
+    if (claude_subscription or codex_subscription) and native_workspace is not None:
         # Whatever the workflow's exit code, a failed Author/Critic call (a
         # usage limit, expired login, timeout) is the run's real outcome.
-        terminal_error = _claude_worker_failure(native_workspace)
+        terminal_error = _cli_worker_failure(native_workspace)
     if terminal_error is None and rc == 0 and native_workspace is not None:
         if kimi_api:
             terminal_error = _kimi_terminal_error(native_workspace, pid)
