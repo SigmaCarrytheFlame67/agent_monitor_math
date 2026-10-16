@@ -487,5 +487,135 @@ class ClaudeDeepAgentsRunErrorTests(unittest.TestCase):
                 self.assertIn(reason, parser.terminal_error or "")
 
 
+def _langchain_stub_modules() -> dict[str, types.ModuleType]:
+    """The langchain_core names the Claude chat model uses (not installed here)."""
+
+    class BaseChatModel:
+        def __init__(self, **fields):
+            self.__dict__.update(fields)
+
+    class AIMessage:
+        def __init__(self, content="", tool_calls=None, usage_metadata=None, response_metadata=None):
+            self.content, self.tool_calls = content, tool_calls or []
+            self.usage_metadata, self.response_metadata = usage_metadata, response_metadata
+
+    class ChatGeneration:
+        def __init__(self, message):
+            self.message = message
+
+    class ChatResult:
+        def __init__(self, generations, llm_output=None):
+            self.generations, self.llm_output = generations, llm_output
+
+    def module(name: str, **attributes) -> types.ModuleType:
+        stub = types.ModuleType(name)
+        stub.__dict__.update(attributes)
+        return stub
+
+    return {
+        "langchain_core": module("langchain_core"),
+        "langchain_core.language_models": module("langchain_core.language_models"),
+        "langchain_core.language_models.chat_models": module(
+            "langchain_core.language_models.chat_models", BaseChatModel=BaseChatModel
+        ),
+        "langchain_core.messages": module("langchain_core.messages", AIMessage=AIMessage),
+        "langchain_core.outputs": module(
+            "langchain_core.outputs", ChatGeneration=ChatGeneration, ChatResult=ChatResult
+        ),
+        "langchain_core.utils": module("langchain_core.utils"),
+        "langchain_core.utils.function_calling": module(
+            "langchain_core.utils.function_calling", convert_to_openai_tool=lambda tool: tool
+        ),
+    }
+
+
+class ClaudeDeepAgentsCacheUsageTests(unittest.TestCase):
+    """Claude Code reports nearly all of a step's prompt as cache reads/writes."""
+
+    def _usage_metadata(self, usages: list[dict[str, int]]) -> dict:
+        from agent_monitor.runners import claude_backend
+
+        # The first reply is invalid, so the step makes a repair call too.
+        replies = ["not-json", json.dumps({"kind": "text", "text": "done", "tool_calls": []})]
+
+        def fake_exec(_system, _user, **_kwargs):
+            return claude_backend.ClaudeResult(
+                text=replies.pop(0), usage=usages.pop(0), model="claude-haiku-4-5-20251001",
+                cost_usd=None, events=(), terminal_event={},
+            )
+
+        human = types.SimpleNamespace(type="human", content="Prove it.")
+        with (
+            tempfile.TemporaryDirectory() as tmp,
+            patch.dict(sys.modules, _langchain_stub_modules()),
+            patch.object(claude_backend, "claude_exec", side_effect=fake_exec),
+            patch.dict(os.environ, {"AGENT_MONITOR_CLAUDE_SUBSCRIPTION": "1", "CLAUDE_CONFIG_DIR": tmp}, clear=True),
+        ):
+            model = deepagents_runner._create_claude_subscription_model(Path(tmp), "claude-haiku-4-5")
+            return model._generate([human], tools=[]).generations[0].message.usage_metadata
+
+    def test_step_usage_counts_cache_reads_and_writes_as_input(self) -> None:
+        usage = self._usage_metadata([
+            {"input_tokens": 6, "output_tokens": 20, "cache_read_tokens": 41000, "cache_write_tokens": 9000},
+            {"input_tokens": 3, "output_tokens": 100, "cache_read_tokens": 40000, "cache_write_tokens": 500},
+        ])
+
+        self.assertEqual(usage, {
+            "input_tokens": 90509,
+            "output_tokens": 120,
+            "total_tokens": 90629,
+            "input_token_details": {"cache_read": 81000, "cache_creation": 9500},
+        })
+
+    def test_step_usage_without_cache_is_unchanged(self) -> None:
+        usage = self._usage_metadata([
+            {"input_tokens": 2, "output_tokens": 3},
+            {"input_tokens": 2, "output_tokens": 3},
+        ])
+
+        self.assertEqual(usage, {"input_tokens": 4, "output_tokens": 6, "total_tokens": 10})
+
+    def test_monitor_totals_include_the_cached_input(self) -> None:
+        # handle_message dispatches on the LangChain class name.
+        message = type("AIMessage", (), {"id": "m1", "content": "", "tool_calls": []})()
+        message.usage_metadata = {
+            "input_tokens": 90509,
+            "output_tokens": 120,
+            "total_tokens": 90629,
+            "input_token_details": {"cache_read": 81000, "cache_creation": 9500},
+        }
+
+        class Agent:
+            def stream(self, *_args, **_kwargs):
+                yield {"messages": [message]}
+
+        output = io.StringIO()
+        with tempfile.TemporaryDirectory() as tmp:
+            previous = Path.cwd()
+            os.chdir(tmp)
+            try:
+                with (
+                    patch.dict(os.environ, {"AGENT_MONITOR_CLAUDE_SUBSCRIPTION": "1", "CLAUDE_CONFIG_DIR": tmp},
+                               clear=True),
+                    patch.dict(sys.modules, _deepagents_stub_modules(Agent())),
+                    patch.object(sys, "argv", ["deepagents_runner.py", "Prove it."]),
+                    patch.object(deepagents_runner, "_install_termination_handlers"),
+                    patch.object(deepagents_runner, "_create_claude_subscription_model", return_value=object()),
+                    patch.object(deepagents_runner, "_run_supplemental_audit"),
+                    contextlib.redirect_stdout(output),
+                ):
+                    deepagents_runner.main()
+            finally:
+                os.chdir(previous)
+
+        parser = CLIEventParser("codex", source_engine="deepagents")
+        parser.feed(output.getvalue())
+        self.assertEqual(parser.usage["input_tokens"], 90509)
+        self.assertEqual(parser.usage["cache_read_tokens"], 81000)
+        self.assertEqual(parser.usage["cache_write_tokens"], 9500)
+        self.assertEqual(parser.usage["output_tokens"], 120)
+        self.assertEqual(parser.total_input_tokens(), 90509)
+
+
 if __name__ == "__main__":
     unittest.main()

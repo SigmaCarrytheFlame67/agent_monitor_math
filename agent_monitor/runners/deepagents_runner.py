@@ -1744,19 +1744,28 @@ def _create_claude_subscription_model(workspace: Path, model_name: str):
                     }
                 )
 
-            input_tokens = sum(
-                int((result.usage or {}).get("input_tokens") or 0)
-                for result in results
-            )
-            output_tokens = sum(
-                int((result.usage or {}).get("output_tokens") or 0)
-                for result in results
-            )
+            def usage_total(name: str) -> int:
+                return sum(
+                    int((result.usage or {}).get(name) or 0) for result in results
+                )
+
+            # Claude Code reports cache reads and writes (nearly the whole
+            # prompt of each step) apart from input_tokens; LangChain counts
+            # them inside input_tokens and breaks them out in the details.
+            cache_read = usage_total("cache_read_tokens")
+            cache_write = usage_total("cache_write_tokens")
+            input_tokens = usage_total("input_tokens") + cache_read + cache_write
+            output_tokens = usage_total("output_tokens")
             usage = {
                 "input_tokens": input_tokens,
                 "output_tokens": output_tokens,
                 "total_tokens": input_tokens + output_tokens,
             }
+            if cache_read or cache_write:
+                usage["input_token_details"] = {
+                    "cache_read": cache_read,
+                    "cache_creation": cache_write,
+                }
             actual_models = [
                 str(result.model)
                 for result in results
@@ -2106,10 +2115,17 @@ def main() -> int:
             if usage:
                 total_in += int(usage.get("input_tokens") or 0)
                 total_out += int(usage.get("output_tokens") or 0)
+                details = usage.get("input_token_details")
+                if not isinstance(details, dict):
+                    details = {}
                 emit({
                     "type": "turn.completed",
                     "usage": {
+                        # LangChain's input_tokens already include the cache
+                        # reads and writes broken out here (Codex semantics).
                         "input_tokens": int(usage.get("input_tokens") or 0),
+                        "cached_input_tokens": int(details.get("cache_read") or 0),
+                        "cache_write_tokens": int(details.get("cache_creation") or 0),
                         "output_tokens": int(usage.get("output_tokens") or 0),
                     },
                 })
