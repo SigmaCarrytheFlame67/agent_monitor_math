@@ -321,6 +321,19 @@ button.start:disabled { opacity: .4; }
 .sess-btn.show { display: inline-flex; }
 .sess-btn.stop:hover { border-color: var(--err); color: var(--err); }
 .sess-btn.cont:hover { border-color: var(--ok); color: var(--ok); }
+/* A run this account may only read (another project member's): the server
+   refuses every change to it, so none is offered. */
+html.read-only-run #sess-stop, html.read-only-run #sess-cont,
+html.read-only-run #proof-edit-btn, html.read-only-run #proof-save-btn, html.read-only-run #proof-done-btn,
+html.read-only-run .chat-compose, html.read-only-run #sel-pop, html.read-only-run .lean-chat-compose,
+html.read-only-run #lean-model-label, html.read-only-run #lean-model, html.read-only-run #lean-compile, html.read-only-run #lean-check,
+html.read-only-run #lean-audit, html.read-only-run #lean-engine, html.read-only-run #lean-harness, html.read-only-run #lean-gen,
+html.read-only-run .run-change { display: none !important; }
+.run-access-note { display: none; align-items: center; gap: 10px; padding: 7px 20px; border-bottom: 1px solid var(--border); flex-shrink: 0;
+  background: color-mix(in srgb, var(--accent) 5%, var(--panel)); color: var(--muted); font-size: 12px; line-height: 1.45; }
+html.read-only-run .run-access-note { display: flex; }
+.run-access-note .badge { flex: none; padding: 2px 8px; border: 1px solid color-mix(in srgb, var(--accent) 35%, var(--border));
+  border-radius: 999px; color: var(--accent); font-weight: 600; font-size: 11px; }
 
 .session-body { flex: 1; min-height: 0; overflow: hidden; display: flex; flex-direction: column; }
 
@@ -1438,6 +1451,7 @@ button:focus-visible, a:focus-visible, select:focus-visible { outline: 2px solid
   .seg-control { max-width: 100%; overflow-x: auto; flex-shrink: 0; }
   .seg-control button { white-space: nowrap; padding: 8px 11px; font-size: 12px; }
   .session-top { padding: 10px 12px; }
+  .run-access-note { padding: 6px 12px; font-size: 11px; }
   .session-side { max-width: 100%; }
   .session-meta { max-width: 140px; }
   .sandbox-split { display: flex; flex-direction: column; overflow-y: auto; }
@@ -1942,6 +1956,7 @@ body { background:var(--bg); }
           <span class="session-meta" id="run-meta">—</span>
         </div>
       </div>
+      <div class="run-access-note" role="note"><span class="badge">Read only</span><span>You can follow this run; only the member who started it can change it.</span></div>
       <div class="session-body">
         <div id="view-sandbox">
           <div class="sandbox-split">
@@ -2066,7 +2081,7 @@ body { background:var(--bg); }
             <span class="lean-badge none" id="lean-badge">—</span>
             <span class="sub" id="lean-meta">—</span>
             <span style="flex:1"></span>
-            <span style="font-size:11px;color:var(--dim)">Model</span>
+            <span id="lean-model-label" style="font-size:11px;color:var(--dim)">Model</span>
             <select id="lean-model"></select>
             <button class="btn-secondary" id="lean-compile" title="Compile the current Proof.lean (no LLM)">Compile</button>
             <button class="btn-secondary" id="lean-check" title="Typecheck and flag remaining sorry/admit">Check</button>
@@ -3892,7 +3907,7 @@ function selectRun(rid,jid){
   lastSandboxRun=null;
   leanRefreshSeq++;
   if(typeof leanPollTimer!=='undefined'&&leanPollTimer){ clearTimeout(leanPollTimer); leanPollTimer=null; }
-  syncLeanControls();
+  syncLeanControls(); syncRunAccess();
   resetProofView(); loadRuns();
   syncRunToMonitor(rid); loadChat(); $('chat-send').disabled=!rid;
   updateChatStatus(null);
@@ -4333,8 +4348,23 @@ function problemItems(run){
 function updateProblemStrip(run){
   const row=$('problem-message-row'); if(row) row.style.display='none';
   lastSandboxRun=run;
-  /* The Lean controls follow the run's pipeline state. */
-  syncLeanControls();
+  /* The Lean controls follow the run's pipeline state, and every change
+     control who may change the run. */
+  syncLeanControls(); syncRunAccess();
+}
+/* Project members read each other's runs, but only a run's owner, or the
+   operator, may change one: the server's _is_run_owner, where a legacy run
+   with no owner is the operator's. The server answers the rest with 403. */
+function canChangeRun(run){
+  // Unknown until both the account and the run's record have loaded.
+  if(!run||CURRENT_USER?.id==null)return true;
+  return run.owner_id==null?viewerIsAdmin():run.owner_id===CURRENT_USER.id||viewerIsAdmin();
+}
+function syncRunAccess(){
+  const root=document.documentElement, readOnly=!canChangeRun(lastSandboxRun?.run_id===runId?lastSandboxRun:null);
+  // The Lean source follows only a change, never unlocking one locked elsewhere.
+  const code=$('lean-code'); if(code&&readOnly!==root.classList.contains('read-only-run'))code.readOnly=readOnly;
+  root.classList.toggle('read-only-run',readOnly);
 }
 
 /* ── prompt strip: the full text sent to the engine (persona + instructions + problem) ── */
@@ -5915,6 +5945,8 @@ function syncDagRebuild(){
   btn.hidden=dagMode==='compiler'||!runId;
   btn.disabled=dagRebuildBusy||guestWait;
   btn.textContent=reload?'↻ Refresh':'↻ Rebuild';
+  // A reload only reads the run; a rebuild changes it (hidden on read-only runs).
+  btn.classList.toggle('run-change',!reload);
   const spends=guest?' · uses one guest Formal/DAG action':'';
   btn.title=guestWait?'Available when the automatic Formal and DAG pipeline finishes'
     :dagMode==='analysis'?'Reload the Manuscript DAG from the saved analysis (no model call, no action used)'
@@ -7855,7 +7887,8 @@ function analysisDetailActions(node,meta,ref){
       :'Last re-check '+String(recheck.status||'')+(recheck.error?': '+dagDetailText(recheck.error,300):'');
   }
   const row=analyzeEl('div','analysis-action-row');
-  const recheckButton=analyzeEl('button','','↻ Re-check'); recheckButton.type='button';
+  // Re-check and Formalize change the run: hidden on a run this account may only read.
+  const recheckButton=analyzeEl('button','run-change','↻ Re-check'); recheckButton.type='button';
   const checkable=meta.checkable===true;
   // A guest re-checks a few results per analysis (the server counts them).
   const guestLimit=viewerIsGuest()?Number(analyzePolicy()?.rechecks_per_analysis)||0:0;
@@ -7867,7 +7900,7 @@ function analysisDetailActions(node,meta,ref){
     :'Check this result again with the model verifier (one result, a few calls'+(guestLimit?`; guests re-check ${guestLimit} results per analysis, ${Math.max(0,guestLimit-used)} left`:'')+')';
   if(spent&&!status.textContent)status.textContent=`Guests can re-check ${guestLimit} results of an analysis — sign in to re-check more.`;
   recheckButton.onclick=()=>recheckAnalysisNode(node,status,recheckButton);
-  const formalize=analyzeEl('button','','∎ Formalize statement'); formalize.type='button';
+  const formalize=analyzeEl('button','run-change','∎ Formalize statement'); formalize.type='button';
   formalize.disabled=!run||running;
   formalize.title=running?'Available when the analysis finishes':'Formalize this statement in Lean on this server (statements only; proofs are not attempted)';
   formalize.onclick=()=>formalizeAnalysisNode(node);
