@@ -1,10 +1,12 @@
 """Ansatz CGM "Max": Claude Code leads (strategist, verifier, curator), Codex works."""
 from __future__ import annotations
 
+import base64
 import copy
 import json
 import tempfile
 import unittest
+from contextlib import ExitStack
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
@@ -574,6 +576,81 @@ class MaxJobTests(unittest.TestCase):
                     jobs._continuation_auth_environment(
                         run_data=record, engine="math_harness", model="max", user=_ADMIN, env={}
                     )
+
+    def _follow_up(self, tmp: Path, run_id: str, message: str, *, claude=True, codex=True):
+        account_patches, *_ = _accounts(tmp, claude=claude, codex=codex)
+        upload = {"name": "notes.md", "data": base64.b64encode(b"Try induction on n.").decode("ascii")}
+        with ExitStack() as stack:
+            for item in (
+                patch("agent_monitor.engines_registry.list_engines", return_value=[dict(_HARNESS)]),
+                patch.object(jobs, "_user_extra_env", return_value={"HOME": "/srv/home"}),
+                patch("agent_monitor.jobs.threading.Thread", _FakeThread),
+                *account_patches,
+            ):
+                stack.enter_context(item)
+            return jobs.send_human_message(run_id, message, user=_ADMIN, attachments=[upload])
+
+    def test_a_follow_up_refused_on_its_route_is_not_recorded(self) -> None:
+        max_record = {
+            "run_id": "math_harness_max_follow_up",
+            "engine": "math_harness",
+            "status": "finished",
+            "owner_id": 17,
+            "model": "max",
+            "auth_route": "dual_subscription",
+            "live": {"auth_mode": "dual_subscription", "model": "max"},
+            "reasoning_effort": "max",
+            "speed_mode": "standard",
+            "route_plan": {"advisor": {"model": "fable"}, "worker": {"model": "gpt-6-astra"}},
+            "problem_text": "Prove 1+1=2",
+            "problems": [{"text": "Prove 1+1=2", "source": "initial"}],
+        }
+        codex_record = {
+            **{key: value for key, value in max_record.items() if key != "route_plan"},
+            "run_id": "math_harness_codex_follow_up",
+            "model": "gpt-6-astra",
+            "auth_route": "codex_subscription",
+            "live": {"auth_mode": "chatgpt_subscription", "model": "gpt-6-astra"},
+            "reasoning_effort": "high",
+        }
+        with tempfile.TemporaryDirectory() as raw, ExitStack() as stack:
+            tmp = Path(raw)
+            stack.enter_context(patch.object(jobs, "RUNS_DIR", tmp / "runs"))
+            stack.enter_context(patch.object(jobs, "CACHE_DIR", tmp / "cache"))
+            stack.enter_context(patch.object(jobs, "_JOBS", {}))
+            stack.enter_context(patch.object(jobs, "_STOP_EVENTS", {}))
+            for record, refusal, disconnected in (
+                (max_record, "Claude Code is not connected", {"claude": False}),
+                (max_record, "Codex is not connected", {"codex": False}),
+                (codex_record, "Codex is not connected", {"codex": False}),
+            ):
+                run_id = record["run_id"]
+                workspace = jobs.workspace_dir(run_id)
+                jobs._write_run(copy.deepcopy(record))
+                with self.assertRaisesRegex(ValueError, refusal):
+                    self._follow_up(tmp, run_id, "Now also prove 2+2=4", **disconnected)
+                # Nothing shows as sent: no chat entry, session problem or file.
+                self.assertEqual(jobs.list_chat(run_id), [], refusal)
+                self.assertEqual([item["text"] for item in jobs._load_run_record(run_id)["problems"]], ["Prove 1+1=2"])
+                self.assertFalse((workspace / "problems.json").exists())
+                self.assertFalse((workspace / "attachments").exists())
+                self.assertFalse(jobs.run_is_active(run_id))
+
+            # Once the account is back, the same message is sent exactly once.
+            run_id = max_record["run_id"]
+            result = self._follow_up(tmp, run_id, "Now also prove 2+2=4")
+            self.assertEqual(result["status"], "continuing")
+            chat = jobs.list_chat(run_id)
+            self.assertEqual([entry["content"] for entry in chat if entry["role"] == "user"], ["Now also prove 2+2=4"])
+            self.assertEqual(len(chat[0]["attachments"]), 1)
+            problems = [item["text"] for item in jobs._load_run_record(run_id)["problems"]]
+            self.assertEqual(len(problems), 2)
+            self.assertTrue(problems[1].startswith("Now also prove 2+2=4"))
+            # Feedback for a running continuation is still queued; its route
+            # is checked when it starts.
+            self.assertTrue(jobs.run_is_active(run_id))
+            queued = self._follow_up(tmp, run_id, "Then prove 3+3=6", claude=False)
+            self.assertEqual(queued["status"], "queued")
 
     def test_billing_tuning_and_route_records(self) -> None:
         self.assertEqual(usage_ledger.billing_class({"auth_route": "dual_subscription"}), "subscription")

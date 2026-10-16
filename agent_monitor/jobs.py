@@ -5811,6 +5811,18 @@ def send_human_message(
         if feedback_error:
             raise ValueError(feedback_error)
     _tool_free_follow_up(run_id, recorded, recorded_engine, model)
+    if not run_is_active(run_id):
+        # This message would continue the run now, so its route must pass
+        # (linked accounts, keys) before anything is recorded; the launch
+        # checks again.  Feedback for an active run is checked when it starts.
+        preflight_model = _continuation_model(recorded, model)
+        _continuation_auth_environment(
+            run_data=recorded,
+            engine=recorded_engine,
+            model=preflight_model,
+            user=user,
+            env=_user_extra_env(user, preflight_model, recorded.get("subagent_model")),
+        )
 
     attached = research_attachments.save(ws, attachment_batch)
     display_message = message or (
