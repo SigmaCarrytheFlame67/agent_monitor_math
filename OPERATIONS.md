@@ -169,7 +169,10 @@ ceilings, so an environment value can only lower them.
   billed to an API key. Each call sees only its own account: Codex calls get
   `CODEX_HOME` and the service `HOME`, never `CLAUDE_CONFIG_DIR`, and Claude
   calls never get `CODEX_HOME`. Each call may take 1800 s and the run 10800 s
-  (`agent_monitor/cgm_max.py`); concurrency stays 1. The receipt is schema 4:
+  (`agent_monitor/cgm_max.py`); concurrency stays 1. The outer watchdog is at
+  least 11100 s: `AGENT_MONITOR_CLI_TIMEOUT` and
+  `AGENT_MONITOR_MATH_HARNESS_TIMEOUT` can raise it but never lower it, since
+  a stopped run publishes nothing. The receipt is schema 4:
   transport `hybrid`, with `workflow.routes` naming the advisor (Claude Code)
   and worker (Codex) models, and every call checked against its side. A
   follow-up continues as Max, or stops if either account was disconnected.

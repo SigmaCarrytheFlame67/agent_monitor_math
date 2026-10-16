@@ -4082,6 +4082,11 @@ def _cli_timeout_seconds(engine: str, env: dict[str, str]) -> int:
     except (TypeError, ValueError):
         requested = default
     bounded = max(60, min(requested, 86_400))
+    if normalized == "MATH_HARNESS" and env.get(cgm_max.ROUTE_MODE_ENV) == "max":
+        # Max fixes its own call and run limits (cgm_max.apply_models), and a
+        # runner the watchdog stops publishes nothing: operator timeouts may
+        # raise a Max run's watchdog but never cut the run short.
+        bounded = max(bounded, default, cgm_max.RUN_SECONDS + 300)
     if env.get("AGENT_MONITOR_SPONSORED_KIMI") == "1":
         bounded = min(bounded, _SPONSORED_KIMI_CLI_TIMEOUT_MAX)
     return bounded

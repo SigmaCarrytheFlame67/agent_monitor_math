@@ -473,6 +473,31 @@ class MaxJobTests(unittest.TestCase):
         jobs._apply_selected_model_env(projected, engine="math_harness", model="max")
         self.assertEqual((projected["AGENT_MONITOR_CLAUDE_MODEL"], projected["AGENT_MONITOR_CODEX_MODEL"]), ("fable", "gpt-6-astra"))
 
+    def test_operator_cli_timeouts_never_cut_a_max_run_short(self) -> None:
+        from agent_monitor.subprocess_env import child_process_env
+
+        with tempfile.TemporaryDirectory() as raw:
+            _job, _written, captured, *_ = self._start(Path(raw))
+        extra = captured["extra_env"]
+
+        def watchdog(operator: dict[str, str], extra_env: dict[str, str] = extra) -> int:
+            # The runner thread copies the service environment, then the run's.
+            with patch.dict("os.environ", operator):
+                return jobs._cli_timeout_seconds("math_harness", child_process_env(extra=extra_env))
+
+        # A Max run stopped by the watchdog publishes nothing, so the generic
+        # limit (.env.example) and the engine's own may only raise it.
+        for operator in (
+            {"AGENT_MONITOR_CLI_TIMEOUT": "3600"},
+            {"AGENT_MONITOR_CLI_TIMEOUT": "7200"},
+            {"AGENT_MONITOR_MATH_HARNESS_TIMEOUT": "3600"},
+        ):
+            self.assertGreaterEqual(watchdog(operator), cgm_max.RUN_SECONDS + 300, operator)
+        self.assertEqual(watchdog({"AGENT_MONITOR_CLI_TIMEOUT": "20000"}), 20_000)
+        # A single Claude-subscription CGM run keeps the operator's lower limit.
+        claude_only = {key: value for key, value in extra.items() if key != cgm_max.ROUTE_MODE_ENV}
+        self.assertEqual(watchdog({"AGENT_MONITOR_CLI_TIMEOUT": "3600"}, claude_only), 3_600)
+
     def test_worker_falls_back_to_the_best_codex_model_the_account_offers(self) -> None:
         with tempfile.TemporaryDirectory() as raw:
             tmp = Path(raw)
