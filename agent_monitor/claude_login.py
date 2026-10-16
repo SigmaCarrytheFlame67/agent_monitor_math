@@ -180,7 +180,13 @@ def _auth_status(home: Path, *, force: bool = False) -> dict[str, Any]:
         return dict(cached[1])
     payload = _run_auth_status(home)
     with _cache_lock:
-        _auth_cache[key] = (time.monotonic(), dict(payload))
+        # Probes overlap (polls, Settings, the login reader).  An answer is as
+        # old as its probe's start: one that began before the cached answer's
+        # probe, such as a poll started before the sign-in saved its
+        # credentials, must not replace it.
+        current = _auth_cache.get(key)
+        if current is None or current[0] <= now:
+            _auth_cache[key] = (now, dict(payload))
     return payload
 
 

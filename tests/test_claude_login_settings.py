@@ -301,6 +301,43 @@ class ClaudeLoginTests(unittest.TestCase):
             self.assertTrue(final["connected"])
             self.assertEqual(procs[0].returncode, -15)
 
+    def test_a_probe_started_before_a_newer_one_never_replaces_its_answer(self) -> None:
+        # A poll's `claude auth status` that began before the sign-in saved its
+        # credentials can finish after the login reader's own check: the
+        # reader's newer answer must stay cached, or polls report the finished
+        # sign-in as not connected.
+        probes = []
+        started = threading.Event()
+        release = threading.Event()
+
+        def probe(home):
+            probes.append(home)
+            if len(probes) == 1:
+                started.set()
+                release.wait(10)
+                return {"loggedIn": False, "authMethod": "none", "apiProvider": "firstParty"}
+            return {"loggedIn": True, "authMethod": "claude.ai", "apiProvider": "firstParty"}
+
+        with (
+            tempfile.TemporaryDirectory() as tmp,
+            patch.object(claude_login, "_run_auth_status", side_effect=probe),
+        ):
+            home = Path(tmp)
+            slow: dict = {}
+            poll = threading.Thread(target=lambda: slow.update(claude_login._auth_status(home)))
+            poll.start()
+            try:
+                self.assertTrue(started.wait(10))
+                fresh = claude_login._auth_status(home, force=True)
+            finally:
+                release.set()
+                poll.join(10)
+            cached = claude_login._auth_status(home)
+        self.assertFalse(slow["loggedIn"])
+        self.assertTrue(fresh["loggedIn"])
+        self.assertTrue(cached["loggedIn"])
+        self.assertEqual(len(probes), 2)
+
     def test_expired_refresh_token_is_fail_closed_without_model_probe(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             home = Path(tmp)

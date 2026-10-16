@@ -2970,8 +2970,8 @@ async function chooseAccountRuntime(value){
 
 
 /* ── ChatGPT/Codex subscription shared by supported harnesses ── */
-let CODEX_POLL_TIMER=null, LAST_CODEX_STATUS={status:'loading',running:false,connected:false,codex_installed:true};
-function stopCodexPoll(){ if(CODEX_POLL_TIMER){clearInterval(CODEX_POLL_TIMER);CODEX_POLL_TIMER=null;} }
+let CODEX_POLL={timer:null,loop:null}, LAST_CODEX_STATUS={status:'loading',running:false,connected:false,codex_installed:true};
+function stopCodexPoll(){ stopSignInPoll(CODEX_POLL); }
 function safeExternalAuthUrl(raw){
   try{
     const url=new URL(String(raw||''));
@@ -2984,6 +2984,32 @@ function safeExternalAuthUrl(raw){
 // instead of rendering the missing install flag as "CLI not installed".
 function failedLoginStatus(last,body,fallback){
   return {...last,status:'error',running:false,error:String(body?.error||fallback)};
+}
+/* A sign-in poll sends its next request only after the last reply is applied,
+   so a slow reply (a `claude auth status` probe can take seconds) never lands
+   after a newer one, and a stopped poll (Cancel, Settings closed, a restart)
+   drops a reply still on its way. A reply that never comes (a network or proxy
+   error) is retried with backoff before the card says contact was lost. */
+const SIGN_IN_POLL_MS=1500, SIGN_IN_POLL_TRIES=3;
+function stopSignInPoll(poll){ poll.loop=null; if(poll.timer){clearTimeout(poll.timer);poll.timer=null;} }
+function startSignInPoll(poll,url,product,last,apply){
+  stopSignInPoll(poll);
+  let misses=0;
+  const loop=async()=>{
+    poll.timer=null;
+    let st=null;
+    try{ const response=await fetch(url), body=await response.json(); st=response.ok?body:failedLoginStatus(last(),body,product+' sign-in status is unavailable'); }catch(error){}
+    if(poll.loop!==loop)return;  // stopped or restarted while this request was out
+    if(!st){
+      if(++misses<SIGN_IN_POLL_TRIES){ poll.timer=setTimeout(loop,SIGN_IN_POLL_MS*2**misses); return; }
+      st=failedLoginStatus(last(),null,'Lost contact with the '+product+' sign-in. Reopen Settings to see whether it finished.');
+    }
+    misses=0;
+    await apply(st);
+    if(poll.loop===loop&&st.status==='running')poll.timer=setTimeout(loop,SIGN_IN_POLL_MS);
+  };
+  poll.loop=loop;
+  poll.timer=setTimeout(loop,SIGN_IN_POLL_MS);
 }
 /* Self-registered members cannot sign in with a Claude or ChatGPT plan here
    (settings subscription_policy is "admin_only"): the providers do not let a
@@ -3081,19 +3107,9 @@ async function refreshCodexCard(){
   if(SETTINGS?.subscription_policy?.codex==='admin_only'){renderCodexCard();return;}
   try{ const response=await fetch('/api/settings/codex/status'); if(!response.ok)return; const st=await response.json(); await applyCodexStatus(st); if(st.status==='running')startCodexPoll(); }catch(e){}
 }
-function startCodexPoll(){
-  stopCodexPoll();
-  CODEX_POLL_TIMER=setInterval(async()=>{
-    try{
-      const response=await fetch('/api/settings/codex/login/poll'), body=await response.json();
-      const st=response.ok?body:failedLoginStatus(LAST_CODEX_STATUS,body,'Codex sign-in status is unavailable');
-      await applyCodexStatus(st);
-      if(st.status!=='running')stopCodexPoll();
-    }catch(e){ stopCodexPoll(); }
-  },1500);
-}
-let CLAUDE_POLL_TIMER=null, LAST_CLAUDE_STATUS={status:'loading',running:false,connected:false,reauth_required:false,claude_installed:true,models:[]};
-function stopClaudePoll(){ if(CLAUDE_POLL_TIMER){clearInterval(CLAUDE_POLL_TIMER);CLAUDE_POLL_TIMER=null;} }
+function startCodexPoll(){ startSignInPoll(CODEX_POLL,'/api/settings/codex/login/poll','Codex',()=>LAST_CODEX_STATUS,applyCodexStatus); }
+let CLAUDE_POLL={timer:null,loop:null}, LAST_CLAUDE_STATUS={status:'loading',running:false,connected:false,reauth_required:false,claude_installed:true,models:[]};
+function stopClaudePoll(){ stopSignInPoll(CLAUDE_POLL); }
 function claudeCardBody(st){
   if(SETTINGS?.subscription_policy?.claude==='admin_only')return subscriptionPolicyBody('claude');
   if(!st.claude_installed)return `<div style="font-size:12px;color:var(--dim)">Claude Code CLI is not installed on the server. Install the official CLI before connecting an account.</div>`;
@@ -3147,18 +3163,7 @@ async function refreshClaudeCard(){
   if(SETTINGS?.subscription_policy?.claude==='admin_only'){renderClaudeCard();return;}
   try{ const response=await fetch('/api/settings/claude/status'); if(!response.ok)return; const st=await response.json(); await applyClaudeStatus(st); if(st.status==='running')startClaudePoll(); }catch(error){}
 }
-function startClaudePoll(){
-  stopClaudePoll();
-  CLAUDE_POLL_TIMER=setInterval(async()=>{
-    try{
-      const response=await fetch('/api/settings/claude/login/poll');
-      if(!response.ok)throw new Error('Claude login poll failed');
-      const st=await response.json();
-      await applyClaudeStatus(st);
-      if(st.status!=='running')stopClaudePoll();
-    }catch(error){ stopClaudePoll(); }
-  },1500);
-}
+function startClaudePoll(){ startSignInPoll(CLAUDE_POLL,'/api/settings/claude/login/poll','Claude',()=>LAST_CLAUDE_STATUS,applyClaudeStatus); }
 async function saveSettings(){
   // A runtime card switch in flight owns account_runtime until it settles.
   if(RUNTIME_SWITCH_PENDING||SETTINGS_SAVE_PENDING)return;

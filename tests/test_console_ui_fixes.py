@@ -220,5 +220,119 @@ const codex=connected=>({status:connected?'success':'idle',running:false,connect
         self.assertEqual(out["codexUnchanged"]["loads"], 2)
 
 
+
+@unittest.skipUnless(NODE, "node is unavailable")
+class SignInPollTests(unittest.TestCase):
+    PROGRAM = (
+        _CARDS_DOM
+        + _js_function("selectedAccountRuntime")
+        + "\n"
+        + _sign_in_cards()
+        + r"""
+const loadSettings=async()=>{loads++;};
+SETTINGS={account_runtime:'claude',subscription_policy:{claude:'available',codex:'available'},
+  claude_connected:false,codex_connected:false,claude_models:[],codex_models:[],models_by_runtime:{}};
+const waiting={status:'running',running:true,url:'https://claude.ai/oauth/authorize?x=1',awaiting_code:true,code_submitted:false,connected:false,claude_installed:true,models:[]};
+const finishing={...waiting,awaiting_code:false,code_submitted:true};
+const done={status:'success',running:false,connected:true,claude_installed:true,models:['sonnet','opus']};
+const deviceCode={status:'running',running:true,url:'https://auth.openai.com/codex/device',code:'ABCD-12345',output:'',connected:false,codex_installed:true};
+const state=()=>({status:LAST_CLAUDE_STATUS.status,connected:SETTINGS.claude_connected,polling:timers.length>0||requests.length>0,card:cardText('claude-card')});
+"""
+    )
+
+    def test_a_slow_poll_never_undoes_a_finished_sign_in(self) -> None:
+        program = self.PROGRAM + r"""
+(async()=>{
+  await applyClaudeStatus(finishing);
+  startClaudePoll();
+  // The server answers each poll as of when it arrived; the sign-in finishes
+  // while the first poll's slow `claude auth status` probe is still running.
+  let signedIn=false;
+  const stamp=()=>{ for(const request of requests)if(!('signedIn' in request))request.signedIn=signedIn; };
+  await tick(); stamp();
+  signedIn=true;
+  await tick(); stamp();
+  // Replies arrive newest first.
+  for(let round=0;round<8&&(requests.length||timers.length);round++){
+    const request=requests.at(-1);
+    if(request)await answer(request,reply(200,request.signedIn?done:finishing));
+    await tick(); stamp();
+  }
+  console.log(JSON.stringify(state()));
+})().catch(error=>{console.error(error);process.exit(1);});
+"""
+        out = _run(program)
+        self.assertEqual(out["status"], "success")
+        self.assertTrue(out["connected"])
+        self.assertFalse(out["polling"])
+        self.assertIn("Connected", out["card"])
+
+    def test_a_reply_that_arrives_after_cancel_is_dropped(self) -> None:
+        program = self.PROGRAM + r"""
+(async()=>{
+  await applyClaudeStatus(waiting);
+  startClaudePoll();
+  await tick();
+  // Cancel stops the poll and shows the cancelled sign-in; the poll that was
+  // already out answers afterwards.
+  stopClaudePoll();
+  await applyClaudeStatus({status:'cancelled',running:false,connected:false,claude_installed:true,models:[]});
+  await answer(requests[0],reply(200,waiting));
+  await tick();
+  console.log(JSON.stringify(state()));
+})().catch(error=>{console.error(error);process.exit(1);});
+"""
+        out = _run(program)
+        self.assertEqual(out["status"], "cancelled")
+        self.assertFalse(out["polling"])
+        self.assertIn("Connect via Claude", out["card"])
+
+    def test_a_lost_poll_is_retried_and_then_reported(self) -> None:
+        program = self.PROGRAM + r"""
+(async()=>{
+  const out={};
+  await applyClaudeStatus(finishing);
+  startClaudePoll();
+  const delays=[];
+  const next=async response=>{ await tick(); if(requests[0])await answer(requests[0],response); delays.push(timers.map(timer=>timer.ms)); };
+  // A proxy error is retried, and a reply in between starts the count again.
+  await next(proxyError(502)); out.retried=state();
+  await next(reply(200,finishing));
+  await next(proxyError(502));
+  await next(new TypeError('Failed to fetch'));
+  out.beforeLost=state();
+  await next(proxyError(504)); out.lost=state();
+  out.delays=delays;
+  // Codex: the same for its device-code sign-in; a refusal is shown at once.
+  await applyCodexStatus(deviceCode);
+  startCodexPoll();
+  for(let i=0;i<3;i++){ await tick(); if(requests[0])await answer(requests[0],proxyError(502)); }
+  out.codexLost={status:LAST_CODEX_STATUS.status,polling:timers.length>0||requests.length>0,card:cardText('codex-card')};
+  await applyCodexStatus(deviceCode);
+  startCodexPoll();
+  await tick(); if(requests[0])await answer(requests[0],reply(403,{error:'Codex sign-in is limited to the site administrator'}));
+  out.codexRefused={status:LAST_CODEX_STATUS.status,polling:timers.length>0||requests.length>0,card:cardText('codex-card')};
+  console.log(JSON.stringify(out));
+})().catch(error=>{console.error(error);process.exit(1);});
+"""
+        out = _run(program)
+        self.assertEqual(out["retried"]["status"], "running")
+        self.assertTrue(out["retried"]["polling"])
+        self.assertIn("Finishing the account connection", out["retried"]["card"])
+        self.assertTrue(out["beforeLost"]["polling"])
+        self.assertEqual(out["lost"]["status"], "error")
+        self.assertFalse(out["lost"]["polling"])
+        self.assertIn("Lost contact with the Claude sign-in", out["lost"]["card"])
+        self.assertIn("Connect via Claude", out["lost"]["card"])
+        # Retries back off; an answered poll goes back to the normal period.
+        self.assertEqual(out["delays"], [[3000], [1500], [3000], [6000], []])
+        self.assertEqual(out["codexLost"]["status"], "error")
+        self.assertFalse(out["codexLost"]["polling"])
+        self.assertIn("Lost contact with the Codex sign-in", out["codexLost"]["card"])
+        self.assertEqual(out["codexRefused"]["status"], "error")
+        self.assertFalse(out["codexRefused"]["polling"])
+        self.assertIn("Codex sign-in is limited to the site administrator", out["codexRefused"]["card"])
+
+
 if __name__ == "__main__":
     unittest.main()
