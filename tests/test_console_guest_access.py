@@ -2063,6 +2063,36 @@ def test_shared_profile_and_library_writes_are_operator_only(
     assert len(writes) == len(checks)
 
 
+def test_members_never_read_the_operators_run_records_in_the_library(
+    guest_console, monkeypatch: pytest.MonkeyPatch
+):
+    admin = auth.register("admin@example.test", "long-enough-password")
+    member = auth.register("member@example.test", "long-enough-password")
+    items = [
+        {"id": "memory_run_codex_adhoc_1", "type": "memory", "name": "Run p1 (codex)",
+         "content": "Problem: the operator's private problem", "source": "run:codex_adhoc_1"},
+        {"id": "memory_notes", "type": "memory", "name": "Notes", "content": "Shared notes"},
+        {"id": "skill_lean", "type": "skill", "name": "lean", "content": "Use Lean."},
+    ]
+    monkeypatch.setattr(library, "get_library", lambda: {
+        "items": items, "counts": {"memory": 2, "skill": 1, "tool": 0}, "settings": {"auto_memory": True},
+    })
+
+    with running_server() as port:
+        def read(account):
+            cookie = {"Cookie": f"{auth.SESSION_COOKIE}={auth.create_session(account['id'])}"}
+            status, _, raw = request(port, "GET", APP_MOUNT + "/api/library", headers=cookie)
+            assert status == 200, raw
+            return json.loads(raw)
+
+        shown = read(member)
+        everything = read(admin)
+    assert [item["id"] for item in shown["items"]] == ["memory_notes", "skill_lean"]
+    assert shown["counts"] == {"memory": 1, "skill": 1, "tool": 0}
+    assert "private problem" not in json.dumps(shown)
+    assert [item["id"] for item in everything["items"]] == [item["id"] for item in items]
+
+
 def test_finished_guest_run_starts_its_derived_pipeline_immediately(
     guest_console, guest_derived_state, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ):

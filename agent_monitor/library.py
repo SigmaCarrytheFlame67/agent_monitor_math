@@ -1076,6 +1076,18 @@ def get_library() -> dict[str, Any]:
     return {"items": items, "counts": counts, "settings": data["settings"]}
 
 
+def without_run_memories(payload: dict[str, Any]) -> dict[str, Any]:
+    """The library without its automatic run records, for accounts that are
+    not the operator: each one quotes an operator run's problem and answer."""
+    items = [
+        item for item in payload.get("items") or []
+        if not str(item.get("source") or "").startswith("run:")
+        and not str(item.get("id") or "").startswith("memory_run_")
+    ]
+    counts = {t: sum(1 for i in items if i.get("type") == t) for t in VALID_TYPES}
+    return {**payload, "items": items, "counts": counts}
+
+
 def run_trusted_tool(item_id: str, arguments: dict[str, Any]) -> dict[str, Any]:
     """Run an unmodified built-in tool through its bounded Python handler."""
     ensure_seeded()

@@ -2815,7 +2815,12 @@ class Handler(RunSharingMixin, ProjectsMixin, ResearchMixin, BaseHTTPRequestHand
                 return
             from agent_monitor import library
 
-            self._send(200, json.dumps(library.get_library(), ensure_ascii=False))
+            payload = library.get_library()
+            if not _is_operator_user(user):
+                # Members read the shared profile, not records of the
+                # operator's own runs (each quotes its problem and answer).
+                payload = library.without_run_memories(payload)
+            self._send(200, json.dumps(payload, ensure_ascii=False))
             return
 
         if path.startswith("/api/jobs/"):
