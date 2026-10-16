@@ -13,7 +13,7 @@ import time
 import unittest
 from unittest.mock import patch
 
-from agent_monitor import cgm_max, codex_login, jobs, lean_verify, settings
+from agent_monitor import cgm_max, claude_login, codex_login, jobs, lean_verify, settings
 from agent_monitor.runners import codex_backend
 
 SOURCE = "theorem main : True := by trivial\n"
@@ -394,6 +394,47 @@ class CodexReauthTests(unittest.TestCase):
         jobs._ensure_codex_auth(env, self.USER["id"])
         self.assertEqual(env["CODEX_HOME"], str(self.home))
         self.assertNotIn("OPENAI_API_KEY", env)
+
+    def test_a_flagged_login_never_moves_a_legacy_continuation_to_an_api_key(self) -> None:
+        # A run recorded before auth_route existed follows the current runtime.
+        legacy = {"run_id": "plain_legacy", "engine": "plain", "owner_id": self.USER["id"]}
+        engine = {"id": "plain", "auth_modes": ["api_key", "codex_subscription", "claude_subscription"]}
+        claude_home = self.root / "claude-account"
+
+        def continue_on(runtime: str, model: str) -> str:
+            env = {
+                "AGENT_MONITOR_ACCOUNT_RUNTIME": runtime,
+                "OPENAI_API_KEY": "sk-test-dormant",
+                "ANTHROPIC_API_KEY": "sk-ant-test-dormant",
+            }
+            return jobs._continuation_auth_environment(
+                run_data=legacy, engine="plain", model=model, user=self.USER, env=env
+            )[1]
+
+        with (
+            patch("agent_monitor.engines_registry.list_engines", return_value=[engine]),
+            patch.object(claude_login, "account_home", return_value=claude_home),
+            patch.object(
+                claude_login,
+                "_auth_status",
+                return_value={"loggedIn": True, "authMethod": "oauth", "apiProvider": "firstParty"},
+            ),
+        ):
+            codex_login.mark_reauth_required(self.home)
+            claude_login.mark_reauth_required(claude_home)
+            for runtime, model, product in (
+                ("codex", "gpt-6-astra", "Codex"),
+                ("claude", "sonnet", "Claude Code"),
+            ):
+                with (
+                    self.subTest(runtime=runtime),
+                    self.assertRaisesRegex(ValueError, f"{product} is not connected"),
+                ):
+                    continue_on(runtime, model)
+
+            # A disconnected account keeps the historical pin to API.
+            codex_login.logout(self.USER["id"])
+            self.assertEqual(continue_on("codex", "gpt-6-astra"), "api_key")
 
     def _formal_lean_codex(self, stdout: str, returncode: int, *, during=None) -> dict:
         workspace = self.root / "formal-run"

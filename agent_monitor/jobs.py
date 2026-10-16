@@ -1892,6 +1892,21 @@ def _user_extra_env(
     return dict(project_provider_env(env, requested_models))
 
 
+def _account_awaits_reconnect(route: str, user_id: int | None) -> bool:
+    """True when the route's linked login was rejected and needs a new sign-in."""
+    if user_id is None:
+        return False
+    if route == "codex_subscription":
+        from agent_monitor import codex_login
+
+        return codex_login.account_reauth_required(codex_login.account_home(int(user_id)))
+    if route == "claude_subscription":
+        from agent_monitor import claude_login
+
+        return claude_login.account_reauth_required(claude_login.account_home(int(user_id)))
+    return False
+
+
 def _continuation_auth_environment(
     *,
     run_data: dict[str, Any],
@@ -1974,6 +1989,10 @@ def _continuation_auth_environment(
         # otherwise pin the continuation to API. A recorded route never enters
         # this compatibility branch and therefore always fails closed.
         if not legacy_unpinned or route == "api_key" or "api_key" not in auth_modes:
+            raise
+        # A login waiting for Reconnect is still the selected account, and
+        # Settings promises its API keys are never the fallback.
+        if _account_awaits_reconnect(route, owner_id):
             raise
         route = "api_key"
         configured = _configure_auth_route(env, route=route, user_id=None)
