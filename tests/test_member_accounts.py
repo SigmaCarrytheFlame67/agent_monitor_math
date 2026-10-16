@@ -377,6 +377,73 @@ def test_member_cannot_connect_subscriptions_or_start_the_formal_harness(
         assert "site administrator" in json.loads(raw)["error"]
 
 
+def test_member_dag_rebuild_never_uses_a_stored_subscription_sign_in(
+    member_console, monkeypatch, tmp_path: Path
+):
+    """Sign-ins and runtimes a member stored before subscriptions became
+    administrator-only stay unused by a manual DAG rebuild: not for the model
+    "codex", not as a failed API call's fallback, not as a legacy run's runtime."""
+    from agent_monitor import codex_login, proof_graph
+
+    workspace = tmp_path / "ws"
+    workspace.mkdir()
+    (workspace / "proof.md").write_text("Assume equality. Therefore one equals one.", encoding="utf-8")
+    records: dict[str, dict] = {}
+    monkeypatch.setattr(console, "_workspace_for_run", lambda _run_id: workspace)
+    monkeypatch.setattr(console.Handler, "_owns_run", lambda _self, _run_id, _user: True)
+    monkeypatch.setattr(console, "_run_record_for", lambda run_id: dict(records[run_id]))
+    monkeypatch.setenv("AGENT_MONITOR_CODEX_ACCOUNT_HOME", str(tmp_path / "codex"))
+    graph = json.dumps({"nodes": [{"id": "n1", "kind": "conclusion", "label": "done",
+                                   "statement": "1=1", "citations": []}], "edges": []})
+    launches: list[str] = []
+    monkeypatch.setattr(proof_graph, "_run_codex_prompt",
+                        lambda *_a, **_k: launches.append("codex") or graph)
+    monkeypatch.setattr(proof_graph, "_run_claude_prompt",
+                        lambda *_a, **_k: launches.append("claude") or ("sonnet", graph))
+    monkeypatch.setattr(proof_graph, "_claude_account_ready", lambda _user: True)
+
+    def no_api_key(_env, model, _prompt, **_kwargs):
+        raise ValueError(f"Model {model} requires an API key; add and verify it in Settings")
+
+    monkeypatch.setattr(proof_graph, "_call_llm", no_api_key)
+    with running_server() as port:
+        user, cookie = _member(port)
+        member_id = int(user["id"])
+        # A ChatGPT sign-in linked before the policy, still on the server.
+        home = codex_login.account_home(member_id)
+        home.mkdir(parents=True)
+        (home / "auth.json").write_text(json.dumps({"tokens": {"access_token": "x"}}), encoding="utf-8")
+        assert proof_graph._codex_account_ready(user)
+        api_run = {"run_id": "plain_api", "engine": "plain", "owner_id": member_id,
+                   "auth_route": "api_key", "model": "gpt-5", "status": "finished"}
+        legacy_run = {"run_id": "plain_legacy", "engine": "plain", "owner_id": member_id,
+                      "model": "gpt-5", "status": "finished"}
+        records.update(plain_api=api_run, plain_legacy=legacy_run)
+
+        def rebuild(run_id: str, body: dict) -> int:
+            return request(port, "POST", f"{APP_MOUNT}/api/run/{run_id}/proof_graph",
+                           body=body, headers={"Cookie": cookie})[0]
+
+        statuses = [
+            rebuild("plain_api", {"kind": "informal", "model": "codex"}),
+            rebuild("plain_legacy", {"kind": "informal", "model": "codex"}),
+        ]
+        for runtime in ("codex", "claude"):  # stored before the policy
+            auth.set_user_env(member_id, {"AGENT_MONITOR_ACCOUNT_RUNTIME": runtime})
+            statuses.append(rebuild("plain_legacy", {"kind": "informal"}))
+        assert statuses == [400, 400, 400, 400] and launches == []
+
+        # The administrator's legacy run still honours an explicit "codex".
+        admin, token = auth.login_and_create_session("owner@example.test", "long-enough-password")
+        records["plain_legacy"] = {**legacy_run, "owner_id": admin["id"]}
+        status, _headers, raw = request(
+            port, "POST", f"{APP_MOUNT}/api/run/plain_legacy/proof_graph",
+            body={"kind": "informal", "model": "codex"},
+            headers={"Cookie": f"{auth.SESSION_COOKIE}={token}"},
+        )
+    assert status == 200 and launches == ["codex"], raw
+
+
 def test_member_settings_report_the_policy_without_probing_logins(member_console, monkeypatch):
     from agent_monitor import claude_login, codex_login
 

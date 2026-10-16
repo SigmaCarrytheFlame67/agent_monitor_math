@@ -1880,11 +1880,17 @@ def generate(
     requested = str(model or "").strip().lower()
     requested_codex = requested in {"codex", "codex-cli", "codex cli"}
     requested_claude = requested in _CLAUDE_ACCOUNT_MODELS
+    from agent_monitor import account_policy
+
+    # Only a legacy run (no recorded route) may pick a subscription by model
+    # name or account preference, and never a member's: subscriptions are the
+    # administrator's, even a sign-in a member linked before that policy.
+    may_pick_subscription = recorded_route is None and not account_policy.is_member(user)
     use_codex = recorded_route == "codex_subscription" or (
-        requested_codex and allow_codex_fallback
+        requested_codex and allow_codex_fallback and may_pick_subscription
     )
     use_claude = recorded_route == "claude_subscription"
-    if recorded_route is None and not use_claude:
+    if may_pick_subscription and not use_claude:
         from agent_monitor.settings import claude_enabled
 
         use_claude = (
@@ -1918,7 +1924,7 @@ def generate(
                 from agent_monitor.settings import codex_enabled
 
                 if (
-                    recorded_route is None
+                    may_pick_subscription
                     and codex_enabled(user, env=env)
                     and _codex_account_ready(user)
                 ):
