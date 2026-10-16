@@ -207,18 +207,18 @@ def member_run_model(
 ) -> str | None:
     """The model a member's ``engine`` run uses when the request names none.
 
-    A blank request (the Projects page's "Default account model") means the
-    default model the console offers: the member's saved default, or, when
-    the member's keys (or the sponsored Kimi K3 service) cannot run that, the
-    first model of the account's API keys they can run.  Only a model the
-    engine accepts, and never Max.  When nothing else runs, a saved default
-    the engine accepts stays, so the refusal names the key it needs (a new
-    account's default is Kimi K3).
+    A blank Plain, Ansatz CGM or Analyze request (the Projects page's
+    "Default account model") means the default model the console offers: the
+    member's saved default, or, when the member's keys (or the sponsored Kimi
+    K3 service) cannot run that, the first model of the account's API keys
+    they can run.  Only a model the engine accepts, and never Max.  When
+    nothing else runs, a saved default the engine accepts stays, so the
+    refusal names the key it needs (a new account's default is Kimi K3).
     """
     if (
         str(model or "").strip()
         or not is_member(user)
-        or engine not in dict(_OWN_KEY_CHOICES)
+        or engine not in {*dict(_OWN_KEY_CHOICES), ANALYZE_ENGINE}
     ):
         return model
     from agent_monitor import cgm_max

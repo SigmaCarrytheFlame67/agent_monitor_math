@@ -748,17 +748,22 @@ def test_member_blank_model_is_the_saved_default_or_a_model_its_keys_run(monkeyp
     # Otherwise the first model of the member's keys the engine accepts (never
     # Kimi K3 for the own-key harness, never Max).
     for saved in ("kimi-k3", "claude-opus-4-8", "max", None):
-        for engine in ("plain", "math_harness"):
+        for engine in ("plain", "math_harness", "analyze"):
             assert resolve(saved, openai, engine) == "gpt-6-astra", (saved, engine)
     assert resolve("kimi-k3", {"KIMI_API_KEY": "sk-kimi", **openai}, "math_harness") == "gpt-6-astra"
+    assert resolve("kimi-k3", {"KIMI_API_KEY": "sk-kimi", **openai}, "analyze") == "kimi-k3"
     # Nothing else runs: the saved default stays where the engine takes it,
     # so the refusal names the key it needs.
     assert resolve("kimi-k3", {}, "plain") == "kimi-k3"
+    assert resolve("kimi-k3", {}, "analyze") == "kimi-k3"
     assert resolve("claude-opus-4-8", {}, "math_harness") == "claude-opus-4-8"
     assert resolve("kimi-k3", {}, "math_harness") is None
-    # The sponsored service runs Kimi K3 for Plain, never for the own-key harness.
+    assert resolve("max", {}, "analyze") is None
+    # The sponsored service runs Kimi K3 for Plain and Analyze, never for the
+    # own-key harness.
     sponsored[0] = True
     assert resolve("claude-opus-4-8", {}, "plain") == "kimi-k3"
+    assert resolve("claude-opus-4-8", {}, "analyze") == "kimi-k3"
     assert resolve("kimi-k3", {}, "math_harness") is None
     assert resolve("kimi-k3", openai, "math_harness") == "gpt-6-astra"
     # A named model, another engine or another account is left alone.

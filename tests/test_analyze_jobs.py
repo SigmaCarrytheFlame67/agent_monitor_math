@@ -278,6 +278,35 @@ def test_own_key_member_analysis_gets_no_sponsor_credential(gate, monkeypatch, c
     assert child["AGENT_MONITOR_SPONSORED_KIMI"] == "0"
 
 
+def test_a_member_blank_model_analysis_runs_on_a_model_its_keys_run(gate, monkeypatch, captured_start):
+    """The Projects page sends no model ("Default account model").  A new
+    account's saved default is Kimi K3; with only an OpenAI key (and no
+    sponsored service) the analysis runs on the first OpenAI model, the one
+    the console's Analyze form offers."""
+    from cryptography.fernet import Fernet
+
+    from agent_monitor import auth
+
+    for name in ("AGENT_MONITOR_PUBLIC", "AGENT_MONITOR_SPONSORED_KIMI", "OPENAI_API_KEY", "KIMI_API_KEY"):
+        monkeypatch.delenv(name, raising=False)
+    monkeypatch.setenv("AGENT_MONITOR_DATA_ENCRYPTION_KEY", Fernet.generate_key().decode("ascii"))
+    auth.register("owner@example.test", "long-enough-password")
+    member = auth.register("member@example.test", "long-enough-password")
+    own_key = "sk-member-openai-123456789"
+    auth.set_user_env(int(member["id"]), {"OPENAI_API_KEY": own_key})
+    job = jobs.start_job(engine="analyze", run_kind="analyze", source={"text": PAPER}, user=member)
+    assert (job["model"], job["credential_source"], job["auth_route"]) == ("gpt-6-astra", "user", "api_key")
+    assert captured_start.threads[0]["kwargs"]["extra_env"]["OPENAI_API_KEY"] == own_key
+    req = analysis_request.load(Path(captured_start.records[0]["workspace"]))
+    assert (req["route"], req["sponsored"], req["model"]) == ("api_key", False, "gpt-6-astra")
+    assert gate.usage_today() == 0
+    # With no key left, the refusal names the key the saved default needs.
+    auth.set_user_env(int(member["id"]), {}, clear=["OPENAI_API_KEY"])
+    with pytest.raises(ValueError, match="Kimi K3 requires your own API key"):
+        jobs.start_job(engine="analyze", run_kind="analyze", source={"text": PAPER}, user=member)
+    assert len(captured_start.threads) == 1
+
+
 def test_public_mode_keeps_member_analyses_on_sponsored_kimi(gate, monkeypatch, captured_start):
     """Public mode gives every account the server's provider keys, so a
     member's "own key" analysis would bill the operator (like the own-key CGM

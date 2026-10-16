@@ -287,7 +287,8 @@ def _check_cgm_problem_size(engine: str, text: str) -> None:
 
 def _analyze_model(user: dict[str, Any] | None, model: str | None) -> str:
     """The model of an Analyze run: Kimi K3 for guests (sponsored only), the
-    requested one, else the account's saved default, else Kimi K3."""
+    requested one, else the account's saved default (a member's as
+    account_policy.member_run_model resolves it), else Kimi K3."""
     from agent_monitor.settings import GUEST_DEFAULT_MODEL
 
     requested = str(model or "").strip()
@@ -301,6 +302,11 @@ def _analyze_model(user: dict[str, Any] | None, model: str | None) -> str:
         # Public mode: the saved default would be the server's (see
         # account_policy.member_analyze_sponsored_only).
         return GUEST_DEFAULT_MODEL
+    if account_policy.is_member(user):
+        # As for a blank Plain model: the model the console's Analyze form
+        # offers, not a saved default (a new account's Kimi K3) that the
+        # member's keys cannot run.
+        return account_policy.member_run_model(user, _ANALYZE_ENGINE, None) or GUEST_DEFAULT_MODEL
     if user is not None:
         from agent_monitor.settings import resolved_user_env
 
