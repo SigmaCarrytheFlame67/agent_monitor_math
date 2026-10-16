@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import os
 import sys
 import tempfile
 import unittest
@@ -260,6 +261,85 @@ class OrphanedHarnessRecordTests(_HarnessStateCleanup):
             console_server.main(port=1)
 
         sweep.assert_called_once_with(console_server.WORKSPACES_ROOT)
+
+
+
+class HarnessTimeoutTests(_HarnessStateCleanup):
+    """r2-lean-harness-6: a harness killed at its limit says it timed out."""
+
+    def test_timeout_is_recorded_as_a_timeout_not_exit_minus_nine(self) -> None:
+        child = (
+            "import pathlib, time\n"
+            f"pathlib.Path('Proof.lean').write_text({FRESH_SOURCE!r})\n"
+            "print('iterating with ./check.sh', flush=True)\n"
+            "time.sleep(30)\n"
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            workspace = Path(tmp).resolve()
+            ldir = workspace / lean_verify.LEAN_DIRNAME
+            ldir.mkdir()
+            base = _running_base(workspace)
+            with (
+                patch.dict(os.environ, {"AGENT_MONITOR_LEAN_HARNESS_TIMEOUT": "1"}),
+                patch.object(lean_verify, "_write_and_run", side_effect=_checked_write),
+                patch.object(lean_verify, "toolchain_status", return_value={}),
+            ):
+                lean_verify._harness_worker(
+                    workspace=workspace,
+                    ldir=ldir,
+                    argv=[sys.executable, "-c", child],
+                    engine="claude",
+                    label="Claude Code",
+                    user={"id": 17},
+                    model="sonnet",
+                    run_record=_CLAUDE_RUN,
+                    env={"PATH": os.environ.get("PATH", "")},
+                    problem="Prove n + 0 = n.",
+                    informal="Simplify.",
+                    base=base,
+                    initial_fingerprint=None,
+                    audit=False,
+                )
+            saved = lean_verify.load_cached(workspace)
+
+        self.assertEqual(saved["status"], "failed")
+        self.assertEqual(saved["harness"]["state"], "timed_out")
+        self.assertTrue(saved["harness"]["timed_out"])
+        self.assertFalse(saved["harness"]["artifact_accepted"])
+        self.assertIn("timed out", saved["notes"])
+        self.assertIn("1s limit", saved["notes"])
+        self.assertNotIn("exited -9", saved["notes"])
+        self.assertIn("1s limit", saved["log"])
+
+    def test_a_stop_at_the_deadline_is_still_a_stop(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            workspace, initial = _workspace_with_fresh_artifact(Path(tmp))
+            with (
+                patch.object(lean_verify, "_write_and_run", side_effect=_checked_write),
+                patch.object(lean_verify, "toolchain_status", return_value={}),
+            ):
+                result = lean_verify._harness_finish(
+                    workspace=workspace,
+                    engine="claude",
+                    label="Claude Code",
+                    log="",
+                    exit_code=-9,
+                    elapsed=5.0,
+                    user=None,
+                    run_record=None,
+                    model=None,
+                    problem="Prove n + 0 = n.",
+                    informal="Simplify.",
+                    audit=False,
+                    initial_fingerprint=initial,
+                    stopped=True,
+                    timeout_limit=5,
+                )
+
+        self.assertEqual(result["status"], "stopped")
+        self.assertEqual(result["harness"]["state"], "stopped")
+        self.assertFalse(result["harness"]["timed_out"])
+        self.assertIn("stopped by user", result["notes"])
 
 
 if __name__ == "__main__":

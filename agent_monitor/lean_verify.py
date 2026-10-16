@@ -7415,6 +7415,7 @@ def _harness_worker(
     started = time.time()
     exit_code: int | None = None
     stopped = False
+    timed_out = False
 
     def flush(note: str | None = None) -> None:
         rec = dict(base)
@@ -7505,6 +7506,8 @@ def _harness_worker(
         while True:
             now = time.time()
             if now > deadline:
+                # A child that already exited (output still draining) did not.
+                timed_out = proc.poll() is None
                 _terminate_process_group(proc, force=True)
                 lines.append(f"\n[agent-monitor] harness timeout after {timeout_s}s — killed\n")
                 break
@@ -7572,6 +7575,7 @@ def _harness_worker(
             audit=audit,
             initial_fingerprint=initial_fingerprint,
             stopped=stopped,
+            timeout_limit=timeout_s if timed_out else None,
         )
     finally:
         with _HARNESS_LOCK:
@@ -7677,8 +7681,13 @@ def _harness_finish(
     audit: bool,
     initial_fingerprint: dict[str, Any] | None,
     stopped: bool,
+    timeout_limit: int | None = None,
 ) -> dict[str, Any]:
-    """Re-check a fresh regular artifact, but never forgive a failed child."""
+    """Re-check a fresh regular artifact, but never forgive a failed child.
+
+    ``timeout_limit`` is the limit, in seconds, at which the worker killed a
+    still-running child; a user Stop takes precedence over it.
+    """
     from agent_monitor.jobs import _route_from_record
 
     prev = load_cached(workspace) or {}
@@ -7713,10 +7722,14 @@ def _harness_finish(
         )
     )
     child_exit_ok = exit_code == 0
+    timed_out = timeout_limit is not None and not stopped
     rejection_reasons: list[str] = []
     if stopped:
         rejection_reasons.append("the run was stopped")
-    if not child_exit_ok:
+    elif timed_out:
+        rejection_reasons.append(f"the harness exceeded its {timeout_limit}s limit")
+    if not child_exit_ok and not timed_out:
+        # After a timeout the exit status is only the worker's own kill.
         rejection_reasons.append(
             "the child process did not exit successfully"
             if exit_code is None
@@ -7730,12 +7743,18 @@ def _harness_finish(
         rejection_reasons.append("Proof.lean is unchanged from the pre-run artifact")
 
     artifact_accepted = bool(
-        child_exit_ok and artifact_regular and artifact_fresh and lean_src and not stopped
+        child_exit_ok
+        and artifact_regular
+        and artifact_fresh
+        and lean_src
+        and not stopped
+        and not timed_out
     )
     harness_meta = {
         "engine": engine,
         "label": label,
-        "state": "stopped" if stopped else "finished",
+        "state": "stopped" if stopped else "timed_out" if timed_out else "finished",
+        "timed_out": timed_out,
         "exit_code": exit_code,
         "child_exit_ok": child_exit_ok,
         "elapsed_s": elapsed,
@@ -7856,7 +7875,9 @@ def _harness_finish(
             + notes
         )
     fid_note = _fidelity_summary(_fidelity_flags(lean_src), audit_result)
-    verdict = "stopped by user" if stopped else f"exit {exit_code}"
+    verdict = (
+        "stopped by user" if stopped else "timed out" if timed_out else f"exit {exit_code}"
+    )
     notes = f"{label} harness ({verdict}, {elapsed}s). {notes} {fid_note}".strip()
     compiler_log = (
         (check.get("stderr") or "") + "\n" + (check.get("stdout") or "")
