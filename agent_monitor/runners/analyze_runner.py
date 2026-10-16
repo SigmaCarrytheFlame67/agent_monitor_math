@@ -448,6 +448,9 @@ class AnalysisRun:
                 modelled["bibliography"] = segments.get("bibliography") or {}
                 segments = modelled
         if not segments["nodes"]:
+            if self.provider_failure:
+                # The model's provider failed, which says nothing about the manuscript.
+                raise AnalyzeError(f"The results in the source could not be located: {self.provider_failure}")
             raise AnalyzeError("No theorems, lemmas or other results were found in the source"
                                + (f" ({segments['warnings'][0]})" if segments["warnings"] else ""))
         _write_json(self.analysis / "segments.json", segments)
@@ -499,8 +502,15 @@ class AnalysisRun:
                 found, _reply = harness._job_result(job)
             except harness.RunCancelled:
                 raise
-            except (harness._BudgetExhausted, harness.MathHarnessError, ParseError):
+            except (harness._BudgetExhausted, harness.MathHarnessError, ParseError) as exc:
                 self.degraded.append("model-segmentation-incomplete")
+                if (isinstance(exc, harness.ProviderCallError) and not isinstance(exc, harness.EmptyReplyError)
+                        and not self.cancel.is_set() and not self.ctx.deadline_passed()):
+                    # Say why (a lapsed sign-in, a usage limit, an invalid key), and
+                    # send no more chunks when each would be refused the same way.
+                    self._note_failure(exc)
+                    if self.permanent_failure:
+                        break
                 continue
             items.extend(dict(item, _chunk=(offset, len(chunk))) for item in found)
         if not items:
@@ -519,6 +529,8 @@ class AnalysisRun:
         """One paper-map call, only when ``planned`` calls (the planned
         checks) stay available after it; its retries never use them."""
         nodes = segments["nodes"]
+        if self.permanent_failure:
+            return  # refused for good while locating results: the map would be too
         if not nodes or self.ctx.remaining() < planned + 1:
             if nodes:
                 self.degraded.append("paper-map-skipped-for-budget")

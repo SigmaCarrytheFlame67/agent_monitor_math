@@ -696,7 +696,42 @@ def test_model_segmentation_fallback_uses_verbatim_quotes(tmp_path, provider):
     assert [seen["kind"] for seen in server.seen][:1] == ["segment"]
 
 
-SHORT_TEX = r"""\documentclass{article}
+# Plain prose with no theorem headings: the model is asked to locate results, in three chunks.
+PROSE = "\n\n".join(f"Paragraph {index}. " + "Every widget carries a frobnicator along the line. " * 10
+                    for index in range(120))
+
+
+def test_a_refused_segmentation_call_is_not_blamed_on_the_manuscript(tmp_path, provider):
+    quota = {"message": "quota", "type": "sponsor_quota", "forwarded": False}
+    server = provider(lambda kind, node, user, headers: (429, {"error": dict(quota)}))
+    req = write_request(tmp_path, text=PROSE, route="sponsored_kimi", model="kimi-k3", sponsored=True)
+    with pytest.raises(runner.AnalyzeError, match="could not be located: This run used up its Kimi call budget"):
+        run(tmp_path, req, sponsored_env(server))
+    # Every later chunk would be refused the same way.
+    assert [seen["kind"] for seen in server.seen] == ["segment"]
+
+
+def test_a_failing_provider_while_locating_results_is_reported(tmp_path, provider):
+    server = provider(lambda kind, node, user, headers: (500, {"error": {"message": "upstream exploded"}}))
+    with pytest.raises(runner.AnalyzeError, match="could not be located") as error:
+        run(tmp_path, write_request(tmp_path, text=PROSE), own_key_env(server))
+    assert "No theorems" not in str(error.value)
+    # A failure that may pass leaves the other chunks to try.
+    assert [seen["kind"] for seen in server.seen] == ["segment"] * 3
+
+
+def test_a_refused_segmentation_call_stops_the_run_before_the_overview(tmp_path, provider):
+    quota = {"message": "quota", "type": "sponsor_quota", "forwarded": False}
+    server = provider(lambda kind, node, user, headers: (429, {"error": dict(quota)}))
+    text = "Lemma 1. Every widget has a frobnicator.\n\nProof. Inspect it. QED\n\n" + PROSE
+    req = write_request(tmp_path, text=text, route="sponsored_kimi", model="kimi-k3", sponsored=True)
+    with pytest.raises(runner.AnalyzeError, match="No result could be checked: This run used up its Kimi call"):
+        run(tmp_path, req, sponsored_env(server))
+    assert [seen["kind"] for seen in server.seen] == ["segment"]
+    assert {node["meta"]["verdict"] for node in ag.load(tmp_path)["nodes"]} == {"not_checked"}
+
+
+SHORT_TEX =r"""\documentclass{article}
 \newtheorem{theorem}{Theorem}
 \newtheorem{lemma}[theorem]{Lemma}
 \begin{document}
