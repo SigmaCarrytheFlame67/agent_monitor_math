@@ -8,12 +8,13 @@ import subprocess
 import sys
 import tempfile
 import textwrap
+import time
 import unittest
 from contextlib import redirect_stderr, redirect_stdout
 from pathlib import Path
 from unittest.mock import Mock, call, patch
 
-from agent_monitor import kimi_responses_proxy
+from agent_monitor import jobs, kimi_responses_proxy
 from agent_monitor.runners import codex_backend, kimi_codex_runner
 from agent_monitor.runners.codex_backend import CodexBackendError, CodexResult
 
@@ -41,6 +42,7 @@ def install_fake_codex(bin_dir: Path, body: str) -> None:
                 print("codex-cli 0.160.0")
                 sys.exit(0)
             sys.stdin.read()
+            Path(__file__).with_name("exec-calls").touch()
             workspace = Path(args[args.index("--cd") + 1])
             last_message = Path(args[args.index("--output-last-message") + 1])
             def event(payload):
@@ -88,6 +90,47 @@ def run_kimi_wrapper(body: str, *, timeout: str = "60") -> tuple[int, str | None
         proof = workspace / "proof.md"
         text = proof.read_text(encoding="utf-8") if proof.exists() else None
         return status, text, stderr.getvalue()
+
+
+def run_kimi_codex_job(body: str, **extra_env: str) -> dict:
+    """Run a Codex CLI engine job on Kimi K3 (the wrapper) with a fake ``codex``.
+
+    HOME is a scratch directory and the engine's extra PATH entries are
+    dropped, so only the fake can be found, never an installed CLI.
+    """
+    with tempfile.TemporaryDirectory() as raw:
+        root = Path(raw)
+        install_fake_codex(root / "bin", body)
+        (root / "home").mkdir()
+        (root / "workspace").mkdir()
+        with (
+            patch.dict(
+                os.environ,
+                {
+                    "HOME": str(root / "home"),
+                    "PATH": f"{root / 'bin'}{os.pathsep}{os.environ.get('PATH', os.defpath)}",
+                },
+            ),
+            patch("agent_monitor.engines_registry.engine_extra_path", return_value=[]),
+            patch("agent_monitor.agent_config.persona_preamble", return_value=""),
+            patch.object(jobs, "_write_run"),
+        ):
+            run = jobs._run_cli_engine(
+                run_id="kimi_codex_reason",
+                engine="codex",
+                problem_id="p",
+                problem_text="Prove that a sum of evens is even.",
+                started=time.time(),
+                workspace=root / "workspace",
+                requested_model="kimi-k3",
+                extra_env={
+                    "KIMI_API_KEY": "test-key-not-real",
+                    "KIMI_API_BASE": "http://127.0.0.1:9/v1",
+                    **extra_env,
+                },
+            )
+        assert (root / "bin" / "exec-calls").exists(), "the fake codex did not run"
+        return run
 
 
 class KimiResponsesReliabilityTests(unittest.TestCase):
@@ -312,6 +355,43 @@ class KimiCodexEmptyFinalMessageTests(unittest.TestCase):
                         "KIMI_API_BASE": "http://127.0.0.1:9/v1",
                     },
                 )
+
+
+class KimiCodexFailureReasonTests(unittest.TestCase):
+    """The wrapper's own reason, not just "exited with code 1", is the run error."""
+
+    def test_a_missing_proof_is_the_run_error(self) -> None:
+        run = run_kimi_codex_job(
+            """\
+            event({"type": "thread.started", "thread_id": "t1"})
+            event({"type": "item.completed", "item": {"type": "agent_message", "text": "It is true."}})
+            event({"type": "turn.completed", "usage": {"input_tokens": 5, "output_tokens": 3}})
+            last_message.write_text("It is true.")
+            """
+        )
+        self.assertEqual(run["status"], "failed")
+        self.assertIn("without a new substantive proof.md or proof.tex", run["error"])
+
+    def test_a_timeout_is_the_run_error(self) -> None:
+        run = run_kimi_codex_job(
+            """\
+            event({"type": "thread.started", "thread_id": "t1"})
+            time.sleep(60)
+            """,
+            AGENT_MONITOR_CODEX_TIMEOUT="3",
+        )
+        self.assertEqual(run["status"], "failed")
+        self.assertIn("codex exec timed out after 3s", run["error"])
+
+    def test_a_multi_line_cli_error_is_kept_whole(self) -> None:
+        run = run_kimi_codex_job(
+            """\
+            sys.stderr.write("Error: loading config\\ncaused by: unexpected status 401 Unauthorized\\n")
+            sys.exit(2)
+            """
+        )
+        self.assertEqual(run["status"], "failed")
+        self.assertIn("Error: loading config caused by: unexpected status 401 Unauthorized", run["error"])
 
 
 if __name__ == "__main__":
