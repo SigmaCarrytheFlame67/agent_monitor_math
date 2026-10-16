@@ -3566,6 +3566,8 @@ class Handler(RunSharingMixin, ProjectsMixin, ResearchMixin, BaseHTTPRequestHand
                 # Model work on a member's run billed to a subscription or Max
                 # (started before subscriptions became administrator-only)
                 # would bill that sign-in and could fall back to Codex.
+                # Compile and Check call no model; _lean_verify_action skips
+                # the Formal refresh after them on such a run.
                 refusal = account_policy.member_continuation_error(
                     user, job_manager._route_from_record(run_record)
                 )
@@ -4158,16 +4160,23 @@ class Handler(RunSharingMixin, ProjectsMixin, ResearchMixin, BaseHTTPRequestHand
         )
         if refreshes and str(result.get("status") or "") != "running":
             run_record = _derived_record_for(rid) or {}
-            auto_pipeline.refresh_formal(
-                run_id=rid,
-                workspace=ws,
-                owner_id=user.get("id"),
-                model=model or result.get("model"),
-                engine=str(run_record.get("engine") or "unknown"),
-                on_exit=slot.release if slot is not None else None,
-            )
-            if slot is not None:
-                slot.handed_off = True
+            # The refresh may ask a model on the run's recorded route, so a
+            # member's run off the API route (billed to a subscription or Max,
+            # reached here by Compile or Check) keeps its Formal stages.
+            if (
+                not account_policy.is_member(user)
+                or job_manager._route_from_record(run_record) == "api_key"
+            ):
+                auto_pipeline.refresh_formal(
+                    run_id=rid,
+                    workspace=ws,
+                    owner_id=user.get("id"),
+                    model=model or result.get("model"),
+                    engine=str(run_record.get("engine") or "unknown"),
+                    on_exit=slot.release if slot is not None else None,
+                )
+                if slot is not None:
+                    slot.handed_off = True
         self._send(200, json.dumps(result, ensure_ascii=False))
 
     @_track_request

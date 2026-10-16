@@ -1607,10 +1607,14 @@ def test_member_lean_actions_never_use_a_subscription_or_the_codex_agent(member_
     source = "theorem t : 1 + 1 = 2 := by sorry\n"
     (workspace / "lean" / "Proof.lean").write_text(source)
     owner: dict = {}
-    record = {"run_id": "codex_member_1", "engine": "codex", "auth_route": "codex_subscription",
-              "model": "gpt-5.5", "live": {"auth_mode": "chatgpt_subscription"}}
+    records = {
+        "codex_member_1": {"run_id": "codex_member_1", "engine": "codex", "auth_route": "codex_subscription",
+                           "model": "gpt-5.5", "live": {"auth_mode": "chatgpt_subscription"}},
+        "plain_member_1": {"run_id": "plain_member_1", "engine": "plain", "auth_route": "api_key",
+                           "model": "gpt-6-astra"},
+    }
     monkeypatch.setattr(console, "_workspace_for_run", lambda _run_id: workspace)
-    monkeypatch.setattr(console, "_run_record_for", lambda _run_id: {**record, "owner_id": owner.get("id")})
+    monkeypatch.setattr(console, "_run_record_for", lambda run_id: {**records[run_id], "owner_id": owner.get("id")})
     monkeypatch.setattr(console.job_manager, "run_owner", lambda _run_id: owner.get("id"))
 
     def model_fails(*_args, **_kwargs):
@@ -1619,14 +1623,15 @@ def test_member_lean_actions_never_use_a_subscription_or_the_codex_agent(member_
     monkeypatch.setattr(lean_verify, "_chat", model_fails)
     checked: list = []
     monkeypatch.setattr(lean_verify, "compile_or_check", lambda **kwargs: checked.append(kwargs) or {"status": "failed"})
-    monkeypatch.setattr("agent_monitor.auto_pipeline.refresh_formal", lambda **_kwargs: None)
+    refreshed: list = []
+    monkeypatch.setattr("agent_monitor.auto_pipeline.refresh_formal", lambda **kwargs: refreshed.append(kwargs["run_id"]))
     with running_server() as port:
         user, cookie = _member(port)
         owner["id"] = int(user["id"])
         log = _fake_member_codex(monkeypatch, tmp_path, owner["id"])
 
-        def lean(body: dict):
-            return request(port, "POST", f"{APP_MOUNT}/api/run/codex_member_1/lean_verify",
+        def lean(body: dict, run_id: str = "codex_member_1"):
+            return request(port, "POST", f"{APP_MOUNT}/api/run/{run_id}/lean_verify",
                            body=body, headers={"Cookie": cookie})
 
         refused = [
@@ -1636,14 +1641,19 @@ def test_member_lean_actions_never_use_a_subscription_or_the_codex_agent(member_
             lean({"action": "audit", "lean": source}),
             lean({"action": "verify"}),
         ]
-        check = lean({"action": "check", "lean": source})
+        checks = [lean({"action": action, "lean": source}) for action in ("compile", "check")]
+        api_check = lean({"action": "check", "lean": source}, "plain_member_1")
 
     for status, _headers, raw in refused:
         assert status == 403, raw
         assert json.loads(raw)["error"] == account_policy.member_continuation_error(user, "codex_subscription")
     assert not log.exists()
-    # Compiling and checking the source calls no model.
-    assert check[0] == 200 and len(checked) == 1
+    # Compiling and checking the source calls no model.  Nor does the Formal
+    # refresh that follows, which would ask one on the run's recorded route:
+    # it runs for the member's own API-key run only.
+    assert [status for status, _headers, _raw in checks] == [200, 200] and api_check[0] == 200
+    assert len(checked) == 3
+    assert refreshed == ["plain_member_1"]
 
 
 def test_a_member_never_gets_the_codex_lean_agent(monkeypatch, tmp_path):
