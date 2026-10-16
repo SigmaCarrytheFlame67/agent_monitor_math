@@ -1847,8 +1847,8 @@ class Handler(RunSharingMixin, ProjectsMixin, ResearchMixin, BaseHTTPRequestHand
     def log_request(self, code="-", size="-"):
         """Log request paths without query strings that may contain reset tokens."""
         path = urlparse(self.path).path
-        # Share tokens are 43 URL-safe characters; /static/vendor/shared/ is an asset path.
-        path = re.sub(r"/(?:api/)?shared/[A-Za-z0-9_-]{43}(?![A-Za-z0-9_-])|/invite/[^/]+", "/private-link/[redacted]", path)
+        # /static/vendor/shared/ is an asset path, not a share link.
+        path = re.sub(r"(?<!/static/vendor)/(?:api/)?shared/[^/]+|/invite/[^/]+", "/private-link/[redacted]", path)
         self.log_message('"%s %s %s" %s %s', self.command, path, self.request_version, code, size)
 
     def _send(self, code: int, body: str, ctype: str = "application/json", headers: dict[str, str] | None = None):

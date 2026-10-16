@@ -114,7 +114,7 @@ def _items(value, limit):
 
 # Absolute server paths (a workspace, a home directory, a toolchain) in saved
 # logs keep only their last part: a share never shows the host's layout.
-_SERVER_PATH = re.compile(r"(?<![\w.:/~-])/(?:home|var|opt|tmp|etc|root|srv|usr|mnt|run|private|Users)/[^\s'\"`<>|)\]]*")
+_SERVER_PATH = re.compile(r"(?:file://|(?<![\w.:/~-]))/(?:home|var|opt|tmp|etc|root|srv|usr|mnt|run|private|Users)/[^\s'\"`<>|)\]]*")
 
 
 def _redact(value, limit=100_000):
@@ -156,18 +156,26 @@ _TOOL_ROLES = {'tool', 'tools', 'exec', 'shell'}
 _COST = re.compile(r'(?<=· )\$\d+(?:\.\d+)?(?= ·|$)', re.M)
 
 
+# Earlier snapshots kept only a label: "turn-2 (exec)", "turn-1 (message+tool)", "iter-3 (read_file)".
+_TOOL_LABEL = re.compile(r'\((?:[^)]*\b(?:exec|edit|tool)\b[^)]*)\)|^iter-\d+ \(')
+
+
 def _agent_output(item):
-    """One step's output as a share shows it. A tool step keeps its call (the
-    command or tool name) but not what it returned: that can be anything the
-    agent read, such as an attachment or another workspace file, which the
-    share dialog promises to leave out. Run logs drop their cost figures."""
+    """One step's output as a share shows it. A tool step keeps its calls (the
+    command, or Hermes' '▸ name(args)' lines) but not what they returned:
+    that can be anything the agent read, such as an attachment or another
+    workspace file, which the share dialog promises to leave out. Run logs
+    drop their cost figures."""
     text = item.get('summary') or item.get('output_text') or item.get('response_text') or item.get('final_text') or item.get('output')
     text = text if isinstance(text, str) else ''
     role = str(item.get('role') or '').lower()
-    if role in _TOOL_ROLES or str(item.get('pipeline_stage') or '').lower() == 'act':
+    tool = (role in _TOOL_ROLES or str(item.get('pipeline_stage') or '').lower() == 'act' or bool(item.get('tools'))
+            or text.lstrip().startswith(('$ ', '▸ ', 'edited: ')))
+    if tool:
         lines = [line for line in text.strip().splitlines() if line.strip()]
-        head = _redact(lines[0], 300) if lines else ''
-        return head + ('\n(tool output is not included in shared snapshots)' if len(lines) > 1 else '')
+        calls = [line for line in lines if line.startswith('▸ ')] or lines[:1]
+        head = '\n'.join(_redact(line, 300) for line in calls)
+        return head + ('\n(tool output is not included in shared snapshots)' if len(lines) > len(calls) else '')
     text = _redact(text, 400_000)
     if len(text) > 20_000:
         # Logs end with the result: keep their start and their end.
@@ -309,9 +317,18 @@ def _lean_check(check):
         out['log'] = _redact(check['log'], _LEAN_ATTEMPT_LOG)
     axioms = check.get('axioms') if isinstance(check.get('axioms'), dict) else None
     if axioms:
-        out['axioms'] = {key: [_text(name, 200) for name in _items(axioms.get(key), 40) if isinstance(name, str)]
-                         if isinstance(axioms.get(key), list) else _text(axioms.get(key), 200)
-                         for key in ('status', 'axioms', 'nonstandard', 'standard', 'message') if key in axioms}
+        # The #print axioms probe: ok, the declaration and the axioms it uses.
+        kept = {}
+        for key, value in axioms.items():
+            if key not in {'ok', 'decl', 'axioms', 'unexpected', 'error', 'status', 'nonstandard', 'standard', 'message'}:
+                continue
+            if isinstance(value, bool):
+                kept[key] = value
+            elif isinstance(value, list):
+                kept[key] = [_text(name, 200) for name in value[:40] if isinstance(name, str)]
+            elif isinstance(value, str):
+                kept[key] = _redact(value, 400)
+        out['axioms'] = kept
     return out
 
 
@@ -343,7 +360,10 @@ def _lean_record(read):
     if targets:
         out['targets'] = targets
     attempts = []
-    for attempt in _items(record.get('attempts'), 24):
+    every = record.get('attempts') if isinstance(record.get('attempts'), list) else []
+    # The console shows the latest attempts; keep the newest 24 and the count.
+    out['attempt_count'] = len(every)
+    for attempt in every[-24:]:
         if not isinstance(attempt, dict):
             continue
         entry = {key: _text(attempt.get(key), 160) for key in ('action', 'result_status', 'title', 'target', 'model')
@@ -374,6 +394,10 @@ _PRIVATE_KEYS = re.compile(r'(?i)(prompt|thinking|reasoning_text|chat|conversati
 def _plain(value, depth=3):
     """A bounded JSON copy of model-written review data (fidelity findings,
     citations): text and numbers only, private-looking keys dropped."""
+    if isinstance(value, str):
+        return _redact(value, 4000)
+    if isinstance(value, bool) or _number(value):
+        return value
     if depth <= 0:
         return None
     if isinstance(value, dict):
@@ -387,10 +411,6 @@ def _plain(value, depth=3):
         return out
     if isinstance(value, list):
         return [kept for kept in (_plain(item, depth - 1) for item in value[:60]) if kept is not None]
-    if isinstance(value, str):
-        return _redact(value, 4000)
-    if isinstance(value, bool) or _number(value):
-        return value
     return None
 
 
@@ -811,6 +831,11 @@ def snapshot(run_id, data):
     # A long run keeps its first steps and its last ones, which carry the
     # final answer and any follow-ups.
     steps = steps if len(steps) <= 100 else steps[:30] + steps[-70:]
+    proof, proof_source = read('proof.md'), 'proof.md'
+    if not proof:
+        proof, proof_source = read('proof.tex'), 'proof.tex'
+    if not proof:
+        proof, proof_source = _text(data.get('proof_text')), ''
     for item in steps:
         if not isinstance(item, dict):
             continue
@@ -826,7 +851,7 @@ def snapshot(run_id, data):
         'version': 3, 'type': 'shared', 'title': _text(data.get('title') or data.get('problem_text_preview') or run_id, 240),
         'status': _text(data.get('status'), 80), 'engine': _text(data.get('engine'), 100),
         'problem': _text(data.get('problem_text') or data.get('problem_text_preview')),
-        'proof': read('proof.md') or read('proof.tex') or _text(data.get('proof_text')),
+        'proof': proof, 'proof_source': proof_source,
         'agents': agents, 'informal_graph': graph('proof_graph.json'),
         'formal_graph': graph('lean_proof_graph.json'), 'lean_source': read('lean/Proof.lean'),
         'notice': 'Read-only snapshot selected by the run owner. It does not update as the run continues. Graphs describe dependencies; they are not, by themselves, proof certificates.',
@@ -906,8 +931,9 @@ def _lean_summary(record):
         status = attempt.get('result_status') or check.get('status') or ('verified' if check.get('ok') else 'failed')
         attempts.append({'action': attempt.get('action') or 'check', 'status': status,
                          'sorry_count': attempt.get('sorry_count') or 0, 'ok': bool(check.get('ok'))})
+    count = record.get('attempt_count') if isinstance(record.get('attempt_count'), int) else len(attempts)
     return {'status': record.get('status') or 'none', 'has_result': bool(record.get('lean')),
-            'attempt_count': len(attempts), 'attempts': attempts, 'chat': [], 'harness_running': False,
+            'attempt_count': max(count, len(attempts)), 'attempts': attempts, 'chat': [], 'harness_running': False,
             'generated_at': record.get('generated_at') or ''}
 
 
@@ -939,14 +965,21 @@ def console_view(snap):
                 'log': _redact(recorded, 2000),
                 'notes': recorded and 'Checker result as recorded with the saved source.'
                 or 'The Lean source as saved. Its checker record was not included in this snapshot.'}
+    legacy = not isinstance(snap.get('version'), int) or snap['version'] < 3
     agents = []
     for index, agent in enumerate(_items(snap.get('agents'), 100), 1):
         if not isinstance(agent, dict):
             continue
         entry = {key: agent[key] for key in agent if key not in {'id', 'label', 'summary'}}
+        output = agent.get('summary') if isinstance(agent.get('summary'), str) else ''
+        if legacy:
+            # Shares made before version 3 kept raw step output: apply today's
+            # rules (tool output withheld, server paths and costs removed).
+            tool = bool(_TOOL_LABEL.search(str(agent.get('label') or '')))
+            output = _agent_output({'summary': output, 'role': 'tool' if tool else ''})
         entry.update({'trace_id': f'{CONSOLE_RUN}::{index}', 'call_seq': agent.get('call_seq') or index,
                       'stage_name': agent.get('stage_name') or agent.get('label') or 'Research step',
-                      'output': agent.get('summary') or '', 'model': agent.get('model') or ''})
+                      'output': output, 'model': agent.get('model') or ''})
         agents.append(entry)
     analysis_block = snap.get('analysis') if isinstance(snap.get('analysis'), dict) else {}
     run = {
@@ -980,6 +1013,10 @@ def console_view(snap):
             'source_url': snap['source_url'] if str(snap.get('source_url') or '').startswith('https://') else None,
             'source_file': None,
         }
+    elif snap.get('proof_source') == 'proof.tex':
+        # The console compiles proof.tex to a PDF; a share shows its source.
+        run['sandbox_preview'] = {'text': proof, 'source': 'proof.tex', 'has_proof_md': False,
+                                  'has_proof_tex': True, 'revision': 'shared', 'mtime': 0}
     else:
         run['sandbox_preview'] = {'text': proof, 'source': 'proof.md' if proof else '', 'has_proof_md': bool(proof),
                                   'has_proof_tex': False, 'revision': 'shared', 'mtime': 0}
@@ -1067,7 +1104,7 @@ _THIRD_PARTY = (
     (re.compile(r'<script id="sharing-loader">.*?</script>\n?', re.S), ''),
 )
 _EXTERNAL_ASSET = re.compile(r'<(?:script|link)\b[^>]*\b(?:src|href)="(?:https?:)?//', re.I)
-_INLINE_SCRIPT = re.compile(r'<script(?![^>]*\bsrc=)[^>]*>(.*?)</script>', re.S | re.I)
+_INLINE_SCRIPT = re.compile(r'<script(?![^>]*\ssrc\s*=)[^>]*>(.*?)</script>', re.S | re.I)
 # Console tabs, plus the graph names links from the earlier viewer used.
 SHARED_VIEWS = ('sandbox', 'lean', 'monitor', 'dag', 'explore', 'facts', 'outline', 'formal', 'compiler', 'manuscript')
 

@@ -328,3 +328,58 @@ def test_snapshot_limits_match_the_console_and_count_utf8_bytes():
     math = [{'name': f'step {i}', 'output': '∑' * 5_000} for i in range(100)]
     snap = shares.snapshot('run-3', {'problem_text': 'P', 'agents': math})
     assert len(json.dumps(snap).encode()) > 4_000_000 > len(json.dumps(snap, ensure_ascii=False).encode())
+
+
+def test_hermes_tool_iterations_keep_their_calls_but_not_their_results():
+    hermes = {'stage_name': 'iter-3 (read_file, terminal)', 'role': 'reader', 'pipeline_stage': 'understand',
+              'tools': ['read_file', 'terminal'],
+              'output': '▸ read_file({"path": "attachments/notes.txt"})\nPRIVATE NOTES\n\n▸ terminal({"command": "ls"})\nproof.md'}
+    assert shares._agent_output(hermes) == ('▸ read_file({"path": "attachments/notes.txt"})\n▸ terminal({"command": "ls"})\n'
+                                            '(tool output is not included in shared snapshots)')
+
+
+def test_shares_made_before_version_3_are_sanitized_when_viewed():
+    snap = {'version': 2, 'title': 'Old', 'status': 'finished', 'proof': 'P', 'agents': [
+        {'id': 'r::2', 'label': 'turn-2 (exec)', 'summary': '$ cat attachments/a.txt\nPRIVATE ATTACHMENT'},
+        {'id': 'r::3', 'label': 'iter-4 (read_file)', 'summary': '▸ read_file(x)\nPRIVATE FILE'},
+        {'id': 'r::4', 'label': 'claude session summary', 'summary': 'edit · /home/ubuntu/w/proof.md\n✓ result · 2 turns · $0.0421 · ok'}]}
+    outputs = [agent['output'] for agent in shares.console_view(snap)['run']['agents']]
+    assert outputs == ['$ cat attachments/a.txt\n(tool output is not included in shared snapshots)',
+                       '▸ read_file(x)\n(tool output is not included in shared snapshots)',
+                       'edit · …/proof.md\n✓ result · 2 turns · … · ok']
+    assert 'PRIVATE' not in json.dumps(shares.shared_payload(snap))
+
+
+def test_lean_record_keeps_the_newest_attempts_their_count_and_axiom_probe(tmp_path):
+    ws = shares.RUNS_DIR / 'workspaces' / 'run-4'
+    ws.mkdir(parents=True)
+    attempts = [{'action': 'repair', 'round': i, 'check': {'ok': False, 'status': 'failed'}} for i in range(30)]
+    attempts.append({'action': 'check', 'round': 30, 'check': {'ok': True, 'status': 'verified', 'axioms': {
+        'ok': True, 'decl': 'main', 'axioms': ['propext'], 'unexpected': [], 'error': ''}}})
+    (ws / 'lean_verify.json').write_text(json.dumps({'status': 'verified', 'lean': 'theorem main : True := trivial',
+                                                     'attempts': attempts,
+                                                     'fidelity': {'flags': [{'lines': [3, 4], 'note': 'n'}]}}))
+    (ws / 'proof.tex').write_text('\\section{Proof} $x=x$.')
+    snap = shares.snapshot('run-4', {'problem_text': 'P'})
+    lean = snap['lean_record']
+    assert lean['attempt_count'] == 31 and len(lean['attempts']) == 24 and lean['attempts'][-1]['round'] == 30
+    assert lean['attempts'][-1]['check']['axioms'] == {'ok': True, 'decl': 'main', 'axioms': ['propext'], 'unexpected': [], 'error': ''}
+    assert lean['fidelity'] == {'flags': [{'lines': [3, 4], 'note': 'n'}]}
+    view = shares.console_view(snap)
+    assert view['run']['lean_verification']['attempt_count'] == 31
+    # A LaTeX proof is shown as proof.tex, not as a proof.md file.
+    preview = view['run']['sandbox_preview']
+    assert preview['source'] == 'proof.tex' and preview['has_proof_tex'] and not preview['has_proof_md'] and view['files'] == []
+
+
+def test_redaction_covers_file_urls():
+    assert shares._redact('open file:///home/ubuntu/w/proof.md now') == 'open …/proof.md now'
+
+
+def test_request_log_hides_a_share_token_with_trailing_text():
+    seen = []
+    handler = type('Handler', (), {'command': 'GET', 'request_version': 'HTTP/1.1',
+                                   'log_message': lambda self, fmt, *args: seen.append(fmt % args)})()
+    handler.path = '/shared/' + TOKEN + 'thanks'
+    console.Handler.log_request(handler, 404)
+    assert TOKEN not in seen[0]
