@@ -7101,10 +7101,13 @@ def delete_run(run_id: str) -> dict[str, Any]:
         except (json.JSONDecodeError, OSError):
             pass
 
-    for path in (run_json, RUNS_DIR / f"{run_id}.json"):
-        if path.exists():
-            path.unlink()
-            removed["deleted"].append(str(path))
+    # Under the write lock: a worker already inside _write_run for this run
+    # finishes first, so it cannot publish the record again after the unlink.
+    with _RUN_WRITE_LOCK:
+        for path in (run_json, RUNS_DIR / f"{run_id}.json"):
+            if path.exists():
+                path.unlink()
+                removed["deleted"].append(str(path))
 
     pdf = cache / "pdf" / f"{run_id}.pdf"
     if pdf.exists():

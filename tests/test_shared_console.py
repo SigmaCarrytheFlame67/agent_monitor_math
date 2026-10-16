@@ -383,3 +383,10 @@ def test_request_log_hides_a_share_token_with_trailing_text():
     handler.path = '/shared/' + TOKEN + 'thanks'
     console.Handler.log_request(handler, 404)
     assert TOKEN not in seen[0]
+
+
+def test_every_static_asset_a_served_page_links_exists():
+    pages = list(shares.WEB.glob('*.html')) + [shares.DASHBOARD_WEB / 'index.html']
+    for page in pages:
+        for name in re.findall(r'(?:__BASE__|__ASSET_BASE__)?/static/([\w./-]+\.(?:css|js))', page.read_text()):
+            assert (shares.WEB / name).is_file() or (shares.DASHBOARD_WEB / name).is_file(), (page.name, name)
