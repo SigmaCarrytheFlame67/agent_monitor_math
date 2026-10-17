@@ -23,6 +23,7 @@ import json
 import os
 import re
 import shutil
+import stat
 import subprocess
 import tempfile
 import threading
@@ -38,6 +39,12 @@ _URL_RE = re.compile(r"https?://\S+")
 _ANSI_RE = re.compile(r"\x1b\[[0-9;]*[a-zA-Z]")
 _CODE_RE = re.compile(r"^[A-Z0-9]{3,6}-[A-Z0-9]{3,6}$")
 _MAX_OUTPUT_CHARS = 4000
+_REAUTH_MARKER_NAME = ".agent-monitor-reauth-required.json"
+# What an error adds after Codex's own reason ("Please log out and sign in
+# again") once note_turn_outcome has flagged the linked login.
+RECONNECT_ADVICE = (
+    "reconnect Codex (ChatGPT) in Settings (the linked account needs a new sign-in) and retry"
+)
 
 # A newly completed device login has valid OAuth tokens before Codex has made
 # its first model-list request and written models_cache.json. Keep the first
@@ -83,7 +90,7 @@ def account_home(user_id: int) -> Path:
     return base / f"user_{user_id}"
 
 
-def account_login_ready(home: Path) -> bool:
+def _has_account_tokens(home: Path) -> bool:
     """True if ``home`` holds a ChatGPT-account (OAuth) Codex login.
 
     An account login's auth.json carries a ``tokens`` bundle (id_token /
@@ -101,19 +108,87 @@ def account_login_ready(home: Path) -> bool:
     return bool(tokens.get("access_token") or tokens.get("id_token"))
 
 
+def account_login_ready(home: Path) -> bool:
+    """True if ``home`` holds a usable ChatGPT-account (OAuth) Codex login.
+
+    A login Codex has rejected (see ``mark_reauth_required``) stays unusable
+    until the account signs in again.
+    """
+    return _has_account_tokens(home) and not account_reauth_required(home)
+
+
+def _reauth_marker(home: str | Path) -> Path:
+    return Path(home) / _REAUTH_MARKER_NAME
+
+
+def account_reauth_required(home: str | Path) -> bool:
+    """True when Codex rejected this account's saved login (expired or revoked)."""
+    try:
+        return stat.S_ISREG(_reauth_marker(home).lstat().st_mode)
+    except OSError:
+        return False
+
+
+def mark_reauth_required(home: str | Path) -> None:
+    """Persist a secret-free marker after Codex's final 401 for this login."""
+    flags = os.O_WRONLY | os.O_CREAT | os.O_TRUNC | getattr(os, "O_NOFOLLOW", 0)
+    fd = os.open(_reauth_marker(home), flags, 0o600)
+    with os.fdopen(fd, "w", encoding="utf-8") as stream:
+        json.dump({"version": 1, "marked_at": int(time.time())}, stream)
+
+
+def clear_reauth_required(home: str | Path) -> None:
+    """Clear the marker after a new sign-in, a disconnect or a completed turn."""
+    try:
+        _reauth_marker(home).unlink()
+    except FileNotFoundError:
+        pass
+
+
+def note_turn_outcome(home: str | Path, *, completed: bool, failure: str = "") -> bool:
+    """Keep a linked account's reconnect flag in step with its last Codex turn.
+
+    Codex's final 401 or failed token refresh (an expired or revoked login)
+    flags the account, so Settings offers Reconnect and subscription routes
+    refuse it; a completed turn clears the flag. A usage limit, a transient
+    error, or an API-key or temporary CODEX_HOME never flags anything.
+    Returns True when this turn flagged the account.
+    """
+    from agent_monitor.runners.codex_backend import _failure_kind
+
+    path = Path(home).expanduser()
+    match = re.fullmatch(r"user_(\d+)", path.name)
+    try:
+        if not match or path.resolve() != account_home(int(match.group(1))).resolve():
+            return False
+        if completed:
+            clear_reauth_required(path)
+        elif (
+            _failure_kind(failure) == "auth"
+            # A newer sign-in replaced this login while the turn ran.
+            and "signed in to another account" not in failure
+        ):
+            mark_reauth_required(path)
+            return True
+    except OSError:
+        pass
+    return False
+
+
 def _installed_cli_version(codex: str) -> str:
     """Bare version (``0.160.0``) that ``codex --version`` reports."""
+    # The npm launcher cannot forward SIGKILL; this helper stops the whole
+    # process group (native codex included) when the timeout expires.
+    from agent_monitor.runners.codex_backend import _run_codex_process
+
     with tempfile.TemporaryDirectory() as isolated_home:
         try:
-            completed = subprocess.run(
+            completed = _run_codex_process(
                 [codex, "--version"],
+                input="",
+                timeout=_MODELS_REFRESH_TIMEOUT_S,
                 env={"PATH": os.environ.get("PATH", os.defpath), "HOME": isolated_home,
                      "CODEX_HOME": isolated_home, "NO_COLOR": "1"},
-                stdin=subprocess.DEVNULL,
-                capture_output=True,
-                text=True,
-                timeout=_MODELS_REFRESH_TIMEOUT_S,
-                check=False,
                 cwd=isolated_home,
             )
         except (OSError, subprocess.SubprocessError):
@@ -192,20 +267,17 @@ def refresh_models_cache(user_id: int, *, timeout: float = _MODELS_REFRESH_TIMEO
     codex = codex_binary()
     if not codex or not account_login_ready(home):
         return False
+    from agent_monitor.runners.codex_backend import _run_codex_process
     from agent_monitor.subprocess_env import child_process_env
 
     env = child_process_env()
     env["CODEX_HOME"] = str(home)
     env.setdefault("NO_COLOR", "1")
     try:
-        subprocess.run(
-            [codex, "debug", "models"],
-            env=env,
-            stdin=subprocess.DEVNULL,
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-            timeout=timeout,
-            check=False,
+        # A timeout stops native codex too (see _installed_cli_version); the
+        # rendered catalog on stdout is discarded.
+        _run_codex_process(
+            [codex, "debug", "models"], input="", timeout=timeout, env=env, cwd=None
         )
     except (OSError, subprocess.SubprocessError):
         return False
@@ -222,6 +294,7 @@ def _augment(user_id: int, snapshot: dict[str, Any]) -> dict[str, Any]:
     """
     home = account_home(user_id)
     snapshot["connected"] = account_login_ready(home)
+    snapshot["reauth_required"] = account_reauth_required(home)
     snapshot["codex_installed"] = codex_binary() is not None
     snapshot["codex_home"] = str(home)
     return snapshot
@@ -232,6 +305,18 @@ def status(user_id: int) -> dict[str, Any]:
     with _lock:
         st = {k: v for k, v in _state_for(user_id).items() if k != "proc"}
     return _augment(user_id, st)
+
+
+def _failure_reason(lines: list[str]) -> str:
+    """Codex's own error line (``Error logging in with device code: ...``).
+
+    The sign-in link, one-time code and notices printed before it are not a
+    reason, so only a line that reports an error qualifies.
+    """
+    for line in reversed(lines):
+        if "error" in line.lower():
+            return " ".join(line.split())[:300]
+    return ""
 
 
 def _reader(proc: subprocess.Popen, home: Path, user_id: int) -> None:
@@ -260,6 +345,12 @@ def _reader(proc: subprocess.Popen, home: Path, user_id: int) -> None:
     except subprocess.TimeoutExpired:
         proc.kill()
         rc = -1
+    if rc == 0 and _has_account_tokens(home):
+        # The new sign-in replaces a login Codex had rejected.
+        try:
+            clear_reauth_required(home)
+        except OSError:
+            pass
     if rc == 0 and account_login_ready(home):
         # Before reporting success (the UI then reloads its model list), fetch
         # the account's real catalog.
@@ -273,8 +364,12 @@ def _reader(proc: subprocess.Popen, home: Path, user_id: int) -> None:
             st["status"] = "success"
         else:
             st["status"] = "error"
-            if rc != 0 and not st.get("error"):
-                st["error"] = f"codex login exited with code {rc}"
+            if not st.get("error"):
+                if rc == 0:
+                    st["error"] = "codex login finished but no ChatGPT sign-in was saved"
+                else:
+                    reason = _failure_reason(lines)
+                    st["error"] = f"codex login exited with code {rc}" + (f": {reason}" if reason else "")
 
 
 def start_login(user_id: int) -> dict[str, Any]:
@@ -350,4 +445,5 @@ def logout(user_id: int) -> dict[str, Any]:
     auth_path = home / "auth.json"
     if auth_path.exists():
         auth_path.unlink()
+    clear_reauth_required(home)
     return _augment(user_id, {"ok": True})

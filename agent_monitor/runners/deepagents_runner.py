@@ -8,7 +8,7 @@ events to stdout so the console's CLIEventParser builds a multi-node trace:
   {"type": "turn.completed", "usage": {...}}
 
 Executed inside engines/deepagents/.venv (created by setup.sh).
-Usage: deepagents_runner.py "<prompt>"   (cwd = run workspace)
+Usage: deepagents_runner.py --prompt-file PATH | "<prompt>"   (cwd = run workspace)
 
 Important: DeepAgents' default tool filesystem is virtual/in-memory. We mount a
 FilesystemBackend rooted at the run workspace (virtual_mode=True) so read/write
@@ -34,6 +34,7 @@ if __package__:
         normalize_requested_outcome_file,
         strip_outcome_markers,
     )
+    from .task_prompt import read_task_prompt
 else:
     # engines_registry executes this file with the DeepAgents interpreter and
     # a run workspace as cwd. Make the owning repository importable without
@@ -45,6 +46,7 @@ else:
         normalize_requested_outcome_file,
         strip_outcome_markers,
     )
+    from agent_monitor.runners.task_prompt import read_task_prompt
 
 
 _ACTIVE_CODEX_GROUPS: set[int] = set()
@@ -1742,19 +1744,28 @@ def _create_claude_subscription_model(workspace: Path, model_name: str):
                     }
                 )
 
-            input_tokens = sum(
-                int((result.usage or {}).get("input_tokens") or 0)
-                for result in results
-            )
-            output_tokens = sum(
-                int((result.usage or {}).get("output_tokens") or 0)
-                for result in results
-            )
+            def usage_total(name: str) -> int:
+                return sum(
+                    int((result.usage or {}).get(name) or 0) for result in results
+                )
+
+            # Claude Code reports cache reads and writes (nearly the whole
+            # prompt of each step) apart from input_tokens; LangChain counts
+            # them inside input_tokens and breaks them out in the details.
+            cache_read = usage_total("cache_read_tokens")
+            cache_write = usage_total("cache_write_tokens")
+            input_tokens = usage_total("input_tokens") + cache_read + cache_write
+            output_tokens = usage_total("output_tokens")
             usage = {
                 "input_tokens": input_tokens,
                 "output_tokens": output_tokens,
                 "total_tokens": input_tokens + output_tokens,
             }
+            if cache_read or cache_write:
+                usage["input_token_details"] = {
+                    "cache_read": cache_read,
+                    "cache_creation": cache_write,
+                }
             actual_models = [
                 str(result.model)
                 for result in results
@@ -1939,9 +1950,19 @@ def _load_user_tools(workspace: Path) -> list:
 
 def main() -> int:
     _install_termination_handlers()
-    prompt = sys.argv[1] if len(sys.argv) > 1 else ""
+    try:
+        prompt = read_task_prompt(sys.argv)
+    except (OSError, UnicodeDecodeError) as exc:
+        emit_item(
+            {
+                "type": "error",
+                "message": f"could not read the task prompt ({type(exc).__name__})",
+                "terminal": True,
+            }
+        )
+        return 2
     if not prompt.strip():
-        emit_item({"type": "error", "message": "empty prompt"})
+        emit_item({"type": "error", "message": "empty prompt", "terminal": True})
         return 2
 
     workspace = Path.cwd().resolve()
@@ -1958,6 +1979,7 @@ def main() -> int:
             {
                 "type": "error",
                 "message": "Codex and Claude account routes cannot both be active",
+                "terminal": True,
             }
         )
         return 2
@@ -2008,19 +2030,19 @@ def main() -> int:
         try:
             deepagents_model = _create_codex_subscription_model(workspace, model)
         except Exception as exc:  # noqa: BLE001
-            emit_item({"type": "error", "message": f"{type(exc).__name__}: {exc}"})
+            emit_item({"type": "error", "message": f"{type(exc).__name__}: {exc}", "terminal": True})
             return 1
     elif claude_subscription_mode:
         try:
             deepagents_model = _create_claude_subscription_model(workspace, model)
         except Exception as exc:  # noqa: BLE001
-            emit_item({"type": "error", "message": f"{type(exc).__name__}: {exc}"})
+            emit_item({"type": "error", "message": f"{type(exc).__name__}: {exc}", "terminal": True})
             return 1
     elif _is_kimi_api_model(model):
         try:
             deepagents_model = _create_kimi_api_model(model)
         except Exception as exc:  # noqa: BLE001
-            emit_item({"type": "error", "message": f"{type(exc).__name__}: {exc}"})
+            emit_item({"type": "error", "message": f"{type(exc).__name__}: {exc}", "terminal": True})
             return 1
     else:
         deepagents_model = model
@@ -2093,10 +2115,17 @@ def main() -> int:
             if usage:
                 total_in += int(usage.get("input_tokens") or 0)
                 total_out += int(usage.get("output_tokens") or 0)
+                details = usage.get("input_token_details")
+                if not isinstance(details, dict):
+                    details = {}
                 emit({
                     "type": "turn.completed",
                     "usage": {
+                        # LangChain's input_tokens already include the cache
+                        # reads and writes broken out here (Codex semantics).
                         "input_tokens": int(usage.get("input_tokens") or 0),
+                        "cached_input_tokens": int(details.get("cache_read") or 0),
+                        "cache_write_tokens": int(details.get("cache_creation") or 0),
                         "output_tokens": int(usage.get("output_tokens") or 0),
                     },
                 })
@@ -2204,7 +2233,7 @@ def main() -> int:
                 )
             )
             if not recovered:
-                emit_item({"type": "error", "message": f"{type(exc).__name__}: {exc}"})
+                emit_item({"type": "error", "message": f"{type(exc).__name__}: {exc}", "terminal": True})
                 return 1
             emit_item({
                 "type": "agent_message",
@@ -2279,6 +2308,7 @@ def main() -> int:
                             else " (lean_check was never completed)"
                         )
                     ),
+                    "terminal": True,
                 }
             )
             return 1
@@ -2326,6 +2356,7 @@ def main() -> int:
                     "DeepAgents ended without a non-empty proof.md or proof.tex "
                     "artifact"
                 ),
+                "terminal": True,
             }
         )
         return 1
@@ -2351,6 +2382,7 @@ def main() -> int:
                     "checkpoint or an explicit current-run degraded audit with "
                     "a concrete missing/failed artifact reason"
                 ),
+                "terminal": True,
             }
         )
         return 1

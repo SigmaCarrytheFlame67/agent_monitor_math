@@ -308,6 +308,11 @@ def analysis_graph_snapshot(graph):
     verdicts; never proof excerpts, notes or anything from analysis/source."""
     if not isinstance(graph, dict):
         return {'nodes': [], 'edges': []}
+    from agent_monitor.analyze.graph import ref_labels
+    from agent_monitor.analyze.titles import tex_text_refs
+
+    # The viewer shows statements as text: \ref{x} reads as the result's number.
+    refs = ref_labels(graph)
     nodes = []
     for node in (graph.get('nodes') or [])[:100]:
         if not isinstance(node, dict):
@@ -325,7 +330,7 @@ def analysis_graph_snapshot(graph):
         entry = {
             'id': _text(node.get('id'), 240), 'kind': _text(node.get('kind'), 240),
             'label': _text(node.get('label'), 240),
-            'statement': _text(' '.join(str(node.get('statement') or '').split()), 1200),
+            'statement': _text(' '.join(tex_text_refs(node.get('statement'), refs).split()), 1200),
             'status': status, 'verdict': verdict,
             'closure': VERDICT_STATUS[closure] if closure else '',
             'main_result': bool(meta.get('main_result')),
@@ -392,7 +397,7 @@ def _verdict_counts(shared_graph, summary):
 
 def _analysis_snapshot(run_id, data, read, graph):
     from agent_monitor.analyze import graph as analysis_graph
-    from agent_monitor.analyze.titles import plain_title
+    from agent_monitor.analyze.titles import plain_title, tex_text_refs
 
     ws = RUNS_DIR / 'workspaces' / run_id
     block = data.get('analyze') if isinstance(data.get('analyze'), dict) else {}
@@ -420,8 +425,10 @@ def _analysis_snapshot(run_id, data, read, graph):
         'title': _text(f'Analyze · {title}', 240),
         'status': _text(data.get('status'), 80), 'engine': 'analyze',
         'problem': problem,
-        # The report quotes labels and model findings, never the manuscript.
-        'proof': read('analysis/report.md'),
+        # The report quotes labels and model findings, never the manuscript;
+        # a report written before cross-references were resolved reads as text too.
+        'proof': tex_text_refs(read('analysis/report.md'), analysis_graph.ref_labels(manuscript_graph)
+                               if manuscript_graph else None),
         'agents': [],
         'informal_graph': shared_graph if shared_graph else {'title': '', 'nodes': [], 'edges': []},
         'formal_graph': graph('lean_proof_graph.json'), 'lean_source': lean,

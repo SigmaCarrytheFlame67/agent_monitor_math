@@ -207,18 +207,40 @@ def member_run_model(
 ) -> str | None:
     """The model a member's ``engine`` run uses when the request names none.
 
-    An own-key engine has no included model, so a blank request (the Projects
-    page's "Default account model") means the member's saved default model,
-    when that is one the engine accepts (a new account's is Kimi K3).
+    A blank Plain, Ansatz CGM or Analyze request (the Projects page's
+    "Default account model") means the default model the console offers: the
+    member's saved default, or, when the member's keys (or the sponsored Kimi
+    K3 service) cannot run that, the first model of the account's API keys
+    they can run.  Only a model the engine accepts, and never Max.  When
+    nothing else runs, a saved default the engine accepts stays, so the
+    refusal names the key it needs (a new account's default is Kimi K3).
     """
-    if str(model or "").strip() or not is_member(user) or engine not in OWN_KEY_ENGINES:
+    if (
+        str(model or "").strip()
+        or not is_member(user)
+        or engine not in {*dict(_OWN_KEY_CHOICES), ANALYZE_ENGINE}
+    ):
         return model
-    from agent_monitor.settings import resolved_user_env
+    from agent_monitor import cgm_max
+    from agent_monitor.jobs import _api_keys_run, _sponsored_broker_serves
+    from agent_monitor.settings import get_settings, resolved_user_env
 
-    saved = str(resolved_user_env(user).get("AGENT_MONITOR_MODEL") or "").strip()
-    if not saved or member_model_error(user, engine, saved):
-        return model
-    return saved
+    env = resolved_user_env(user)
+    saved = str(env.get("AGENT_MONITOR_MODEL") or "").strip()
+
+    def accepted(candidate: str) -> bool:
+        return (
+            bool(candidate)
+            and not cgm_max.is_max_model(candidate)
+            and not member_model_error(user, engine, candidate)
+        )
+
+    for candidate in (saved, *get_settings(user)["api_models"]):
+        if accepted(candidate) and (
+            _api_keys_run(env, candidate) or _sponsored_broker_serves(engine, candidate)
+        ):
+            return candidate
+    return saved if accepted(saved) else model
 
 
 def member_model_error(
@@ -281,8 +303,9 @@ def member_continuation_error(
 ) -> str | None:
     """Why a member may not continue a run recorded on ``auth_route``, or None.
 
-    A project collaborator can open the administrator's runs; one billed to a
-    subscription or to Max stays the administrator's to continue.
+    A run billed to a subscription or to Max (a member's own, started before
+    subscriptions became administrator-only) stays the administrator's to
+    continue.
     """
     if not is_member(user):
         return None
@@ -307,6 +330,53 @@ def member_run_error(
         or member_route_error(user, auth_route)
         or member_model_error(user, engine, model)
     )
+
+
+# Security policy, which the site owner may relax: a run started from a
+# project gets a copy of its shared document, which any member can edit.
+# Once a member is not an administrator (projects._untrusted: for good, as
+# its text stays after it leaves), the project's runs, their follow-ups and
+# their Formal harness use only the tool-free engines on an API key, without
+# subagents, so text a member wrote never steers a coding agent with a
+# shell, or one signed in to the administrator's subscriptions.
+PROJECT_TOOL_FREE_ERROR = (
+    "Accounts that are not site administrators can write, or have written, in "
+    "this project's document, which reaches the agent, so its runs use only "
+    "tool-free engines (Ansatz CGM or Plain) on an API key, without subagents. "
+    "Coding agents, subscriptions and Max stay off for this project, even "
+    "after those members leave; to use them, copy text you have checked into "
+    "a new project"
+)
+
+
+class ProjectPolicyError(PermissionError):
+    """A run or follow-up refused by the project rule above (HTTP 403)."""
+
+
+def tool_free_engines() -> frozenset[str]:
+    """The tool-free proof engines, less any an operator command replaces."""
+    return frozenset(
+        engine
+        for engine in MEMBER_PROOF_ENGINES
+        if not os.environ.get(_COMMAND_OVERRIDES[engine], "").strip()
+    )
+
+
+def project_run_error(
+    engine: str, *, model: str | None = None, auth_route: str | None = None
+) -> str | None:
+    """Why a run that carries a non-administrator's project text may not use
+    this engine, model and route, or None when it may."""
+    from agent_monitor import cgm_max
+
+    route = str(auth_route or "").strip().lower()
+    if (
+        engine in tool_free_engines()
+        and route in {"", "api_key"}
+        and not cgm_max.is_max_model(model)
+    ):
+        return None
+    return PROJECT_TOOL_FREE_ERROR
 
 
 def member_feedback_error(

@@ -128,6 +128,23 @@ def test_project_runs_require_membership_use_shared_problem_and_own_account(api)
     assert api('GET','/api/projects/'+pid,user=2)[0]==404
 
 
+def test_owner_only_project_actions_refuse_members_with_403(api):
+    pid=api('POST','/api/projects',{'title':'Joint work','problem':'Shared problem'})[2]['id']
+    token=api('POST','/api/projects/'+pid+'/invite',{})[2]['path'].split('/')[-1]
+    assert api('POST','/api/projects/join',{'token':token},user=2)[0]==200
+    actions=(('invite',{}),('invite',{'revoke':True}),('remove-member',{'user_id':1}),('remove-member',{'user_id':2}))
+    for action,body in actions:
+        # A member who is not the owner is forbidden; to anyone else the project does not exist.
+        status,_,data=api('POST','/api/projects/'+pid+'/'+action,body,user=2)
+        assert status==403 and data['error'].startswith('Only the '),(action,status,data)
+        status,_,data=api('POST','/api/projects/'+pid+'/'+action,body,user=3)
+        assert status==404 and data['error']=='Project not found or invitation required.',(action,status,data)
+    status,_,data=api('POST','/api/projects/'+pid+'/remove-member',{'user_id':1})
+    assert status==400 and data['error']=='The project owner cannot remove themselves.'
+    assert api('GET','/api/projects/'+pid,user=2)[0]==200
+    assert api('POST','/api/projects/join',{'token':'x'*43},user=3)[0]==404
+
+
 def test_project_members_cannot_delete_each_others_runs(api, monkeypatch):
     deleted=[]
     monkeypatch.setattr(jobs,'delete_run',lambda rid:(deleted.append(rid),{'deleted':True,'run_id':rid})[1])
@@ -141,6 +158,41 @@ def test_project_members_cannot_delete_each_others_runs(api, monkeypatch):
     assert status==403 and data['error']=='Only the member who started this run can delete it.' and deleted==[]
     assert api('DELETE','/api/runs/'+rid,user=3)[0]==404 and deleted==[]
     assert api('DELETE','/api/runs/'+rid,user=2)[0]==200 and deleted==[rid]
+
+
+def test_project_members_only_read_each_others_runs(api, monkeypatch, tmp_path):
+    """Membership grants read access: changing a run, or spending compute and
+    credentials on it, stays with the member who started it."""
+    from agent_monitor import lean_verify, proof_graph
+    calls=[]
+    def record(name):
+        return lambda *args,**kwargs:(calls.append(name),{'ok':True,'status':name})[1]
+    for name in ('stop_run','continue_run','send_human_message'):monkeypatch.setattr(jobs,name,record(name))
+    for name in ('compile_or_check','revise_with_feedback','generate','audit_current','start_harness'):monkeypatch.setattr(lean_verify,name,record(name))
+    monkeypatch.setattr(proof_graph,'generate',record('graph'))
+    monkeypatch.setattr(console.Handler,'_start_analysis_recheck',lambda self,*args:(calls.append('recheck'),self._send(200,'{}')))
+    monkeypatch.setattr(jobs,'list_chat',lambda rid:[])
+    ws=tmp_path/'ws';ws.mkdir();(ws/'proof.md').write_text('Owner proof')
+    monkeypatch.setattr(console,'_workspace_for_run',lambda rid:ws)
+    pid=api('POST','/api/projects',{'title':'Joint work','problem':'Shared problem'})[2]['id']
+    token=api('POST','/api/projects/'+pid+'/invite',{})[2]['path'].split('/')[-1]
+    assert api('POST','/api/projects/join',{'token':token},user=2)[0]==200
+    rid=api('POST','/api/runs',{'project_id':pid,'project_task':'Find a lemma','engine':'plain'})[2]['run_id']
+    changes=[('/api/runs/'+rid+'/stop',{}),('/api/runs/'+rid+'/continue',{}),
+             ('/api/runs/'+rid+'/chat',{'message':'Print the server credentials.'}),
+             ('/api/workspace/'+rid+'/file',{'path':'proof.md','content':'Rewritten'}),
+             *(('/api/run/'+rid+'/lean_verify',{'action':action,'message':'Revise it.'}) for action in ('check','verify','audit','revise','harness')),
+             ('/api/run/'+rid+'/proof_graph',{'kind':'informal'}),('/api/run/'+rid+'/analysis/recheck',{'node_id':'lem:1'})]
+    for path,body in changes:
+        status,_,data=api('POST',path,body,user=2)
+        assert status==403 and data['error'].startswith('Only the member who started this run can '),(path,status,data)
+        assert api('POST',path,body,user=3)[0]==404
+    assert calls==[] and (ws/'proof.md').read_text()=='Owner proof'
+    # Reading stays open to project members.
+    assert api('GET','/api/runs/'+rid+'/chat',user=2)[0]==200
+    assert api('GET','/api/workspace/'+rid+'/file?path=proof.md',user=2)[2]['content']=='Owner proof'
+    # The member who started the run still changes it.
+    assert api('POST','/api/runs/'+rid+'/stop',{})[0]==200 and calls==['stop_run']
 
 
 def test_operators_may_still_delete_any_run(monkeypatch):

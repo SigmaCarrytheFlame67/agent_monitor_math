@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import contextlib
 import io
 import json
 import os
@@ -660,6 +661,116 @@ class ClaudeOpenClawRoutingTests(unittest.TestCase):
 
         self.assertEqual(returncode, 78)
         watchdog.assert_not_called()
+
+
+class ClaudeOpenClawBackendFailureTests(unittest.TestCase):
+    """OpenClaw failing before Claude answers keeps its exit code and says why."""
+
+    def _main(
+        self,
+        *,
+        watchdog_returncode: int,
+        recorded_model: str | None = None,
+        reauth_required: bool = False,
+        formal: bool = False,
+    ) -> tuple[int, str, str, dict[str, object]]:
+        root = Path(self.enterContext(tempfile.TemporaryDirectory()))
+        account = _private_dir(root / "account")
+        workspace = _private_dir(root / "workspace")
+        claude_binary = _executable(root / "claude")
+        key = "agent:main:run-one"
+
+        def which(name: str) -> str | None:
+            return {"openclaw": "/mock/openclaw", "claude": str(claude_binary)}.get(name)
+
+        def watchdog(argv, state_dir: Path, **_kwargs) -> int:
+            if recorded_model:
+                session = state_dir / "agents" / "main" / "sessions" / "session.jsonl"
+                session.parent.mkdir(parents=True, exist_ok=True)
+                session.write_text(
+                    json.dumps({"type": "message", "message": {
+                        "role": "assistant", "provider": "claude-cli", "model": recorded_model,
+                    }}) + "\n",
+                    encoding="utf-8",
+                )
+            return watchdog_returncode
+
+        env = {
+            "HOME": str(account),
+            "CLAUDE_CONFIG_DIR": str(account),
+            "AGENT_MONITOR_CLAUDE_SUBSCRIPTION": "1",
+            "AGENT_MONITOR_CLAUDE_MODEL": "claude-haiku-4-5",
+        }
+        if formal:
+            env["AGENT_MONITOR_FORMAL_LEAN_MODE"] = "1"
+        stdout, stderr = io.StringIO(), io.StringIO()
+        with (
+            patch.dict(os.environ, env, clear=True),
+            patch.object(openclaw_runner.sys, "argv", ["openclaw_runner.py", "prove something", "run-one"]),
+            patch.object(openclaw_runner.Path, "cwd", return_value=workspace),
+            patch.object(openclaw_runner.shutil, "which", side_effect=which),
+            patch.object(openclaw_runner, "_bind_workspace_tool_python", return_value=[]),
+            patch.object(openclaw_runner, "_run_with_terminal_watchdog", side_effect=watchdog),
+            patch.object(openclaw_runner, "_session_key", return_value=key),
+            patch(
+                "agent_monitor.claude_login.account_reauth_required",
+                return_value=reauth_required,
+            ) as reauth,
+            patch.object(openclaw_runner, "_persist_terminal_candidate") as persist,
+            patch.object(openclaw_runner, "_recover_checkpointed_proof", return_value=False) as recover,
+            patch.object(openclaw_runner, "_normalize_requested_outcome") as normalize,
+            patch.object(openclaw_runner, "_run_supplemental_audit") as audit,
+            contextlib.redirect_stdout(stdout),
+            contextlib.redirect_stderr(stderr),
+        ):
+            returncode = openclaw_runner.main()
+        calls = {"reauth": reauth, "persist": persist, "recover": recover,
+                 "normalize": normalize, "audit": audit}
+        return returncode, stdout.getvalue(), stderr.getvalue(), calls
+
+    def test_failure_before_any_reply_keeps_exit_code_and_explains(self) -> None:
+        # e.g. the Claude Code session limit: OpenClaw exits 1 with no reply.
+        returncode, stdout, stderr, calls = self._main(watchdog_returncode=1)
+
+        self.assertEqual(returncode, 1)
+        self.assertIn("[agent-monitor] OpenClaw's Claude Code backend stopped before any model reply", stderr)
+        self.assertIn("usage limit", stderr)
+        self.assertNotIn("recorded no Claude model usage", stdout)
+        for name in ("persist", "recover", "normalize", "audit"):
+            calls[name].assert_not_called()
+
+    def test_failure_with_a_login_to_reconnect_says_so(self) -> None:
+        returncode, _stdout, stderr, _calls = self._main(
+            watchdog_returncode=1, reauth_required=True
+        )
+
+        self.assertEqual(returncode, 1)
+        self.assertIn("[agent-monitor] ", stderr)
+        self.assertIn("reconnect Claude Code in Settings", stderr)
+
+    def test_formal_lean_failure_before_any_reply_is_not_promoted(self) -> None:
+        returncode, stdout, stderr, _calls = self._main(watchdog_returncode=1, formal=True)
+
+        self.assertEqual(returncode, 1)
+        self.assertIn('"agentMonitorFormalLeanArtifactAccepted": false', stdout)
+        self.assertIn("[agent-monitor] ", stderr)
+
+    def test_clean_exit_without_model_usage_still_fails_closed(self) -> None:
+        returncode, stdout, stderr, calls = self._main(watchdog_returncode=0)
+
+        self.assertEqual(returncode, 65)
+        self.assertIn("recorded no Claude model usage", stdout)
+        self.assertNotIn("[agent-monitor]", stderr)
+        calls["reauth"].assert_not_called()
+
+    def test_failed_run_that_used_another_model_still_fails_closed(self) -> None:
+        returncode, stdout, stderr, _calls = self._main(
+            watchdog_returncode=1, recorded_model="claude-opus-4-1-20250805"
+        )
+
+        self.assertEqual(returncode, 65)
+        self.assertIn("model mismatch", stdout)
+        self.assertNotIn("[agent-monitor]", stderr)
 
 
 if __name__ == "__main__":

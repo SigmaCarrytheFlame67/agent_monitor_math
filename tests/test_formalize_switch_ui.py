@@ -194,6 +194,98 @@ console.log(JSON.stringify([handled,els['lean-progress-title'].textContent,els['
 """
         self.assertEqual(_run(program), [False, "Formalization is off for this run", True, "Off"])
 
+    @unittest.skipUnless(NODE, "node is unavailable")
+    def test_stages_of_a_stopped_run_read_as_stopped_not_failed(self) -> None:
+        source = "\n".join(_js_function(name) for name in ("pipelineStageVisualStatus", "renderAutoPipeline"))
+        program = f"""
+{_DOM}
+const tabs={{lean:element('tab-lean'),dag:element('tab-dag')}};
+const document={{querySelector:selector=>selector.includes('"lean"')?tabs.lean:tabs.dag}};
+const escapeHtml=value=>String(value);
+let workspaceView='sandbox', autoPipelineKey='';
+const syncDagRebuild=()=>{{}}, refreshDagView=()=>{{}}, refreshLeanView=()=>{{}};
+{source}
+const stopped={{status:'stopped',outcome:'not_run',detail:'The run was stopped before it produced a proof draft'}};
+renderAutoPipeline({{status:'stopped',stages:{{informal_dag:stopped,lean:stopped,formal_dag:stopped,coverage:stopped}}}});
+const html=els['auto-pipeline-status'].innerHTML;
+console.log(JSON.stringify([(html.match(/pipeline-chip stopped/g)||[]).length,/pipeline-chip (skipped|error|waiting)/.test(html),[...tabs.lean.classes],[...tabs.dag.classes]]));
+"""
+        # Neutral chips and no tab dots: a stop is the user's choice, not a failure.
+        self.assertEqual(_run(program), [4, False, [], []])
+
+    @unittest.skipUnless(NODE, "node is unavailable")
+    def test_lean_tab_of_a_stopped_run_says_stopped_not_failed(self) -> None:
+        constants = "\n".join(
+            f"const {name}=" + SCRIPT.split(f"const {name}=", 1)[1].split(";", 1)[0] + ";"
+            for name in ("LEAN_PROGRESS_STAGES", "LEAN_ANALYSIS_STAGE_NAMES")
+        )
+        source = "\n".join(
+            _js_function(name)
+            for name in ("pipelineStageVisualStatus", "leanForAnalysis", "renderLeanProgress", "syncLeanPipelineEmptyState")
+        )
+        program = f"""
+{_DOM}
+let badge='none', meta='', lastSandboxRun=null, runId='run-a';
+const CURRENT_USER=null, setLeanBadge=value=>{{badge=value;}}, leanStatus=value=>{{meta=value;}};
+const document={{body:{{classList:{{contains:()=>false}}}}}}, isAnalysisRun=()=>false;
+{constants}
+{source}
+const stopped={{status:'stopped',outcome:'not_run',detail:'The run was stopped before it produced a proof draft'}};
+const state={{status:'stopped',proof_engine:'claude',stages:{{informal_dag:stopped,lean:stopped,formal_dag:stopped,coverage:stopped}}}};
+renderLeanProgress(state);
+const handled=syncLeanPipelineEmptyState(state);
+console.log(JSON.stringify([handled,badge,els['lean-progress-title'].textContent,els['lean-progress-detail'].textContent,els['lean-progress-pct'].textContent]));
+"""
+        self.assertEqual(
+            _run(program),
+            [False, "none", "Run stopped", "The run was stopped before it produced a proof draft.", "Stopped"],
+        )
+
+    @unittest.skipUnless(NODE, "node is unavailable")
+    def test_dag_tab_of_a_stopped_run_promises_no_automatic_graph(self) -> None:
+        source = "\n".join(
+            _js_function(name)
+            for name in (
+                "dagStatus",
+                "setDagObservation",
+                "dagObservationText",
+                "isCompilerFactsGraph",
+                "compilerFactsPayload",
+                "dagIsCgmEngine",
+                "dagPayloadForMode",
+                "dagUnavailableState",
+                "showDagUnavailable",
+            )
+        )
+        source += "\nasync " + _js_function("refreshDagView")
+        program = f"""
+{_DOM}
+let dagRunKey='', dagRefreshSeq=0, dagDisplayedRunId='', dagDisplayedMode='', dagDisplayedEngineView='', dagMode='informal', dagEngineView='workflow', runId='run-a';
+let lastSandboxRun=null;
+const renderDag=()=>{{}}, rememberAnalysisGraph=()=>{{}};
+globalThis.fetch=async()=>({{ok:true,json:async()=>({{status:'none',kind:'informal'}})}});
+{source}
+const show=async(run_kind,status,detail)=>{{
+  lastSandboxRun={{run_id:'run-a',engine:'claude',auto_pipeline:{{run_kind,stages:{{informal_dag:{{status,detail}}}}}}}};
+  await refreshDagView();
+  return [els['dag-empty'].innerHTML.replace(/<[^>]+>/g,' ').replace(/\\s+/g,' ').trim(),els['dag-meta'].textContent];
+}};
+(async()=>console.log(JSON.stringify([
+  await show(undefined,'stopped','The run was stopped before it produced a proof draft'),
+  await show('analyze','stopped','The analysis was stopped before it published a graph'),
+  await show(undefined,'waiting','Waiting for proof.md'),
+])))();
+"""
+        self.assertEqual(
+            _run(program),
+            [
+                ["◇ Run stopped · no proof draft to graph.", "The run was stopped before it produced a proof draft"],
+                ["◇ Analysis stopped · no report to graph.", "The analysis was stopped before it published a graph"],
+                # A run still on its way keeps the automatic-generation note.
+                ["◆ Generating the proof graph automatically… No manual action is needed.", "Waiting for proof.md"],
+            ],
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

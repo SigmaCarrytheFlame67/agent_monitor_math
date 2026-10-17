@@ -291,7 +291,9 @@ class ResolvedSource:
     knows the size before the download; show no size rather than a guess).
     ``format`` is the expected format: ``"tex"`` for arXiv means "e-print
     expected" (a PDF-only paper is found out when the source is fetched,
-    and guests are told then); ``""`` when unknown."""
+    and guests are told then); ``""`` when unknown.  ``retryable`` marks a
+    failed lookup that may work later (the site was slow or busy), as
+    opposed to a link that cannot be analyzed."""
 
     ok: bool
     connector: str | None
@@ -306,6 +308,7 @@ class ResolvedSource:
     choices: list[dict[str, Any]] = field(default_factory=list)
     error: str | None = None
     meta: dict[str, Any] = field(default_factory=dict)
+    retryable: bool = False
 
     def as_dict(self) -> dict[str, Any]:
         out: dict[str, Any] = {
@@ -324,6 +327,8 @@ class ResolvedSource:
             out["choices"] = list(self.choices)
         if self.error:
             out["error"] = self.error
+        if self.retryable:
+            out["retryable"] = True
         return out
 
 
@@ -1359,10 +1364,12 @@ def resolve(
                               title=PurePosixPath(urlsplit(info["canonical_url"]).path).name or info["canonical_url"],
                               format={".pdf": "pdf", ".tex": "tex"}.get(PurePosixPath(urlsplit(info["canonical_url"]).path).suffix.lower(), ""))
     except SourceError as exc:
-        return ResolvedSource(ok=False, connector=info["connector"], canonical_url=info.get("canonical_url"), error=str(exc))
+        return ResolvedSource(ok=False, connector=info["connector"], canonical_url=info.get("canonical_url"), error=str(exc),
+                              retryable=exc.kind == "unavailable")
     except FetchError as exc:
+        public = _public_error(exc, "The link")
         return ResolvedSource(ok=False, connector=info["connector"], canonical_url=info.get("canonical_url"),
-                              error=str(_public_error(exc, "The link")))
+                              error=str(public), retryable=public.kind == "unavailable")
 
 
 def fetch_bundle(

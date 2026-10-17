@@ -7,13 +7,21 @@ picker, shared pages) from arXiv metadata (``$\\pi$``), GitHub Markdown
 typeset (``\\pi`` -> π, ``\\mathbb Q`` -> ℚ, ``x^2`` -> x², ``\\le`` -> ≤) and
 leaves everything else alone.  It never raises: an unexpected construct keeps
 its command name without the backslash.
+
+:func:`tex_text_accents` writes TeX text accents outside math as the letters
+they make (``Erd\\H{o}s`` -> Erdős, ``P\\'olya`` -> Pólya); titles and the
+model-written prose of an analysis report use it.  :func:`tex_text_refs`
+writes cross-references outside math as text (``Corollary~\\ref{cor:counting}``
+-> Corollary 1.2) for the model-written prose of an analysis.
 """
 from __future__ import annotations
 
 import html
 import re
+import unicodedata
+from typing import Mapping
 
-__all__ = ["plain_title", "tex_to_text"]
+__all__ = ["plain_title", "tex_text_accents", "tex_text_refs", "tex_to_text", "unresolved_label"]
 
 _GREEK = {
     "alpha": "α", "beta": "β", "gamma": "γ", "delta": "δ", "epsilon": "ϵ", "varepsilon": "ε", "zeta": "ζ",
@@ -272,6 +280,121 @@ def tex_to_text(tex: str) -> str:
     return text.strip()
 
 
+# Text-mode accents: \"o, \"{o}, {\"o}, \H{o}, \H o, \c{c}, \'{\i} ...  A bare
+# letter after a symbol accent counts only where that accent is used (so an
+# escaped apostrophe in "it\'s" stays as written).
+_ACCENT_MARKS = {"'": "\u0301", "`": "\u0300", "^": "\u0302", '"': "\u0308", "~": "\u0303", "=": "\u0304",
+                 ".": "\u0307", "H": "\u030b", "c": "\u0327", "v": "\u030c", "u": "\u0306", "r": "\u030a",
+                 "k": "\u0328"}
+_BARE_ACCENTED = {"'": "aeiouyAEIOUYcnzCNZ", "`": "aeiouAEIOU", "^": "aeiouAEIOU", '"': "aeiouyAEIOUY",
+                  "~": "anoANO", "=": "aeiouAEIOU", ".": "zZeEgGcCI"}
+_TEXT_ACCENT = re.compile(
+    r"(?P<open>\{)?\\(?:(?P<sym>['`^\"~=.])|(?P<let>[Hcvurk])(?![A-Za-z]))"
+    r"(?:\s*\{\s*(?P<braced>\\[ij](?![A-Za-z])|[A-Za-z])\s*\}|\s*(?P<bare>\\[ij](?![A-Za-z])|[A-Za-z]))"
+    r"(?(open)\})")
+_TEXT_LETTERS = {"o": "ø", "O": "Ø", "ss": "ß", "ae": "æ", "AE": "Æ", "oe": "œ", "OE": "Œ", "aa": "å", "AA": "Å",
+                 "l": "ł", "L": "Ł"}
+_TEXT_LETTER = re.compile(r"\{\\(o|O|ss|ae|AE|oe|OE|aa|AA|l|L)\}|\\(o|O|ss|ae|AE|oe|OE|aa|AA|l|L)(?:\{\}| (?=[A-Za-z]))")
+_MATH_SPANS = re.compile(r"(\$\$.+?\$\$|(?<!\\)\$[^$\n]+?\$|\\\(.+?\\\)|\\\[.+?\\\])", re.S)
+
+
+def _accented(match: "re.Match[str]") -> str:
+    accent = match.group("sym") or match.group("let")
+    base = match.group("braced") or match.group("bare")
+    if match.group("bare") and match.group("sym") and base not in _BARE_ACCENTED[accent]:
+        return match.group(0)
+    letter = {"\\i": "i", "\\j": "j"}.get(base, base)
+    return unicodedata.normalize("NFC", letter + _ACCENT_MARKS[accent])
+
+
+def tex_text_accents(value: object) -> str:
+    """``value`` with TeX text accents and special letters outside math
+    (``$...$``, ``\\(...\\)``, ``\\[...\\]``) written as Unicode letters."""
+    text = str(value or "")
+    if "\\" not in text:
+        return text
+    parts = _MATH_SPANS.split(text)
+    for index in range(0, len(parts), 2):
+        part = _TEXT_ACCENT.sub(_accented, parts[index])
+        parts[index] = _TEXT_LETTER.sub(lambda match: _TEXT_LETTERS[match.group(1) or match.group(2)], part)
+    return "".join(parts)
+
+
+# Cross-references in prose, as a manuscript or a model writes them.  A tie
+# (~) before a reference or a number is a space; other tildes are left alone
+# (in model prose "~" also means "of the order of").
+_REF_COMMANDS = r"\\(?:ref|eqref|cref|Cref|autoref|nameref|hyperref|cite[pt]?|S)(?![A-Za-z])"
+_REF_TIE = re.compile(r"(?<=\S)~(?=" + _REF_COMMANDS + r"|\d)")
+_REF_HYPER = re.compile(r"\\hyperref\s*\[[^\]\n]{0,200}\]\s*\{([^{}\n]{0,300})\}")
+_REF_NAMED = re.compile(r"\\(?:cref|Cref|autoref|nameref)\*?\s*\{([^{}\n]{1,300})\}")
+_REF_EQUATION = re.compile(r"\\eqref\*?\s*\{([^{}\n]{1,300})\}")
+_REF_NUMBERED = re.compile(r"\\ref\*?\s*\{([^{}\n]{1,300})\}")
+_REF_CITE = re.compile(r"\\cite[pt]?\*?(?:\s*\[[^\]\n]{0,200}\])*\s*\{([^{}\n]{1,300})\}")
+_SECTION_SIGN = re.compile(r"\\S(?![A-Za-z])\s*")
+# A label the analysis cannot resolve reads as its name without the prefix
+# ("Section~\ref{sec:prescribed}" -> "Section (prescribed)"), with the kind
+# the prefix names where a name is wanted (\cref{lem:x} -> "Lemma (x)").
+_LABEL_PREFIX = re.compile(r"([A-Za-z]{1,10}):(.+)")
+LABEL_KINDS = {
+    "sec": "Section", "sect": "Section", "ssec": "Section", "subsec": "Section", "sssec": "Section",
+    "subsubsec": "Section", "app": "Appendix", "appendix": "Appendix", "ch": "Chapter", "chap": "Chapter",
+    "part": "Part", "thm": "Theorem", "theorem": "Theorem", "lem": "Lemma", "lemma": "Lemma",
+    "prop": "Proposition", "cor": "Corollary", "corollary": "Corollary", "def": "Definition",
+    "defn": "Definition", "rem": "Remark", "conj": "Conjecture", "claim": "Claim", "ex": "Example",
+    "exa": "Example", "fig": "Figure", "tab": "Table", "eq": "Equation", "eqn": "Equation", "alg": "Algorithm",
+}
+
+
+def unresolved_label(label: str, *, name: bool = False) -> str:
+    """How an unknown label reads: "(prescribed)" for ``sec:prescribed``, or
+    "Section (prescribed)" where a name is wanted."""
+    prefixed = _LABEL_PREFIX.fullmatch(label)
+    text = f"({prefixed.group(2) if prefixed else label})"
+    kind = LABEL_KINDS.get(prefixed.group(1).lower()) if prefixed and name else None
+    return f"{kind} {text}" if kind else text
+
+
+def tex_text_refs(value: object, refs: Mapping[str, tuple[str, str]] | None = None) -> str:
+    """``value`` with TeX cross-references outside math written as text.
+
+    ``\\ref{x}`` becomes the result's number, ``\\cref``/``\\Cref``/
+    ``\\autoref``/``\\nameref{x}`` its name, ``\\eqref{x}`` "(number)",
+    ``\\hyperref[x]{text}`` its text, ``\\cite{k}`` "[k]" and ``\\S`` "§";
+    a tie before a reference or a number becomes a space.  ``refs`` maps a
+    label to ``(name, number)``; an unknown label reads as
+    :func:`unresolved_label` says, never with its command."""
+    text = str(value or "")
+    if "\\" not in text and "~" not in text:
+        return text
+    known = refs or {}
+
+    def labels(match: "re.Match[str]", field: int, *, bare: bool = False) -> str:
+        out = []
+        for key in (key.strip() for key in match.group(1).split(",")):
+            if not key:
+                continue
+            value = (known.get(key) or ("", ""))[field]
+            if value:
+                out.append(str(value))
+            else:
+                # Inside \eqref's own parentheses the label is not parenthesized again.
+                fallback = unresolved_label(key, name=field == 0)
+                out.append(fallback[1:-1] if bare else fallback)
+        return ", ".join(out)
+
+    parts = _MATH_SPANS.split(text)
+    for index in range(0, len(parts), 2):
+        # \S first: "\S\ref{x}" is "§" and then the reference.
+        part = _SECTION_SIGN.sub("§", _REF_TIE.sub(" ", parts[index]))
+        part = _REF_HYPER.sub(lambda match: match.group(1), part)
+        part = _REF_NAMED.sub(lambda match: labels(match, 0), part)
+        part = _REF_EQUATION.sub(lambda match: "(" + labels(match, 1, bare=True) + ")", part)
+        part = _REF_NUMBERED.sub(lambda match: labels(match, 1), part)
+        parts[index] = _REF_CITE.sub(lambda match: "[" + ", ".join(
+            key.strip() for key in match.group(1).split(",") if key.strip()) + "]", part)
+    return "".join(parts)
+
+
 _HTML_SCRIPT = re.compile(r"<(sup|sub)>(.*?)</\1>", re.I | re.S)
 _HTML_TAG = re.compile(r"</?[A-Za-z][^<>]{0,200}>")
 _GITHUB_MATH = re.compile(r"\$`(.+?)`\$", re.S)
@@ -286,6 +409,7 @@ def plain_title(value: object, limit: int | None = None) -> str:
                             text)
     text = _HTML_TAG.sub("", text)
     text = html.unescape(text)
+    text = tex_text_accents(text)
     text = _GITHUB_MATH.sub(lambda match: tex_to_text(match.group(1)), text)
     text = _PAREN_MATH.sub(lambda match: tex_to_text(match.group(1)), text)
     text = _DOLLAR_MATH.sub(lambda match: tex_to_text(match.group(1)), text)

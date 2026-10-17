@@ -1,6 +1,6 @@
 # Analysis: Algebraicity of Weil classes on split abelian eightfolds
 
-> Checked by a model verifier (kimi-k3 via sponsored_kimi) — not a certificate. Each result was checked on its own, given the statements it cites; verdicts are model judgements that can be wrong in both directions.
+> Checked by a model verifier (kimi-k3 via the site's sponsored access) — not a certificate. Each result was checked on its own, given the statements it cites; verdicts are model judgements that can be wrong in both directions.
 
 ## Source
 
@@ -69,7 +69,7 @@ Statement formalization in Lean 4.14 was requested: selected statements are tran
 ## How this analysis was made
 
 - Structure: deterministic parse of the manuscript (pylatexenc-2.11); dependencies come from its own labels and references (inferred and model-proposed links are marked as such).
-- Checks: 7 model call(s) to kimi-k3 via sponsored_kimi; each result was checked independently, assuming the statements it cites.
+- Checks: 7 model call(s) to kimi-k3 via the site's sponsored access; each result was checked independently, assuming the statements it cites.
 - A verdict of "checked" means the verifier found no error or gap in the proof as written. It is not a certificate, a refereed review or a Lean proof.
-- Limits reached: budget.
+- Limits reached: the model-call limit.
 - Analyzed on 2026-10-11.

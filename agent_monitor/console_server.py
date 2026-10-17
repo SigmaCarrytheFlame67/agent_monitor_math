@@ -703,6 +703,24 @@ def _reserve_guest_run_slot(user_id: int, client: str | None = None) -> tuple[st
     return None, 0
 
 
+def _release_guest_run_slot(user_id: int, client: str | None = None) -> None:
+    """Give back the hourly guest run slots reserved for a start that started nothing.
+
+    Callers hold ``_GUEST_RUN_START_LOCK`` from the reservation on, so the
+    newest entries are this start's.
+    """
+    with _GUEST_RUN_START_LOCK:
+        window = _GUEST_RUN_WINDOWS.get(user_id)
+        if window:
+            window.pop()
+        if _GUEST_GLOBAL_RUN_WINDOW:
+            _GUEST_GLOBAL_RUN_WINDOW.pop()
+        if client is not None:
+            client_window = _GUEST_RUN_CLIENT_WINDOWS.get(client)
+            if client_window:
+                client_window.pop()
+
+
 def _reserve_guest_session_slot(client: str | None = None) -> tuple[bool, int]:
     """Bound anonymous account creation; existing guest sessions bypass this."""
     limit = _bounded_env_int(
@@ -813,6 +831,26 @@ def _member_subscription_status(kind: str) -> dict[str, Any]:
             models=[],
         )
     return status
+
+
+def _remove_member_stored_login(kind: str, user_id: int) -> None:
+    """Delete a sign-in a member linked before subscriptions became admin-only.
+
+    Only the credential file that Settings reports as stored is removed: no
+    CLI runs, and no account home is created.
+    """
+    if kind == "codex":
+        from agent_monitor import codex_login
+
+        credentials = codex_login.account_home(user_id) / "auth.json"
+    else:
+        from agent_monitor import claude_login
+
+        credentials = claude_login.account_home(user_id) / ".credentials.json"
+    try:
+        credentials.unlink()
+    except FileNotFoundError:
+        pass
 
 
 def _release_member_run_slot(user_id: int) -> None:
@@ -1329,6 +1367,15 @@ def _preferred_formal_harness_engine(
     return available[0] if available else ""
 
 
+def _pipeline_may_run_lean(workspace: Path) -> bool:
+    """Whether the run's automatic pipeline is running with formal stages on."""
+    from agent_monitor import auto_pipeline
+
+    state = auto_pipeline.load_state(workspace) or {}
+    lean = (state.get("stages") or {}).get("lean") or {}
+    return state.get("status") == "running" and lean.get("status") != "off"
+
+
 WORKSPACES_ROOT = (RUNS_DIR / "workspaces").resolve()
 _TEXT_SUFFIXES = {".tex", ".txt", ".md", ".py", ".json", ".yaml", ".yml", ".log", ".sty", ".bib"}
 
@@ -1481,6 +1528,48 @@ def _https_link(value: object) -> str | None:
     return text if text.startswith("https://") and len(text) <= 2000 else None
 
 
+# The Analyze runner's own progress notes start with this prefix ("Analyze ·
+# Check · Lemma 3.7 · error — …"); a bare call stage after it ("map",
+# "check-3", "check-3-low", "segment-1-retry") only marks a model call.
+_ANALYZE_NOTE_PREFIX = "Analyze · "
+_ANALYZE_CALL_RE = re.compile(r"(?:map|segment-\d+|check-\d+)(?:-retry)?(?:-low)?")
+_ANALYZE_NOW_CHECKING = "Check · now checking "
+ANALYZE_PROGRESS_LINES = 600
+
+
+def _analysis_progress_text(data: dict) -> str:
+    """The live Sandbox of an Analyze run: the runner's progress notes and its
+    public error messages, one per line, without the ``Analyze · `` prefix.
+
+    Never a verifier's or paper map's raw JSON reply, a model-call marker or
+    the process log (the session summary node): those are model output and
+    plumbing, shown in the Monitor and the process log only."""
+    lines: list[str] = []
+    for agent in data.get("agents") or []:
+        if not isinstance(agent, dict):
+            continue
+        output = str(agent.get("output") or "").strip()
+        if not output:
+            continue
+        if output.startswith(_ANALYZE_NOTE_PREFIX):
+            note = " ".join(output[len(_ANALYZE_NOTE_PREFIX):].split())
+            if note and not _ANALYZE_CALL_RE.fullmatch(note):
+                lines.append(note[:600])
+        elif str(agent.get("stage_name") or "").endswith("(error)"):
+            # The runner's terminal error ("The source could not be used: …").
+            message = " ".join(output.split())
+            if message:
+                lines.append(message[:600])
+    if not lines and str(data.get("status") or "") not in ("", "running"):
+        error = " ".join(str(data.get("error") or "").split())
+        if error:
+            lines.append(error[:600])
+    # "Now checking …" matters only for the checks still in flight (the last line).
+    lines = [line for index, line in enumerate(lines)
+             if not line.startswith(_ANALYZE_NOW_CHECKING) or index == len(lines) - 1]
+    return "\n".join(lines[-ANALYZE_PROGRESS_LINES:])
+
+
 def _analysis_preview(run_id: str, data: dict) -> dict:
     """The Sandbox of an Analyze run: ``analysis/report.md`` (live progress
     until it exists).  Never anything under ``analysis/source/``; the owner
@@ -1515,7 +1604,7 @@ def _analysis_preview(run_id: str, data: dict) -> dict:
                 source_file = f"analysis/source/{root_file}"
     block = data.get("analyze") if isinstance(data.get("analyze"), dict) else {}
     source = block.get("source") if isinstance(block.get("source"), dict) else {}
-    live = "" if report else _live_writes(data)
+    live = "" if report else _analysis_progress_text(data)
     return {
         "kind": "analysis",
         "text": report or live,
@@ -2091,7 +2180,9 @@ class Handler(RunSharingMixin, ProjectsMixin, ResearchMixin, BaseHTTPRequestHand
                 body.get("project_id"),
                 user["id"],
                 body.get("project_task"),
-                lambda: job_manager.start_job(
+                # An analysis never receives the project's document, so the
+                # tool-free rule for project proofs does not apply.
+                lambda _tool_free: job_manager.start_job(
                     engine="analyze",
                     run_kind="analyze",
                     source=body.get("source"),
@@ -2130,6 +2221,7 @@ class Handler(RunSharingMixin, ProjectsMixin, ResearchMixin, BaseHTTPRequestHand
                         return
                     if not reserve_guest_run(user_id, guest_runs_per_session(),
                                              previous_runs=job_manager.persisted_run_count(user_id)):
+                        _release_guest_run_slot(user_id, client)
                         self._send(403, json.dumps({"error": "Guest limit reached. Sign in to continue",
                                                    "login_required": True, "guest_policy": guest_policy(user)}))
                         return
@@ -2139,6 +2231,7 @@ class Handler(RunSharingMixin, ProjectsMixin, ResearchMixin, BaseHTTPRequestHand
                     except Exception:
                         release_guest_run(user_id)
                         _release_guest_analyze(user_id, client)
+                        _release_guest_run_slot(user_id, client)
                         raise
                     if client is not None and job.get("run_id"):
                         _GUEST_RUN_CLIENTS[str(job["run_id"])] = client
@@ -2182,6 +2275,12 @@ class Handler(RunSharingMixin, ProjectsMixin, ResearchMixin, BaseHTTPRequestHand
             return
         if len(url) > analyze_runs.MAX_URL_CHARS:
             self._send(400, json.dumps({"error": "The link is too long"}))
+            return
+        # A link refused without any lookup (mistyped, half-typed, member-only)
+        # is answered at once and does not count against the preview limit.
+        refusal = analyze_runs.preview_refusal(url.strip(), role=analyze_runs.role_of(user))
+        if refusal is not None:
+            self._send(200, json.dumps(refusal, ensure_ascii=False), headers={"Cache-Control": "no-store"})
             return
         error, retry_after = _reserve_analyze_resolve(user, self._guest_client_key())
         if error:
@@ -2399,6 +2498,21 @@ class Handler(RunSharingMixin, ProjectsMixin, ResearchMixin, BaseHTTPRequestHand
             return _is_operator_user(user)
         return owner == user.get("id") or _is_operator_user(user)
 
+    def _deny_run_change(self, run_id: str, user: dict, change: str) -> bool:
+        """Refuse (403) a change to a run that ``user`` may only read.
+
+        Project membership grants read access only: changing a run, or
+        spending compute and credentials on it, stays with its owner and the
+        operator.  Callers check ``_owns_run`` (404) first.
+        """
+        if self._is_run_owner(run_id, user):
+            return False
+        self._send(
+            403,
+            json.dumps({"error": f"Only the member who started this run can {change}."}),
+        )
+        return True
+
     def _send_bytes(self, code: int, body: bytes, ctype: str, *, download_name: str | None = None, headers: dict[str, str] | None = None):
         self.send_response(code)
         self.send_header("Content-Type", ctype)
@@ -2592,7 +2706,12 @@ class Handler(RunSharingMixin, ProjectsMixin, ResearchMixin, BaseHTTPRequestHand
                 # cannot run is administrator-only, not "after sign-in".
                 after_sign_in = allowed | account_policy.member_engine_allowlist()
                 engines = [
-                    {**engine, "requires_login": engine.get("id") not in allowed}
+                    {
+                        **engine,
+                        "requires_login": engine.get("id") not in allowed,
+                        # A guest, and the member it becomes, bills an API key.
+                        "auth_modes": [mode for mode in engine.get("auth_modes") or [] if mode == "api_key"],
+                    }
                     if engine.get("id") in after_sign_in
                     else account_policy.admin_only_engine_view(engine)
                     for engine in engines
@@ -2721,7 +2840,12 @@ class Handler(RunSharingMixin, ProjectsMixin, ResearchMixin, BaseHTTPRequestHand
                 return
             from agent_monitor import library
 
-            self._send(200, json.dumps(library.get_library(), ensure_ascii=False))
+            payload = library.get_library()
+            if not _is_operator_user(user):
+                # Members read the shared profile, not records of the
+                # operator's own runs (each quotes its problem and answer).
+                payload = library.without_run_memories(payload)
+            self._send(200, json.dumps(payload, ensure_ascii=False))
             return
 
         if path.startswith("/api/jobs/"):
@@ -2806,8 +2930,12 @@ class Handler(RunSharingMixin, ProjectsMixin, ResearchMixin, BaseHTTPRequestHand
                 formal_options = _guest_formal_options()
             else:
                 model_options = lean_verify.harness_model_options(user)
-                engines = lean_verify.harness_engines(
-                    user, model=model_options["selected"]
+                # The coding-agent harness is the operator's alone (the POST
+                # refuses it to members), so a member is offered none.
+                engines = (
+                    []
+                    if account_policy.is_member(user)
+                    else lean_verify.harness_engines(user, model=model_options["selected"])
                 )
                 formal_options = {
                     "engines": engines,
@@ -2842,7 +2970,11 @@ class Handler(RunSharingMixin, ProjectsMixin, ResearchMixin, BaseHTTPRequestHand
                     cached.update(_guest_formal_options())
                 else:
                     model_options = lean_verify.harness_model_options(user, run_record)
-                    engines = lean_verify.harness_engines(user, run_record)
+                    engines = (
+                        []
+                        if account_policy.is_member(user)
+                        else lean_verify.harness_engines(user, run_record)
+                    )
                     cached["engines"] = engines
                     cached["harness_auth_route"] = model_options["auth_route"]
                     cached["harness_models"] = model_options["models"]
@@ -2872,11 +3004,10 @@ class Handler(RunSharingMixin, ProjectsMixin, ResearchMixin, BaseHTTPRequestHand
                 cached["harness"] = {**(cached.get("harness") or {}), **job}
             elif cached.get("status") == "running":
                 # The worker died without writing a final record (restart, OOM).
+                # Persist that too: a running record counts as active work.
+                lean_verify.reconcile_orphaned_harness(ws)
                 cached["status"] = "failed"
-                cached["notes"] = (
-                    "Harness run did not finish — the server may have restarted. "
-                    "Press Compile/Check on the source below, or run it again."
-                )
+                cached["notes"] = lean_verify.HARNESS_INTERRUPTED_NOTE
             self._send(200, json.dumps(cached, ensure_ascii=False))
             return
 
@@ -3255,8 +3386,10 @@ class Handler(RunSharingMixin, ProjectsMixin, ResearchMixin, BaseHTTPRequestHand
 
         if path.startswith("/api/run/") and path.endswith("/analysis/recheck"):
             rid = path.removeprefix("/api/run/").removesuffix("/analysis/recheck")
-            if not rid or "/" in rid or not self._is_run_owner(rid, user):
+            if not rid or "/" in rid or not self._owns_run(rid, user):
                 self._send(404, json.dumps({"error": "run not found"}))
+                return
+            if self._deny_run_change(rid, user, "re-check its results"):
                 return
             self._start_analysis_recheck(rid, body, user)
             return
@@ -3293,6 +3426,8 @@ class Handler(RunSharingMixin, ProjectsMixin, ResearchMixin, BaseHTTPRequestHand
             ws = _workspace_for_run(run_id)
             if action != "file" or not separator or not ws or not self._owns_run(run_id, user):
                 self._send(404, json.dumps({"error": "workspace not found"}))
+                return
+            if self._deny_run_change(run_id, user, "edit its proof"):
                 return
             rel = str(body.get("path") or "proof.md").strip()
             if rel != "proof.md":
@@ -3375,6 +3510,8 @@ class Handler(RunSharingMixin, ProjectsMixin, ResearchMixin, BaseHTTPRequestHand
             if not ws or not self._owns_run(rid, user):
                 self._send(404, json.dumps({"error": "run not found"}))
                 return
+            if self._deny_run_change(rid, user, "rebuild its graphs"):
+                return
             run_record = _derived_record_for(rid)
             kind = str(body.get("kind") or "informal").strip().lower()
             model = str(body.get("model") or "").strip() or None
@@ -3387,6 +3524,16 @@ class Handler(RunSharingMixin, ProjectsMixin, ResearchMixin, BaseHTTPRequestHand
                 return
             if kind == "analysis":
                 self._send(400, json.dumps({"error": "This run has no manuscript analysis"}))
+                return
+            if (
+                kind != "engine"
+                and job_manager.tool_free_run(rid, run_record or {})
+                and job_manager._route_from_record(run_record) != "api_key"
+            ):
+                # A tool-free project run: as for its Lean actions, no graph
+                # model call off its API route (a subscription agent can read
+                # the server's files). The engine view calls no model.
+                self._send(403, json.dumps({"error": account_policy.PROJECT_TOOL_FREE_ERROR}))
                 return
             if user.get("guest"):
                 from agent_monitor.settings import GUEST_DEFAULT_MODEL
@@ -3453,6 +3600,8 @@ class Handler(RunSharingMixin, ProjectsMixin, ResearchMixin, BaseHTTPRequestHand
             if not ws or not self._owns_run(rid, user):
                 self._send(404, json.dumps({"error": "run not found"}))
                 return
+            if self._deny_run_change(rid, user, "run Lean actions on it"):
+                return
             action = str(body.get("action") or "verify").strip().lower()
             model = str(body.get("model") or "").strip() or None
             lean_src = body.get("lean")
@@ -3469,6 +3618,26 @@ class Handler(RunSharingMixin, ProjectsMixin, ResearchMixin, BaseHTTPRequestHand
             from agent_monitor import analyze_runs
 
             run_record = _run_record_for(rid)
+            if action not in {"compile", "check", "stop_harness"}:
+                # Model work on a member's run billed to a subscription or Max
+                # (started before subscriptions became administrator-only)
+                # would bill that sign-in and could fall back to Codex.
+                # Compile and Check call no model; _lean_verify_action skips
+                # the Formal refresh after them on such a run.
+                refusal = account_policy.member_continuation_error(
+                    user, job_manager._route_from_record(run_record)
+                )
+                if refusal:
+                    self._send(403, json.dumps({"error": refusal}, ensure_ascii=False))
+                    return
+                # A tool-free project run: no coding-agent harness, and no
+                # model work off its API route (the Codex fallback included).
+                if job_manager.tool_free_run(rid, run_record or {}) and (
+                    action == "harness"
+                    or job_manager._route_from_record(run_record) != "api_key"
+                ):
+                    self._send(403, json.dumps({"error": account_policy.PROJECT_TOOL_FREE_ERROR}))
+                    return
             if analyze_runs.is_analyze_record(run_record):
                 # An analysis formalizes the STATEMENTS of selected nodes on the
                 # server's Lean 4.14 checker (proofs are not attempted), or
@@ -3496,6 +3665,15 @@ class Handler(RunSharingMixin, ProjectsMixin, ResearchMixin, BaseHTTPRequestHand
                 if len(feedback) > GUEST_MAX_FEEDBACK_CHARACTERS:
                     self._send(400, json.dumps({"error": "Feedback is too large for a guest action"}))
                     return
+            if action == "harness" and _pipeline_may_run_lean(ws):
+                # Its Lean stage would fail on the harness's reservation, or
+                # regenerate over the harness's Proof.lean. Stop is never refused.
+                self._send(
+                    409,
+                    json.dumps({"error": "Wait for the automatic Formal and DAG pipeline to finish"}),
+                    headers={"Retry-After": "20"},
+                )
+                return
             if not self._admit_guest_derived_action(user, ws):
                 return
             slot = _GuestDerivedSlot(int(user["id"])) if user.get("guest") else None
@@ -3585,7 +3763,7 @@ class Handler(RunSharingMixin, ProjectsMixin, ResearchMixin, BaseHTTPRequestHand
                 max_iterations = max(1, min(max_iterations, guest_max_iterations()))
             try:
                 def start() -> dict:
-                    return research_projects.start_run(body.get("project_id"), user["id"], body.get("project_task"), lambda: job_manager.start_job(
+                    return research_projects.start_run(body.get("project_id"), user["id"], body.get("project_task"), lambda tool_free: job_manager.start_job(
                         engine=engine,
                         problem_id=body.get("problem_id"),
                         problem_text=body.get("problem_text"),
@@ -3610,6 +3788,7 @@ class Handler(RunSharingMixin, ProjectsMixin, ResearchMixin, BaseHTTPRequestHand
                         ),
                         # Only an explicit false turns automatic formalization off.
                         formalize=body.get("formalize") is not False,
+                        tool_free=tool_free,
                     ))
 
                 if user.get("guest"):
@@ -3631,13 +3810,17 @@ class Handler(RunSharingMixin, ProjectsMixin, ResearchMixin, BaseHTTPRequestHand
                         from agent_monitor.auth import reserve_guest_run, release_guest_run
                         if not reserve_guest_run(int(user["id"]), guest_runs_per_session(),
                                                  previous_runs=job_manager.persisted_run_count(int(user["id"]))):
+                            _release_guest_run_slot(int(user["id"]), client)
                             self._send(403, json.dumps({"error": "Guest limit reached. Sign in to continue",
                                                        "login_required": True, "guest_policy": guest_policy(user)}))
                             return
                         try:
                             job = start()
                         except Exception:
+                            # A refused start (no key, bad input) starts
+                            # nothing, so it costs no hourly run either.
                             release_guest_run(int(user["id"]))
+                            _release_guest_run_slot(int(user["id"]), client)
                             raise
                         if client is not None and job.get("run_id"):
                             _GUEST_RUN_CLIENTS[str(job["run_id"])] = client
@@ -3671,6 +3854,10 @@ class Handler(RunSharingMixin, ProjectsMixin, ResearchMixin, BaseHTTPRequestHand
                         # A refused start (no key, bad input) starts nothing.
                         self._release_member_run(user)
                         raise
+            except account_policy.ProjectPolicyError as exc:
+                # The project's tool-free rule.
+                self._send(403, json.dumps({"error": str(exc)}, ensure_ascii=False))
+                return
             except Exception as exc:  # noqa: BLE001
                 self._send(400, json.dumps({"error": str(exc)}, ensure_ascii=False))
                 return
@@ -3681,6 +3868,8 @@ class Handler(RunSharingMixin, ProjectsMixin, ResearchMixin, BaseHTTPRequestHand
             run_id = path.removeprefix("/api/runs/").removesuffix("/stop")
             if not run_id or "/" in run_id or not self._owns_run(run_id, user):
                 self._send(404, json.dumps({"error": "not found"}))
+                return
+            if self._deny_run_change(run_id, user, "stop it"):
                 return
             try:
                 result = job_manager.stop_run(run_id)
@@ -3696,6 +3885,8 @@ class Handler(RunSharingMixin, ProjectsMixin, ResearchMixin, BaseHTTPRequestHand
             run_id = path.removeprefix("/api/runs/").removesuffix("/continue")
             if not run_id or "/" in run_id or not self._owns_run(run_id, user):
                 self._send(404, json.dumps({"error": "not found"}))
+                return
+            if self._deny_run_change(run_id, user, "continue it"):
                 return
             if self._refuse_analyze_continuation(run_id):
                 return
@@ -3717,6 +3908,11 @@ class Handler(RunSharingMixin, ProjectsMixin, ResearchMixin, BaseHTTPRequestHand
             except FileNotFoundError as exc:
                 self._release_member_run(user)
                 self._send(404, json.dumps({"error": str(exc)}))
+                return
+            except account_policy.ProjectPolicyError as exc:
+                # The project's tool-free rule.
+                self._release_member_run(user)
+                self._send(403, json.dumps({"error": str(exc)}))
                 return
             except ValueError as exc:
                 # A refused continuation (retired engine, member policy, a
@@ -3741,6 +3937,8 @@ class Handler(RunSharingMixin, ProjectsMixin, ResearchMixin, BaseHTTPRequestHand
             if not run_id or "/" in run_id or not self._owns_run(run_id, user):
                 self._send(404, json.dumps({"error": "not found"}))
                 return
+            if self._deny_run_change(run_id, user, "send it feedback"):
+                return
             if self._refuse_analyze_continuation(run_id):
                 return
             if not self._admit_member_message(user):
@@ -3760,6 +3958,11 @@ class Handler(RunSharingMixin, ProjectsMixin, ResearchMixin, BaseHTTPRequestHand
                     user=user,
                     attachments=body.get("attachments"),
                 )
+            except account_policy.ProjectPolicyError as exc:
+                # The project's tool-free rule.
+                self._release_member_run(user)
+                self._send(403, json.dumps({"error": str(exc)}))
+                return
             except (ValueError, FileNotFoundError) as exc:
                 self._release_member_run(user)
                 self._send(400, json.dumps({"error": str(exc)}))
@@ -3832,6 +4035,13 @@ class Handler(RunSharingMixin, ProjectsMixin, ResearchMixin, BaseHTTPRequestHand
                 explanation=account_policy.subscription_notes()["codex"],
             ):
                 return
+            if account_policy.is_member(user):
+                # A member links no account, so there is no login to cancel;
+                # logout only removes a sign-in stored before the policy.
+                if path.endswith("/logout"):
+                    _remove_member_stored_login("codex", int(user["id"]))
+                self._send(200, json.dumps(_member_subscription_status("codex"), ensure_ascii=False))
+                return
             # Every operation is scoped to user["id"] from the authenticated
             # session — never from the request body — so a user can only
             # ever start, poll, cancel, or disconnect their *own* Codex
@@ -3855,11 +4065,19 @@ class Handler(RunSharingMixin, ProjectsMixin, ResearchMixin, BaseHTTPRequestHand
         ):
             if self._deny_guest(user, "account connections"):
                 return
-            if path.endswith("/start") and self._deny_member(
+            if path.endswith(("/start", "/code")) and self._deny_member(
                 user,
                 "Connecting a Claude subscription",
                 explanation=account_policy.subscription_notes()["claude"],
             ):
+                return
+            if account_policy.is_member(user):
+                # As for the member's status, claude_login is never reached:
+                # its CLI probes create an account home.  Logout only removes
+                # a sign-in stored before the policy.
+                if path.endswith("/logout"):
+                    _remove_member_stored_login("claude", int(user["id"]))
+                self._send(200, json.dumps(_member_subscription_status("claude"), ensure_ascii=False))
                 return
             from agent_monitor import claude_login
 
@@ -3941,6 +4159,7 @@ class Handler(RunSharingMixin, ProjectsMixin, ResearchMixin, BaseHTTPRequestHand
                     engine=str(body.get("engine") or "codex").strip().lower(),
                     model=model,
                     lean=lean_arg,
+                    run_id=rid,
                 )
             elif action == "stop_harness":
                 result = lean_verify.stop_harness(ws)
@@ -4011,16 +4230,25 @@ class Handler(RunSharingMixin, ProjectsMixin, ResearchMixin, BaseHTTPRequestHand
         )
         if refreshes and str(result.get("status") or "") != "running":
             run_record = _derived_record_for(rid) or {}
-            auto_pipeline.refresh_formal(
-                run_id=rid,
-                workspace=ws,
-                owner_id=user.get("id"),
-                model=model or result.get("model"),
-                engine=str(run_record.get("engine") or "unknown"),
-                on_exit=slot.release if slot is not None else None,
-            )
-            if slot is not None:
-                slot.handed_off = True
+            route = job_manager._route_from_record(run_record)
+            # The refresh may ask a model on the run's recorded route, so a
+            # member's run off the API route (billed to a subscription or Max,
+            # reached here by Compile or Check), and a tool-free project run
+            # off it, keep their Formal stages.
+            if route == "api_key" or (
+                not account_policy.is_member(user)
+                and not job_manager.tool_free_run(rid, run_record)
+            ):
+                auto_pipeline.refresh_formal(
+                    run_id=rid,
+                    workspace=ws,
+                    owner_id=user.get("id"),
+                    model=model or result.get("model"),
+                    engine=str(run_record.get("engine") or "unknown"),
+                    on_exit=slot.release if slot is not None else None,
+                )
+                if slot is not None:
+                    slot.handed_off = True
         self._send(200, json.dumps(result, ensure_ascii=False))
 
     @_track_request
@@ -4085,8 +4313,7 @@ class Handler(RunSharingMixin, ProjectsMixin, ResearchMixin, BaseHTTPRequestHand
             if not run_id or "/" in run_id or not self._owns_run(run_id, user):
                 self._send(404, json.dumps({"error": "not found"}))
                 return
-            if not self._is_run_owner(run_id, user):
-                self._send(403, json.dumps({"error": "Only the member who started this run can delete it."}))
+            if self._deny_run_change(run_id, user, "delete it"):
                 return
             try:
                 result = job_manager.delete_run(run_id)
@@ -4405,6 +4632,17 @@ def main(port: int | None = None):
     recovered = job_manager.reconcile_stale_running_runs(min_age_seconds=0)
     if recovered:
         print(f"[recovery] marked {len(recovered)} orphaned run(s) interrupted: {', '.join(recovered)}")
+    from agent_monitor import lean_verify
+
+    closed_harnesses = lean_verify.reconcile_orphaned_harnesses(WORKSPACES_ROOT)
+    if closed_harnesses:
+        print(
+            f"[recovery] closed {len(closed_harnesses)} interrupted Formal Lean "
+            f"harness record(s): {', '.join(closed_harnesses)}"
+        )
+    removed_logins = job_manager.remove_legacy_codex_key_homes()
+    if removed_logins:
+        print(f"[cleanup] removed {removed_logins} saved Codex API-key login(s) from the data directory")
     if start_guest_retention_thread() is not None:
         print(f"  guest run retention       -> {guest_run_retention_days()} days")
     root = f"http://localhost:{port}{BASE_PATH or ''}"

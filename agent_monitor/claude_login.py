@@ -7,8 +7,9 @@ signed-in Proving Console user's Claude configuration in a separate private
 directory.
 
 Only the authenticated session's numeric user id may be passed into these
-functions.  No OAuth credential, authorization code, CLI output, or token is
-ever included in a response payload.
+functions.  No OAuth credential, authorization code, token, or raw CLI output
+is ever included in a response payload; a failed sign-in reports only the
+CLI's own error line.
 """
 from __future__ import annotations
 
@@ -37,6 +38,10 @@ DEFAULT_CLAUDE_MODELS = (
 
 _ANSI_RE = re.compile(r"\x1b\[[0-9;?]*[ -/]*[@-~]")
 _URL_RE = re.compile(r"https?://[^\s<>]+")
+# The code prompt ends without a newline, so the CLI's error (on stderr, the
+# same pipe) can follow it on one line.
+_CODE_PROMPT_RE = re.compile(r"^.*paste code here if prompted\s*>\s*", re.IGNORECASE)
+_MAX_REASON_LINES = 50
 _AUTH_CACHE_SECONDS = 5.0
 _MAX_CREDENTIAL_FILE_BYTES = 64 * 1024
 _REAUTH_MARKER_NAME = ".agent-monitor-reauth-required.json"
@@ -180,7 +185,13 @@ def _auth_status(home: Path, *, force: bool = False) -> dict[str, Any]:
         return dict(cached[1])
     payload = _run_auth_status(home)
     with _cache_lock:
-        _auth_cache[key] = (time.monotonic(), dict(payload))
+        # Probes overlap (polls, Settings, the login reader).  An answer is as
+        # old as its probe's start: one that began before the cached answer's
+        # probe, such as a poll started before the sign-in saved its
+        # credentials, must not replace it.
+        current = _auth_cache.get(key)
+        if current is None or current[0] <= now:
+            _auth_cache[key] = (now, dict(payload))
     return payload
 
 
@@ -397,14 +408,35 @@ def poll_login(user_id: int) -> dict[str, Any]:
     return status(user_id)
 
 
+def _failure_reason(lines: list[str]) -> str:
+    """The CLI's own reason for a failed sign-in (``Login failed: ...``).
+
+    The sign-in link is never a reason (its state is opaque text), so a line
+    with a URL never qualifies; the code prompt before an error is dropped.
+    """
+    for line in reversed(lines):
+        if _URL_RE.search(line):
+            continue
+        text = _CODE_PROMPT_RE.sub("", line)
+        lowered = text.lower()
+        if "error" in lowered or "failed" in lowered:
+            return " ".join(text.split())[:300]
+    return ""
+
+
 def _reader(proc: subprocess.Popen[str], home: Path, user_id: int) -> None:
+    # The user's state belongs to this process only while it holds ``proc``:
+    # a cancel or logout drops it, and a newer sign-in replaces it.
+    lines: list[str] = []
     try:
         assert proc.stdout is not None
         for raw_line in proc.stdout:
             line = _ANSI_RE.sub("", raw_line.rstrip("\r\n"))
+            lines.append(line)
+            del lines[:-_MAX_REASON_LINES]
             with _lock:
                 st = _state_for(user_id)
-                if st.get("status") != "running":
+                if st.get("proc") is not proc or st.get("status") != "running":
                     break
                 urls = _URL_RE.findall(line)
                 if urls:
@@ -422,21 +454,24 @@ def _reader(proc: subprocess.Popen[str], home: Path, user_id: int) -> None:
 
     auth = _auth_status(home, force=True)
     connected = _account_state(home, auth, ignore_marker=True)["connected"]
-    if rc == 0 and connected:
-        clear_reauth_required(home)
     with _lock:
         st = _state_for(user_id)
-        if st.get("status") == "cancelled":
+        if st.get("status") == "cancelled" or st.get("proc") is not proc:
             return
         st.pop("proc", None)
         st["running"] = False
         st["awaiting_code"] = False
         if rc == 0 and connected:
+            clear_reauth_required(home)
             st["status"] = "success"
             st.pop("error", None)
+        elif rc == 0:
+            st["status"] = "error"
+            st["error"] = "claude auth login finished but no usable Claude sign-in was saved"
         else:
             st["status"] = "error"
-            st["error"] = f"claude auth login exited with code {rc}"
+            reason = _failure_reason(lines)
+            st["error"] = f"claude auth login exited with code {rc}" + (f": {reason}" if reason else "")
 
 
 def start_login(user_id: int) -> dict[str, Any]:
@@ -502,6 +537,12 @@ def submit_code(user_id: int, code: str) -> dict[str, Any]:
     value = str(code or "").strip()
     if not value or len(value) > 4096 or "\n" in value or "\r" in value:
         raise ValueError("A valid Claude authorization code is required")
+    parts = value.split("#")
+    if len(parts) < 2 or not parts[0] or not parts[1]:
+        # `claude auth login` takes only the whole code#state the sign-in page
+        # shows.  It answers anything else on stderr and keeps waiting, so the
+        # card would say "Finishing the account connection" until Cancel.
+        raise ValueError("Invalid code. Please make sure the full code was copied.")
     with _lock:
         st = _state_for(user_id)
         proc: subprocess.Popen[str] | None = st.get("proc")

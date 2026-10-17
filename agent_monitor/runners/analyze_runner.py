@@ -44,11 +44,12 @@ The parser packages (pylatexenc, pypdf) are checked before anything runs: a
 missing one is a configuration error (exit 2), not a property of the
 manuscript.
 
-Exit status: 0 published, 2 configuration (request, route or credentials),
-143 stopped by SIGTERM (results that had settled are still published), 1 any
-other failure (including when every attempted check failed: provider errors,
-empty answers, uninterpretable output or the time limit; the structure is
-still published).
+Exit status: 0 published, 2 configuration (request, route or credentials, or
+a re-check its caps or a guest's one-call limit cannot hold; nothing was sent
+to a model), 143 stopped by SIGTERM (results that had settled are still
+published), 1 any other failure (including when every attempted check failed:
+provider errors, empty answers, uninterpretable output or the time limit; the
+structure is still published).
 """
 from __future__ import annotations
 
@@ -82,6 +83,7 @@ from agent_monitor import kimi_k3, safe_fetch
 from agent_monitor.analyze import graph as analysis_graph
 from agent_monitor.analyze import latex_structure, limits, prompts, report, sources, text_structure, verdicts
 from agent_monitor.analyze import request as analysis_request
+from agent_monitor.analyze.titles import tex_text_refs
 from agent_monitor.cgm.parsing import ParseError
 from agent_monitor.runners import math_harness_runner as harness
 
@@ -90,12 +92,18 @@ LABEL = "Analyze"
 MAX_REPLY_BYTES = 64_000
 RECHECK_SECONDS = 900
 RECHECK_MAX_CALLS = 8
+# Guests check no proof that needs more than one call, in an analysis or a re-check.
+GUEST_TOO_LONG = "Too long for a guest check (sign in to check long proofs)"
 GITHUB_TOKEN_ENV = "AGENT_MONITOR_ANALYZE_GITHUB_TOKEN"
 _KIND_WORDS = "theorem|lemma|proposition|corollary|claim|definition|conjecture|remark|fact|observation"
 _FOCUS_RE = re.compile(rf"\b({_KIND_WORDS})s?\s+((?:[A-Z]\.)?\d+(?:\.\d+)*[a-z]?)", re.I)
 _DORMANT_ENV = (
     "KIMI_BASE_URL", "HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "http_proxy", "https_proxy", "all_proxy",
 )
+# Claude Code / Codex and own-key API failure kinds (ClaudeBackendError.kind,
+# CodexBackendError.kind, APIBackendError.kind) that every further check
+# would hit as well.
+_SUBSCRIPTION_STOP_KINDS = frozenset({"auth", "usage_limit", "model"})
 
 
 class AnalyzeError(RuntimeError):
@@ -169,6 +177,11 @@ class RouteInfo:
     name: str
     sponsored: bool
     guest: bool
+
+    @property
+    def bounded(self) -> bool:
+        """Sponsored and guest runs get the bounded prompt budget."""
+        return self.sponsored or self.guest
 
 
 def configure_route(env: dict[str, str], req: Mapping[str, Any]) -> RouteInfo:
@@ -289,7 +302,7 @@ class AnalysisRun:
             minimum=60,
             maximum=900,
         )
-        bounded = self.info.sponsored or self.info.guest
+        bounded = self.info.bounded
         self.ctx = harness._Ctx(
             route=self.info.route,
             budgets=harness.Budgets(max_calls=self.caps.max_calls, max_seconds=self.caps.max_seconds,
@@ -309,6 +322,8 @@ class AnalysisRun:
         self.stopped = False
         self.provider_failure: str | None = None
         self.permanent_failure = False
+        # Why the model could not locate results (named only if none were found).
+        self.segment_failure: str | None = None
         self.check_seq = 0
         self.attempted = False
         self.paper_map: dict[str, Any] = {}
@@ -444,6 +459,9 @@ class AnalysisRun:
                 modelled["bibliography"] = segments.get("bibliography") or {}
                 segments = modelled
         if not segments["nodes"]:
+            if self.segment_failure:
+                # The model's provider failed, which says nothing about the manuscript.
+                raise AnalyzeError(f"The results in the source could not be located: {self.segment_failure}")
             raise AnalyzeError("No theorems, lemmas or other results were found in the source"
                                + (f" ({segments['warnings'][0]})" if segments["warnings"] else ""))
         _write_json(self.analysis / "segments.json", segments)
@@ -495,8 +513,17 @@ class AnalysisRun:
                 found, _reply = harness._job_result(job)
             except harness.RunCancelled:
                 raise
-            except (harness._BudgetExhausted, harness.MathHarnessError, ParseError):
+            except (harness._BudgetExhausted, harness.MathHarnessError, ParseError) as exc:
                 self.degraded.append("model-segmentation-incomplete")
+                if (isinstance(exc, harness.ProviderCallError) and not isinstance(exc, harness.EmptyReplyError)
+                        and not self.cancel.is_set() and not self.ctx.deadline_passed()):
+                    # Say why if nothing is located (a lapsed sign-in, a usage limit, an
+                    # invalid key).  Only a refusal every later call would repeat fails
+                    # the checks too: it stops the chunks, and the checks are not sent.
+                    self.segment_failure, permanent = self._failure_reason(exc)
+                    if permanent:
+                        self._note_failure(exc)
+                        break
                 continue
             items.extend(dict(item, _chunk=(offset, len(chunk))) for item in found)
         if not items:
@@ -515,6 +542,8 @@ class AnalysisRun:
         """One paper-map call, only when ``planned`` calls (the planned
         checks) stay available after it; its retries never use them."""
         nodes = segments["nodes"]
+        if self.permanent_failure:
+            return  # refused for good while locating results: the map would be too
         if not nodes or self.ctx.remaining() < planned + 1:
             if nodes:
                 self.degraded.append("paper-map-skipped-for-budget")
@@ -541,17 +570,18 @@ class AnalysisRun:
         except (harness._BudgetExhausted, harness.MathHarnessError, ParseError):
             self.degraded.append("paper-map-failed")
         if self.paper_map.get("main_results"):
-            self.note("Check · main results: " + ", ".join(self.paper_map["main_results"][:6]))
+            # Progress names results as the manuscript does ("Theorem 1.1"), not by label id.
+            labels = {node["id"]: prompts.node_label(node) for node in nodes}
+            self.note("Check · main results: " + ", ".join(
+                labels.get(node_id, node_id) for node_id in self.paper_map["main_results"][:6]))
 
     def priority(self, segments: Mapping[str, Any]) -> list[dict[str, Any]]:
         return prioritize(segments, focus=str(self.req.get("focus") or ""), paper_map=self.paper_map)
 
     def prompts_for(self, node: Mapping[str, Any], segments: Mapping[str, Any]) -> list[str]:
-        sp_limit, pred_limit, notation_limit, bib_limit = self.budget
-        statement = prompts.clip(str(node.get("statement") or ""), max(2000, sp_limit // 3))
-        part_limit = max(2000, sp_limit - prompts.utf8_len(statement) - 600)
+        _sp_limit, pred_limit, notation_limit, bib_limit = self.budget
+        statement, parts = proof_parts(node, self.budget)
         proof = str(node.get("proof") or "")
-        parts = prompts.split_proof(proof, part_limit) if proof.strip() else [""]
         by_id = {item["id"]: item for item in segments["nodes"]}
         predecessors = []
         for edge in segments["edges"]:
@@ -576,6 +606,11 @@ class AnalysisRun:
         nodes = segments["nodes"]
         results: dict[str, dict[str, Any]] = {}
         prompt_lists: dict[str, list[str]] = {}
+        # Progress notes name what a finding cites ("Corollary 1.2", not \ref{cor:x});
+        # a re-check of an older analysis reads its section labels from the stored copy.
+        self.progress_refs = analysis_graph.segments_ref_labels(segments)
+        for label, value in analysis_graph.source_section_labels(self.workspace).items():
+            self.progress_refs.setdefault(label, (value["name"], value["number"]))
 
         def prompts_of(node: Mapping[str, Any]) -> list[str]:
             if node["id"] not in prompt_lists:
@@ -600,7 +635,7 @@ class AnalysisRun:
         for node in ranked:
             prompt_list = prompts_of(node)
             if self.info.guest and len(prompt_list) > 1:
-                results[node["id"]] = _not_checked(node, "Too long for a guest check (sign in to check long proofs)")
+                results[node["id"]] = _not_checked(node, GUEST_TOO_LONG)
                 continue
             if planned_nodes >= self.caps.max_nodes:
                 results[node["id"]] = _not_checked(node, "Not checked: the result-check limit for this run was reached")
@@ -655,6 +690,11 @@ class AnalysisRun:
                 stop_reason = "Not checked: the model-call budget for this run was used"
                 break
             pending = pending[len(turn_jobs):]
+            # Progress: which results this wave checks (a check can take minutes).
+            checking = list(dict.fromkeys(
+                prompts.node_label(by_id[job.node_id]) + (f" (part {job.part} of {job.parts})" if job.parts > 1 else "")
+                for job in turn_jobs))
+            self.note("Check · now checking " + ", ".join(checking))
             try:
                 harness._run_turns(self.ctx, [job.turn_job for job in turn_jobs])
             except harness.RunCancelled:
@@ -715,8 +755,10 @@ class AnalysisRun:
         if isinstance(error, harness.PromptBoundError):
             return ("failed", job, "The check prompt exceeded its size bound")
         if isinstance(error, harness.EmptyReplyError):
-            # No judgement at all (Kimi's reasoning can use the whole output budget).
-            return ("failed", job, "the model returned an empty answer, even at low effort")
+            # No judgement at all (Kimi's reasoning can use the whole output
+            # budget).  Only Kimi routes retry at low effort.
+            low = ", even at low effort" if harness._is_kimi_route(self.info.route) else ""
+            return ("failed", job, f"the model returned an empty answer{low}")
         if isinstance(error, ParseError):
             return ("verdict", job, (verdicts.uninterpretable(str(error)), harness._job_reply(turn_job)))
         if isinstance(error, harness.ProviderCallError):
@@ -730,15 +772,36 @@ class AnalysisRun:
             return ("stopped", job, "the analysis was stopped")
         return ("failed", job, "The check failed")
 
-    def _note_failure(self, error: harness.ProviderCallError) -> str:
+    def _failure_reason(self, error: harness.ProviderCallError) -> tuple[str, bool]:
+        """A failed call's public reason (in words that fit every stage), and
+        whether every further call would fail the same way."""
         failure = getattr(error, "failure", None)
         message = ""
+        permanent = False
         if isinstance(failure, kimi_k3.CallFailure):
             message = kimi_k3.failure_message(failure, billed=self.ctx.run_processed())
-            if failure.permanent:
-                self.permanent_failure = True
+            permanent = failure.permanent
         if not message:
-            message = "The model provider did not answer this check"
+            # A linked Claude Code / Codex account that must sign in again, has
+            # reached its usage limit, or cannot use the model fails every
+            # further call the same way, as does an own API key the provider
+            # rejects or that is out of credit: say why, and start no more checks.
+            cause = error.__cause__
+            kind = getattr(cause, "kind", None)
+            if kind in _SUBSCRIPTION_STOP_KINDS:
+                message = " ".join(str(cause).split())[:400]
+                permanent = True
+            elif kind == "timeout":
+                message = "The model did not answer in time (" + " ".join(str(cause).split())[:200] + ")"
+            elif failure is None and isinstance(cause, harness.APIBackendError):
+                # An own key's provider says why (the key is redacted where it is raised).
+                message = " ".join(str(cause).split())[:400]
+        return message or "The model provider did not answer", permanent
+
+    def _note_failure(self, error: harness.ProviderCallError) -> str:
+        message, permanent = self._failure_reason(error)
+        if permanent:
+            self.permanent_failure = True
         self.provider_failure = message
         if "provider-failure" not in self.degraded:
             self.degraded.append("provider-failure")
@@ -794,7 +857,8 @@ class AnalysisRun:
         report_block = result.get("verification_report") or {}
         first = (report_block.get("critical_errors") or report_block.get("gaps") or [None])[0]
         if first:
-            detail = " — " + " ".join(str(first.get("issue") or "").split())[:100]
+            issue = tex_text_refs(first.get("issue"), getattr(self, "progress_refs", None))
+            detail = " — " + " ".join(issue.split())[:100]
         elif verdict == "not_checked":
             detail = " — " + str(result.get("reason") or "")[:100]
         self.note(f"Check · {prompts.node_label(node)} · {verdict}{detail}")
@@ -814,6 +878,9 @@ class AnalysisRun:
         analysis_graph.merge_annotations(graph, results)
         analysis_graph.rollup(graph)
         clean = analysis_graph.sanitize(graph)
+        if not clean["ref_labels"]:
+            # Segments parsed before sections kept their labels (a re-check of an older analysis).
+            clean["ref_labels"] = analysis_graph.source_section_labels(self.workspace)
         closure = clean.get("main_closure")
         if clean.get("dependency_basis") == "model":
             self.note("Roll-up · dependencies not established (the model located the statements)")
@@ -936,6 +1003,26 @@ def prioritize(segments: Mapping[str, Any], *, focus: str = "",
     ordered += [node["id"] for node in nodes if node["id"] not in seen]
     allowed = {node["id"] for node in checkable}
     return [by_id[node_id] for node_id in ordered if node_id in allowed]
+
+
+def proof_parts(node: Mapping[str, Any], budget: tuple[int, ...]) -> tuple[str, list[str]]:
+    """``node``'s statement as a check prompt carries it, and its proof in the
+    parts checked one call each (statement and part fit the first ``budget``
+    limit)."""
+    sp_limit = budget[0]
+    statement = prompts.clip(str(node.get("statement") or ""), max(2000, sp_limit // 3))
+    part_limit = max(2000, sp_limit - prompts.utf8_len(statement) - 600)
+    proof = str(node.get("proof") or "")
+    return statement, prompts.split_proof(proof, part_limit) if proof.strip() else [""]
+
+
+def recheck_caps(node: Mapping[str, Any], *, bounded: bool) -> dict[str, int]:
+    """A re-check's own caps, within the run's role caps: eight calls and 15
+    minutes, or for a proof checked in more parts, a call for each part and
+    two to spare (a format reminder), with the time in proportion."""
+    parts = proof_parts(node, prompts.BOUNDED_BUDGET if bounded else prompts.FULL_BUDGET)[1]
+    calls = max(RECHECK_MAX_CALLS, len(parts) + 2)
+    return {"max_calls": calls, "max_seconds": RECHECK_SECONDS * calls // RECHECK_MAX_CALLS, "max_nodes": 1}
 
 
 def _read_capped(path: Path) -> str:

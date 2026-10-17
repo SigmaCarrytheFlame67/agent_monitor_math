@@ -4,18 +4,87 @@ from __future__ import annotations
 import json
 import math
 import os
+import queue
 import signal
 import shutil
 import subprocess
 import sys
 import tempfile
+import threading
+import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, Mapping
 
 
 class CodexBackendError(RuntimeError):
-    """Raised when a one-shot Codex CLI call cannot produce a response."""
+    """Raised when a one-shot Codex CLI call cannot produce a response.
+
+    ``kind`` classifies failures a caller should not simply retry: ``"auth"``
+    (the linked account must sign in again), ``"usage_limit"`` (plan usage or
+    quota; a bare 429 may be transient and is not one), ``"model"`` (the model
+    is unavailable to this account or build), ``"timeout"`` (no answer within
+    the per-call limit); ``None`` otherwise.
+    """
+
+    def __init__(self, message: str = "", *, kind: str | None = None) -> None:
+        super().__init__(message)
+        self.kind = kind
+
+
+def _failure_kind(message: str) -> str | None:
+    """Classify a Codex CLI failure message (see ``CodexBackendError.kind``)."""
+    rendered = str(message or "").lower()
+    if (
+        "usage limit" in rendered
+        or "quota exceeded" in rendered
+        or "exceeded your current quota" in rendered
+        or "insufficient_quota" in rendered
+        or ("hit your" in rendered and "limit" in rendered)
+    ):
+        return "usage_limit"
+    if (
+        "401 unauthorized" in rendered
+        or "access token could not be refreshed" in rendered
+        or "sign in again" in rendered
+        or "not logged in" in rendered
+        or "log out and sign in" in rendered
+    ):
+        return "auth"
+    if (
+        "model is not supported" in rendered
+        or "not supported when using codex" in rendered
+        or "not in the vetted bundled catalog" in rendered
+        or "model_not_found" in rendered
+        or ("does not exist" in rendered and "model" in rendered)
+    ):
+        return "model"
+    return None
+
+
+def _event_failure_message(events: list[dict]) -> str:
+    """The CLI's own reason for a failed turn, without its JSONL framing.
+
+    Codex 0.160 ends a failed turn with ``turn.failed`` (``error.message``)
+    after an ``error`` event and writes nothing useful to stderr; the first
+    ``error`` item is often only the nonfatal ``use_legacy_landlock``
+    deprecation notice and must never be reported as the cause.
+    """
+    for event in reversed(events):
+        if event.get("type") in {"turn.failed", "turn.cancelled"}:
+            detail = event.get("error") or event.get("message") or ""
+            if isinstance(detail, dict):
+                detail = detail.get("message") or json.dumps(detail, ensure_ascii=False)
+            if str(detail).strip():
+                return " ".join(str(detail).split())
+    for event in reversed(events):
+        # Item-level errors are nonfatal notices (the landlock deprecation,
+        # "Falling back from WebSockets ..."); only top-level errors count.
+        if event.get("type") == "error" and str(event.get("message") or "").strip():
+            message = " ".join(str(event["message"]).split())
+            if not message.startswith("Reconnecting..."):
+                return message
+    return ""
 
 
 # Callers that persist a no-tools provenance claim can fail closed on this
@@ -77,6 +146,29 @@ def _legacy_landlock_notice(event: dict) -> bool:
         and "use_legacy_landlock" in message
         and "deprecated" in message.lower()
     )
+
+
+def forward_nonterminal(event: dict, emit: Callable[[dict], None]) -> None:
+    """Forward one event of a Codex call whose failure the caller tolerates.
+
+    The run's stream parser ends the whole run on a raw ``turn.failed`` or
+    ``turn.cancelled``.  A tolerated call (an audit pass that only degrades
+    the result) shows its failure as a non-terminal error item instead; the
+    caller reports a fatal failure itself.
+    """
+    if event.get("type") in {"turn.failed", "turn.cancelled"}:
+        detail = event.get("error") or event.get("message") or event.get("type")
+        if isinstance(detail, dict):
+            detail = detail.get("message") or json.dumps(detail, ensure_ascii=False)
+        event = {
+            "type": "item.completed",
+            "item": {
+                "type": "error",
+                "message": "provider call failed: "
+                + " ".join(str(detail).split())[-1200:],
+            },
+        }
+    emit(event)
 
 
 def subscription_enabled(source_env: Mapping[str, str] | None = None) -> bool:
@@ -354,6 +446,83 @@ def _stop_process_group(process: subprocess.Popen[str]) -> None:
     process.communicate(timeout=3)
 
 
+def _stream_output(
+    process: subprocess.Popen[str],
+    *,
+    input: str,
+    timeout: float,
+    on_stdout_line: Callable[[str], None],
+) -> tuple[str, str]:
+    """``communicate()`` that hands over each stdout line as Codex writes it.
+
+    Helper threads own the pipes: they write the prompt (it can exceed a pipe
+    buffer), drain stderr so it cannot block Codex, and queue stdout lines.
+    ``on_stdout_line`` runs here, on the calling thread, because the runners'
+    emitters are not thread-safe.
+    """
+    stdin, stdout, stderr = process.stdin, process.stdout, process.stderr
+    # _stop_process_group's communicate() then only waits for the exit.
+    process.stdin = process.stdout = process.stderr = None
+    deadline = time.monotonic() + timeout
+    lines: queue.Queue[str | None] = queue.Queue()
+    stderr_text: list[str] = []
+
+    def write_prompt() -> None:
+        try:
+            stdin.write(input)
+        except (OSError, ValueError):
+            pass  # Codex exited early; its exit status says why.
+        finally:
+            try:
+                stdin.close()
+            except (OSError, ValueError):
+                pass
+
+    def read_stdout() -> None:
+        try:
+            for line in stdout:
+                lines.put(line)
+        except (OSError, ValueError):
+            pass
+        finally:
+            lines.put(None)
+            stdout.close()
+
+    def read_stderr() -> None:
+        try:
+            stderr_text.append(stderr.read())
+        except (OSError, ValueError):
+            pass
+        finally:
+            stderr.close()
+
+    helpers = [
+        threading.Thread(target=target, name=f"codex-{target.__name__}", daemon=True)
+        for target in (write_prompt, read_stdout, read_stderr)
+    ]
+    for helper in helpers:
+        helper.start()
+    stdout_text: list[str] = []
+    while True:
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            raise subprocess.TimeoutExpired(process.args, timeout)
+        try:
+            line = lines.get(timeout=remaining)
+        except queue.Empty:
+            continue
+        if line is None:
+            break
+        stdout_text.append(line)
+        on_stdout_line(line)
+    for helper in helpers:
+        helper.join(max(0.0, deadline - time.monotonic()))
+        if helper.is_alive():
+            raise subprocess.TimeoutExpired(process.args, timeout)
+    process.wait(max(0.0, deadline - time.monotonic()))
+    return "".join(stdout_text), "".join(stderr_text)
+
+
 def _run_codex_process(
     command: list[str],
     *,
@@ -361,8 +530,13 @@ def _run_codex_process(
     timeout: float,
     env: dict[str, str],
     cwd: str | None,
+    on_stdout_line: Callable[[str], None] | None = None,
 ) -> subprocess.CompletedProcess[str]:
-    """Run Codex in its own process group so timeout cleanup is complete."""
+    """Run Codex in its own process group so timeout cleanup is complete.
+
+    With ``on_stdout_line`` each stdout line is handed over while Codex runs
+    (live activity, kept even if the call then times out).
+    """
     process = subprocess.Popen(
         command,
         stdin=subprocess.PIPE,
@@ -374,13 +548,32 @@ def _run_codex_process(
         start_new_session=os.name == "posix",
     )
     try:
-        stdout, stderr = process.communicate(input=input, timeout=timeout)
+        if on_stdout_line is None:
+            stdout, stderr = process.communicate(input=input, timeout=timeout)
+        else:
+            stdout, stderr = _stream_output(
+                process, input=input, timeout=timeout, on_stdout_line=on_stdout_line
+            )
     except BaseException:
         _stop_process_group(process)
         raise
     else:
         _stop_process_group(process)
     return subprocess.CompletedProcess(command, process.returncode, stdout, stderr)
+
+
+def _forward_events(emit_event: Callable[[dict], None]) -> Callable[[str], None]:
+    """Pass each JSONL event of Codex's stdout to ``emit_event``."""
+
+    def forward(line: str) -> None:
+        try:
+            event = json.loads(line)
+        except json.JSONDecodeError:
+            return
+        if isinstance(event, dict) and not _legacy_landlock_notice(event):
+            emit_event(event)
+
+    return forward
 
 
 def codex_exec(
@@ -394,6 +587,7 @@ def codex_exec(
     sandbox: str = "read-only",
     enable_tools: bool = False,
     source_env: Mapping[str, str] | None = None,
+    allow_empty_text: bool = False,
 ) -> CodexResult:
     """Run one isolated ``codex exec`` turn using an explicit source env.
 
@@ -401,6 +595,10 @@ def codex_exec(
     they must bind the subprocess to the run owner's ``CODEX_HOME`` rather
     than whichever login or API credentials happen to exist in the server's
     global environment.  The child receives an allowlisted environment only.
+
+    A completed turn without a final message is an error unless
+    ``allow_empty_text`` is set: a tool-enabled caller whose deliverable is a
+    workspace file checks that file instead.
     """
     source = source_env if source_env is not None else os.environ
     use_kimi = _kimi_model(model)
@@ -537,9 +735,14 @@ def codex_exec(
                         if enable_tools and workspace is not None
                         else temp_dir
                     ),
+                    on_stdout_line=(
+                        _forward_events(emit_event) if emit_event is not None else None
+                    ),
                 )
             except subprocess.TimeoutExpired as exc:
-                raise CodexBackendError(f"codex exec timed out after {timeout:g}s") from exc
+                raise CodexBackendError(
+                    f"codex exec timed out after {timeout:g}s", kind="timeout"
+                ) from exc
             except OSError as exc:
                 raise CodexBackendError(f"could not start codex exec: {exc}") from exc
         finally:
@@ -547,7 +750,14 @@ def codex_exec(
                 proxy.__exit__(None, None, None)
 
         events: list[dict] = []
-        usage = {"input_tokens": 0, "output_tokens": 0}
+        # Codex semantics: cached input is part of input_tokens.  Keep the
+        # cached and reasoning parts so callers can show and price them.
+        usage = {
+            "input_tokens": 0,
+            "cached_input_tokens": 0,
+            "output_tokens": 0,
+            "reasoning_output_tokens": 0,
+        }
         terminal_event: dict | None = None
         for line in completed.stdout.splitlines():
             try:
@@ -557,28 +767,49 @@ def codex_exec(
             if not isinstance(event, dict):
                 continue
             events.append(event)
-            if emit_event is not None and not _legacy_landlock_notice(event):
-                emit_event(event)
             if event.get("type") == "turn.completed":
                 event_usage = event.get("usage") or {}
-                usage["input_tokens"] += int(event_usage.get("input_tokens") or 0)
-                usage["output_tokens"] += int(event_usage.get("output_tokens") or 0)
+                for key in usage:
+                    try:
+                        usage[key] += int(event_usage.get(key) or 0)
+                    except (TypeError, ValueError):
+                        pass
             if event.get("type") in {"turn.completed", "turn.failed", "turn.cancelled"}:
                 terminal_event = event
 
+        failure = _event_failure_message(events)
+        if not use_kimi:
+            from agent_monitor import codex_login
+
+            # Settings offers Reconnect once Codex rejects a linked login, and
+            # the error says so after Codex's own reason, as Claude Code's does.
+            if codex_login.note_turn_outcome(
+                env["CODEX_HOME"],
+                completed=(terminal_event or {}).get("type") == "turn.completed",
+                failure=failure,
+            ):
+                failure = f"{failure.rstrip('. ')}; {codex_login.RECONNECT_ADVICE}."
         if completed.returncode:
+            if failure:
+                # The CLI's own reason (usage limit, expired login, model not
+                # available ...) instead of the raw JSONL tail.
+                raise CodexBackendError(
+                    f"codex exec failed: {failure[-1000:]}", kind=_failure_kind(failure)
+                )
             detail = (completed.stderr or completed.stdout or "").strip()
             suffix = f": {detail[-1000:]}" if detail else ""
             raise CodexBackendError(
-                f"codex exec exited with status {completed.returncode}{suffix}"
+                f"codex exec exited with status {completed.returncode}{suffix}",
+                kind=_failure_kind(detail),
             )
         if terminal_event is None:
             raise CodexBackendError("codex exec ended without a terminal turn event")
         if terminal_event.get("type") != "turn.completed":
-            detail = terminal_event.get("error") or terminal_event.get("message") or ""
+            detail = failure or ""
             suffix = f": {str(detail)[-500:]}" if detail else ""
             raise CodexBackendError(
-                f"codex exec terminal event was {terminal_event.get('type')}{suffix}"
+                f"codex exec terminal event was {terminal_event.get('type')}{suffix}",
+                kind=_failure_kind(detail),
             )
 
         try:
@@ -591,9 +822,11 @@ def codex_exec(
                 if item.get("type") == "agent_message" and str(item.get("text") or "").strip():
                     text = str(item["text"]).strip()
                     break
-        if not text:
+        if not text and not allow_empty_text:
             raise CodexBackendError("codex exec returned an empty response")
-        return CodexResult(text=text, usage=usage)
+        # The cached and reasoning parts appear only when the CLI reported them.
+        return CodexResult(text=text, usage={key: value for key, value in usage.items()
+                                             if value or key in {"input_tokens", "output_tokens"}})
 
 
 def codex_subscription_exec(

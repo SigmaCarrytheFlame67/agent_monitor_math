@@ -138,7 +138,9 @@ class ClaudeCodeRuntimeTests(unittest.TestCase):
                 effort="xhigh",
                 enable_tools=False,
             )
-        self.assertEqual(command[:3], ["/bin/claude", "-p", "prove it"])
+        # The prompt travels on stdin (one argv string is limited to 128 KiB).
+        self.assertEqual(command[:2], ["/bin/claude", "-p"])
+        self.assertNotIn("prove it", command)
         self.assertIn("stream-json", command)
         self.assertIn("--verbose", command)
         self.assertIn("--safe-mode", command)
@@ -341,6 +343,51 @@ class ClaudeCodeRuntimeTests(unittest.TestCase):
             lean_text = lean.read_text(encoding="utf-8")
         self.assertEqual(result.artifact.name, "Proof.lean")
         self.assertNotIn("ProvingConsole outcome:", lean_text)
+
+    def test_lean_mode_accepts_a_valid_proof_lean_the_agent_left_as_it_was(self) -> None:
+        # A Formal harness may find the stored Proof.lean already right; the
+        # harness re-checks it. A file below the size floor still fails.
+        for text, accepted in (
+            ("theorem kept : True := by trivial\n" + "-- verified earlier\n" * 8, True),
+            ("-- stub\n", False),
+        ):
+            with self.subTest(accepted=accepted), tempfile.TemporaryDirectory() as td, tempfile.TemporaryDirectory() as config:
+                workspace = Path(td)
+                lean = workspace / "Proof.lean"
+                lean.write_text(text, encoding="utf-8")
+                source_env = {
+                    "AGENT_MONITOR_CLAUDE_SUBSCRIPTION": "1",
+                    "AGENT_MONITOR_FORMAL_LEAN_MODE": "1",
+                    "CLAUDE_CONFIG_DIR": config,
+                    "PATH": os.environ.get("PATH", ""),
+                }
+                with patch.object(
+                    claude_backend, "_run_stream", return_value=claude_backend._ProcessResult(0, "", _events())
+                ), patch.object(claude_backend, "_claude_binary", return_value="/bin/claude"):
+                    if accepted:
+                        result = claude_backend.claude_proof("Formalize.", workspace, source_env=source_env)
+                        self.assertTrue(result.unchanged)
+                        self.assertEqual(result.artifact, workspace / "Proof.lean")
+                        self.assertEqual(lean.read_text(encoding="utf-8"), text)
+                    else:
+                        with self.assertRaisesRegex(claude_backend.ClaudeBackendError, "fresh substantive"):
+                            claude_backend.claude_proof("Formalize.", workspace, source_env=source_env)
+
+    def test_an_unchanged_proof_still_fails_outside_lean_mode(self) -> None:
+        with tempfile.TemporaryDirectory() as td, tempfile.TemporaryDirectory() as config:
+            workspace = Path(td)
+            (workspace / "proof.md").write_text("# Proof\n" + "An earlier proof. " * 40, encoding="utf-8")
+            source_env = {
+                "AGENT_MONITOR_CLAUDE_SUBSCRIPTION": "1",
+                "CLAUDE_CONFIG_DIR": config,
+                "PATH": os.environ.get("PATH", ""),
+            }
+            with patch.object(
+                claude_backend, "_run_stream", return_value=claude_backend._ProcessResult(0, "", _events())
+            ), patch.object(claude_backend, "_claude_binary", return_value="/bin/claude"), self.assertRaisesRegex(
+                claude_backend.ClaudeBackendError, "fresh substantive"
+            ):
+                claude_backend.claude_proof("Prove it.", workspace, source_env=source_env)
 
     def test_lean_mode_accepts_generic_formal_flag(self) -> None:
         with tempfile.TemporaryDirectory() as td, tempfile.TemporaryDirectory() as config:

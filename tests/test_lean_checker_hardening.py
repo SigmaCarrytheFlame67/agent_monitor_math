@@ -554,9 +554,8 @@ class LeanCheckerHardeningTests(unittest.TestCase):
                             "_harness_env",
                             return_value={},
                         ),
-                        patch.object(
-                            lean_verify.subprocess,
-                            "run",
+                        patch(
+                            "agent_monitor.runners.codex_backend._run_codex_process",
                             side_effect=fake_run,
                         ),
                     ):
@@ -566,7 +565,7 @@ class LeanCheckerHardeningTests(unittest.TestCase):
                         ):
                             lean_verify._codex_subscription_interaction(
                                 workspace=workspace,
-                                user={"id": 7},
+                                user={"id": 7, "is_admin": True},
                                 prompt="Revise safely.",
                                 lean_source=SOURCE,
                                 edit=True,

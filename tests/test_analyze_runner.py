@@ -264,14 +264,50 @@ def test_provider_failure_on_every_check_fails_the_run_but_keeps_the_structure(t
     def script(kind, node, user, headers):
         if kind == "map":
             return paper_map()
-        return (500, {"error": {"message": "upstream exploded with secret detail"}})
+        return (500, {"error": {"message": "upstream exploded"}})
 
     server = provider(script)
-    with pytest.raises(runner.AnalyzeError, match="No result could be checked"):
+    # An own key's provider says why (the key is redacted where the error is raised).
+    with pytest.raises(runner.AnalyzeError, match=re.escape(
+            "No result could be checked: Deepseek model call failed for deepseek-test (HTTP 500): upstream exploded")):
         run(tmp_path, write_request(tmp_path), own_key_env(server))
     graph = ag.load(tmp_path)
     assert graph is not None and all(node["meta"]["verdict"] == "not_checked" for node in graph["nodes"])
     assert (tmp_path / "analysis" / "report.md").is_file()
+    # A server error may pass: every result was still tried.
+    assert [seen["kind"] for seen in server.seen].count("check") == 3
+
+
+@pytest.mark.parametrize(("status", "error"), [
+    (401, {"message": "Incorrect API key provided: sk-bad.", "type": "invalid_request_error", "code": "invalid_api_key"}),
+    (429, {"message": "You exceeded your current quota, please check your plan and billing details.",
+           "type": "insufficient_quota", "code": "insufficient_quota"}),
+])
+def test_an_own_key_refusal_stops_the_checks_and_says_why(tmp_path, provider, status, error):
+    def script(kind, node, user, headers):
+        return paper_map() if kind == "map" else (status, {"error": dict(error)})
+
+    server = provider(script)
+    reason = f"Deepseek model call failed for deepseek-test (HTTP {status}): {error['message']}"
+    with pytest.raises(runner.AnalyzeError, match=re.escape(f"No result could be checked: {reason}")):
+        run(tmp_path, write_request(tmp_path), own_key_env(server, AGENT_MONITOR_ANALYZE_CONCURRENCY="1"))
+    # Every later check would be refused the same way.
+    assert [seen["kind"] for seen in server.seen] == ["map", "check"]
+    assert {node["meta"]["reason"] for node in ag.load(tmp_path)["nodes"]} == {f"Not checked: {reason}"}
+    assert "test-key" not in reason
+
+
+def test_a_rate_limited_check_does_not_stop_the_others(tmp_path, provider):
+    def script(kind, node, user, headers):
+        if kind == "check" and node == "thm:main":
+            return (429, {"error": {"message": "Rate limit reached for requests", "code": "rate_limit_exceeded"}})
+        return default_script()(kind, node, user, headers)
+
+    server = provider(script)
+    run(tmp_path, write_request(tmp_path), own_key_env(server, AGENT_MONITOR_ANALYZE_CONCURRENCY="1"))
+    assert node_meta(tmp_path, "thm:main")["reason"] == (
+        "Not checked: Deepseek model call failed for deepseek-test (HTTP 429): Rate limit reached for requests")
+    assert node_meta(tmp_path, "lem:rep")["verdict"] == node_meta(tmp_path, "lem:sum")["verdict"] == "checked"
 
 
 @pytest.mark.parametrize(
@@ -348,7 +384,7 @@ def test_deadline_publishes_what_settled(tmp_path, provider, monkeypatch):
     assert all("time limit" in node["meta"]["reason"] for node in graph["nodes"])
     receipt = json.loads((tmp_path / "analysis" / "receipt.json").read_text())
     assert "time-limit" in receipt["degraded"]
-    assert "Limits reached: time-limit" in (tmp_path / "analysis" / "report.md").read_text()
+    assert "Limits reached: the time limit" in (tmp_path / "analysis" / "report.md").read_text()
 
 
 def test_deadline_keeps_the_results_that_settled(tmp_path, provider, monkeypatch):
@@ -529,6 +565,42 @@ def test_a_failed_recheck_keeps_the_previous_verdict(tmp_path, provider, failure
     assert receipt["rechecks"][0]["failed"] and receipt["calls"] > first_receipt["calls"]
 
 
+# A proof of about 376 KB: checked in more parts than a short re-check's eight calls.
+LONG_STEPS = "\n\n".join(f"Step {index}: we observe that $a_{{{index}}} + b_{{{index}}}$ is even, since "
+                         + "both summands are even and the sum of evens is even. " * 9 for index in range(720))
+LONG_PAPER = PAPER.replace("\\begin{proof} By definition. \\end{proof}",
+                           "\\begin{proof} " + LONG_STEPS + " \\end{proof}")
+
+
+def test_a_recheck_has_a_call_for_every_part_of_a_long_proof(tmp_path, provider):
+    server = provider(default_script())
+    env = own_key_env(server)
+    run(tmp_path, write_request(tmp_path, text=LONG_PAPER, role="admin"), env)
+    parts = sum(1 for seen in server.seen if seen["node"] == "lem:rep")
+    assert parts > runner.RECHECK_MAX_CALLS and node_meta(tmp_path, "lem:rep")["parts"] == parts
+    before = len(server.seen)
+    result = recheck.run(tmp_path, "lem:rep", route_env=env, sink=lambda _event: None)
+    assert result["verdict"] == "checked" and result["calls"] == parts == len(server.seen) - before
+    entry = json.loads((tmp_path / "analysis" / "receipt.json").read_text())["rechecks"][0]
+    # Two calls to spare (a format reminder), and the time in proportion.
+    assert entry["caps"]["max_calls"] == parts + 2
+    assert entry["caps"]["max_seconds"] == runner.RECHECK_SECONDS * (parts + 2) // runner.RECHECK_MAX_CALLS
+
+
+def test_a_proof_longer_than_the_runs_calls_is_refused_before_any_call(tmp_path, provider):
+    server = provider(default_script())
+    run(tmp_path, write_request(tmp_path, text=LONG_PAPER, role="admin"), own_key_env(server))
+    stored = (tmp_path / "analysis" / "nodes" / "lem:rep.json").read_bytes()
+    receipt = (tmp_path / "analysis" / "receipt.json").read_bytes()
+    before = len(server.seen)
+    env = own_key_env(server, AGENT_MONITOR_ANALYZE_ADMIN_MAX_CALLS="5")
+    with pytest.raises(runner.ConfigError, match=r"too long to re-check on its own: .* parts, .* at most 5 calls"):
+        recheck.run(tmp_path, "lem:rep", route_env=env, sink=lambda _event: None)
+    assert len(server.seen) == before
+    assert (tmp_path / "analysis" / "nodes" / "lem:rep.json").read_bytes() == stored
+    assert (tmp_path / "analysis" / "receipt.json").read_bytes() == receipt
+
+
 def test_runner_command_line_contract(tmp_path, provider):
     server = provider(default_script({"lem:sum": "gap"}))
     workspace = tmp_path / "ws"
@@ -630,6 +702,36 @@ def test_guest_runs_use_guest_caps_and_skip_long_proofs(tmp_path, provider):
     assert all(seen["node"] != "lem:rep" for seen in server.seen)
 
 
+def guest_long_proof_analysis(workspace: Path, server) -> dict[str, str]:
+    """A guest analysis whose lem:rep proof needs more than one call (so it
+    was not checked); returns the analysis's route environment."""
+    long_proof = "\n\n".join(f"Step {index}. " + "word " * 400 for index in range(40))
+    text = PAPER.replace("\\begin{proof} By definition. \\end{proof}", "\\begin{proof}" + long_proof + "\\end{proof}")
+    sha = "e" * 40
+    fetcher = _FakeFetcher({f"https://raw.githubusercontent.com/o/r/{sha}/main.tex": text.encode()})
+    req = write_request(workspace, role="guest", route="sponsored_kimi", model="kimi-k3", sponsored=True,
+                        source={"kind": "url", "url": f"https://github.com/o/r/blob/{sha}/main.tex"})
+    env = sponsored_env(server, AGENT_MONITOR_GUEST="1")
+    run(workspace, req, env, fetcher=fetcher)
+    return env
+
+
+def test_a_guest_recheck_of_a_long_proof_is_refused_before_any_call(tmp_path, provider):
+    server = provider(default_script())
+    env = guest_long_proof_analysis(tmp_path, server)
+    assert node_meta(tmp_path, "lem:rep")["reason"] == runner.GUEST_TOO_LONG
+    receipt = (tmp_path / "analysis" / "receipt.json").read_bytes()
+    before = len(server.seen)
+    # A configuration refusal (exit 2): the console gives a sponsored start back.
+    with pytest.raises(runner.ConfigError, match="Too long for a guest check"):
+        recheck.run(tmp_path, "lem:rep", route_env=env, sink=lambda _event: None)
+    assert len(server.seen) == before
+    assert (tmp_path / "analysis" / "receipt.json").read_bytes() == receipt
+    # The console refuses it before the start, from the stored segments.
+    assert recheck.guest_refusal(tmp_path, "lem:rep") == runner.GUEST_TOO_LONG
+    assert recheck.guest_refusal(tmp_path, "lem:sum") == ""
+
+
 def test_members_check_long_proofs_in_parts(tmp_path, provider):
     long_proof = "\n\n".join(f"Step {index}. " + "word " * 400 for index in range(40))
     text = PAPER.replace("\\begin{proof} By definition. \\end{proof}", "\\begin{proof}" + long_proof + "\\end{proof}")
@@ -696,7 +798,97 @@ def test_model_segmentation_fallback_uses_verbatim_quotes(tmp_path, provider):
     assert [seen["kind"] for seen in server.seen][:1] == ["segment"]
 
 
-SHORT_TEX = r"""\documentclass{article}
+# Plain prose with no theorem headings: the model is asked to locate results, in three chunks.
+PROSE = "\n\n".join(f"Paragraph {index}. " + "Every widget carries a frobnicator along the line. " * 10
+                    for index in range(120))
+
+
+def test_a_refused_segmentation_call_is_not_blamed_on_the_manuscript(tmp_path, provider):
+    quota = {"message": "quota", "type": "sponsor_quota", "forwarded": False}
+    server = provider(lambda kind, node, user, headers: (429, {"error": dict(quota)}))
+    req = write_request(tmp_path, text=PROSE, route="sponsored_kimi", model="kimi-k3", sponsored=True)
+    with pytest.raises(runner.AnalyzeError, match="could not be located: This run used up its Kimi call budget"):
+        run(tmp_path, req, sponsored_env(server))
+    # Every later chunk would be refused the same way.
+    assert [seen["kind"] for seen in server.seen] == ["segment"]
+
+
+def test_a_failing_provider_while_locating_results_is_reported(tmp_path, provider):
+    server = provider(lambda kind, node, user, headers: (500, {"error": {"message": "upstream exploded"}}))
+    with pytest.raises(runner.AnalyzeError, match="could not be located") as error:
+        run(tmp_path, write_request(tmp_path, text=PROSE), own_key_env(server))
+    assert "No theorems" not in str(error.value)
+    # A failure that may pass leaves the other chunks to try.
+    assert [seen["kind"] for seen in server.seen] == ["segment"] * 3
+
+
+def test_a_refused_segmentation_call_stops_the_run_before_the_overview(tmp_path, provider):
+    quota = {"message": "quota", "type": "sponsor_quota", "forwarded": False}
+    server = provider(lambda kind, node, user, headers: (429, {"error": dict(quota)}))
+    text = "Lemma 1. Every widget has a frobnicator.\n\nProof. Inspect it. QED\n\n" + PROSE
+    req = write_request(tmp_path, text=text, route="sponsored_kimi", model="kimi-k3", sponsored=True)
+    with pytest.raises(runner.AnalyzeError, match="No result could be checked: This run used up its Kimi call"):
+        run(tmp_path, req, sponsored_env(server))
+    assert [seen["kind"] for seen in server.seen] == ["segment"]
+    assert {node["meta"]["verdict"] for node in ag.load(tmp_path)["nodes"]} == {"not_checked"}
+
+
+def prose_script(check_answer):
+    """PROSE's first chunk fails once (a provider error that may pass); each
+    other chunk locates the result its first paragraph states, with a proof."""
+
+    def script(kind, node, user, headers):
+        if kind == "segment":
+            if "Chunk 1 of" in user:
+                return 500, {"error": {"message": "upstream hiccup"}}
+            number = re.search(r"Paragraph (\d+)\.", user).group(1)
+            return json.dumps({"items": [{
+                "kind": "lemma", "label": f"Claim {number}",
+                "statement_quote": f"Paragraph {number}. Every widget carries a frobnicator along the line.",
+                "proof_start_quote": "Every widget carries a frobnicator", "proof_end_quote": "along the line.",
+                "uses": []}]})
+        if kind == "map":
+            return paper_map(main=())
+        return check_answer
+
+    return script
+
+
+def test_a_passing_failure_while_locating_results_is_no_failure_of_the_checks(tmp_path, provider):
+    server = provider(prose_script(verdict_json()))
+    outcome = run(tmp_path, write_request(tmp_path, text=PROSE), own_key_env(server))
+    assert outcome["summary"]["checked"] == 2
+    # The report says the model missed part of the text, not that a check went unanswered.
+    receipt = json.loads((tmp_path / "analysis" / "receipt.json").read_text())
+    assert receipt["degraded"] == ["model-segmentation-incomplete"]
+
+
+def test_checks_failing_later_are_not_blamed_on_a_passing_segmentation_failure(tmp_path, provider):
+    server = provider(prose_script("no verdict here"))
+    with pytest.raises(runner.AnalyzeError,
+                       match="^No result could be checked: the verifier output could not be interpreted$"):
+        run(tmp_path, write_request(tmp_path, text=PROSE), own_key_env(server))
+
+
+def test_a_failed_call_is_described_in_words_that_fit_every_stage(tmp_path, provider):
+    from agent_monitor.runners.codex_backend import CodexBackendError
+
+    analysis = runner.AnalysisRun(tmp_path, write_request(tmp_path), env=own_key_env(provider(default_script())),
+                                  sink=lambda _event: None)
+
+    def failed(cause):
+        error = harness.ProviderCallError("provider call failed")
+        error.__cause__ = cause
+        return error
+
+    # A check and the location of results alike ("could not be located: ...").
+    timeout = failed(CodexBackendError("codex exec timed out after 600s", kind="timeout"))
+    assert analysis._note_failure(timeout) == "The model did not answer in time (codex exec timed out after 600s)"
+    assert analysis._note_failure(failed(ConnectionResetError())) == "The model provider did not answer"
+    assert not analysis.permanent_failure
+
+
+SHORT_TEX =r"""\documentclass{article}
 \newtheorem{theorem}{Theorem}
 \newtheorem{lemma}[theorem]{Lemma}
 \begin{document}

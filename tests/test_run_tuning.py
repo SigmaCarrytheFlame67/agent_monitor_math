@@ -604,10 +604,67 @@ console.log(JSON.stringify(out));
                 "Standard",
                 # Max: fixed at maximum effort, nothing to adjust.
                 "Ultra",
-                "Max runs Claude Code and Codex at maximum effort.",
+                "Max runs Claude Code and Codex at maximum effort. "
+                "Formal Lean and Lean DAG run on Codex at High.",
                 True,
                 True,
             ],
+        )
+
+    def test_profile_note_states_the_effort_of_derived_codex_work(self) -> None:
+        # cgm_max.formal_view derives a Codex-subscription run's Formal Lean
+        # and Lean DAG at no more than high effort (a fixed per-call limit), so
+        # the note never promises them an Extra high or Ultra profile.
+        from agent_monitor import cgm_max
+
+        caps = {route: run_tuning.capabilities("gpt-6-sol", route) for route in ("codex_subscription", "api_key")}
+        source = "\n".join(
+            _js_function(name)
+            for name in (
+                "runTuningCapabilities",
+                "runTuningStorage",
+                "runTuningStorageKey",
+                "currentRunTuning",
+                "renderRunTuning",
+            )
+        )
+        cases = [("codex_subscription", effort) for effort in ("high", "xhigh", "max")] + [("api_key", "max")]
+        program = f"""
+const RUN_TUNING_KEY='tuning';
+let store={{}};
+const localStorage={{getItem:()=>JSON.stringify(store),setItem(){{}}}};
+const els={{}};
+const $=id=>els[id]||(els[id]={{id,textContent:'',innerHTML:'',title:'',attrs:{{}},style:{{setProperty(){{}}}},classList:{{toggle(){{}},add(){{}},remove(){{}}}},setAttribute(name,value){{this.attrs[name]=value;}}}});
+let route='api_key';
+const selectedAccountRuntime=()=>route==='codex_subscription'?'codex':'api', currentModel=()=>'gpt-6-sol', animateRunTuningFeedback=()=>{{}};
+const isCgmMax=()=>false, runAuthRoute=()=>route;
+const engine='plain';
+const SETTINGS={{run_tuning_by_runtime:{{codex:{{'gpt-6-sol':{json.dumps(caps["codex_subscription"])}}},api:{{'gpt-6-sol':{json.dumps(caps["api_key"])}}}}}}};
+{source}
+const out=[];
+for(const [selected,effort] of {json.dumps(cases)}){{
+  route=selected; store={{[selected+':gpt-6-sol']:{{reasoning_effort:effort,speed_mode:'fast'}}}};
+  renderRunTuning(); out.push([$('run-profile-summary').textContent,$('run-profile-note').textContent]);
+}}
+console.log(JSON.stringify(out));
+"""
+        result = subprocess.run([NODE, "-e", program], capture_output=True, text=True, check=False)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        kept = (
+            "Saved for this model. Applies to new runs; existing runs, Formal Lean, "
+            "Lean DAG, and continuations keep the profile they started with."
+        )
+        capped = (
+            "Saved for this model. Applies to new runs; existing runs and continuations "
+            "keep the profile they started with. Formal Lean and Lean DAG run at High, "
+            "the most their Codex calls allow."
+        )
+        for (route, effort), (summary, note) in zip(cases, json.loads(result.stdout), strict=True):
+            derived = cgm_max.formal_view({"auth_route": route, "reasoning_effort": effort})
+            self.assertIn(" · Fast", summary)
+            self.assertEqual(note, kept if derived["reasoning_effort"] == effort else capped, (route, effort))
+        self.assertEqual(
+            [note for _summary, note in json.loads(result.stdout)], [kept, capped, capped, kept]
         )
 
 

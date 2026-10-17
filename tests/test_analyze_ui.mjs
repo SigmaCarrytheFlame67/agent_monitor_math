@@ -222,7 +222,7 @@ test('Manuscript DAG: verdicts map to blue, amber, red, grey and hollow — neve
 })
 
 test('report and verdict text stay text: raw HTML escaped, math kept, links sanitized', () => {
-  const render = run(['stashMath', 'escapeHtml', 'analysisMarkdownHtml'], [],
+  const render = run(['stashMath', 'escapeHtml', 'analysisMarkdownHtml', 'analysisReportMath', 'analysisTextAccents', 'analysisResolveRefs', 'analysisUnresolvedLabel'], ['ANALYZE_ACCENT_MARKS', 'ANALYZE_BARE_ACCENTED', 'ANALYZE_TEXT_LETTERS', 'ANALYZE_REF_TIE', 'ANALYZE_LABEL_KINDS'],
     `let analysisMarkdownParser=null; const sanitizeRenderedHtml=html=>html; const window={};`,
     `(text,marked)=>{ window.marked=marked; analysisMarkdownParser=null; return analysisMarkdownHtml(text); }`)
   // Without marked the report is preformatted, escaped text.
@@ -252,14 +252,14 @@ test('report and verdict text stay text: raw HTML escaped, math kept, links sani
 })
 
 test('statement prose, progress lines and author macros are cleaned for display', () => {
-  const prose = run(['analysisRefLabels', 'analysisProse'], [], '', `(text,graph)=>analysisProse(text,analysisRefLabels(graph))`)
+  const prose = run(['analysisTextAccents', 'analysisResolveRefs', 'analysisUnresolvedLabel', 'analysisRefLabels', 'analysisProse'], ['ANALYZE_ACCENT_MARKS', 'ANALYZE_BARE_ACCENTED', 'ANALYZE_TEXT_LETTERS', 'ANALYZE_REF_TIE', 'ANALYZE_LABEL_KINDS'], '', `(text,graph)=>analysisProse(text,analysisRefLabels(graph))`)
   const graph = { nodes: [{ label: 'Definition 2.1', meta: { number: '2.1', labels: ['def:parity'] } }, { label: 'Lemma 3.2', meta: { number: '3.2', labels: ['lem:sum'] } }] }
   assert.equal(prose('By Definition~\\ref{def:parity} and \\cref{lem:sum}, \\emph{every} $x\\in\\mathbb{Z}$ works \\cite[Thm. 2]{Smith}.', graph),
     'By Definition 2.1 and Lemma 3.2, every $x\\in\\mathbb{Z}$ works [Smith].')
-  assert.equal(prose('Keep $\\ref{x}~y$ and \\(a~b\\) as written; see \\ref{missing}.', graph), 'Keep $\\ref{x}~y$ and \\(a~b\\) as written; see missing.')
-  const progress = run(['analysisProgressText'], [], '', 'analysisProgressText')
+  assert.equal(prose('Keep $\\ref{x}~y$ and \\(a~b\\) as written; see \\ref{missing}.', graph), 'Keep $\\ref{x}~y$ and \\(a~b\\) as written; see (missing).')
+  const progress = run(['analysisProgressLines', 'analysisProgressText'], ['ANALYZE_CALL_MARKER'], '', 'analysisProgressText')
   assert.equal(progress('$ /venv/bin/python -u /srv/x/analyze_runner.py\nAnalyze · 1 Ingest\n{"verdict":"checked"}\n\n---\n\nAnalyze · 3 Check · Lemma 3.2 · checked'),
-    'Analyze · 1 Ingest\nAnalyze · 3 Check · Lemma 3.2 · checked')
+    '1 Ingest\n3 Check · Lemma 3.2 · checked')
   const macros = run(['analysisKatexMacros'], [], '', 'analysisKatexMacros')
   assert.deepEqual(macros({ macros: { '\\R': '\\mathbb{R}', '\\bad': '\\href{javascript:x}{y}', '\\loop': '\\def\\a{\\a}', 'R': 'x', '\\long': 'x'.repeat(401), '\\ok': '#1^2' } }),
     { '\\R': '\\mathbb{R}', '\\ok': '#1^2' })
@@ -331,12 +331,12 @@ test('the Lean tab of an analysis never speaks of verifying a proof (waiting, ru
   style:{},scrollTop:0,clientHeight:0,scrollHeight:0,classes:new Set(),classList:{add(...c){c.forEach(x=>els[id].classes.add(x));},remove(...c){c.forEach(x=>els[id].classes.delete(x));},toggle(){}},querySelectorAll:()=>[]});
 const $=element; let bodyClasses=new Set();
 const document={body:{classList:{contains:c=>bodyClasses.has(c)}},querySelector:()=>null};
-let lastSandboxRun=null, runId='r1', CURRENT_USER={guest:false}, leanRunKey='', leanDirty=false, statusLine='';
+let lastSandboxRun=null, runId='r1', CURRENT_USER={guest:false,is_admin:true}, leanRunKey='', leanDirty=false, statusLine='';
 const leanStatus=text=>{statusLine=String(text);}; const escapeHtml=value=>String(value);
 const LEAN_STATUS_LABEL={verified:'Verified',compiled:'Compiled',failed:'Failed',incomplete:'Incomplete (sorry)',none:'—'};
 const setLeanBadge=status=>{ element('lean-badge').className='lean-badge '+(status||'none'); element('lean-badge').textContent=LEAN_STATUS_LABEL[status]||status; };
 const leanEditorText=()=>'', leanToolchainLabel=()=>'Lean 4.14', leanAttemptAxioms=()=>'', leanAttemptLabel=()=>'', renderLeanFidelity=()=>{}, renderLeanCitations=()=>{}, renderLeanChat=()=>{}, setLeanRunning=()=>{};`
-  const out = run(['pipelineStageVisualStatus', 'leanForAnalysis', 'isAnalysisRun', 'renderLeanProgress', 'syncLeanPipelineEmptyState', 'setStatementsLeanBadge', 'renderLean'],
+  const out = run(['pipelineStageVisualStatus', 'leanForAnalysis', 'isAnalysisRun', 'renderLeanProgress', 'syncLeanPipelineEmptyState', 'setStatementsLeanBadge', 'renderLean', 'viewerIsAdmin'],
     ['LEAN_PROGRESS_STAGES', 'LEAN_ANALYSIS_STAGE_NAMES'], dom, `(()=>{
   const card=()=>[els['lean-progress-title'].textContent,els['lean-progress-detail'].textContent];
   const stages=(lean,dag)=>({informal_dag:dag||{status:'waiting'},lean,formal_dag:{status:'waiting'},coverage:{status:'waiting'}});
@@ -424,7 +424,11 @@ test('an analysis\'s Progress pane and process log show progress, never raw veri
     'thinking · Analyze · Check · Lemma 3.2 · error — sign of the trace term', '---', 'stage · 4 Roll-up'].join('\n')
   assert.deepEqual(lines(log), ['assistant · Ansatz Analyze · kimi-k3 via sponsored_kimi · no tools', 'stage · 1 Ingest · pasted text',
     'thinking · Analyze · 1 Ingest · pasted text', 'thinking · Analyze · Check · Lemma 3.2 · error — sign of the trace term', 'stage · 4 Roll-up'])
-  assert.match(fn('updateProcLog'), /isAnalysisRun\(run\)\?analysisLogLines\(raw\)/)
+  assert.match(fn('updateProcLog'), /isAnalysisRun\(run\)\?\(\/session summary\$\/\.test\(String\(last\?\.stage_name\|\|''\)\)\?analysisLogLines\(raw\):analysisRunProgress\(run\)\)/)
+  // A verifier reply pretty-printed across lines is JSON on every line, never progress.
+  const pretty = ['assistant · {', '  "claim": "There exist constants",', '  "depends_on": [', '  ],', '  "verification_report": {', '    "gaps": []', '  },',
+    '  "verdict": "checked"', '}', '```json', 'thinking · Analyze · Check · Lemma 3.2 · checked'].join('\n')
+  assert.deepEqual(lines(pretty), ['thinking · Analyze · Check · Lemma 3.2 · checked'])
   const chat = run(['analysisLogLines', 'selectedRunIsAnalysis', 'isAnalysisRun', 'renderChat'], [],
     `const RUN_KIND_BY_ID=new Map([['a1','analyze']]); let runId='a1', lastSandboxRun=null; const box={innerHTML:'',scrollTop:0,scrollHeight:0};
 const $=()=>box; const escapeHtml=v=>String(v); const fmtTs=()=>''; const attachmentLinks=()=>'';`,
@@ -500,11 +504,208 @@ test('the stage strip starts at Ingest: the placeholder session node before the 
 })
 
 test('manuscript display environments keep their row breaks and render as math', () => {
-  const prose = run(['analysisProse'], [], '', 'analysisProse')
+  const prose = run(['analysisTextAccents', 'analysisResolveRefs', 'analysisUnresolvedLabel', 'analysisProse'], ['ANALYZE_ACCENT_MARKS', 'ANALYZE_BARE_ACCENTED', 'ANALYZE_TEXT_LETTERS', 'ANALYZE_REF_TIE', 'ANALYZE_LABEL_KINDS'], '', 'analysisProse')
   const text = 'For all $x$,\n\\begin{align}\n |F(x)|&\\le 2,\\\\\n |X_x|&\\le 3.\n\\end{align}\nSee~\\ref{a}.'
   const out = prose(text, null)
   assert.match(out, /\\begin\{align\*\}\n \|F\(x\)\|&\\le 2,\\\\\n \|X_x\|&\\le 3\.\n\\end\{align\*\}/, 'unnumbered, rows kept')
-  assert.match(out, /See a\.$/)
+  assert.match(out, /See \(a\)\.$/)  // an unknown label reads without its command
   assert.match(script, /function mathEnvDelimiters\(\)\{ return \['equation','equation\*','align','align\*','alignat','alignat\*','gather','gather\*'\]/)
   assert.match(script, /renderMathInElement\(el,\{delimiters:\[\.\.\.mathEnvDelimiters\(\),/)
+})
+
+// ---------------------------------------------------------------------------
+// Live progress, report math and link refusals (Analyze UX review, 2026-10-11)
+// ---------------------------------------------------------------------------
+
+const ANALYZE_TEXT_CONSTS = ['ANALYZE_ACCENT_MARKS', 'ANALYZE_BARE_ACCENTED', 'ANALYZE_TEXT_LETTERS', 'ANALYZE_REF_TIE', 'ANALYZE_LABEL_KINDS']
+// A tiny element tree: enough for analyzeEl, append, classes and text.
+const miniDom = `const document={createElement:tag=>({tag,className:'',textContent:'',attrs:{},kids:[],
+  setAttribute(k,v){this.attrs[k]=String(v);},append(...k){this.kids.push(...k.map(x=>typeof x==='string'?{tag:'#text',textContent:x,kids:[]}:x));}})};
+const flat=node=>({tag:node.tag,cls:node.className,text:node.textContent,kids:(node.kids||[]).map(flat)});`
+
+test('a live analysis shows its progress notes as stages and verdict rows, never the verifier\'s JSON', () => {
+  const pretty = JSON.stringify({ claim: 'There exist constants', depends_on: [], verification_report: { summary: 'ok', critical_errors: [], gaps: [] }, verdict: 'checked' }, null, 2)
+  const raw = ['Ansatz Analyze · kimi-k3 via sponsored_kimi · up to 12 results', 'Analyze · 1 Ingest · link', 'Analyze · Ingest · Short Egyptian fractions · 11 files',
+    'Analyze · 3 Check · checking up to 12 of 19 results', 'Analyze · map', 'Analyze · check-1', pretty, '```json', pretty, '```', 'Analyze · check-12-low',
+    'Analyze · Check · main results: Theorem 1.1', 'Analyze · Check · Theorem 1.1 · checked',
+    'Analyze · Check · Lemma 3.7 · error — sign of the trace term: \\(x < y\\) and \\(S \\ge',
+    'Analyze · Check · Lemma 4.2 · not_checked — Not checked: the result-check limit for this run was reached',
+    'Analyze · Check · now checking Lemma 2.3, Proposition 2.1'].join('\n')
+  const lines = run(['analysisProgressLines'], ['ANALYZE_CALL_MARKER'], '', 'analysisProgressLines')(raw)
+  assert.deepEqual(lines, ['1 Ingest · link', 'Ingest · Short Egyptian fractions · 11 files', '3 Check · checking up to 12 of 19 results',
+    'Check · main results: Theorem 1.1', 'Check · Theorem 1.1 · checked', 'Check · Lemma 3.7 · error — sign of the trace term: \\(x < y\\) and \\(S \\ge',
+    'Check · Lemma 4.2 · not_checked — Not checked: the result-check limit for this run was reached', 'Check · now checking Lemma 2.3, Proposition 2.1'])
+  const view = run(['analyzeEl', 'analysisClosedMath', 'analysisProgressView', 'analysisModelProse', 'analysisTextAccents', 'analysisResolveRefs', 'analysisUnresolvedLabel'],
+    ['ANALYZE_STAGE_LINE', 'ANALYZE_RESULT_LINE', 'ANALYZE_NOW_LINE', 'ANALYZE_SOURCE_WORDS', 'ANALYZE_VERDICT_SHORT', 'ANALYZE_MATH_SPLIT', ...ANALYZE_TEXT_CONSTS], miniDom,
+    `(lines,status)=>flat(analysisProgressView(lines,{status}))`)
+  const live = view(lines, 'running')
+  assert.equal(live.tag, 'ol')
+  const rows = live.kids.map(row => [row.cls, row.kids.map(kid => kid.text).join(' | ') || row.text])
+  assert.deepEqual(rows, [
+    ['ap-stage', 'Ingest | from a link'],
+    ['ap-line', 'Short Egyptian fractions · 11 files'],
+    ['ap-stage', 'Check | checking up to 12 of 19 results | · 2 done'],
+    ['ap-line', 'Main results: Theorem 1.1'],
+    ['ap-result v-checked', 'checked | Theorem 1.1'],
+    // A finding cut short inside a formula never leaves it open.
+    ['ap-result v-error', 'error | Lemma 3.7 | sign of the trace term: \\(x < y\\) and …'],
+    ['ap-result v-not_checked', 'not checked | Lemma 4.2 | the result-check limit for this run was reached'],
+    ['ap-now', 'Checking Lemma 2.3, Proposition 2.1…'],
+  ])
+  // Once it has ended, nothing is "being checked"; a failure's last line reads as the error.
+  const ended = view([...lines.slice(0, -1), 'No result could be checked: the provider refused'], 'failed')
+  assert.ok(!ended.kids.some(row => row.cls === 'ap-now'))
+  assert.equal(ended.kids.at(-1).cls, 'ap-error')
+  // The Progress panel's one line names the latest note, never "}" or a call marker.
+  const detail = run(['analysisProgressDetail'], ['ANALYZE_STAGE_LINE', 'ANALYZE_RESULT_LINE', 'ANALYZE_NOW_LINE', 'ANALYZE_SOURCE_WORDS', 'ANALYZE_VERDICT_SHORT'], '', 'analysisProgressDetail')
+  assert.equal(detail(lines), 'checking Lemma 2.3, Proposition 2.1')
+  assert.equal(detail(lines.slice(0, 5)), 'Theorem 1.1 · checked')
+  assert.equal(detail(lines.slice(0, 1)), 'from a link')
+  assert.equal(detail(['The source could not be used: x']), 'The source could not be used: x')
+  const status = fn('updateChatStatus')
+  assert.match(status, /if\(isAnalysisRun\(run\)\)\{[\s\S]*detail=analysisProgressDetail\(analysisRunProgress\(run\)\)/)
+  assert.match(fn('renderAnalysisReport'), /list=analysisProgressView\(text\.split\('\\n'\),run,refs\)/)
+})
+
+test('report math keeps |x| and < y: the report\'s Markdown escapes are undone inside math only', () => {
+  const math = run(['analysisReportMath'], [], '', 'analysisReportMath')
+  assert.equal(math('\\(\\|H\\| \\le X/4\\)'), '\\(|H| \\le X/4\\)')
+  assert.equal(math('\\(x_{i+1} &lt; x_i &gt; 0\\)'), '\\(x_{i+1} < x_i > 0\\)')
+  // An original norm \| was written as \\| by the report: it comes back as \|.
+  assert.equal(math('$\\\\|v\\\\|$'), '$\\|v\\|$')
+  // A stand-in for marked: the text passes through, as a paragraph.
+  class Marked { use() {} parse(source) { return `<p>${source}</p>` } }
+  const render = run(['stashMath', 'escapeHtml', 'analysisMarkdownHtml', 'analysisReportMath', 'analysisTextAccents', 'analysisResolveRefs', 'analysisUnresolvedLabel'], ['ANALYZE_ACCENT_MARKS', 'ANALYZE_BARE_ACCENTED', 'ANALYZE_TEXT_LETTERS', 'ANALYZE_REF_TIE', 'ANALYZE_LABEL_KINDS'],
+    `let analysisMarkdownParser=null; const sanitizeRenderedHtml=html=>html; const window={};`,
+    `(text,marked)=>{ window.marked=marked; analysisMarkdownParser=null; return analysisMarkdownHtml(text); }`)
+  const html = render('| Finding |\n| --- |\n| bound \\(\\|H\\| \\le X/4\\) and \\(x &lt; y\\); 1&lt;=a |', { Marked })
+  assert.match(html, /\\\(\|H\| \\le X\/4\\\)/)
+  assert.match(html, /\\\(x &lt; y\\\)/)  // HTML-escaped once, so KaTeX reads "x < y"
+  assert.doesNotMatch(html, /&amp;lt;/)
+  // Older reports keep TeX accents in the model's prose: they read as letters, math untouched.
+  assert.match(render('Overview: Erd\\H{o}s\'s conjecture and \\(\\H{o}\\).', { Marked }), /Overview: Erdős's conjecture and \\\(\\H\{o\}\\\)\./)
+})
+
+test('a link the preview refused never starts an analysis; a lookup that may work later does not block', () => {
+  const pick = run(['analyzeLinkFromText', 'guessManuscriptFormat', 'analyzeSourceFromComposer', 'viewerIsGuest'], [],
+    `const analyzeResolveCache=new Map(); let CURRENT_USER={guest:true}; const box={value:''}; const $=()=>box;
+const initialAttachments={files:[]}; const analyzePolicy=()=>({sources:{paste_chars:20000}});`,
+    `(text,cached)=>{ box.value=text; analyzeResolveCache.clear(); if(cached)analyzeResolveCache.set(text.trim(),cached); return analyzeSourceFromComposer(); }`)
+  const link = 'https://github.com/openai/math/blob/fd4aeeb/README.md'
+  assert.deepEqual(pick(link, null), { kind: 'url', url: link })
+  assert.deepEqual(pick(link, { ok: false, error: 'Link one manuscript folder of openai/math (preprints/<title>)' }),
+    { error: 'Link one manuscript folder of openai/math (preprints/<title>) — change the link to analyze something else.' })
+  assert.deepEqual(pick(link, { ok: false, transient: true, error: 'arXiv asks for a pause' }), { kind: 'url', url: link })
+  assert.deepEqual(pick(link, { ok: true, title: 'x' }), { kind: 'url', url: link })
+  // A refused lookup marked retryable is kept out of the cache, like a 429.
+  assert.match(fn('resolveAnalyzeLink'), /body\.ok===false&&body\.retryable\?\{\.\.\.body,transient:true\}:body/)
+  // Starting looks the link up first when no preview came back yet.
+  assert.match(fn('startAnalyzeRun'), /if\(source\.kind==='url'&&!analyzeResolveCache\.has\(source\.url\)\)\{[\s\S]*await resolveAnalyzeLink\(source\.url\)[\s\S]*source=analyzeSourceFromComposer\(\);/)
+})
+
+test('TeX text accents read as letters in statements and findings; math is left alone', () => {
+  const accents = run(['analysisTextAccents'], ['ANALYZE_ACCENT_MARKS', 'ANALYZE_BARE_ACCENTED', 'ANALYZE_TEXT_LETTERS'], '', 'analysisTextAccents')
+  assert.equal(accents('Erd\\H{o}s and P\\\'olya, Schr\\"{o}dinger, {\\"o}, Bj{\\o}rn, Tur\\\'an'), 'Erdős and Pólya, Schrödinger, ö, Bjørn, Turán')
+  assert.equal(accents('$\\"o$ \\(\\H{o}\\) \\Hom \\cdot \\vec{v} it\\\'s'), '$\\"o$ \\(\\H{o}\\) \\Hom \\cdot \\vec{v} it\\\'s')
+  const prose = run(['analysisTextAccents', 'analysisResolveRefs', 'analysisUnresolvedLabel', 'analysisRefLabels', 'analysisProse'], ['ANALYZE_ACCENT_MARKS', 'ANALYZE_BARE_ACCENTED', 'ANALYZE_TEXT_LETTERS', 'ANALYZE_REF_TIE', 'ANALYZE_LABEL_KINDS'], '',
+    `(text)=>analysisProse(text,analysisRefLabels({nodes:[]}))`)
+  assert.equal(prose('A theorem of Erd\\H{o}s~and Ma\\~{n}\\\'e: $\\tilde{x}$.'), 'A theorem of Erdős and Mañé: $\\tilde{x}$.')
+})
+
+test('the shared viewer renders the report as Markdown and reads TeX references as text', () => {
+  const viewer = readFileSync(new URL('../agent_monitor/web/run-viewer.js', import.meta.url), 'utf8')
+  const text = readFileSync(new URL('../agent_monitor/web/run-viewer-text.js', import.meta.url), 'utf8')
+  // The report goes through the shared Markdown renderer (which drops the
+  // report's \| and &lt; escapes) in manuscript mode, never as raw text.
+  assert.match(viewer, /AnsatzSharedText\.render\(target, text\(value\), \{ manuscript: analysis \}\)/)
+  const sandbox = { window: {}, document: {}, NodeFilter: {}, location: { href: 'https://example.test/' } }
+  vm.runInNewContext(text, sandbox)
+  const prose = sandbox.window.AnsatzSharedText.manuscriptProse
+  // Snapshots taken before the server resolved references keep bare labels,
+  // never the commands; math is left alone.
+  assert.equal(prose("the proof of Corollary~\\ref{cor:counting}, \\cref{lem:greedy}, \\eqref{eq:x}; keep $\\ref{x}~y$"),
+    "the proof of Corollary cor:counting, lem:greedy, (eq:x); keep $\\ref{x}~y$")
+})
+
+test('model prose reads TeX cross-references as the manuscript\'s results, or bare labels, never with their commands', () => {
+  const prose = run(['analysisTextAccents', 'analysisResolveRefs', 'analysisUnresolvedLabel', 'analysisModelProse', 'analysisRefLabels'], ['ANALYZE_MATH_SPLIT', ...ANALYZE_TEXT_CONSTS], '',
+    `(text,graph)=>analysisModelProse(text,analysisRefLabels(graph))`)
+  const graph = {
+    nodes: [{ label: 'Corollary 1.2', meta: { number: '1.2', labels: ['cor:counting'] } },
+      { label: 'Lemma 7.1 (A greedy prefix)', meta: { number: '7.1', labels: ['lem:greedy'] } }],
+    // Graphs written since sections keep their labels.
+    ref_labels: { 'sec:prescribed': { name: 'Section 7', number: '7' } },
+  }
+  assert.equal(prose("asserted from 'the construction in Section~\\ref{sec:prescribed}' and the proof of Corollary~\\ref{cor:counting}", graph),
+    "asserted from 'the construction in Section 7' and the proof of Corollary 1.2")
+  assert.equal(prose('\\cref{lem:greedy}, \\Cref{cor:counting,sec:prescribed}, \\autoref{x}, \\eqref{eq:supply-size}, \\hyperref[sec:prescribed]{the construction}', graph),
+    'Lemma 7.1 (A greedy prefix), Corollary 1.2, Section 7, (x), (supply-size), the construction')
+  // Without the graph (a running analysis, an old graph) the labels are shown bare.
+  assert.equal(prose("Section~\\ref{sec:prescribed} and \\S\\ref{sec:a}, \\cref{lem:gone}, Erd\\H{o}s", null), 'Section (prescribed) and §(a), Lemma (gone), Erdős')
+  // Only ties are spaces; math, other tildes and other commands are left alone.
+  assert.equal(prose('N(b) ~ log log b by Lemma~3.2, $\\ref{x}~y$ and \\(\\eqref{z}\\), \\textbf{x}', graph),
+    'N(b) ~ log log b by Lemma 3.2, $\\ref{x}~y$ and \\(\\eqref{z}\\), \\textbf{x}')
+  // A finding the runner cut inside a reference never ends in a broken command.
+  const closed = run(['analysisClosedMath'], [], '', 'analysisClosedMath')
+  assert.equal(closed("from 'the construction in Section~\\ref{sec:presc"), "from 'the construction in Section …")
+  assert.equal(closed('the bound of Lemma~\\eqref'), 'the bound of Lemma …')
+  assert.equal(closed('a complete \\alpha stays'), 'a complete \\alpha stays')
+  // Every place that shows model prose uses it: DAG details, the report, the progress view.
+  const detail = fn('renderAnalysisDetail')
+  assert.match(detail, /const value=analysisModelProse\(dagDetailText\(text\),labels\);/)
+  assert.match(detail, /analysisModelProse\(dagDetailText\(item\.issue,1200\),labels\)/)
+  assert.match(detail, /analysisModelProse\(dagDetailText\(item\.statement_as_used,1200\),labels\)/)
+  assert.match(fn('analysisMarkdownHtml'), /const s=analysisResolveRefs\(analysisTextAccents\(stashed\.s\),refLabels\);/)
+  assert.match(fn('renderAnalysisReport'), /refs=analysisRefLabels\(graph\)[\s\S]*analysisMarkdownHtml\(text,refs\)/)
+  assert.match(fn('analysisProgressView'), /analysisClosedMath\(analysisModelProse\(finding,refLabels\)\)/)
+})
+
+test('a report\'s ties never strike text through, and its references read as results', () => {
+  // A stand-in for marked that strikes "~text~" through, as GFM does.
+  class Marked { use() {} parse(source) { return `<p>${source.replace(/~([^~\n]+)~/g, '<del>$1</del>')}</p>` } }
+  const render = run(['stashMath', 'escapeHtml', 'analysisMarkdownHtml', 'analysisReportMath', 'analysisTextAccents', 'analysisResolveRefs', 'analysisUnresolvedLabel', 'analysisRefLabels'], ANALYZE_TEXT_CONSTS,
+    `let analysisMarkdownParser=null; const sanitizeRenderedHtml=html=>html; const window={};`,
+    `(text,graph,marked)=>{ window.marked=marked; analysisMarkdownParser=null; return analysisMarkdownHtml(text,analysisRefLabels(graph)); }`)
+  const graph = { nodes: [{ label: 'Corollary 1.2', meta: { number: '1.2', labels: ['cor:counting'] } }] }
+  const html = render("| gap | from Section~\\ref{sec:prescribed}' and Corollary~\\ref{cor:counting} with \\(x~y\\) |", graph, { Marked })
+  assert.doesNotMatch(html, /<del>|\\ref/)
+  assert.match(html, /from Section \(prescribed\)' and Corollary 1\.2 with \\\(x~y\\\)/)
+})
+
+test('Enter pressed again during the pre-start link lookup starts one analysis', async () => {
+  const posts = []
+  const els = {}
+  const context = vm.createContext({
+    console, setTimeout,
+    $: id => (els[id] ||= { id, style: {}, disabled: false, textContent: '', className: '', value: '', checked: false }),
+    initialAttachments: { busy: false, files: [], lock(busy) { this.busy = busy }, clear() {}, payload: async () => [] },
+    analyzeEngineEntry: () => ({ available: true, label: 'Ansatz Analyze' }),
+    analyzePolicy: () => ({ enabled: true }),
+    analyzeSourceFromComposer: () => ({ kind: 'url', url: 'https://arxiv.org/abs/2401.00001' }),
+    analyzeResolveCache: new Map(), analyzeResolveTimer: 0, clearTimeout() {},
+    analyzeSponsoredOnly: () => true, engineRuntimeIssue: () => '', currentModel: () => 'm',
+    selectedAccountRuntime: () => 'api', runtimeDisplayName: () => '', setPill() {},
+    currentRunTuning: () => ({}), runAuthRoute: () => 'api_key',
+    RUN_KIND_BY_ID: new Map(), selectRun() {}, goSession() {}, loadEngines: async () => {}, limitMessage: m => m,
+    GUEST_POLICY: null, applyGuestUi() {},
+  })
+  context.resolveAnalyzeLink = link => new Promise(resolve => setTimeout(() => { context.analyzeResolveCache.set(link, { ok: true }); resolve() }, 20))
+  context.fetch = async url => { posts.push(url); return { ok: true, status: 200, json: async () => ({ run_id: 'r' + posts.length, job_id: 'j' }) } }
+  vm.runInContext('let analyzeLinkLookupPending=false;\n' + fn('startAnalyzeRun'), context)
+  // Ctrl+Enter in the problem box and Enter in the focus field call it while the start button is disabled.
+  await Promise.all([context.startAnalyzeRun(), context.startAnalyzeRun()])
+  assert.deepEqual(posts, ['/api/runs'])
+  await context.startAnalyzeRun()
+  assert.equal(posts.length, 2)
+})
+
+test('an analysis that fails before its first note shows why in the Sandbox', () => {
+  const lines = run(['analysisProgressLines'], ['ANALYZE_CALL_MARKER'], '', 'analysisProgressLines')
+  assert.deepEqual(lines('Ansatz Analyze could not start: the task prompt is too large to pass on the command line'),
+    ['Ansatz Analyze could not start: the task prompt is too large to pass on the command line'])
+  assert.deepEqual(lines('Ansatz Analyze exited with code 1: the source could not be read'),
+    ['Ansatz Analyze exited with code 1: the source could not be read'])
+  // The runner's banner and closing line stay out.
+  assert.deepEqual(lines('Ansatz Analyze · kimi-k3 via sponsored_kimi · up to 12 results\nAnalyze · 1 Ingest · link\nAnsatz Analyze completed · finished'),
+    ['1 Ingest · link'])
 })

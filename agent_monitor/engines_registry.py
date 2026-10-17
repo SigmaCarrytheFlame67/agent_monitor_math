@@ -4,7 +4,7 @@ External harnesses (Codex CLI, OpenClaude, OpenHands) run as
 subprocesses inside the per-run workspace. Command templates can be overridden
 via environment variables so users can adapt to their local install.
 
-Template placeholders: {prompt} {workspace} {problem_file} {model_args}
+Template placeholders: {prompt} {prompt_file} {workspace} {problem_file} {model_args}
 """
 from __future__ import annotations
 
@@ -12,7 +12,9 @@ import importlib.util
 import os
 import shlex
 import shutil
+import subprocess
 import sys
+import threading
 from pathlib import Path
 from typing import Any
 
@@ -175,7 +177,7 @@ CLI_ENGINES: dict[str, dict[str, Any]] = {
         "cmd_env": "KIMI_PROOF_CMD",
         "default_cmd": (
             "{python} -u "
-            "{root}/agent_monitor/runners/kimi_runner.py {prompt}"
+            "{root}/agent_monitor/runners/kimi_runner.py --prompt-file {prompt_file}"
         ),
         "install_hint": "Add a Kimi API key in Settings",
         "ready_detail": "tool-free Kimi K3 CGM pipeline ready",
@@ -195,7 +197,10 @@ CLI_ENGINES: dict[str, dict[str, Any]] = {
         # --json emits JSONL events (incl. per-turn token usage) instead of TTY text.
         # Landlock (workspace-write) denies all writes on this kernel, so run
         # unsandboxed — each run already gets its own workspace directory.
-        "default_cmd": 'codex exec --json --cd {workspace} --sandbox danger-full-access --skip-git-repo-check {model_args} {prompt}',
+        # "-" reads the prompt from stdin (see prompt_on_stdin): one argv
+        # string is limited to 128 KiB, and a prompt argument with a piped
+        # stdin makes Codex log "Reading additional input from stdin...".
+        "default_cmd": 'codex exec --json --cd {workspace} --sandbox danger-full-access --skip-git-repo-check {model_args} -',
         "install_hint": "npm install -g @openai/codex  (or: brew install --cask codex)",
     },
     "claude": {
@@ -208,9 +213,10 @@ CLI_ENGINES: dict[str, dict[str, Any]] = {
         "binary": "claude",
         "binary_candidates": ["~/.local/bin/claude", "~/.npm-global/bin/claude"],
         "cmd_env": "CLAUDE_CMD",
+        # The prompt goes in a file: one argv string is limited to 128 KiB.
         "default_cmd": (
             "{python} -u "
-            "{root}/agent_monitor/runners/claude_runner.py {prompt}"
+            "{root}/agent_monitor/runners/claude_runner.py --prompt-file {prompt_file}"
         ),
         "install_hint": "Install the official Claude Code CLI and link a Claude Pro / Max account",
         "parser_style": "claude",
@@ -294,7 +300,7 @@ CLI_ENGINES: dict[str, dict[str, Any]] = {
         "cmd_env": "DEEPAGENTS_CMD",
         "default_cmd": (
             "{root}/engines/deepagents/.venv/bin/python -u "
-            "{root}/agent_monitor/runners/deepagents_runner.py {prompt}"
+            "{root}/agent_monitor/runners/deepagents_runner.py --prompt-file {prompt_file}"
         ),
         "install_hint": "./setup.sh  (creates engines/deepagents/.venv)",
         "parser_style": "codex",
@@ -310,7 +316,7 @@ CLI_ENGINES: dict[str, dict[str, Any]] = {
         "cmd_env": "PLAIN_CMD",
         "default_cmd": (
             "{python} -u "
-            "{root}/agent_monitor/runners/plain_runner.py {prompt}"
+            "{root}/agent_monitor/runners/plain_runner.py --prompt-file {prompt_file}"
         ),
         "install_hint": "needs OPENAI_API_KEY",
         "parser_style": "codex",
@@ -326,7 +332,7 @@ CLI_ENGINES: dict[str, dict[str, Any]] = {
         "cmd_env": "METAHARNESS_CMD",
         "default_cmd": (
             "{python} -u "
-            "{root}/agent_monitor/runners/metaharness_runner.py {prompt}"
+            "{root}/agent_monitor/runners/metaharness_runner.py --prompt-file {prompt_file}"
         ),
         "install_hint": "./setup.sh  (needs OPENAI_API_KEY)",
         "parser_style": "codex",
@@ -580,6 +586,73 @@ def supported_models(engine_id: str) -> list[str]:
     return list((CLI_ENGINES.get(engine_id) or {}).get("supported_models") or [])
 
 
+# Where ``{prompt_file}`` puts the task prompt.  A dot-file, which the run's
+# file list and export skip (the prompt can carry the agent profile); the
+# wrapper deletes it once read, the console once the wrapper has ended.
+PROMPT_FILENAME = ".agent-monitor-prompt"
+
+
+def _write_prompt_file(workspace: Path, prompt: str) -> Path:
+    """Write the task prompt for a wrapper that reads it from a file.
+
+    One argv string is limited to 128 KiB on Linux, which a long problem in a
+    3-byte script (Chinese, Japanese, Korean) exceeds.  The file is created
+    afresh, never through a link an earlier agent left in the workspace.
+    """
+    path = Path(workspace).absolute() / PROMPT_FILENAME
+    # The workspace is the agent's: it may have left anything under this name.
+    if path.is_dir() and not path.is_symlink():
+        shutil.rmtree(path)
+    else:
+        path.unlink(missing_ok=True)
+    flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0)
+    with os.fdopen(os.open(path, flags, 0o600), "w", encoding="utf-8", newline="") as handle:
+        handle.write(prompt)
+    return path
+
+
+def discard_prompt_file(workspace: Path) -> None:
+    """Remove a prompt file its wrapper never read (it could not start, or was
+    stopped first)."""
+    try:
+        (Path(workspace) / PROMPT_FILENAME).unlink(missing_ok=True)
+    except OSError:
+        pass
+
+
+def prompt_on_stdin(engine_id: str, argv: list[str] | None) -> bool:
+    """True when a Codex command reads its task prompt from stdin (``-``).
+
+    The Kimi Codex wrapper (runners/kimi_codex_runner.py) takes ``-`` too.
+    An operator's ``CODEX_CMD`` may still pass ``{prompt}`` as an argument.
+    """
+    return engine_id == "codex" and bool(argv) and argv[-1] == "-"
+
+
+def send_prompt_on_stdin(proc: subprocess.Popen[str], prompt: str) -> None:
+    """Write the task prompt to ``proc``'s stdin and close it, from a thread.
+
+    The prompt can exceed the pipe buffer, and the caller must meanwhile read
+    the CLI's output and keep its stop and timeout checks running.
+    """
+    stdin = proc.stdin
+    if stdin is None:
+        return
+
+    def write() -> None:
+        try:
+            stdin.write(prompt)
+        except (OSError, ValueError):
+            pass  # The CLI exited early; its exit status says why.
+        finally:
+            try:
+                stdin.close()
+            except (OSError, ValueError):
+                pass
+
+    threading.Thread(target=write, name=f"cli-prompt-{proc.pid}", daemon=True).start()
+
+
 def build_cli_command(
     engine_id: str,
     *,
@@ -588,7 +661,11 @@ def build_cli_command(
     problem_file: Path,
     model: str | None = None,
 ) -> list[str] | None:
-    """Resolve a CLI engine's command as argv list, or None if unavailable."""
+    """Resolve a CLI engine's command as argv list, or None if unavailable.
+
+    ``{prompt_file}`` writes the prompt to a file in ``workspace`` (see
+    ``_write_prompt_file``) and stands for its path.
+    """
     spec = CLI_ENGINES.get(engine_id)
     if not spec:
         return None
@@ -596,6 +673,7 @@ def build_cli_command(
     if not ok or not template:
         return None
     argv: list[str] = []
+    prompt_path: Path | None = None
     for token in shlex.split(template):
         if token == "{model_args}":
             if model:
@@ -607,6 +685,9 @@ def build_cli_command(
         token = token.replace("{workspace}", str(workspace))
         token = token.replace("{ws_name}", workspace.name)
         token = token.replace("{problem_file}", str(problem_file))
+        if "{prompt_file}" in token:
+            prompt_path = prompt_path or _write_prompt_file(workspace, prompt)
+            token = token.replace("{prompt_file}", str(prompt_path))
         if "{prompt}" in token:
             token = token.replace("{prompt}", prompt)
         argv.append(token)

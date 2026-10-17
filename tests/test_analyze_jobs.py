@@ -24,7 +24,8 @@ from agent_monitor.analyze import graph as analysis_graph  # noqa: E402
 from agent_monitor.analyze import request as analysis_request  # noqa: E402
 from agent_monitor.runners import analyze_runner  # noqa: E402
 
-from test_analyze_runner import PAPER, Provider, default_script, own_key_env  # noqa: E402
+from test_analyze_runner import LONG_PAPER, PAPER, Provider, default_script, own_key_env  # noqa: E402
+from test_analyze_runner import guest_long_proof_analysis  # noqa: E402
 
 TOKEN = "short-lived-loopback-token-" + "y" * 20
 SECRET_PROOF = "Distributivity-unique-proof-marker-7731"
@@ -275,6 +276,35 @@ def test_own_key_member_analysis_gets_no_sponsor_credential(gate, monkeypatch, c
     child: dict = {}
     jobs._apply_analyze_runner_env(child, env)
     assert child["AGENT_MONITOR_SPONSORED_KIMI"] == "0"
+
+
+def test_a_member_blank_model_analysis_runs_on_a_model_its_keys_run(gate, monkeypatch, captured_start):
+    """The Projects page sends no model ("Default account model").  A new
+    account's saved default is Kimi K3; with only an OpenAI key (and no
+    sponsored service) the analysis runs on the first OpenAI model, the one
+    the console's Analyze form offers."""
+    from cryptography.fernet import Fernet
+
+    from agent_monitor import auth
+
+    for name in ("AGENT_MONITOR_PUBLIC", "AGENT_MONITOR_SPONSORED_KIMI", "OPENAI_API_KEY", "KIMI_API_KEY"):
+        monkeypatch.delenv(name, raising=False)
+    monkeypatch.setenv("AGENT_MONITOR_DATA_ENCRYPTION_KEY", Fernet.generate_key().decode("ascii"))
+    auth.register("owner@example.test", "long-enough-password")
+    member = auth.register("member@example.test", "long-enough-password")
+    own_key = "sk-member-openai-123456789"
+    auth.set_user_env(int(member["id"]), {"OPENAI_API_KEY": own_key})
+    job = jobs.start_job(engine="analyze", run_kind="analyze", source={"text": PAPER}, user=member)
+    assert (job["model"], job["credential_source"], job["auth_route"]) == ("gpt-6-astra", "user", "api_key")
+    assert captured_start.threads[0]["kwargs"]["extra_env"]["OPENAI_API_KEY"] == own_key
+    req = analysis_request.load(Path(captured_start.records[0]["workspace"]))
+    assert (req["route"], req["sponsored"], req["model"]) == ("api_key", False, "gpt-6-astra")
+    assert gate.usage_today() == 0
+    # With no key left, the refusal names the key the saved default needs.
+    auth.set_user_env(int(member["id"]), {}, clear=["OPENAI_API_KEY"])
+    with pytest.raises(ValueError, match="Kimi K3 requires your own API key"):
+        jobs.start_job(engine="analyze", run_kind="analyze", source={"text": PAPER}, user=member)
+    assert len(captured_start.threads) == 1
 
 
 def test_public_mode_keeps_member_analyses_on_sponsored_kimi(gate, monkeypatch, captured_start):
@@ -555,6 +585,149 @@ def test_recheck_calls_reach_the_usage_ledger(gate, provider, monkeypatch):
     assert booked["recheck"][3] == pytest.approx(0.0025 * calls)
     # Booked once, as a re-check: the analysis's engine usage is unchanged.
     assert booked["engine"][1] == 100 and record["totals"]["input_tokens"] == 100
+
+
+def test_recheck_usage_prices_cache_writes_at_their_own_rate(monkeypatch):
+    priced: list[dict] = []
+    monkeypatch.setattr(jobs, "_estimate_cost", lambda _model, **kwargs: priced.append(kwargs) or 0.01)
+
+    def book(usage: dict, model: str) -> dict:
+        output = json.dumps({"type": "turn.completed", "stage": "check-1", "usage": usage})
+        return jobs._book_recheck_usage("analyze_recheck_cache_1", output, model=model)
+
+    # Claude Code reports cache reads and writes apart from its input.
+    claude = book({"input_tokens": 10, "cache_read_tokens": 1000, "cached_input_tokens": 1000,
+                   "cache_write_tokens": 20000, "output_tokens": 500, "input_excludes_cache": True}, "claude-sonnet-5")
+    # Codex counts cached input inside its input and writes no cache.
+    codex = book({"input_tokens": 5000, "cached_input_tokens": 4000, "output_tokens": 300}, "gpt-6-sol")
+    assert priced == [
+        {"input_tokens": 10, "output_tokens": 500, "cache_read": 1000, "cache_write": 20000},
+        {"input_tokens": 1000, "output_tokens": 300, "cache_read": 4000, "cache_write": 0},
+    ]
+    # The tally keeps the input with its cache, as the run's totals do.
+    assert (claude["input_tokens"], codex["input_tokens"]) == (21010, 5000)
+    assert claude["cost_usd"] == codex["cost_usd"] == 0.01
+
+
+@pytest.mark.parametrize("node_id", ["lem:sum", "lem:rep"])
+def test_the_recheck_watchdog_follows_the_length_of_the_proof(gate, provider, monkeypatch, node_id):
+    server = provider(default_script())
+    for name, value in own_key_env(server).items():
+        if name.startswith(("DEEPSEEK", "NO_PROXY", "no_proxy")):
+            monkeypatch.setenv(name, value)
+    run_id = "analyze_recheck_watchdog_" + node_id.replace(":", "_")
+    workspace = jobs.workspace_dir(run_id)
+    analysis_workspace(workspace, server, text=LONG_PAPER)
+    write_record(run_id, workspace, owner_id=None)
+    launched: list[dict] = []
+    monkeypatch.setattr(jobs, "_execute_recheck", lambda **kwargs: launched.append(kwargs)
+                        or jobs._update_job(kwargs["job_id"], status="finished"))
+    jobs.start_analysis_recheck(run_id, node_id, user=None)
+    meta = next(node["meta"] for node in analysis_graph.load(workspace)["nodes"] if node["id"] == node_id)
+    parts = meta.get("parts", 1)
+    assert (parts > analyze_runner.RECHECK_MAX_CALLS) == (node_id == "lem:rep")
+    # The runner's own time limit for this proof, one in-flight call and publication.
+    seconds = analyze_runner.RECHECK_SECONDS * max(analyze_runner.RECHECK_MAX_CALLS, parts + 2) \
+        // analyze_runner.RECHECK_MAX_CALLS
+    assert launched[0]["timeout"] == seconds + jobs._analyze_api_timeout(False) + jobs._RECHECK_GRACE_SECONDS
+
+
+@pytest.mark.parametrize(("route", "model", "effort", "operator", "expected"), [
+    # As in the analysis: Extra high and Ultra calls on a linked account get 30 minutes.
+    ("codex_subscription", "gpt-6-sol", "max", {}, ("1800", "1800")),
+    ("claude_subscription", "claude-opus-4-8", "xhigh", {}, ("1800", "1800")),
+    ("codex_subscription", "gpt-6-sol", "high", {}, (None, None)),
+    ("api_key", "deepseek-test", "default", {}, (None, None)),
+    # An operator's limit wins, the shared Claude Code one too (the Analyze one would override it).
+    ("claude_subscription", "claude-opus-4-8", "max", {"AGENT_MONITOR_CLAUDE_TIMEOUT": "900"}, ("1800", None)),
+])
+def test_an_extra_high_or_ultra_recheck_keeps_the_long_call_limit(provider, monkeypatch, route, model, effort,
+                                                                    operator, expected):
+    names = ("AGENT_MONITOR_CODEX_TIMEOUT", "AGENT_MONITOR_MATH_HARNESS_CLAUDE_TIMEOUT")
+    for name in (*names, "AGENT_MONITOR_CLAUDE_TIMEOUT"):
+        monkeypatch.delenv(name, raising=False)
+    for name, value in operator.items():
+        monkeypatch.setenv(name, value)
+    server = provider(default_script())
+    run_id = f"analyze_recheck_effort_{route}_{effort}"
+    workspace = jobs.workspace_dir(run_id)
+    analysis_workspace(workspace, server)
+    write_record(run_id, workspace, owner_id=1, auth_route=route, model=model, reasoning_effort=effort,
+                 speed_mode="standard")
+    real_configure = jobs._configure_auth_route
+
+    def linked_account(env, *, route, user_id):
+        # No account is linked here: the route's own flag stands in for one.
+        configured = real_configure(env, route="api_key", user_id=None)
+        flag = {"codex_subscription": "AGENT_MONITOR_CODEX_SUBSCRIPTION",
+                "claude_subscription": "AGENT_MONITOR_CLAUDE_SUBSCRIPTION"}.get(route)
+        if flag:
+            configured[flag] = "1"
+        return configured
+
+    monkeypatch.setattr(jobs, "_configure_auth_route", linked_account)
+    monkeypatch.setattr(jobs, "_validate_subscription_model", lambda **_kwargs: None)
+    monkeypatch.setattr(jobs, "_user_extra_env", lambda user, *models: {"DEEPSEEK_API_KEY": "test-key"})
+    monkeypatch.setattr(analyze_runs, "availability_error", lambda user: None)
+    launched: list[dict] = []
+    monkeypatch.setattr(jobs, "_execute_recheck", lambda **kwargs: launched.append(kwargs)
+                        or jobs._update_job(kwargs["job_id"], status="finished"))
+    jobs.start_analysis_recheck(run_id, "lem:sum", user={"id": 1, "email": "a@example.test", "is_admin": True})
+    env = launched[0]["env"]
+    assert tuple(env.get(name) for name in names) == expected
+    assert env.get("AGENT_MONITOR_CLAUDE_TIMEOUT") == operator.get("AGENT_MONITOR_CLAUDE_TIMEOUT")
+    assert env.get("AGENT_MONITOR_RUN_REASONING_EFFORT") == effort
+    # The re-check's own watchdog is unchanged: every call stays capped at its deadline.
+    assert launched[0]["timeout"] == analyze_runner.RECHECK_SECONDS + jobs._analyze_api_timeout(False) \
+        + jobs._RECHECK_GRACE_SECONDS
+
+
+def test_a_recheck_that_reaches_no_model_gives_its_sponsored_start_back(gate, tmp_path):
+    run_id = "analyze_recheck_refund_1"
+    jobs._write_run({"run_id": run_id, "engine": "analyze", "run_kind": "analyze", "status": "finished"})
+    key = analyze_runs.recheck_key(run_id)
+    gate.reserve(key, run_id=run_id)
+    assert gate.usage_today() == 1
+    env = {"PATH": os.environ.get("PATH", "/usr/bin:/bin"), "AGENT_MONITOR_DATA_DIR": str(tmp_path / "data"),
+           "AGENT_MONITOR_ENV_PATH": str(tmp_path / "server.env")}
+    (tmp_path / "server.env").touch()
+    (tmp_path / "ws").mkdir()
+    # No analysis/request.json: the runner exits 2 (configuration) before any model call.
+    jobs._execute_recheck(run_id=run_id, job_id="rf1", node_id="lem:rep", label="Lemma 2.1",
+                          workspace=tmp_path / "ws", env=env, timeout=120, gate_key=key, on_exit=None,
+                          started_at=jobs._now())
+    recheck = jobs._load_run_record(run_id)["analyze"]["recheck"]
+    assert recheck["status"] == "failed" and "request.json is missing" in recheck["error"]
+    assert not gate.holds(key) and gate.usage_today() == 0
+
+
+def test_a_guest_recheck_of_a_long_proof_gives_its_sponsored_start_back(gate, provider, tmp_path):
+    server = provider(default_script())
+    run_id = "analyze_recheck_guest_long_1"
+    workspace = jobs.workspace_dir(run_id)
+    env = guest_long_proof_analysis(workspace, server)
+    write_record(run_id, workspace, owner_id=41, guest=True, credential_source="sponsored_kimi", model="kimi-k3")
+    guest = {"id": 41, "guest": True}
+    released: list = []
+    # Refused at once, as in the analysis: nothing is reserved or counted.
+    with pytest.raises(analyze_runs.AnalyzeRequestError, match="Too long for a guest check"):
+        jobs.start_analysis_recheck(run_id, "lem:rep", user=guest, on_exit=lambda: released.append(1))
+    assert released == [1] and gate.usage_today() == 0
+    assert jobs.recheck_count(jobs._load_run_record(run_id)) == 0 and not jobs.run_is_active(run_id)
+    # The runner refuses it too, before any call (exit 2): the sponsored start comes back.
+    key = analyze_runs.recheck_key(run_id)
+    gate.reserve(key, run_id=run_id, guest=True)
+    assert (gate.usage_today(), gate.guest_usage_today()) == (1, 1)
+    before = len(server.seen)
+    (tmp_path / "server.env").touch()
+    jobs._execute_recheck(run_id=run_id, job_id="rg1", node_id="lem:rep", label="Lemma 2.1", workspace=workspace,
+                          env={**env, "AGENT_MONITOR_DATA_DIR": str(tmp_path / "data"),
+                               "AGENT_MONITOR_ENV_PATH": str(tmp_path / "server.env")},
+                          timeout=120, gate_key=key, on_exit=None, started_at=jobs._now(), model="kimi-k3")
+    recheck = jobs._load_run_record(run_id)["analyze"]["recheck"]
+    assert recheck["status"] == "failed" and recheck["error"] == analyze_runner.GUEST_TOO_LONG
+    assert len(server.seen) == before
+    assert not gate.holds(key) and (gate.usage_today(), gate.guest_usage_today()) == (0, 0)
 
 
 def test_recheck_refusals(tmp_path, provider):

@@ -2,13 +2,28 @@ from __future__ import annotations
 
 import io
 import json
+import os
 import tempfile
+import threading
+import time
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
 
 from agent_monitor import claude_login, console_server, settings
+
+# Stands in for `claude auth login`: prints the sign-in URL, waits for the
+# code on stdin, then stores a credential the way the real CLI does.
+FAKE_LOGIN_CLI = """#!/bin/sh
+[ "$1 $2" = "auth login" ] || exit 2
+echo "https://claude.ai/oauth/authorize?code=true&state=test"
+echo "Paste code here if prompted > "
+read -r code || exit 1
+[ -n "$code" ] || exit 1
+printf '{"claudeAiOauth":{"refreshToken":"test-refresh","refreshTokenExpiresAt":4102444800000}}' \\
+  > "$CLAUDE_CONFIG_DIR/.credentials.json"
+"""
 
 
 class ClaudeLoginTests(unittest.TestCase):
@@ -170,11 +185,159 @@ class ClaudeLoginTests(unittest.TestCase):
             ):
                 claude_login.mark_reauth_required(home)
                 with claude_login._lock:
-                    claude_login._states[7] = {"status": "running", "running": True}
+                    claude_login._states[7] = {"status": "running", "running": True, "proc": proc}
                 claude_login._reader(proc, home, 7)
             self.assertFalse((home / claude_login._REAUTH_MARKER_NAME).exists())
             with claude_login._lock:
                 self.assertEqual(claude_login._states[7]["status"], "success")
+
+    def test_a_replaced_login_reader_leaves_the_newer_login_alone(self) -> None:
+        # Cancel and Connect again while the old CLI is still being read: the
+        # old reader must not touch the new login or its reauth marker.
+        with tempfile.TemporaryDirectory() as tmp:
+            home = Path(tmp)
+            (home / ".credentials.json").write_text(
+                json.dumps(
+                    {
+                        "claudeAiOauth": {
+                            "refreshToken": "secret",
+                            "refreshTokenExpiresAt": 1_900_000_000_000,
+                        }
+                    }
+                ),
+                encoding="utf-8",
+            )
+            newer = SimpleNamespace(stdin=io.StringIO())
+            replaced = {"status": "running", "running": True, "url": None, "awaiting_code": False, "proc": newer}
+
+            def old_output():
+                yield "https://claude.ai/oauth/authorize?state=first\n"
+                with claude_login._lock:
+                    claude_login._states[7] = dict(replaced)
+                yield "https://claude.ai/oauth/authorize?state=stale\n"
+
+            old = SimpleNamespace(stdout=old_output(), wait=lambda timeout: 0)
+            with (
+                patch.object(
+                    claude_login,
+                    "_auth_status",
+                    return_value={"loggedIn": True, "authMethod": "oauth"},
+                ),
+                patch.object(claude_login.time, "time", return_value=1_800_000_000.0),
+            ):
+                claude_login.mark_reauth_required(home)
+                with claude_login._lock:
+                    claude_login._states[7] = {"status": "running", "running": True, "proc": old}
+                claude_login._reader(old, home, 7)
+            self.assertTrue((home / claude_login._REAUTH_MARKER_NAME).exists())
+            with claude_login._lock:
+                state = claude_login._states[7]
+                self.assertIs(state.get("proc"), newer)
+                self.assertEqual({k: v for k, v in state.items() if k != "proc"},
+                                 {k: v for k, v in replaced.items() if k != "proc"})
+
+    def test_connect_cancel_connect_keeps_the_second_sign_in_usable(self) -> None:
+        user_id = 71
+        with tempfile.TemporaryDirectory() as tmp:
+            fake = Path(tmp) / "claude"
+            fake.write_text(FAKE_LOGIN_CLI, encoding="utf-8")
+            fake.chmod(0o755)
+            checking = threading.Event()
+            release = threading.Event()
+
+            def auth_status(home, *, force=False):
+                # The reader's check after its CLI exits stands for the slow
+                # `claude auth status` run, and holds there until released.
+                if force and not checking.is_set():
+                    checking.set()
+                    release.wait(10)
+                signed_in = (Path(home) / ".credentials.json").is_file()
+                return {"loggedIn": signed_in, "authMethod": "claude.ai" if signed_in else "none"}
+
+            def login_proc():
+                with claude_login._lock:
+                    return claude_login._states[user_id].get("proc")
+
+            def reader_threads():
+                return {t for t in threading.enumerate() if t.name == f"claude-login-{user_id}"}
+
+            procs = []
+            # The readers must finish while the fakes are patched in: the real
+            # lookup would find an installed `claude`.
+            with (
+                patch.dict(os.environ, {"AGENT_MONITOR_CLAUDE_ACCOUNT_HOME": str(Path(tmp) / "homes")}),
+                patch.object(claude_login, "claude_binary", return_value=str(fake)),
+                patch.object(claude_login, "_auth_status", side_effect=auth_status),
+            ):
+                try:
+                    claude_login.start_login(user_id)
+                    procs.append(login_proc())
+                    old_readers = reader_threads()
+                    self.assertEqual(claude_login.cancel_login(user_id)["status"], "cancelled")
+                    self.assertTrue(checking.wait(10))
+                    self.assertEqual(claude_login.start_login(user_id)["status"], "running")
+                    procs.append(login_proc())
+                    new_readers = reader_threads() - old_readers
+                    release.set()
+                    for thread in old_readers:
+                        thread.join(10)
+                    with claude_login._lock:
+                        state = dict(claude_login._states[user_id])
+                    self.assertEqual(state["status"], "running")
+                    self.assertIs(state.get("proc"), procs[1])
+                    self.assertNotIn("error", state)
+                    claude_login.submit_code(user_id, "one-time-code#state")
+                    self.assertEqual(procs[1].wait(10), 0)
+                    for thread in new_readers:
+                        thread.join(10)
+                    final = claude_login.status(user_id)
+                finally:
+                    release.set()
+                    for proc in procs:
+                        if proc is not None and proc.poll() is None:
+                            proc.kill()
+                    for thread in reader_threads():
+                        thread.join(10)
+            self.assertEqual(final["status"], "success")
+            self.assertTrue(final["connected"])
+            self.assertEqual(procs[0].returncode, -15)
+
+    def test_a_probe_started_before_a_newer_one_never_replaces_its_answer(self) -> None:
+        # A poll's `claude auth status` that began before the sign-in saved its
+        # credentials can finish after the login reader's own check: the
+        # reader's newer answer must stay cached, or polls report the finished
+        # sign-in as not connected.
+        probes = []
+        started = threading.Event()
+        release = threading.Event()
+
+        def probe(home):
+            probes.append(home)
+            if len(probes) == 1:
+                started.set()
+                release.wait(10)
+                return {"loggedIn": False, "authMethod": "none", "apiProvider": "firstParty"}
+            return {"loggedIn": True, "authMethod": "claude.ai", "apiProvider": "firstParty"}
+
+        with (
+            tempfile.TemporaryDirectory() as tmp,
+            patch.object(claude_login, "_run_auth_status", side_effect=probe),
+        ):
+            home = Path(tmp)
+            slow: dict = {}
+            poll = threading.Thread(target=lambda: slow.update(claude_login._auth_status(home)))
+            poll.start()
+            try:
+                self.assertTrue(started.wait(10))
+                fresh = claude_login._auth_status(home, force=True)
+            finally:
+                release.set()
+                poll.join(10)
+            cached = claude_login._auth_status(home)
+        self.assertFalse(slow["loggedIn"])
+        self.assertTrue(fresh["loggedIn"])
+        self.assertTrue(cached["loggedIn"])
+        self.assertEqual(len(probes), 2)
 
     def test_expired_refresh_token_is_fail_closed_without_model_probe(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -226,12 +389,140 @@ class ClaudeLoginTests(unittest.TestCase):
             "_augment",
             side_effect=lambda _uid, snapshot: claude_login._public_state(snapshot),
         ):
-            result = claude_login.submit_code(17, "one-time-secret")
-        self.assertEqual(stdin.getvalue(), "one-time-secret\n")
+            result = claude_login.submit_code(17, "one-time-secret#state")
+        self.assertEqual(stdin.getvalue(), "one-time-secret#state\n")
         self.assertNotIn("one-time-secret", json.dumps(result))
         self.assertNotIn("output", result)
         with claude_login._lock:
             self.assertNotIn("one-time-secret", json.dumps(claude_login._states[17], default=str))
+
+
+# What `claude auth login --claudeai` prints before it reads the code.  The
+# prompt ends without a newline, and the link's state is opaque text.
+_LOGIN_PROMPT = """[ "$1 $2" = "auth login" ] || exit 2
+echo "Opening browser to sign in…"
+echo "If the browser didn't open, visit: https://claude.com/cai/oauth/authorize?code=true&state=error-failed"
+printf "Paste code here if prompted > "
+read -r code
+"""
+
+
+class ClaudeLoginFailureReasonTests(unittest.TestCase):
+    USER_ID = 4545
+
+    def _login(self, script: str) -> dict:
+        with tempfile.TemporaryDirectory() as raw:
+            root = Path(raw)
+            claude = root / "claude"
+            claude.write_text("#!/bin/sh\n" + _LOGIN_PROMPT + script, encoding="utf-8")
+            claude.chmod(0o755)
+            self.addCleanup(lambda: claude_login._states.pop(self.USER_ID, None))
+            # The reader must finish while the fake is patched in: the real
+            # lookup would find an installed `claude`.
+            with (
+                patch.dict(os.environ, {"AGENT_MONITOR_CLAUDE_ACCOUNT_HOME": str(root / "homes")}),
+                patch.object(claude_login, "claude_binary", return_value=str(claude)),
+            ):
+                status = claude_login.start_login(self.USER_ID)
+                claude_login.submit_code(self.USER_ID, "wrong-code#state")
+                deadline = time.monotonic() + 10
+                while status["running"] and time.monotonic() < deadline:
+                    time.sleep(0.05)
+                    status = claude_login.status(self.USER_ID)
+        self.assertEqual(status["status"], "error")
+        self.assertFalse(status["connected"])
+        self.assertNotIn("https://", status["error"])
+        self.assertNotIn("wrong-code", status["error"])
+        return status
+
+    def test_a_rejected_code_reports_the_clis_reason(self) -> None:
+        # The CLI writes its error on stderr, which joins the unfinished prompt line.
+        status = self._login('echo "Login failed: Request failed with status code 400" >&2\nexit 1\n')
+        self.assertEqual(
+            status["error"],
+            "claude auth login exited with code 1: Login failed: Request failed with status code 400",
+        )
+
+    def test_a_reason_on_its_own_line_is_reported(self) -> None:
+        status = self._login('printf "\\nOAuth error: Invalid code\\n"\nexit 1\n')
+        self.assertEqual(status["error"], "claude auth login exited with code 1: OAuth error: Invalid code")
+
+    def test_exit_without_a_reason_keeps_the_exit_code_message(self) -> None:
+        status = self._login("exit 3\n")
+        self.assertEqual(status["error"], "claude auth login exited with code 3")
+
+    def test_success_exit_without_a_saved_login_is_explained(self) -> None:
+        status = self._login('echo "Login successful."\nexit 0\n')
+        self.assertEqual(
+            status["error"], "claude auth login finished but no usable Claude sign-in was saved"
+        )
+
+    def test_a_code_without_its_state_is_refused_and_the_sign_in_waits_for_another(self) -> None:
+        # claude 2.1.301 takes a pasted line only as code#state: it answers any
+        # other line on stderr and keeps waiting, without exiting.  This fake
+        # also records each line it reads.
+        script = """
+while true; do
+  echo "$code" >> "$CLAUDE_CONFIG_DIR/received"
+  case "$code" in ?*"#"?*) break ;; esac
+  echo "Invalid code. Please make sure the full code was copied." >&2
+  read -r code || exit 1
+done
+printf '{"claudeAiOauth":{"refreshToken":"test-refresh","refreshTokenExpiresAt":4102444800000}}' \\
+  > "$CLAUDE_CONFIG_DIR/.credentials.json"
+"""
+
+        def auth_status(home, *, force=False):
+            signed_in = (Path(home) / ".credentials.json").is_file()
+            return {"loggedIn": signed_in, "authMethod": "claude.ai" if signed_in else "none"}
+
+        def wait_for(condition) -> dict:
+            deadline = time.monotonic() + 10
+            status = claude_login.status(self.USER_ID)
+            while not condition(status) and time.monotonic() < deadline:
+                time.sleep(0.05)
+                status = claude_login.status(self.USER_ID)
+            return status
+
+        with tempfile.TemporaryDirectory() as raw:
+            root = Path(raw)
+            claude = root / "claude"
+            claude.write_text("#!/bin/sh\n" + _LOGIN_PROMPT + script, encoding="utf-8")
+            claude.chmod(0o755)
+            self.addCleanup(lambda: claude_login._states.pop(self.USER_ID, None))
+            # The reader must finish while the fakes are patched in: the real
+            # lookup would find an installed `claude`.
+            with (
+                patch.dict(os.environ, {"AGENT_MONITOR_CLAUDE_ACCOUNT_HOME": str(root / "homes")}),
+                patch.object(claude_login, "claude_binary", return_value=str(claude)),
+                patch.object(claude_login, "_auth_status", side_effect=auth_status),
+            ):
+                try:
+                    claude_login.start_login(self.USER_ID)
+                    self.assertTrue(wait_for(lambda status: status.get("awaiting_code"))["awaiting_code"])
+                    for partial in ("only-the-code", "only-the-code#", "#only-the-state"):
+                        with self.subTest(code=partial), self.assertRaisesRegex(
+                            ValueError, r"^Invalid code\. Please make sure the full code was copied"
+                        ):
+                            claude_login.submit_code(self.USER_ID, partial)
+                    waiting = claude_login.status(self.USER_ID)
+                    claude_login.submit_code(self.USER_ID, "the-code#the-state")
+                    final = wait_for(lambda status: not status["running"])
+                    received = (claude_login.account_home(self.USER_ID) / "received").read_text()
+                finally:
+                    if claude_login.status(self.USER_ID)["running"]:
+                        claude_login.cancel_login(self.USER_ID)
+                    for thread in threading.enumerate():
+                        if thread.name == f"claude-login-{self.USER_ID}":
+                            thread.join(10)
+        # The card keeps the code step, and the CLI only ever saw the whole code.
+        self.assertEqual(
+            (waiting["status"], waiting["awaiting_code"], waiting["code_submitted"]),
+            ("running", True, False),
+        )
+        self.assertEqual(final["status"], "success")
+        self.assertTrue(final["connected"])
+        self.assertEqual(received, "the-code#the-state\n")
 
 
 class ClaudeAccountRuntimeSettingsTests(unittest.TestCase):
@@ -322,7 +613,7 @@ class ClaudeSettingsRouteTests(unittest.TestCase):
         handler.headers = {"Content-Length": str(len(body))}
         handler.rfile = io.BytesIO(body)
         handler._resolve_path = lambda: "/api/settings/claude/login/code"
-        handler._require_user = lambda _path: {"id": 42, "is_admin": False}
+        handler._require_user = lambda _path: {"id": 42, "is_admin": True}
         sent: list[tuple[int, dict]] = []
         handler._send = lambda code, payload, *args, **kwargs: sent.append((code, json.loads(payload)))
         with patch.object(claude_login, "submit_code", return_value={"status": "running"}) as submit:

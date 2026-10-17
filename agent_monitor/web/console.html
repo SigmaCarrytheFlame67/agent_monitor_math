@@ -321,6 +321,19 @@ button.start:disabled { opacity: .4; }
 .sess-btn.show { display: inline-flex; }
 .sess-btn.stop:hover { border-color: var(--err); color: var(--err); }
 .sess-btn.cont:hover { border-color: var(--ok); color: var(--ok); }
+/* A run this account may only read (another project member's): the server
+   refuses every change to it, so none is offered. */
+html.read-only-run #sess-stop, html.read-only-run #sess-cont,
+html.read-only-run #proof-edit-btn, html.read-only-run #proof-save-btn, html.read-only-run #proof-done-btn,
+html.read-only-run .chat-compose, html.read-only-run #sel-pop, html.read-only-run .lean-chat-compose,
+html.read-only-run #lean-model-label, html.read-only-run #lean-model, html.read-only-run #lean-compile, html.read-only-run #lean-check,
+html.read-only-run #lean-audit, html.read-only-run #lean-engine, html.read-only-run #lean-harness, html.read-only-run #lean-gen,
+html.read-only-run .run-change { display: none !important; }
+.run-access-note { display: none; align-items: center; gap: 10px; padding: 7px 20px; border-bottom: 1px solid var(--border); flex-shrink: 0;
+  background: color-mix(in srgb, var(--accent) 5%, var(--panel)); color: var(--muted); font-size: 12px; line-height: 1.45; }
+html.read-only-run .run-access-note { display: flex; }
+.run-access-note .badge { flex: none; padding: 2px 8px; border: 1px solid color-mix(in srgb, var(--accent) 35%, var(--border));
+  border-radius: 999px; color: var(--accent); font-weight: 600; font-size: 11px; }
 
 .session-body { flex: 1; min-height: 0; overflow: hidden; display: flex; flex-direction: column; }
 
@@ -354,8 +367,8 @@ button.start:disabled { opacity: .4; }
 .pipeline-chip.error::before, .pipeline-chip.skipped::before { background: var(--err); }
 .pipeline-chip.stale::before { background: #a855f7; }
 .pipeline-chip .chip-state { overflow: hidden; text-overflow: ellipsis; }
-.pipeline-chip.off { opacity: .75; }
-.pipeline-chip.off::before { background: transparent; box-shadow: inset 0 0 0 1px var(--dim); }
+.pipeline-chip.off, .pipeline-chip.stopped { opacity: .75; }
+.pipeline-chip.off::before, .pipeline-chip.stopped::before { background: transparent; box-shadow: inset 0 0 0 1px var(--dim); }
 .proof-body { flex: 1; min-height: 0; position: relative; overflow-y: auto; overflow-anchor: none; scrollbar-gutter: stable; background: color-mix(in srgb, var(--bg2) 30%, var(--bg)); }
 .notion-editor-wrap { min-height: 100%; padding: 32px 8% 80px; background: var(--bg); }
 .notion-editor {
@@ -450,6 +463,9 @@ button.start:disabled { opacity: .4; }
 .chat-status.err .cdot { background: var(--err); animation: none; }
 .chat-status.interrupted .cdot { background: #f59e0b; animation: none; }
 .chat-status .detail { font-weight: 400; color: var(--dim); font-family: var(--mono); font-size: 10px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* A failed run's reason is the line to read: it wraps instead of being cut off. */
+.chat-status.err { align-items: baseline; }
+.chat-status.err .detail { white-space: normal; overflow-wrap: anywhere; }
 /* live telemetry: which model is answering and which tools it is touching */
 .chat-live { display: none; flex-wrap: wrap; gap: 5px; margin-top: 7px; }
 .chat-live.on { display: flex; }
@@ -1435,6 +1451,7 @@ button:focus-visible, a:focus-visible, select:focus-visible { outline: 2px solid
   .seg-control { max-width: 100%; overflow-x: auto; flex-shrink: 0; }
   .seg-control button { white-space: nowrap; padding: 8px 11px; font-size: 12px; }
   .session-top { padding: 10px 12px; }
+  .run-access-note { padding: 6px 12px; font-size: 11px; }
   .session-side { max-width: 100%; }
   .session-meta { max-width: 140px; }
   .sandbox-split { display: flex; flex-direction: column; overflow-y: auto; }
@@ -1728,6 +1745,25 @@ body { background:var(--bg); }
 .md-view .analysis-doc a { color: var(--accent); overflow-wrap: anywhere; }
 .analysis-live-note { color: var(--muted); font-size: 12px; margin: 0 0 8px; }
 .analysis-live { white-space: pre-wrap; overflow-wrap: anywhere; font: 12px/1.6 var(--mono); color: var(--muted); background: var(--panel2); border: 1px solid var(--border); border-radius: 10px; padding: 12px; margin: 0; }
+/* Live progress: stages, then each result as its verdict settles. */
+.analysis-progress { list-style: none; margin: 0; padding: 12px 14px; display: flex; flex-direction: column; gap: 5px; background: var(--panel2); border: 1px solid var(--border); border-radius: 10px; font-size: 12.5px; line-height: 1.55; color: var(--fg); }
+.analysis-progress li { display: flex; flex-wrap: wrap; align-items: baseline; gap: 2px 8px; min-width: 0; overflow-wrap: anywhere; }
+.analysis-progress .ap-stage { margin-top: 8px; color: var(--muted); font-size: 12px; }
+.analysis-progress .ap-stage:first-child { margin-top: 0; }
+.analysis-progress .ap-stage b { color: var(--fg); font-weight: 650; }
+.analysis-progress .ap-line, .analysis-progress .ap-result, .analysis-progress .ap-now, .analysis-progress .ap-error { padding-left: 14px; }
+.analysis-progress .ap-line { color: var(--muted); }
+.analysis-progress .ap-result .vd { --vc: var(--verdict-none); flex: none; min-width: 76px; text-align: center; font: 700 10px/1.7 var(--mono); padding: 0 7px; border-radius: 999px; color: var(--vc); border: 1px solid color-mix(in srgb, var(--vc) 50%, var(--border)); background: color-mix(in srgb, var(--vc) 11%, var(--panel)); }
+.analysis-progress .v-checked .vd { --vc: var(--verdict-checked); }
+.analysis-progress .v-gap .vd { --vc: var(--verdict-gap); }
+.analysis-progress .v-error .vd { --vc: var(--verdict-error); }
+.analysis-progress .v-unclear .vd { --vc: var(--verdict-unclear); }
+.analysis-progress .v-not_checked .vd { border-style: dashed; background: transparent; }
+.analysis-progress .ap-result .lbl { font-weight: 600; }
+.analysis-progress .ap-result .issue { flex-basis: 100%; padding-left: 84px; color: var(--muted); font-size: 12px; }
+.analysis-progress .ap-now { color: var(--accent); }
+.analysis-progress .ap-error { color: var(--err); font-weight: 600; }
+.analysis-live-foot { margin: 8px 0 0; color: var(--dim); font-size: 11px; }
 .analysis-lines { margin: 0; padding: 10px 0; background: var(--panel2); border: 1px solid var(--border); border-radius: 10px; font: 12px/1.6 var(--mono); color: var(--fg); overflow-x: auto; white-space: pre; }
 .analysis-lines .ln-row { display: block; padding-right: 12px; }
 .analysis-lines .ln { display: inline-block; min-width: 3.4em; padding: 0 10px 0 8px; margin-right: 8px; text-align: right; color: var(--dim); border-right: 1px solid var(--border); user-select: none; }
@@ -1789,9 +1825,11 @@ body { background:var(--bg); }
   .analyze-chip .body { width: 100%; }
   .dag-filters { padding: 6px 12px; }
   .dag-filters .count { margin-left: 0; flex-basis: 100%; }
+  .analysis-progress .ap-result .issue { padding-left: 0; }
 }
 @media (forced-colors: active) {
   .dag-node.analysis { border-left-color: CanvasText; }
+  .analysis-progress .ap-result .vd { border-color: CanvasText; }
   .dag-filters button[aria-pressed="true"] { border-color: Highlight; }
   /* Stage states without colour: dashed waiting, Highlight running, solid done,
      double and struck through when it stopped or failed. */
@@ -1918,6 +1956,7 @@ body { background:var(--bg); }
           <span class="session-meta" id="run-meta">—</span>
         </div>
       </div>
+      <div class="run-access-note" role="note"><span class="badge">Read only</span><span>You can follow this run; only the member who started it can change it.</span></div>
       <div class="session-body">
         <div id="view-sandbox">
           <div class="sandbox-split">
@@ -2042,7 +2081,7 @@ body { background:var(--bg); }
             <span class="lean-badge none" id="lean-badge">—</span>
             <span class="sub" id="lean-meta">—</span>
             <span style="flex:1"></span>
-            <span style="font-size:11px;color:var(--dim)">Model</span>
+            <span id="lean-model-label" style="font-size:11px;color:var(--dim)">Model</span>
             <select id="lean-model"></select>
             <button class="btn-secondary" id="lean-compile" title="Compile the current Proof.lean (no LLM)">Compile</button>
             <button class="btn-secondary" id="lean-check" title="Typecheck and flag remaining sorry/admit">Check</button>
@@ -2401,14 +2440,18 @@ function renderRunTuning(){
   $('run-thinking-ticks').innerHTML=reasoning.map(()=>'<i></i>').join('');
   $('run-thinking-min-label').textContent=reasoning[0]?.label||'Default';
   $('run-thinking-max-label').textContent=reasoning.length>1?reasoning.at(-1).label:'';
+  // Lean and DAG work of a Codex-subscription run is capped at High (cgm_max.formal_view).
+  const derivedAtHigh=runAuthRoute()==='codex_subscription'&&['xhigh','max'].includes(reasoningItem.id);
   $('run-profile-note').textContent=caps.max_mode
-    ?'Max runs Claude Code and Codex at maximum effort.'
+    ?'Max runs Claude Code and Codex at maximum effort. Formal Lean and Lean DAG run on Codex at High.'
     :caps.unsupported_engine
     ?'This engine uses its default thinking and speed settings.'
     :reasoning.length<=1&&speeds.length<=1
       ?'This model uses its default thinking and speed settings.'
     :speeds.length<=1
       ?'Thinking applies to new runs. Speed is fixed for this model.'
+    :derivedAtHigh
+      ?'Saved for this model. Applies to new runs; existing runs and continuations keep the profile they started with. Formal Lean and Lean DAG run at High, the most their Codex calls allow.'
       :'Saved for this model. Applies to new runs; existing runs, Formal Lean, Lean DAG, and continuations keep the profile they started with.';
   animateRunTuningFeedback();
 }
@@ -2428,7 +2471,8 @@ function modelVisual(id){
   if(s.includes('claude')||['sonnet','opus','fable'].includes(s))return {tone:'25 92% 57%',mark:'CL',glyph:'🟧',provider:'Anthropic'};
   if(s.includes('gemini'))return {tone:'145 68% 44%',mark:'GM',glyph:'🟩',provider:'Google'};
   if(s.includes('grok'))return {tone:'282 76% 61%',mark:'GX',glyph:'🟪',provider:'xAI'};
-  if(s.includes('gpt')||s.includes('codex'))return {tone:'218 88% 59%',mark:'CX',glyph:'🔵',provider:'OpenAI · Codex-ready'};
+  // Codex itself runs for the operator alone.
+  if(s.includes('gpt')||s.includes('codex'))return {tone:'218 88% 59%',mark:'CX',glyph:'🔵',provider:viewerIsAdmin()?'OpenAI · Codex-ready':'OpenAI'};
   return {tone:'265 76% 62%',mark:'AI',glyph:'🎨',provider:'Custom provider'};
 }
 function positionControlPanel(panel,trigger){
@@ -2721,7 +2765,7 @@ function runtimeUiSpec(runtime){
   // A member cannot sign in with a subscription, so it cannot select one.
   const adminOnly=runtime!=='api'&&SETTINGS?.subscription_policy?.[runtime]==='admin_only';
   if(runtime==='claude')return {mark:'CL',tone:'#d97757',title:'Claude subscription',description:'Linked Claude Code account',ready:!adminOnly&&!!SETTINGS?.claude_connected,adminOnly,state:adminOnly?'Site administrator only':SETTINGS?.claude_connected?'Connected':(SETTINGS?.claude_reauth_required?'Reauthorization required':'Connect below')};
-  if(runtime==='codex')return {mark:'CX',tone:'#10b981',title:'Codex subscription',description:'Linked ChatGPT account',ready:!adminOnly&&!!SETTINGS?.codex_connected,adminOnly,state:adminOnly?'Site administrator only':SETTINGS?.codex_connected?'Connected':'Connect below'};
+  if(runtime==='codex')return {mark:'CX',tone:'#10b981',title:'Codex subscription',description:'Linked ChatGPT account',ready:!adminOnly&&!!SETTINGS?.codex_connected,adminOnly,state:adminOnly?'Site administrator only':SETTINGS?.codex_connected?'Connected':(SETTINGS?.codex_reauth_required?'Reauthorization required':'Connect below')};
   const sponsored=!!SETTINGS?.sponsored_kimi_available;
   return {mark:'K3',tone:'#eab308',title:'Kimi + API providers',description:sponsored?'Kimi K3 included · own keys optional':'Metered provider credentials',ready:sponsored||configured>0,state:configured?`${configured} own key${configured===1?'':'s'}`:(sponsored?'Kimi K3 included':'Add a key below')};
 }
@@ -2748,7 +2792,9 @@ function syncRuntimeModelControls(forceDefault=false){
   const runtime=selectedAccountRuntime(), models=runtimeModelOptions(runtime);
   const lean=$('lean-model'), previousLean=lean?.value||'';
   if(CURRENT_USER?.guest)fillLeanModels([]);
-  else if(lean){
+  // A selected run's Lean models are its own route's (refreshLeanView); a
+  // Settings refresh must not swap in the account runtime's.
+  else if(lean&&!runId){
     lean.innerHTML=models.map(model=>`<option value="${LIB_ESC(model)}">${LIB_ESC(model)}</option>`).join('')||`<option value="">${LIB_ESC(runtimeDisplayName(runtime))} needs setup</option>`;
     const strong=models.find(model=>/gpt-6|fable|sol|opus|sonnet|pro|terra|luna|5\.5|5\.6|haiku/i.test(model))||models[0]||'';
     lean.value=models.includes(previousLean)?previousLean:strong;
@@ -2781,7 +2827,8 @@ function renderSettingsModal(){
   const providerCatalog=isGuest?(SETTINGS.providers||[]).filter(p=>['kimi','openai'].includes(p.id)):(SETTINGS.providers||[]);
   const providers=providerCatalog.map(p=>{
     const v=providerVisual(p.id), sponsored=p.id==='kimi'&&(p.sponsored_available||GUEST_POLICY?.hosted_guest_available), ownKey=p.api_key_set&&!(isGuest&&sponsored&&!p.api_key_masked), state=ownKey?'own key configured':(sponsored?'included':'not configured');
-    const baseField=!isGuest&&p.base_var?`<label class="settings-field"><span class="settings-field-label">Base URL <em>OpenAI-compatible endpoint</em></span><div class="settings-input-wrap"><input data-key="${LIB_ESC(p.base_var)}" value="${LIB_ESC(p.base_url||'')}" spellcheck="false"/></div></label>`:'';
+    // Only the operator chooses endpoints: other accounts' runs use the provider's.
+    const baseField=viewerIsAdmin()&&p.base_var?`<label class="settings-field"><span class="settings-field-label">Base URL <em>OpenAI-compatible endpoint</em></span><div class="settings-input-wrap"><input data-key="${LIB_ESC(p.base_var)}" value="${LIB_ESC(p.base_url||'')}" spellcheck="false"/></div></label>`:'';
     const optionFields=isGuest?'':(p.settings||[]).map(opt=>{ const choices=(opt.choices||[]).map(choice=>`<option value="${LIB_ESC(choice)}" ${String(choice)===String(opt.value)?'selected':''}>${LIB_ESC(choice)}</option>`).join(''); return `<label class="settings-field"><span class="settings-field-label">${LIB_ESC(opt.label||opt.var)} <em>${LIB_ESC(opt.var)}</em></span><div class="settings-input-wrap">${opt.type==='select'?`<select data-key="${LIB_ESC(opt.var)}">${choices}</select>`:`<input data-key="${LIB_ESC(opt.var)}" value="${LIB_ESC(opt.value||'')}"/>`}</div></label>`; }).join('');
     const compatibility=!isGuest&&p.compatibility_note?`<div class="provider-compatibility">Compatibility: ${LIB_ESC(p.compatibility_note)}</div>`:'';
     const advanced=(baseField||optionFields||compatibility)?`<details class="provider-advanced" ${p.id==='kimi'?'open':''}><summary>Advanced endpoint &amp; compatibility</summary>${baseField}${optionFields}${compatibility}</details>`:'';
@@ -2940,8 +2987,8 @@ async function chooseAccountRuntime(value){
 
 
 /* ── ChatGPT/Codex subscription shared by supported harnesses ── */
-let CODEX_POLL_TIMER=null, LAST_CODEX_STATUS={status:'loading',running:false,connected:false,codex_installed:true};
-function stopCodexPoll(){ if(CODEX_POLL_TIMER){clearInterval(CODEX_POLL_TIMER);CODEX_POLL_TIMER=null;} }
+let CODEX_POLL={timer:null,loop:null}, LAST_CODEX_STATUS={status:'loading',running:false,connected:false,codex_installed:true};
+function stopCodexPoll(){ stopSignInPoll(CODEX_POLL); }
 function safeExternalAuthUrl(raw){
   try{
     const url=new URL(String(raw||''));
@@ -2954,6 +3001,32 @@ function safeExternalAuthUrl(raw){
 // instead of rendering the missing install flag as "CLI not installed".
 function failedLoginStatus(last,body,fallback){
   return {...last,status:'error',running:false,error:String(body?.error||fallback)};
+}
+/* A sign-in poll sends its next request only after the last reply is applied,
+   so a slow reply (a `claude auth status` probe can take seconds) never lands
+   after a newer one, and a stopped poll (Cancel, Settings closed, a restart)
+   drops a reply still on its way. A reply that never comes (a network or proxy
+   error) is retried with backoff before the card says contact was lost. */
+const SIGN_IN_POLL_MS=1500, SIGN_IN_POLL_TRIES=3;
+function stopSignInPoll(poll){ poll.loop=null; if(poll.timer){clearTimeout(poll.timer);poll.timer=null;} }
+function startSignInPoll(poll,url,product,last,apply){
+  stopSignInPoll(poll);
+  let misses=0;
+  const loop=async()=>{
+    poll.timer=null;
+    let st=null;
+    try{ const response=await fetch(url), body=await response.json(); st=response.ok?body:failedLoginStatus(last(),body,product+' sign-in status is unavailable'); }catch(error){}
+    if(poll.loop!==loop)return;  // stopped or restarted while this request was out
+    if(!st){
+      if(++misses<SIGN_IN_POLL_TRIES){ poll.timer=setTimeout(loop,SIGN_IN_POLL_MS*2**misses); return; }
+      st=failedLoginStatus(last(),null,'Lost contact with the '+product+' sign-in. Reopen Settings to see whether it finished.');
+    }
+    misses=0;
+    await apply(st);
+    if(poll.loop===loop&&st.status==='running')poll.timer=setTimeout(loop,SIGN_IN_POLL_MS);
+  };
+  poll.loop=loop;
+  poll.timer=setTimeout(loop,SIGN_IN_POLL_MS);
 }
 /* Self-registered members cannot sign in with a Claude or ChatGPT plan here
    (settings subscription_policy is "admin_only"): the providers do not let a
@@ -3006,6 +3079,12 @@ function codexCardBody(st){
       :`<div class="connection-summary connected">✓ Connected, not in use. Select Codex subscription above to use it for new runs.</div>`)+
       `<button id="codex-logout-btn" style="margin-top:8px">Disconnect</button>`;
   }
+  if(st.reauth_required){
+    return (st.error?`<div class="verify-err">✗ ${LIB_ESC(st.error)}</div>`:'')+
+      `<div class="verify-err"${st.error?' style="margin-top:6px"':''}>✗ ChatGPT authorization needs renewal. Codex rejected the saved sign-in (it expired or was revoked), so new Codex subscription runs are blocked.</div>`+
+      `<div class="connection-summary" style="margin-top:6px">Your saved API keys remain separate and will not be used as a fallback.</div>`+
+      `<button id="codex-connect-btn" style="margin-top:8px">Reconnect via ChatGPT</button>`;
+  }
   return (st.error?`<div class="verify-err">✗ ${LIB_ESC(st.error)}</div>`:'')+
     `<div class="connection-summary" style="margin-top:${st.error?'6px':'0'}">Not connected. Connect ChatGPT once to make the Codex subscription available in the new-run selector.</div>`+
     `<button id="codex-connect-btn" style="margin-top:8px">Connect via ChatGPT</button>`;
@@ -3014,7 +3093,7 @@ function renderCodexCard(st){
   const el=$('codex-card'); if(!el)return;
   st=st||LAST_CODEX_STATUS; LAST_CODEX_STATUS=st;
   const adminOnly=SETTINGS?.subscription_policy?.codex==='admin_only';
-  const badge=adminOnly?'administrator only':st.status==='running'?'connecting':(st.connected?'connected':'not connected');
+  const badge=adminOnly?'administrator only':st.status==='running'?'connecting':(st.connected?'connected':(st.reauth_required?'reauth required':'not connected'));
   el.innerHTML=`<div class="provider-card-head"><div class="provider-logo">CX</div><div class="provider-title"><b>ChatGPT / Codex</b><small>${adminOnly?'Subscription sign-in · site administrator only':'Private subscription login for compatible harnesses'}</small></div><span class="provider-state ${st.connected&&!adminOnly?'configured':''}"><i></i>${badge}</span></div><div class="provider-card-body">${codexCardBody(st)}</div>`;
   const key=$('codex-api-key-btn'); if(key)key.onclick=()=>focusApiProvider(key.dataset.apiProvider);
   const stored=$('codex-remove-stored-btn'); if(stored)stored.onclick=()=>removeStoredSignIn('codex');
@@ -3024,15 +3103,22 @@ function renderCodexCard(st){
   const cp=$('codex-copy-btn'); if(cp)cp.onclick=()=>{ navigator.clipboard?.writeText(cp.dataset.code||''); cp.textContent='Copied!'; setTimeout(()=>{cp.textContent='Copy';},1500); };
 }
 async function applyCodexStatus(st){
+  // A sign-in reads as connected while the server still fetches the account's
+  // model catalog (the list until then is the bundled one); it ends with success.
+  const finished=LAST_CODEX_STATUS?.status==='running'&&st.status==='success';
   LAST_CODEX_STATUS=st;
   const wasConnected=!!SETTINGS?.codex_connected;
   if(SETTINGS){
     SETTINGS.codex_connected=!!st.connected;
+    SETTINGS.codex_reauth_required=!!st.reauth_required;
     if(Array.isArray(st.models)&&st.connected){ SETTINGS.codex_models=[...st.models]; SETTINGS.models_by_runtime={...(SETTINGS.models_by_runtime||{}),codex:[...st.models]}; }
+    else if(!st.connected){ SETTINGS.codex_models=[]; SETTINGS.models_by_runtime={...(SETTINGS.models_by_runtime||{}),codex:[]}; }
     if(selectedAccountRuntime()==='codex')SETTINGS.runtime_ready=!!st.connected;
   }
   renderCodexCard(st);
-  const needsModels=!!st.connected&&!!SETTINGS&&(!wasConnected||!(SETTINGS.codex_models||[]).length);
+  // Linking or unlinking an account also changes what /api/settings derives
+  // from the linked accounts (Max, each runtime's thinking controls).
+  const needsModels=!!SETTINGS&&(wasConnected!==!!st.connected||!!st.connected&&(finished||!(SETTINGS.codex_models||[]).length));
   if(needsModels)await loadSettings({keepEngine:true});
   else if(SETTINGS){ renderRuntimeSelector(); syncRuntimeModelControls(); renderEngines(); }
 }
@@ -3041,19 +3127,12 @@ async function refreshCodexCard(){
   if(SETTINGS?.subscription_policy?.codex==='admin_only'){renderCodexCard();return;}
   try{ const response=await fetch('/api/settings/codex/status'); if(!response.ok)return; const st=await response.json(); await applyCodexStatus(st); if(st.status==='running')startCodexPoll(); }catch(e){}
 }
-function startCodexPoll(){
-  stopCodexPoll();
-  CODEX_POLL_TIMER=setInterval(async()=>{
-    try{
-      const response=await fetch('/api/settings/codex/login/poll'), body=await response.json();
-      const st=response.ok?body:failedLoginStatus(LAST_CODEX_STATUS,body,'Codex sign-in status is unavailable');
-      await applyCodexStatus(st);
-      if(st.status!=='running')stopCodexPoll();
-    }catch(e){ stopCodexPoll(); }
-  },1500);
-}
-let CLAUDE_POLL_TIMER=null, LAST_CLAUDE_STATUS={status:'loading',running:false,connected:false,reauth_required:false,claude_installed:true,models:[]};
-function stopClaudePoll(){ if(CLAUDE_POLL_TIMER){clearInterval(CLAUDE_POLL_TIMER);CLAUDE_POLL_TIMER=null;} }
+function startCodexPoll(){ startSignInPoll(CODEX_POLL,'/api/settings/codex/login/poll','Codex',()=>LAST_CODEX_STATUS,applyCodexStatus); }
+let CLAUDE_POLL={timer:null,loop:null}, LAST_CLAUDE_STATUS={status:'loading',running:false,connected:false,reauth_required:false,claude_installed:true,models:[]};
+// Why the last authorization code was not taken. The server's status has no
+// such field, so the card keeps it with the code step until the sign-in moves on.
+let CLAUDE_CODE_ERROR='';
+function stopClaudePoll(){ stopSignInPoll(CLAUDE_POLL); }
 function claudeCardBody(st){
   if(SETTINGS?.subscription_policy?.claude==='admin_only')return subscriptionPolicyBody('claude');
   if(!st.claude_installed)return `<div style="font-size:12px;color:var(--dim)">Claude Code CLI is not installed on the server. Install the official CLI before connecting an account.</div>`;
@@ -3061,7 +3140,8 @@ function claudeCardBody(st){
     const authUrl=safeExternalAuthUrl(st.url);
     st={...st,url:authUrl||''};
     const link=st.url?`<div class="codex-url-box"><a href="${LIB_ESC(st.url)}" target="_blank" rel="noopener noreferrer">${LIB_ESC(st.url)}</a></div>`:`<div style="font-size:12px;color:var(--dim);margin:6px 0">Preparing a secure Claude sign-in link…</div>`;
-    const codeStep=st.code_submitted?`<div class="verify-ok" style="margin-top:10px">✓ One-time code sent. Finishing the account connection…</div>`:`<div class="claude-code-row"><label class="settings-field"><span class="settings-field-label">Authorization code <em>One-time only</em></span><div class="settings-input-wrap"><span class="input-glyph">CODE</span><input id="claude-login-code" type="password" autocomplete="off" spellcheck="false" maxlength="4096" placeholder="Paste the code from Claude" aria-label="Claude one-time authorization code"/></div></label><button id="claude-code-submit" class="provider-verify" ${st.awaiting_code?'':'disabled'}>Submit code</button></div>`;
+    const codeError=CLAUDE_CODE_ERROR||st.error;
+    const codeStep=st.code_submitted?`<div class="verify-ok" style="margin-top:10px">✓ One-time code sent. Finishing the account connection…</div>`:`${codeError?`<div class="verify-err" style="margin-top:10px">✗ ${LIB_ESC(codeError)}</div>`:''}<div class="claude-code-row"><label class="settings-field"><span class="settings-field-label">Authorization code <em>One-time only</em></span><div class="settings-input-wrap"><span class="input-glyph">CODE</span><input id="claude-login-code" type="password" autocomplete="off" spellcheck="false" maxlength="4096" placeholder="Paste the code from Claude" aria-label="Claude one-time authorization code"/></div></label><button id="claude-code-submit" class="provider-verify" ${st.awaiting_code?'':'disabled'}>Submit code</button></div>`;
     return `<div style="font-size:12px;color:var(--dim)">1. Open this official Claude link and approve access:</div>${link}<div style="font-size:12px;color:var(--dim);margin-top:10px">2. Paste the one-time authorization code below. It is sent directly to the waiting Claude CLI and is never saved.</div>${codeStep}<button id="claude-cancel-btn" style="margin-top:10px">Cancel</button>`;
   }
   if(st.connected){
@@ -3070,7 +3150,7 @@ function claudeCardBody(st){
       :`<div class="connection-summary connected">✓ Connected, not in use. Select Claude subscription above to use it for new runs.</div>`)+`<button id="claude-logout-btn" style="margin-top:8px">Disconnect</button>`;
   }
   if(st.reauth_required){
-    return `<div class="verify-err">✗ Claude authorization needs renewal. The saved session could not be refreshed, so new subscription runs are blocked.</div><div class="connection-summary" style="margin-top:6px">Your saved API keys remain separate and will not be used as a fallback.</div><button id="claude-connect-btn" style="margin-top:8px">Reconnect via Claude</button>`;
+    return (st.error?`<div class="verify-err">✗ ${LIB_ESC(st.error)}</div>`:'')+`<div class="verify-err"${st.error?' style="margin-top:6px"':''}>✗ Claude authorization needs renewal. The saved session could not be refreshed, so new subscription runs are blocked.</div><div class="connection-summary" style="margin-top:6px">Your saved API keys remain separate and will not be used as a fallback.</div><button id="claude-connect-btn" style="margin-top:8px">Reconnect via Claude</button>`;
   }
   return (st.error?`<div class="verify-err">✗ ${LIB_ESC(st.error)}</div>`:'')+`<div class="connection-summary" style="margin-top:${st.error?'6px':'0'}">Connect your Claude account to make the official Claude Code subscription available in the new-run selector. API keys remain a separate route.</div><button id="claude-connect-btn" style="margin-top:8px">Connect via Claude</button>`;
 }
@@ -3083,39 +3163,33 @@ function renderClaudeCard(st){
   el.innerHTML=`<div class="provider-card-head"><div class="provider-logo">CL</div><div class="provider-title"><b>Claude Code</b><small>${adminOnly?'Subscription sign-in · site administrator only':`Private Anthropic subscription login${subscription}`}</small></div><span class="provider-state ${st.connected&&!adminOnly?'configured':''}"><i></i>${badge}</span></div><div class="provider-card-body">${claudeCardBody(st)}</div>`;
   const key=$('claude-api-key-btn'); if(key)key.onclick=()=>focusApiProvider(key.dataset.apiProvider);
   const stored=$('claude-remove-stored-btn'); if(stored)stored.onclick=()=>removeStoredSignIn('claude');
-  const connect=$('claude-connect-btn'); if(connect)connect.onclick=async()=>{ try{ const response=await fetch('/api/settings/claude/login/start',{method:'POST'}); const next=await response.json(); await applyClaudeStatus(response.ok?next:failedLoginStatus(LAST_CLAUDE_STATUS,next,'Could not start Claude sign-in')); if(response.ok&&next.status==='running')startClaudePoll(); }catch(error){ await applyClaudeStatus(failedLoginStatus(LAST_CLAUDE_STATUS,null,'Could not reach the Claude login service')); } };
-  const cancel=$('claude-cancel-btn'); if(cancel)cancel.onclick=async()=>{ const input=$('claude-login-code'); if(input)input.value=''; stopClaudePoll(); await fetch('/api/settings/claude/login/cancel',{method:'POST'}); refreshClaudeCard(); };
+  const connect=$('claude-connect-btn'); if(connect)connect.onclick=async()=>{ CLAUDE_CODE_ERROR=''; try{ const response=await fetch('/api/settings/claude/login/start',{method:'POST'}); const next=await response.json(); await applyClaudeStatus(response.ok?next:failedLoginStatus(LAST_CLAUDE_STATUS,next,'Could not start Claude sign-in')); if(response.ok&&next.status==='running')startClaudePoll(); }catch(error){ await applyClaudeStatus(failedLoginStatus(LAST_CLAUDE_STATUS,null,'Could not reach the Claude login service')); } };
+  const cancel=$('claude-cancel-btn'); if(cancel)cancel.onclick=async()=>{ const input=$('claude-login-code'); if(input)input.value=''; CLAUDE_CODE_ERROR=''; stopClaudePoll(); await fetch('/api/settings/claude/login/cancel',{method:'POST'}); refreshClaudeCard(); };
   const logout=$('claude-logout-btn'); if(logout)logout.onclick=async()=>{ if(!confirm('Disconnect your Claude account? This does not change or expose your Anthropic credentials.'))return; const response=await fetch('/api/settings/claude/logout',{method:'POST'}), body=await response.json(); await applyClaudeStatus(response.ok?body:failedLoginStatus(LAST_CLAUDE_STATUS,body,'Could not disconnect Claude')); };
   const submit=$('claude-code-submit');
-  if(submit)submit.onclick=async()=>{ const input=$('claude-login-code'), code=String(input?.value||'').trim(); if(!code){if(input)input.focus();return;} input.value=''; submit.disabled=true; try{ const response=await fetch('/api/settings/claude/login/code',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({code})}); const next=await response.json(); if(!response.ok)throw new Error(next.error||'Claude rejected the authorization code'); await applyClaudeStatus(next); if(next.status==='running')startClaudePoll(); }catch(error){ await applyClaudeStatus({...LAST_CLAUDE_STATUS,error:String(error?.message||error)}); } };
+  // The code is cleared before it is sent, so a failure says how to go on.
+  if(submit)submit.onclick=async()=>{ const input=$('claude-login-code'), code=String(input?.value||'').trim(); if(!code){if(input)input.focus();return;} input.value=''; submit.disabled=true; CLAUDE_CODE_ERROR=''; let next=null; try{ const response=await fetch('/api/settings/claude/login/code',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({code})}); const body=await response.json().catch(()=>null); if(response.ok&&body)next=body; else CLAUDE_CODE_ERROR=body?.error||`The code could not be sent (HTTP ${response.status}). Paste the code again, or open the link above for a new one.`; }catch(error){ CLAUDE_CODE_ERROR='Could not reach the Claude login service. Paste the code again, or open the link above for a new one.'; } if(!next){ renderClaudeCard(); return; } await applyClaudeStatus(next); if(next.status==='running')startClaudePoll(); };
   const input=$('claude-login-code');
   if(input)input.onkeydown=event=>{ if(event.key==='Enter'){event.preventDefault();submit?.click();} };
 }
 async function applyClaudeStatus(st){
   const input=$('claude-login-code');
   const preserveInput=!!input&&(document.activeElement===input||!!input.value)&&st.status==='running'&&!st.code_submitted&&!st.connected&&!st.error;
+  const wasConnected=!!SETTINGS?.claude_connected;
   LAST_CLAUDE_STATUS=st;
+  if(st.status!=='running'||st.code_submitted)CLAUDE_CODE_ERROR='';
   if(SETTINGS){ SETTINGS.claude_connected=!!st.connected; SETTINGS.claude_reauth_required=!!st.reauth_required; if(Array.isArray(st.models)&&st.connected){ SETTINGS.claude_models=[...st.models]; SETTINGS.models_by_runtime={...(SETTINGS.models_by_runtime||{}),claude:[...st.models]}; } else if(!st.connected){ SETTINGS.claude_models=[]; SETTINGS.models_by_runtime={...(SETTINGS.models_by_runtime||{}),claude:[]}; } if(selectedAccountRuntime()==='claude')SETTINGS.runtime_ready=!!st.connected; }
   if(!preserveInput)renderClaudeCard(st);
-  if(SETTINGS){ renderRuntimeSelector(); syncRuntimeModelControls(); renderEngines(); }
+  // As for Codex: Max and the thinking controls follow the linked accounts.
+  if(SETTINGS&&wasConnected!==!!st.connected)await loadSettings({keepEngine:true});
+  else if(SETTINGS){ renderRuntimeSelector(); syncRuntimeModelControls(); renderEngines(); }
 }
 async function refreshClaudeCard(){
   // A member's card is the policy note: there is no login to look up.
   if(SETTINGS?.subscription_policy?.claude==='admin_only'){renderClaudeCard();return;}
   try{ const response=await fetch('/api/settings/claude/status'); if(!response.ok)return; const st=await response.json(); await applyClaudeStatus(st); if(st.status==='running')startClaudePoll(); }catch(error){}
 }
-function startClaudePoll(){
-  stopClaudePoll();
-  CLAUDE_POLL_TIMER=setInterval(async()=>{
-    try{
-      const response=await fetch('/api/settings/claude/login/poll');
-      if(!response.ok)throw new Error('Claude login poll failed');
-      const st=await response.json();
-      await applyClaudeStatus(st);
-      if(st.status!=='running')stopClaudePoll();
-    }catch(error){ stopClaudePoll(); }
-  },1500);
-}
+function startClaudePoll(){ startSignInPoll(CLAUDE_POLL,'/api/settings/claude/login/poll','Claude',()=>LAST_CLAUDE_STATUS,applyClaudeStatus); }
 async function saveSettings(){
   // A runtime card switch in flight owns account_runtime until it settles.
   if(RUNTIME_SWITCH_PENDING||SETTINGS_SAVE_PENDING)return;
@@ -3229,12 +3303,15 @@ function clearLibForm(){
 function renderLibrary(){
   const counts=LIB.counts||{};
   document.querySelectorAll('[data-lib-count]').forEach(el=>{ el.textContent=counts[el.dataset.libCount]||0; });
+  // The operator curates the library; others read it (the server refuses their writes).
+  const curator=viewerIsAdmin();
   $('lib-auto-memory').checked=!!(LIB.settings&&LIB.settings.auto_memory);
-  $('lib-auto-wrap').style.display=libType==='memory'?'flex':'none';
+  $('lib-auto-wrap').style.display=curator&&libType==='memory'?'flex':'none';
+  document.querySelectorAll('#hub-library-pane .lib-form').forEach(form=>{ form.style.display=curator?'':'none'; });
   $('hub-library-title').textContent=HUB_TITLES[libType]||libType;
   $('hub-library-sub').textContent=LIB_HINTS[libType]||'';
   const items=(LIB.items||[]).filter(i=>i.type===libType);
-  if(!items.length){ $('lib-list').innerHTML=`<div class="lib-empty">No ${LIB_ESC(libType)} items yet — add one below.</div>`; return; }
+  if(!items.length){ $('lib-list').innerHTML=`<div class="lib-empty">No ${LIB_ESC(libType)} items yet${curator?' — add one below':''}.</div>`; return; }
   $('lib-list').innerHTML=items.map(i=>`
     <div class="lib-item ${i.enabled?'':'off'}">
       <div class="meta">
@@ -3245,9 +3322,9 @@ function renderLibrary(){
         ${i.source&&i.source!=='user'?`<div class="src">source: ${LIB_ESC(i.source)}</div>`:''}
       </div>
       ${i.runnable?`<button class="run" data-act="run" data-id="${LIB_ESC(i.id)}">Try</button>`:""}
-      <button data-act="toggle" data-id="${LIB_ESC(i.id)}">${i.enabled?'On':'Off'}</button>
+      ${curator?`<button data-act="toggle" data-id="${LIB_ESC(i.id)}">${i.enabled?'On':'Off'}</button>
       <button data-act="edit" data-id="${LIB_ESC(i.id)}">Edit</button>
-      <button data-act="del" data-id="${LIB_ESC(i.id)}" aria-label="Delete">×</button>
+      <button data-act="del" data-id="${LIB_ESC(i.id)}" aria-label="Delete">×</button>`:`<span class="src">${i.enabled?'On':'Off'}</span>`}
     </div>`).join('');
   $('lib-list').querySelectorAll('button').forEach(b=>b.onclick=async()=>{
     const item=(LIB.items||[]).find(x=>String(x.id)===b.dataset.id); if(!item)return;
@@ -3834,7 +3911,7 @@ function selectRun(rid,jid){
   lastSandboxRun=null;
   leanRefreshSeq++;
   if(typeof leanPollTimer!=='undefined'&&leanPollTimer){ clearTimeout(leanPollTimer); leanPollTimer=null; }
-  syncLeanControls();
+  syncLeanControls(); syncRunAccess();
   resetProofView(); loadRuns();
   syncRunToMonitor(rid); loadChat(); $('chat-send').disabled=!rid;
   updateChatStatus(null);
@@ -4019,7 +4096,7 @@ function renderAutoPipeline(state){
     :{informal_dag:'Informal DAG',lean:'Lean',formal_dag:'Formal DAG',coverage:'Coverage'};
   const stages=state.stages||{};
   const stageNames=['informal_dag','lean','formal_dag','coverage'];
-  const safeStatus=status=>['waiting','running','done','parsed','warning','error','skipped','stale','off'].includes(status)?status:'waiting';
+  const safeStatus=status=>['waiting','running','done','parsed','warning','error','skipped','stale','off','stopped'].includes(status)?status:'waiting';
   const statementsOnly=stage=>analysis&&stage?.result?.scope==='statements';
   const visualStatus=name=>{
     const stage=stages[name]||{};
@@ -4041,8 +4118,9 @@ function renderAutoPipeline(state){
     return '<span class="pipeline-chip '+status+'" title="'+escapeHtml(detail)+'"><span>'+labels[name]+'</span><span class="chip-state">'+escapeHtml(stateLabel)+'</span></span>';
   }).join('');
   const classify=all=>{
-    // Stages turned off for an informal-only run neither wait nor fail.
-    const values=all.filter(x=>x!=='off');
+    // Stages turned off for an informal-only run, or never run because the
+    // run was stopped, neither wait nor fail.
+    const values=all.filter(x=>x!=='off'&&x!=='stopped');
     if(values.some(x=>x==='running'||x==='waiting'))return 'pipeline-running';
     if(values.some(x=>x==='error'||x==='skipped'||x==='stale'))return 'pipeline-error';
     if(values.some(x=>x==='warning'))return 'pipeline-warning';
@@ -4078,18 +4156,26 @@ function updateChatStatus(run){
   syncAnalyzeRunUi(run);
   const agents=run.agents||[]; const last=agents[agents.length-1];
   const stageKey=last?.pipeline_stage||last?.stage_name||'';
-  const analysisStage=isAnalysisRun(run)?ANALYZE_STAGES.find(([id])=>id===stageKey):null;
-  const label=analysisStage?analysisStage[1]:(STAGE_LABELS[stageKey]||STAGE_LABELS[last?.stage_name]||stageKey||'Working');
+  // An analysis names the stage its strip shows as running (the placeholder
+  // node before the runner's first line is Ingest, not Segment).
+  const analysisStage=isAnalysisRun(run)?(analysisStageStates(run).find(item=>item.state==='running')?.label||ANALYZE_STAGES.find(([id])=>id===stageKey)?.[1]):null;
+  const label=analysisStage||(STAGE_LABELS[stageKey]||STAGE_LABELS[last?.stage_name]||stageKey||'Working');
   let detail='';
   const out=(last?.output||'').trim();
-  if(out){
+  if(isAnalysisRun(run)){
+    // The latest progress note, never the tail of a verifier's JSON reply.
+    detail=analysisProgressDetail(analysisRunProgress(run)).slice(0,160);
+  }else if(out){
     const lines=out.split('\n').map(s=>s.trim()).filter(Boolean);
     detail=(lines[lines.length-1]||'').slice(0,80);
   }
+  $('chat-detail').title=isAnalysisRun(run)?detail:'';
   if(run.status==='finished'){ box.className='chat-status on done'; $('chat-stage').textContent='Finished'; $('chat-detail').textContent=''; }
   else if(run.status==='stopped'){ box.className='chat-status on'; $('chat-stage').textContent='Stopped'; $('chat-detail').textContent=''; }
   else if(run.status==='interrupted'){ box.className='chat-status on interrupted'; $('chat-stage').textContent='Interrupted'; $('chat-detail').textContent=run.interruption?.reason||'Worker is no longer active'; }
-  else if(run.status==='failed'){ box.className='chat-status on err'; $('chat-stage').textContent='Failed'; $('chat-detail').textContent=detail; }
+  // A failed run states its own reason (a timeout, the CLI's error, a usage
+  // limit, a reconnect request) rather than the log's last line.
+  else if(run.status==='failed'){ const why=String(run.error||'').trim()||detail; box.className='chat-status on err'; $('chat-stage').textContent='Failed'; $('chat-detail').textContent=why.length>240?why.slice(0,239)+'…':why; $('chat-detail').title=why; }
   else { box.className='chat-status on'; $('chat-stage').textContent=label+'…'; $('chat-detail').textContent=detail; }
   const recheck=run.analyze?.recheck;
   if(recheck?.status==='running'){ box.className='chat-status on'; $('chat-stage').textContent='Re-checking…'; $('chat-detail').textContent=String(recheck.label||recheck.node_id||''); }
@@ -4218,7 +4304,8 @@ function analysisLogLines(text){
   return String(text||'').split('\n').map(line=>line.replace(/\s+$/,'')).filter(line=>{
     const body=line.trim().replace(/^(?:assistant|thinking|reasoning|stage|exec|edit|message)\s+·\s+/,'');
     if(!body||body==='---')return false;
-    if(/^[{[]/.test(body))return false;
+    // JSON from a model reply, also pretty-printed across lines ("key": …, }, ],) or fenced.
+    if(/^[{}[\]"]/.test(body)||/^```/.test(body))return false;
     if(/^·?\s*usage\b/.test(body)||/^\$\s/.test(body)||/^◦ session\b/.test(body))return false;
     return true;
   });
@@ -4229,7 +4316,10 @@ function updateProcLog(run){
   const raw=(last?.output||'').trim();
   if(!raw){ body.textContent=''; $('proc-count').textContent=''; return; }
   // last 300 non-empty lines (fuller live record for human-in-the-loop)
-  const lines=isAnalysisRun(run)?analysisLogLines(raw):raw.split('\n').map(s=>s.replace(/\s+$/,'')).filter(s=>s.trim());
+  // An analysis's last agent is one model call while it runs: its log shows
+  // the progress notes then, and the session's own log once it has ended.
+  const lines=isAnalysisRun(run)?(/session summary$/.test(String(last?.stage_name||''))?analysisLogLines(raw):analysisRunProgress(run))
+    :raw.split('\n').map(s=>s.replace(/\s+$/,'')).filter(s=>s.trim());
   const tail=lines.slice(-300);
   const text=tail.join('\n');
   if(text===lastProcText)return; lastProcText=text;
@@ -4262,7 +4352,23 @@ function problemItems(run){
 function updateProblemStrip(run){
   const row=$('problem-message-row'); if(row) row.style.display='none';
   lastSandboxRun=run;
-  if(CURRENT_USER?.guest)syncLeanControls();
+  /* The Lean controls follow the run's pipeline state, and every change
+     control who may change the run. */
+  syncLeanControls(); syncRunAccess();
+}
+/* Project members read each other's runs, but only a run's owner, or the
+   operator, may change one: the server's _is_run_owner, where a legacy run
+   with no owner is the operator's. The server answers the rest with 403. */
+function canChangeRun(run){
+  // Unknown until both the account and the run's record have loaded.
+  if(!run||CURRENT_USER?.id==null)return true;
+  return run.owner_id==null?viewerIsAdmin():run.owner_id===CURRENT_USER.id||viewerIsAdmin();
+}
+function syncRunAccess(){
+  const root=document.documentElement, readOnly=!canChangeRun(lastSandboxRun?.run_id===runId?lastSandboxRun:null);
+  // The Lean source follows only a change, never unlocking one locked elsewhere.
+  const code=$('lean-code'); if(code&&readOnly!==root.classList.contains('read-only-run'))code.readOnly=readOnly;
+  root.classList.toggle('read-only-run',readOnly);
 }
 
 /* ── prompt strip: the full text sent to the engine (persona + instructions + problem) ── */
@@ -5244,8 +5350,11 @@ async function refreshDagView(){
   if(showDagUnavailable(dagUnavailableState(requestedMode,d,requestedEngineView,runEngine)))return;
   dagRunKey='';
   $('dag-empty').style.display='block'; $('dag-stage').style.display='none';
-  $('dag-empty').innerHTML='<div style="font-size:28px;opacity:.4">◆</div><div>Generating the proof graph automatically…<br/>No manual action is needed.</div>';
   const stage=requestedMode==='engine'?null:lastSandboxRun?.auto_pipeline?.stages?.[requestedMode==='informal'?'informal_dag':'formal_dag'];
+  // A run stopped before its draft builds no graph by itself.
+  $('dag-empty').innerHTML=stage?.status==='stopped'
+    ?'<div style="font-size:28px;opacity:.4">◇</div><div>'+(lastSandboxRun.auto_pipeline.run_kind==='analyze'?'Analysis stopped · no report to graph.':'Run stopped · no proof draft to graph.')+'</div>'
+    :'<div style="font-size:28px;opacity:.4">◆</div><div>Generating the proof graph automatically…<br/>No manual action is needed.</div>';
   dagStatus(stage?.detail||(requestedMode==='engine'?'waiting for engine activity':'waiting for automatic generation'));
 }
 function dagLayers(graph){
@@ -5650,7 +5759,7 @@ function renderDag(d){
     const formalLink=(isCompiler||isEngine)?null:isAnalysis?null:dagCoverageForNode(n,isLean);
     const verified=!!formalLink;
     const auditedLink=verified&&coverageStatementAudited(formalLink,lastSandboxRun?.proof_coverage);
-    const label=dagCardTitle(n,view);
+    const label=isAnalysis?analysisTextAccents(dagCardTitle(n,view)):dagCardTitle(n,view);
     const aria=visual.badge+': '+label.slice(0,160)+(isAnalysis&&visual.status?' — '+visual.status.label:'');
     return `<div class="dag-node${isLean?' lean':''}${auditedLink?' formally-verified':verified?' lean-compiled-only':''}${visual.classes.map(cls=>' '+cls).join('')}" id="${domId}" role="button" tabindex="0" aria-label="${escapeHtml(aria)}" style="--kc:${visual.color};${visual.verdictColor?'--vc:'+visual.verdictColor+';':''}--dag-delay:${Math.min(nodeIndex*28,280)}ms;width:${W}px">
       <div class="kd-row"><span class="kd">${escapeHtml(visual.badge)}</span>${visual.status?`<span class="st ${visual.status.tone}">${escapeHtml(visual.status.label)}</span>`:''}</div>
@@ -5840,6 +5949,8 @@ function syncDagRebuild(){
   btn.hidden=dagMode==='compiler'||!runId;
   btn.disabled=dagRebuildBusy||guestWait;
   btn.textContent=reload?'↻ Refresh':'↻ Rebuild';
+  // A reload only reads the run; a rebuild changes it (hidden on read-only runs).
+  btn.classList.toggle('run-change',!reload);
   const spends=guest?' · uses one guest Formal/DAG action':'';
   btn.title=guestWait?'Available when the automatic Formal and DAG pipeline finishes'
     :dagMode==='analysis'?'Reload the Manuscript DAG from the saved analysis (no model call, no action used)'
@@ -5957,6 +6068,14 @@ function syncLeanPipelineEmptyState(state){
     if(pct)pct.textContent='Off';
     return false;
   }
+  if(status==='stopped'){
+    // Stopped before there was anything to derive: no failure, Verify stays usable.
+    const title=$('lean-progress-title'), message=$('lean-progress-detail'), pct=$('lean-progress-pct');
+    if(title)title.textContent=state?.run_kind==='analyze'?'Analysis stopped':'Run stopped';
+    if(message)message.textContent=String(stage.detail||'The run was stopped before it produced a proof draft').replace(/[.\s]+$/,'')+'.';
+    if(pct)pct.textContent='Stopped';
+    return false;
+  }
   // The pipeline state of an analysis says so (and only analyses have one with
   // nothing to formalize until asked).
   const analysis=state?.run_kind==='analyze';
@@ -6000,31 +6119,38 @@ function syncLeanPipelineEmptyState(state){
   const title=$('lean-progress-title'), message=$('lean-progress-detail');
   const beforeSource=['error','skipped','stale'].includes(lifecycle)&&!outcome;
   if(title)title.textContent=beforeSource?'Formal translation failed':'Formal verification failed';
-  if(message)message.textContent=(beforeSource?'No Proof.lean was produced. ':'Lean did not verify this proof. ')+detail+(CURRENT_USER?.guest?' Retry Verify.':' Retry Verify, or choose an available Harness.');
+  if(message)message.textContent=(beforeSource?'No Proof.lean was produced. ':'Lean did not verify this proof. ')+detail+(viewerIsAdmin()?' Retry Verify, or choose an available Harness.':' Retry Verify.');
   return true;
 }
 function leanEditorText(){ return $('lean-code')?.value||''; }
 function syncLeanControls(){
   const guest=Boolean(CURRENT_USER?.guest);
-  const pipelineRunning=guest&&lastSandboxRun?.run_id===runId&&lastSandboxRun?.auto_pipeline?.status==='running';
+  /* The coding-agent Harness is the operator's: guests must sign in, members get 403. */
+  const harness=viewerIsAdmin();
+  const pipeline=lastSandboxRun?.run_id===runId?lastSandboxRun?.auto_pipeline:null;
+  const pipelineRunning=guest&&pipeline?.status==='running';
+  /* The server refuses a new harness while the pipeline may still run its Lean stage. */
+  const pipelineLean=pipeline?.status==='running'&&pipeline?.stages?.lean?.status!=='off';
   const pending=runId?leanPendingRuns.get(runId):null;
   const running=runId?leanRunningRuns.get(runId):null;
   const btn=$('lean-harness');
   if(btn){
     const selected=leanEngines.find(e=>e.id===$('lean-engine')?.value);
-    btn.textContent=running?'■ Stop':'⚙ Harness';
-    btn.title=running?'Kill the running agent':selected&&!selected.available?(selected.status_detail||selected.auth_detail||'Harness unavailable'):'Run a coding agent in lean/ — it compiles, reads the errors and retries by itself';
-    btn.disabled=guest||!!pending||(!running&&(!selected||!selected.available));
-    btn.style.display=guest?'none':'';
+    /* Once the agent exits, its Proof.lean is checked and audited: nothing to stop. */
+    const finishing=!!running?.finishing;
+    btn.textContent=finishing?'⏳ Checking…':running?'■ Stop':'⚙ Harness';
+    btn.title=finishing?'The agent has finished; its Proof.lean is being checked':running?'Kill the running agent':selected&&!selected.available?(selected.status_detail||selected.auth_detail||'Harness unavailable'):pipelineLean?'Available when the automatic Formal and DAG pipeline finishes':'Run a coding agent in lean/ — it compiles, reads the errors and retries by itself';
+    btn.disabled=!harness||!!pending||finishing||(!running&&(!selected||!selected.available||pipelineLean));
+    btn.style.display=harness?'':'none';
   }
   const engineSelect=$('lean-engine');
-  if(engineSelect){engineSelect.disabled=guest;engineSelect.style.display=guest?'none':'';}
+  if(engineSelect){engineSelect.disabled=!harness;engineSelect.style.display=harness?'':'none';}
   if(guest)fillLeanModels([]);
   ['lean-gen','lean-compile','lean-check','lean-audit','lean-chat-send'].forEach(id=>{
     const el=$(id); if(!el)return;
     el.disabled=!!pending||!!running||pipelineRunning;
     /* Guests may run bounded Verify / Compile / Check / Audit / feedback actions;
-       only the coding-agent Harness needs a signed-in account. */
+       only the coding-agent Harness is the operator's. */
     if(el.dataset.baseTitle===undefined)el.dataset.baseTitle=el.title||'';
     el.title=pipelineRunning?'Available when the automatic Formal and DAG pipeline finishes':el.dataset.baseTitle;
   });
@@ -6185,7 +6311,13 @@ function renderLean(d, {forceCode=false}={}){
   const running=d.status==='running'||d.harness_running;
   const key=runId+':'+(d.generated_at||'')+':'+(d.status||'')+':'+(d.action||'')+':'+(d.chat||[]).length
     +':'+(d.citations||[]).length+':'+((d.fidelity||{}).severity||'')+':'+(running?(d.log||'').length:'');
-  if(key===leanRunKey&&!forceCode){ renderLeanChat(d.chat||[]); renderLeanFidelity(d); renderLeanCitations(d); return; }
+  if(key===leanRunKey&&!forceCode){
+    renderLeanChat(d.chat||[]); renderLeanFidelity(d); renderLeanCitations(d);
+    /* A quiet agent (or one whose result is being checked) leaves the key
+       unchanged: keep polling and track the harness state anyway. */
+    setLeanRunning(running, d.harness?.label||'Agent', runId, d.harness?.state==='finishing');
+    return;
+  }
   leanRunKey=key;
   setLeanBadge(d.status);
   // An analysis formalizes statements only: its sorry-bodied file is the
@@ -6235,7 +6367,7 @@ function renderLean(d, {forceCode=false}={}){
   renderLeanFidelity(d);
   renderLeanCitations(d);
   renderLeanChat(d.chat||[]);
-  setLeanRunning(running, hn.label||'Agent');
+  setLeanRunning(running, hn.label||'Agent', runId, hn.state==='finishing');
 }
 function leanPayloadHasDisplay(d){
   if(!d||typeof d!=='object')return false;
@@ -6285,15 +6417,18 @@ async function leanResponseJson(response,context='Formal Lean request'){
       error.status=response.status;
       throw error;
     }
-    throw new Error(message);
+    // Callers tell a refusal (401/403/404) from a failure by the status.
+    const error=new Error(message);
+    error.status=response.status;
+    throw error;
   }
   if(!payload||typeof payload!=='object'||Array.isArray(payload))throw new Error(`${context} returned an empty response`);
   return payload;
 }
 /* While a harness run is alive the cache file is the progress channel, so poll it. */
-function setLeanRunning(running, label, targetRunId=runId){
+function setLeanRunning(running, label, targetRunId=runId, finishing=false){
   if(!targetRunId)return;
-  if(running)leanRunningRuns.set(targetRunId,{label:label||'Agent'});
+  if(running)leanRunningRuns.set(targetRunId,{label:label||'Agent',finishing:!!finishing});
   else leanRunningRuns.delete(targetRunId);
   if(targetRunId!==runId)return;
   syncLeanControls();
@@ -6365,7 +6500,7 @@ function fillLeanModels(list, preferred){
   sel.disabled=!models.length;
 }
 function fillLeanEngines(list,preferred=''){
-  leanEngines=CURRENT_USER?.guest?[]:(list||[]);
+  leanEngines=viewerIsAdmin()?(list||[]):[];
   const sel=$('lean-engine'); if(!sel)return;
   const keep=runId?leanEngineByRun.get(runId):'';
   sel.innerHTML=leanEngines.map(e=>{
@@ -6391,6 +6526,7 @@ async function leanAction(action, extra={}){
   const badge=$('lean-badge'), priorBadge=badge?{className:badge.className,text:badge.textContent}:null;
   if(action==='verify')setLeanBadge('none');
   if(action==='harness')prepareLeanHarnessStart(labels.harness);
+  let notStarted='';
   try{
     const payload={action, model:$('lean-model').value||null, ...extra};
     if(CURRENT_USER?.guest)payload.model='kimi-k3';
@@ -6405,20 +6541,27 @@ async function leanAction(action, extra={}){
     });
     const d=await leanResponseJson(r,labels[action]||'Formal Lean request');
     if(actionRunId!==runId)return;
-    if(action==='stop_harness'){ leanStatus('stopping the agent…'); return; }
+    if(action==='stop_harness'){ leanStatus(d.finishing?'the agent has finished · checking its result…':'stopping the agent…'); return; }
     const preserveDraft=action==='revise'&&d?.interaction?.kind==='question';
     leanRunKey=''; if(!preserveDraft)leanDirty=false; renderLean(d, {forceCode:!preserveDraft});
   }catch(err){
     if(actionRunId===runId){
-      const message=String(err.message||err).slice(0,1200);
-      leanStatus((err?.limit?'⏸ ':'✗ ')+message.slice(0,180));
-      if(err?.limit&&action!=='revise'){
-        /* A limit is not a failed proof: keep the current Lean state on screen. */
+      const message=String(err.message||err).slice(0,1200), line=(err?.limit?'⏸ ':'✗ ')+message;
+      // Refused (signed out, not this account's run to change, gone) or not
+      // started (400: no proof text yet, another Lean action running): nothing ran.
+      const refused=[400,401,403,404].includes(err?.status);
+      leanStatus(line);
+      if((err?.limit||refused)&&action!=='revise'){
+        /* Neither is a failed proof: keep the current Lean state on screen. */
         /* Undo only our own pre-request reset, never a newer refresh's badge. */
         if(action==='verify'&&priorBadge&&badge?.className==='lean-badge none'){ badge.className=priorBadge.className; badge.textContent=priorBadge.text; }
+        /* The harness's start view replaced it: the refresh below redraws it. */
+        if(action==='harness'){ leanRunKey=''; notStarted=line; }
+        /* A 400 can follow a stored attempt: redraw what the server kept. */
+        else if(err?.status===400){ leanRunKey=''; setTimeout(()=>{ if(actionRunId===runId){ refreshLeanView().then(()=>{ if(actionRunId===runId)leanStatus(line); }); } },0); }
         if($('lean-empty')?.style.display!=='none'){
           const title=$('lean-progress-title'), detail=$('lean-progress-detail');
-          if(title)title.textContent=err.status===429?'Limit reached':'Action paused';
+          if(title)title.textContent=err.status===400?'Action not started':refused?'Action refused':err.status===429?'Limit reached':'Action paused';
           if(detail)detail.textContent=message;
         }
       }
@@ -6434,7 +6577,11 @@ async function leanAction(action, extra={}){
   }
   finally{
     setLeanBusy(false, '', actionRunId, requestToken);
-    if(actionRunId===runId&&(action==='harness'||action==='stop_harness'))refreshLeanView();
+    if(actionRunId===runId&&(action==='harness'||action==='stop_harness')){
+      await refreshLeanView();
+      // Still say why the agent did not start.
+      if(notStarted&&actionRunId===runId)leanStatus(notStarted);
+    }
   }
 }
 // An analysis formalizes the statements of its main results (never proofs).
@@ -6509,7 +6656,8 @@ async function sendChat(){
   chatAttachments.lock(true);
   try{
     const attachments=await chatAttachments.payload();
-    const r=await fetch('/api/runs/'+encodeURIComponent(targetRun)+'/chat',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({message:text,attachments,model:currentModel()||null})});
+    // No model: a follow-up keeps the run's own; the launcher's is for new runs.
+    const r=await fetch('/api/runs/'+encodeURIComponent(targetRun)+'/chat',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({message:text,attachments})});
     const d=await r.json(); if(!r.ok)throw new Error(d.error);
     if(runId!==targetRun)return;
     $('chat-input').value=''; chatAttachments.clear();
@@ -6776,6 +6924,9 @@ function analyzeSourceFromComposer(){
   if(link){
     const known=analyzeResolveCache.get(link);
     if(known?.member_only&&viewerIsGuest())return {error:String(known.error||'Guests can analyze arXiv and GitHub links; this file needs a member account.')};
+    // The preview already found that this link can't be analyzed: starting
+    // would only fail at Ingest (and use up a guest's analysis for the hour).
+    if(known&&known.ok===false&&!known.transient)return {error:String(known.error||'That link can’t be analyzed')+' — change the link to analyze something else.'};
     return {kind:'url',url:link};
   }
   if(files)return {kind:'upload'};
@@ -6839,7 +6990,9 @@ async function resolveAnalyzeLink(link){
   try{
     const response=await fetch('/api/analyze/resolve',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({url:link})});
     const body=await response.json().catch(()=>({}));
-    if(response.ok&&body&&typeof body==='object')result=body;
+    // A lookup that may work later (the site was slow or busy) is not cached
+    // and does not stop the analysis; the link is fetched again when it runs.
+    if(response.ok&&body&&typeof body==='object')result=body.ok===false&&body.retryable?{...body,transient:true}:body;
     else result={ok:false,transient:response.status===429||response.status>=500,
       error:response.status===429?limitMessage(body?.error||'Too many link previews',response):String(body?.error||('The preview failed (HTTP '+response.status+')'))};
   }catch(e){ result={ok:false,transient:true,error:'The link preview is unavailable right now'}; }
@@ -6877,7 +7030,9 @@ function renderAnalyzeChip(link,result){
   const title=analyzeEl('div','title',String(result.title||link).slice(0,300));
   body.append(title);
   const meta=analyzeEl('div','meta');
-  const facts=[result.version,result.license,ANALYZE_FORMAT_LABEL[result.format]||'',analyzeSizeLabel(result.size_bytes),result.canonical_id]
+  // A file link's identifier is "https:" + the link itself, which Open ↗ already gives.
+  const identifier=/^https:/.test(String(result.canonical_id||''))?'':result.canonical_id;
+  const facts=[result.version,result.license,ANALYZE_FORMAT_LABEL[result.format]||'',analyzeSizeLabel(result.size_bytes),identifier]
     .map(value=>String(value||'').trim()).filter(Boolean).map(value=>value.slice(0,160));
   meta.textContent=facts.join(' · ');
   const canonical=String(result.canonical_url||'');
@@ -7014,17 +7169,28 @@ function renderAnalyzeCaps(){
   }
   lines.forEach(line=>box.append(analyzeEl('span','',line)));
 }
+let analyzeLinkLookupPending=false;
 async function startAnalyzeRun(){
   const eb=$('form-error'); eb.style.display='none';
   const fail=message=>{ eb.style.display='block'; eb.textContent=String(message); };
-  if(initialAttachments.busy)return;
+  // Enter / Ctrl+Enter reach here even while the start button is disabled.
+  if(initialAttachments.busy||analyzeLinkLookupPending)return;
   const entry=analyzeEngineEntry(), policy=analyzePolicy();
   if(!entry||!policy)return fail('Analyze is not available on this site right now.');
   if(entry.requires_login){ showEngineSignIn(entry.label||'Ansatz Analyze'); return; }
   if(policy.enabled===false)return fail(policy.reason||'Analyze is turned off on this site.');
   if(!entry.available)return fail((entry.label||'Ansatz Analyze')+' needs setup — '+(entry.health_detail||entry.hint||'runner unavailable'));
-  const source=analyzeSourceFromComposer();
+  let source=analyzeSourceFromComposer();
   if(source.error)return fail(source.error);
+  // A link whose preview has not come back yet is looked up first, so a link
+  // the preview refuses never starts (and never uses up a guest's analysis).
+  if(source.kind==='url'&&!analyzeResolveCache.has(source.url)){
+    clearTimeout(analyzeResolveTimer);
+    $('start-btn').disabled=true; analyzeLinkLookupPending=true;
+    try{ await resolveAnalyzeLink(source.url); }finally{ $('start-btn').disabled=false; analyzeLinkLookupPending=false; }
+    source=analyzeSourceFromComposer();
+    if(source.error)return fail(source.error);
+  }
   const sponsoredOnly=analyzeSponsoredOnly();
   if(!sponsoredOnly){ const issue=engineRuntimeIssue(entry); if(issue)return fail(issue); }
   // Sponsored-only viewers name no model: the server runs Kimi K3.
@@ -7167,17 +7333,102 @@ function renderAnalysisStages(run){
   }));
   list.hidden=false;
 }
-function analysisProgressText(text){
-  // Live writes mix progress lines with the verifier's raw JSON: show the progress.
-  const lines=String(text||'').split('\n').map(line=>line.trim()).filter(line=>line&&line!=='---'&&!/^[{[]/.test(line)&&!/^\$ /.test(line));
-  return lines.slice(-40).join('\n')||'Starting…';
+/* Progress of a running (or unpublished) analysis: the runner's own notes
+   ("Check · Lemma 3.7 · error — …"), never a verifier's raw JSON reply, a
+   model-call marker ("check-3-low") or a process-log line. The server sends
+   only the notes; this filter also keeps any older or mixed text readable. */
+const ANALYZE_CALL_MARKER=/^(?:map|segment-\d+|check-\d+)(?:-retry)?(?:-low)?$/;
+function analysisProgressLines(text){
+  const out=[];
+  String(text||'').split('\n').forEach(raw=>{
+    let line=raw.trim();
+    if(!line||line==='---'||/^```/.test(line)||/^[{}[\]"]/.test(line)||/^\$ /.test(line))return;
+    if(/^(?:◦ session|assistant · |thinking · |stage · |edit · |error · |· usage )/.test(line))return;
+    line=line.replace(/^Analyze · /,'');
+    // The runner's banner and closing line, not "Ansatz Analyze could not start: …".
+    if(!line||ANALYZE_CALL_MARKER.test(line)||/^Ansatz Analyze(?: ·| completed\b)/.test(line))return;
+    out.push(line.slice(0,600));
+  });
+  return out.slice(-600);
+}
+function analysisProgressText(text){ return analysisProgressLines(text).join('\n'); }
+// The lines of the run's progress: the server's (sandbox preview) or, before
+// it arrives, the notes among the run's agents.
+function analysisRunProgress(run){
+  const box=run?.sandbox_preview;
+  if(box&&!box.has_report&&typeof box.text==='string')return analysisProgressLines(box.text);
+  return analysisProgressLines((Array.isArray(run?.agents)?run.agents:[]).map(agent=>/\(error\)$/.test(String(agent?.stage_name||''))||/^Analyze · /.test(String(agent?.output||''))?String(agent.output||'').split('\n')[0]:'').join('\n'));
+}
+const ANALYZE_STAGE_LINE=/^(\d) (Ingest|Segment|Check|Roll-up|Report)(?: · (.*))?$/;
+const ANALYZE_RESULT_LINE=/^Check · (.+?) · (checked|gap|error|unclear|not_checked)(?: — (.*))?$/;
+const ANALYZE_NOW_LINE=/^Check · now checking (.+)$/;
+const ANALYZE_SOURCE_WORDS={link:'from a link','pasted text':'from pasted text','uploaded files':'from uploaded files'};
+// One short line for the Progress panel (the stage name is shown next to it).
+function analysisProgressDetail(lines){
+  const line=String(lines[lines.length-1]||'');
+  let match=ANALYZE_STAGE_LINE.exec(line);
+  if(match)return String(match[3]&&match[2]==='Ingest'?ANALYZE_SOURCE_WORDS[match[3]]||match[3]:match[3]||'');
+  if((match=ANALYZE_RESULT_LINE.exec(line)))return match[1]+' · '+ANALYZE_VERDICT_SHORT[match[2]];
+  if((match=ANALYZE_NOW_LINE.exec(line)))return 'checking '+match[1];
+  return line.replace(/^(?:Ingest|Segment|Check|Roll-up|Report) · /,'');
+}
+// The runner shortens a finding: never leave a formula open at the cut.
+function analysisClosedMath(text){
+  let value=String(text||'');
+  const open=value.lastIndexOf('\\('), close=value.lastIndexOf('\\)');
+  if(open>close)value=value.slice(0,open).trimEnd()+' …';
+  if(((value.replace(/\\\$/g,'').match(/\$/g)||[]).length)%2)value=value.slice(0,value.lastIndexOf('$')).trimEnd()+' …';
+  // ... nor a command cut short (Section~\ref{sec:presc): never a broken one.
+  return value.replace(/~?\\[A-Za-z]+\*?(?:\s*\[[^\]]*\])?\s*\{[^{}]*$/,' …')
+    .replace(/~?\\(?:ref|eqref|cref|Cref|autoref|nameref|hyperref|cite[pt]?)\*?(?:\s*\[[^\]]*\]?)?$/,' …');
+}
+// Stages, then each checked result with its verdict as it settles.
+function analysisProgressView(lines,run,refLabels){
+  const live=run?.status==='running', ended=['failed','interrupted','stopped'].includes(String(run?.status||''));
+  const list=analyzeEl('ol','analysis-progress'); list.setAttribute('aria-label','Analysis progress');
+  let section='', checkDetail=null, settled=0;
+  lines.forEach((line,index)=>{
+    const last=index===lines.length-1;
+    let match=ANALYZE_STAGE_LINE.exec(line);
+    if(match){
+      section=match[2];
+      const item=analyzeEl('li','ap-stage'); item.append(analyzeEl('b','',match[2]));
+      const detail=section==='Ingest'?(ANALYZE_SOURCE_WORDS[match[3]]||match[3]||''):(match[3]||'');
+      if(detail)item.append(analyzeEl('span','',detail));
+      if(section==='Check'){ checkDetail=analyzeEl('span','ap-count'); item.append(checkDetail); }
+      list.append(item); return;
+    }
+    if((match=ANALYZE_RESULT_LINE.exec(line))){
+      const verdict=match[2], item=analyzeEl('li','ap-result v-'+verdict);
+      item.append(analyzeEl('span','vd',ANALYZE_VERDICT_SHORT[verdict]),analyzeEl('span','lbl',match[1]));
+      const finding=String(match[3]||'').replace(/^Not checked: /,'');
+      if(finding)item.append(analyzeEl('span','issue',analysisClosedMath(analysisModelProse(finding,refLabels))));
+      if(verdict!=='not_checked')settled++;
+      list.append(item); return;
+    }
+    if((match=ANALYZE_NOW_LINE.exec(line))){
+      // Only while those checks are in flight: their verdicts follow this line.
+      if(live&&last)list.append(analyzeEl('li','ap-now','Checking '+match[1]+'…'));
+      return;
+    }
+    const plain=analysisModelProse(line.replace(/^(?:Ingest|Segment|Check|Roll-up|Report) · /,''),refLabels);
+    list.append(analyzeEl('li',ended&&last&&plain===line?'ap-error':'ap-line',plain.charAt(0).toUpperCase()+plain.slice(1)));
+  });
+  if(checkDetail&&settled)checkDetail.textContent='· '+settled+' done';
+  return list;
 }
 let analysisMarkdownParser=null;
 // The report is generated from model and manuscript text: Markdown only, raw
 // HTML is shown as text (never parsed), and the output is sanitized like any
 // other run output. Math stays TeX for KaTeX.
-function analysisMarkdownHtml(text){
-  const {s,slots}=stashMath(text);
+function analysisMarkdownHtml(text,refLabels){
+  const stashed=stashMath(text), slots=stashed.slots;
+  // Prose outside math may carry TeX text accents and cross-references
+  // (reports written before the report resolved them itself): Erd\H{o}s
+  // reads Erdős and Corollary~\ref{cor:x} "Corollary 1.2" (the label alone
+  // until the graph is known). Ties become spaces before Markdown is read, so
+  // two of them never strike text through.
+  const s=analysisResolveRefs(analysisTextAccents(stashed.s),refLabels);
   let html=null;
   try{
     const md=window.marked;
@@ -7189,8 +7440,16 @@ function analysisMarkdownHtml(text){
     if(analysisMarkdownParser)html=analysisMarkdownParser.parse(s);
   }catch(e){ html=null; }
   if(typeof html!=='string'||!html)html='<pre>'+escapeHtml(text)+'</pre>';
-  html=html.replace(/@@MATH(\d+)@@/g,(_,i)=>escapeHtml(slots[Number(i)]||''));
+  html=html.replace(/@@MATH(\d+)@@/g,(_,i)=>escapeHtml(analysisReportMath(slots[Number(i)]||'')));
   return sanitizeRenderedHtml(html);
+}
+// The report escapes every "|" as "\|" (table cells) and "<", ">" as "&lt;",
+// "&gt;" (no raw HTML) in model and manuscript text. Math is set aside before
+// the Markdown is read, so KaTeX would get the escapes: |H| typeset as the
+// norm ‖H‖ and x &lt; y as an error. Undo exactly those escapes inside math
+// (an original \| was written as \\| and comes back as \|).
+function analysisReportMath(tex){
+  return String(tex).replace(/\\\|/g,'|').replace(/&lt;/g,'<').replace(/&gt;/g,'>');
 }
 // Author macros (\newcommand) let KaTeX typeset the manuscript's own notation.
 function analysisKatexMacros(graph){
@@ -7235,7 +7494,7 @@ function applyAnalysisPreview(run){
   if(box.has_report&&rid)setDownloadUrl('/api/workspace/'+encodeURIComponent(rid)+'/file?path='+encodeURIComponent('analysis/report.md')+'&download=1','analysis-report.md');
   if(analysisSourceShown&&analysisSourceRunId===rid)return true;
   const report=!!box.has_report;
-  renderAnalysisReport(report?text:(text?analysisProgressText(text):''),!report,run,
+  renderAnalysisReport(report?text:analysisProgressText(text)||(live?'1 Ingest':''),!report,run,
     live?'The report appears here when the analysis finishes. Progress so far:':'This analysis published no report. What it recorded:');
   if(report&&rid&&!analysisGraphCache.has(rid))ensureAnalysisGraph(rid).then(payload=>{ if(payload&&runId===rid&&!analysisSourceShown){ $('md-view')._proofRenderKey=''; renderAnalysisReport(text,false,lastSandboxRun); } });
   return !!text;
@@ -7245,17 +7504,20 @@ function renderAnalysisReport(text,progress,run,note=''){
   $('pdf-pages').style.display='none';
   if(!text){ view.style.display='none'; view.innerHTML=''; view._proofRenderKey=''; setProofEmpty(true); return; }
   setProofEmpty(false); view.style.display='block';
-  const macros=analysisKatexMacros(analysisGraphCache.get(String(run?.run_id||''))?.graph);
-  const key=JSON.stringify(['analysis',!!progress,text,macros,note]);
+  const graph=analysisGraphCache.get(String(run?.run_id||''))?.graph;
+  const macros=analysisKatexMacros(graph), refs=analysisRefLabels(graph);
+  const key=JSON.stringify(['analysis',!!progress,text,macros,note,refs.size]);
   if(view._proofRenderKey===key)return;
   view._proofRenderKey=key;
   const previousTop=body.scrollTop, stick=progress&&body.scrollHeight-body.scrollTop-body.clientHeight<80;
   if(progress){
-    const doc=analyzeEl('div','md-doc analysis-doc live');
-    doc.append(analyzeEl('p','analysis-live-note',note||'Progress so far:'),analyzeEl('pre','analysis-live',text));
+    const doc=analyzeEl('div','md-doc analysis-doc live'), list=analysisProgressView(text.split('\n'),run,refs);
+    doc.append(analyzeEl('p','analysis-live-note',note||'Progress so far:'),list);
+    if(list.querySelector('.ap-result'))doc.append(analyzeEl('p','analysis-live-foot','Verdicts are '+ANALYZE_VERDICT_NOTE+'.'));
     view.replaceChildren(doc);
+    renderMathIn(doc,macros);
   }else{
-    view.innerHTML='<div class="md-doc analysis-doc">'+analysisMarkdownHtml(text)+'</div>';
+    view.innerHTML='<div class="md-doc analysis-doc">'+analysisMarkdownHtml(text,refs)+'</div>';
     view.querySelectorAll('a[href]').forEach(link=>{ link.target='_blank'; link.rel='noopener noreferrer'; });
     renderMathIn(view,macros);
   }
@@ -7347,6 +7609,7 @@ function renderLeanUpstream(run){
 const ANALYZE_VERDICTS=['checked','gap','error','unclear','not_checked'];
 const ANALYZE_VERDICT_LABEL={checked:'checked by a model verifier',gap:'gap',error:'error',unclear:'unclear',not_checked:'not checked'};
 const ANALYZE_VERDICT_SHORT={checked:'checked',gap:'gap',error:'error',unclear:'unclear',not_checked:'not checked'};
+const ANALYZE_ROUTE_WORDS={sponsored_kimi:'sponsored Kimi K3',api_key:'own API key',codex_subscription:'Codex account',claude_subscription:'Claude account'};
 const ANALYZE_VERDICT_COLOR={checked:'var(--verdict-checked)',gap:'var(--verdict-gap)',error:'var(--verdict-error)',unclear:'var(--verdict-unclear)',not_checked:'var(--verdict-none)'};
 let analysisHidden=new Set(), analysisFilterRunId='';
 // Output the verifier's reply could not be read from is no judgement: it is
@@ -7385,22 +7648,78 @@ function analysisRefLabels(graph){
     const number=String(node?.meta?.number||'').trim(), name=String(node?.label||'').trim();
     (Array.isArray(node?.meta?.labels)?node.meta.labels:[]).forEach(label=>{ if(typeof label==='string'&&!labels.has(label))labels.set(label,{number:number||name||label,name:name||number||label}); });
   });
+  // Labelled sections ("Section 7"), in graphs written since they are recorded.
+  const sections=graph?.ref_labels;
+  if(sections&&typeof sections==='object'&&!Array.isArray(sections))Object.entries(sections).slice(0,400).forEach(([label,value])=>{
+    if(!labels.has(label)&&value&&typeof value==='object')labels.set(label,{number:String(value.number||value.name||label),name:String(value.name||value.number||label)});
+  });
   return labels;
+}
+/* Cross-references as text: \ref{x} → the result's number, \cref/\Cref/
+   \autoref/\nameref{x} → its name, \eqref{x} → (number), \hyperref[x]{t} → t,
+   \cite{k} → [k], \S → §, and a tie (~) before a reference or a number → a
+   space. An unknown label is shown bare, never with its command. (Math is
+   left to the callers, which pass prose only.) */
+const ANALYZE_REF_TIE=/(\S)~(?=\\(?:ref|eqref|cref|Cref|autoref|nameref|hyperref|cite[pt]?|S)(?![A-Za-z])|\d)/g;
+// An unknown label reads as its name without the prefix, "(prescribed)" for
+// sec:prescribed, and with the kind its prefix names where a name is wanted.
+const ANALYZE_LABEL_KINDS={sec:'Section',sect:'Section',ssec:'Section',subsec:'Section',sssec:'Section',subsubsec:'Section',app:'Appendix',appendix:'Appendix',ch:'Chapter',chap:'Chapter',part:'Part',thm:'Theorem',theorem:'Theorem',lem:'Lemma',lemma:'Lemma',prop:'Proposition',cor:'Corollary',corollary:'Corollary',def:'Definition',defn:'Definition',rem:'Remark',conj:'Conjecture',claim:'Claim',ex:'Example',exa:'Example',fig:'Figure',tab:'Table',eq:'Equation',eqn:'Equation',alg:'Algorithm'};
+function analysisUnresolvedLabel(label,name){
+  const prefixed=/^([A-Za-z]{1,10}):([\s\S]+)$/.exec(label), text='('+(prefixed?prefixed[2]:label)+')';
+  const kind=prefixed&&name?ANALYZE_LABEL_KINDS[prefixed[1].toLowerCase()]:'';
+  return kind?kind+' '+text:text;
+}
+function analysisResolveRefs(text,refLabels){
+  const known=item=>refLabels instanceof Map?refLabels.get(item):null;
+  const refs=(key,field,bare=false)=>key.split(',').map(item=>item.trim()).filter(Boolean).map(item=>{
+    const value=known(item)?.[field]; if(value)return value;
+    // Inside \eqref's own parentheses the label is not parenthesized again.
+    const fallback=analysisUnresolvedLabel(item,field==='name'); return bare?fallback.slice(1,-1):fallback;
+  }).join(', ');
+  // \S first: "\S\ref{x}" is "§" and then the reference.
+  return String(text??'').replace(ANALYZE_REF_TIE,'$1 ').replace(/\\S(?![A-Za-z])\s*/g,'§')
+    .replace(/\\hyperref\s*\[[^\]\n]{0,200}\]\s*\{([^{}\n]{0,300})\}/g,'$1')
+    .replace(/\\(?:[cC]ref|autoref|nameref)\*?\s*\{([^{}\n]{1,300})\}/g,(_,key)=>refs(key,'name'))
+    .replace(/\\eqref\*?\s*\{([^{}\n]{1,300})\}/g,(_,key)=>'('+refs(key,'number',true)+')')
+    .replace(/\\ref\*?\s*\{([^{}\n]{1,300})\}/g,(_,key)=>refs(key,'number'))
+    .replace(/\\cite[pt]?\*?(?:\s*\[[^\]\n]{0,200}\])*\s*\{([^{}\n]{1,300})\}/g,(_,key)=>'['+key.split(',').map(item=>item.trim()).filter(Boolean).join(', ')+']');
+}
+// Model-written prose (findings, notes, progress): accents and references
+// read as text outside math; nothing else is changed (in model prose "~"
+// can mean "of the order of", so only ties are spaces).
+const ANALYZE_MATH_SPLIT=/(\$\$[\s\S]+?\$\$|\$[^$\n]+?\$|\\\([\s\S]+?\\\)|\\\[[\s\S]+?\\\])/;
+function analysisModelProse(text,refLabels){
+  const value=String(text??'');
+  if(!/[\\~]/.test(value))return value;
+  return value.split(ANALYZE_MATH_SPLIT).map((part,index)=>index%2?part:analysisResolveRefs(analysisTextAccents(part),refLabels)).join('');
+}
+// TeX text accents outside math read as letters (Erd\H{o}s → Erdős), as in
+// the report; a bare letter after an accent counts only where that accent is
+// used, so an escaped apostrophe ("it\'s") stays as written.
+const ANALYZE_ACCENT_MARKS={"'":'\u0301','`':'\u0300','^':'\u0302','"':'\u0308','~':'\u0303','=':'\u0304','.':'\u0307',H:'\u030b',c:'\u0327',v:'\u030c',u:'\u0306',r:'\u030a',k:'\u0328'};
+const ANALYZE_BARE_ACCENTED={"'":'aeiouyAEIOUYcnzCNZ','`':'aeiouAEIOU','^':'aeiouAEIOU','"':'aeiouyAEIOUY','~':'anoANO','=':'aeiouAEIOU','.':'zZeEgGcCI'};
+const ANALYZE_TEXT_LETTERS={o:'ø',O:'Ø',ss:'ß',ae:'æ',AE:'Æ',oe:'œ',OE:'Œ',aa:'å',AA:'Å',l:'ł',L:'Ł'};
+function analysisTextAccents(text){
+  const value=String(text??'');
+  if(!value.includes('\\'))return value;
+  return value.split(/(\$\$[\s\S]+?\$\$|\$[^$\n]+?\$|\\\([\s\S]+?\\\)|\\\[[\s\S]+?\\\])/).map((part,index)=>index%2?part:part
+    .replace(/(\{)?\\(?:(['`^"~=.])|([Hcvurk])(?![A-Za-z]))(?:\s*\{\s*(\\[ij](?![A-Za-z])|[A-Za-z])\s*\}|\s*(\\[ij](?![A-Za-z])|[A-Za-z]))(\})?/g,(match,open,sym,letter,braced,bare,close)=>{
+      const accent=sym||letter, base=braced||bare;
+      if(bare&&sym&&!ANALYZE_BARE_ACCENTED[sym].includes(bare))return match;
+      const out=((base==='\\i'?'i':base==='\\j'?'j':base)+ANALYZE_ACCENT_MARKS[accent]).normalize('NFC');
+      return (open&&!close?'{':'')+out+(close&&!open?'}':'');
+    })
+    .replace(/\{\\(o|O|ss|ae|AE|oe|OE|aa|AA|l|L)\}|\\(o|O|ss|ae|AE|oe|OE|aa|AA|l|L)(?:\{\}| (?=[A-Za-z]))/g,(_,a,b)=>ANALYZE_TEXT_LETTERS[a||b])
+  ).join('');
 }
 // Statements as readable prose: \ref becomes the result's label and simple
 // text markup is dropped; math is left as written for KaTeX.
 function analysisProse(text,refLabels){
   // Display environments are math too: their \\ row breaks must survive.
   const parts=String(text||'').split(/(\\begin\{equation\*?\}[\s\S]*?\\end\{equation\*?\}|\\begin\{align\*?\}[\s\S]*?\\end\{align\*?\}|\\begin\{alignat\*?\}[\s\S]*?\\end\{alignat\*?\}|\\begin\{gather\*?\}[\s\S]*?\\end\{gather\*?\}|\$\$[\s\S]*?\$\$|\\\[[\s\S]*?\\\]|\\\([\s\S]*?\\\)|\$(?:\\.|[^$\\])+\$)/);
-  const known=item=>refLabels instanceof Map?refLabels.get(item):null;
-  const refs=(key,field)=>key.split(',').map(item=>item.trim()).filter(Boolean).map(item=>known(item)?.[field]||item).join(', ');
   // KaTeX would number these itself, never with the manuscript's numbers: show them unnumbered.
-  return parts.map((part,index)=>index%2?part.replace(/\\(begin|end)\{(equation|align|alignat|gather)\}/g,'\\$1{$2*}'):part
-    .replace(/\\(?:[cC]ref|autoref|nameref)\*?\{([^{}]{1,200})\}/g,(_,key)=>refs(key,'name'))
-    .replace(/\\ref\*?\{([^{}]{1,200})\}/g,(_,key)=>refs(key,'number'))
-    .replace(/\\eqref\*?\{([^{}]{1,200})\}/g,(_,key)=>'('+refs(key,'number')+')')
+  return parts.map((part,index)=>index%2?part.replace(/\\(begin|end)\{(equation|align|alignat|gather)\}/g,'\\$1{$2*}'):analysisResolveRefs(analysisTextAccents(part),refLabels)
     .replace(/\\(?:emph|textbf|textit|textsc|textrm|textsf|texttt|text|mbox)\{([^{}]*)\}/g,'$1')
-    .replace(/\\cite[pt]?\*?(?:\[[^\]]*\])*\{([^{}]{1,200})\}/g,'[$1]')
     .replace(/~/g,' ').replace(/\\\\/g,' ').replace(/\s+/g,' ')
   ).join('').trim();
 }
@@ -7475,7 +7794,7 @@ function renderAnalysisDetail(node,context){
   const head=analyzeEl('div','dag-detail-head'), titleBox=analyzeEl('div');
   titleBox.style.minWidth='0';
   const badge=analyzeEl('span','kd',String(meta.env||node.kind||'result').replace(/_/g,' ').slice(0,40)); badge.style.setProperty('--kc','#64748b');
-  titleBox.append(badge,analyzeEl('h4','',dagDetailText(node.label||node.id,600)));
+  titleBox.append(badge,analyzeEl('h4','',analysisTextAccents(dagDetailText(node.label||node.id,600))));
   const close=analyzeEl('button','','×'); close.type='button'; close.setAttribute('aria-label','Close result details'); close.onclick=closeDagDetail;
   head.append(titleBox,close);
   const body=analyzeEl('div','dag-detail-body');
@@ -7483,8 +7802,9 @@ function renderAnalysisDetail(node,context){
   line.append(analyzeEl('strong','',verdict.label.charAt(0).toUpperCase()+verdict.label.slice(1)));
   if(meta.main_result===true)line.append(analyzeEl('span','tag','main result'));
   body.append(line);
+  // Model-written text cites the manuscript's labels: they read as its results.
   const section=(title,text,cls='txt',math=false)=>{
-    const value=dagDetailText(text);
+    const value=analysisModelProse(dagDetailText(text),labels);
     if(!value.trim())return null;
     const box=analyzeEl('section'); const content=analyzeEl('div',cls,value);
     box.append(analyzeEl('h5','',title),content); body.append(box);
@@ -7501,7 +7821,7 @@ function renderAnalysisDetail(node,context){
   if(Number(meta.closure_external))add('Conditional on',Number(meta.closure_external)+' cited external result'+(Number(meta.closure_external)===1?'':'s'));
   if(Array.isArray(meta.closure_assumptions)&&meta.closure_assumptions.length)add('Assumes',meta.closure_assumptions.map(id=>(context.graph.nodes||[]).find(item=>String(item.id)===String(id))?.label||id).join(', '));
   const by=meta.checked_by&&typeof meta.checked_by==='object'?meta.checked_by:null;
-  if(by)add('Checked by',[by.model,by.route,by.effort?by.effort+' effort':''].filter(Boolean).map(String).join(' · '));
+  if(by)add('Checked by',[by.model,ANALYZE_ROUTE_WORDS[by.route]||by.route,by.effort?by.effort+' effort':''].filter(Boolean).map(String).join(' · '));
   if(meta.confidence)add('Confidence',meta.confidence);
   if(meta.interpreted===false)add('Verifier output','no usable verifier output — counted as not checked');
   if(Number(meta.parts)>1)add('Checked in',Number(meta.parts)+' parts');
@@ -7522,8 +7842,8 @@ function renderAnalysisDetail(node,context){
     issues.forEach(item=>{
       const row=analyzeEl('li','issue-'+(item.type==='error'?'error':'gap'));
       row.append(analyzeEl('b','',item.type==='error'?'Error':'Gap'),' ');
-      if(item.location)row.append(analyzeEl('span','loc',dagDetailText(item.location,200)+' — '));
-      row.append(analyzeEl('span','',dagDetailText(item.issue,1200)));
+      if(item.location)row.append(analyzeEl('span','loc',analysisModelProse(dagDetailText(item.location,200),labels)+' — '));
+      row.append(analyzeEl('span','',analysisModelProse(dagDetailText(item.issue,1200),labels)));
       list.append(row);
     });
     box.append(analyzeEl('h5','','Issues found by the verifier'),list); body.append(box);
@@ -7534,8 +7854,8 @@ function renderAnalysisDetail(node,context){
     const box=analyzeEl('section'), list=analyzeEl('ul','analysis-external');
     external.forEach(item=>{
       const row=analyzeEl('li');
-      row.append(analyzeEl('b','',dagDetailText(item.citation,300)||'Cited result'));
-      if(item.statement_as_used)row.append(analyzeEl('div','',dagDetailText(item.statement_as_used,1200)));
+      row.append(analyzeEl('b','',analysisModelProse(dagDetailText(item.citation,300),labels)||'Cited result'));
+      if(item.statement_as_used)row.append(analyzeEl('div','',analysisModelProse(dagDetailText(item.statement_as_used,1200),labels)));
       if(item.hypotheses_checked)row.append(analyzeEl('div','muted','Hypotheses checked: '+dagDetailText(item.hypotheses_checked,200)));
       list.append(row);
     });
@@ -7588,7 +7908,8 @@ function analysisDetailActions(node,meta,ref){
       :'Last re-check '+String(recheck.status||'')+(recheck.error?': '+dagDetailText(recheck.error,300):'');
   }
   const row=analyzeEl('div','analysis-action-row');
-  const recheckButton=analyzeEl('button','','↻ Re-check'); recheckButton.type='button';
+  // Re-check and Formalize change the run: hidden on a run this account may only read.
+  const recheckButton=analyzeEl('button','run-change','↻ Re-check'); recheckButton.type='button';
   const checkable=meta.checkable===true;
   // A guest re-checks a few results per analysis (the server counts them).
   const guestLimit=viewerIsGuest()?Number(analyzePolicy()?.rechecks_per_analysis)||0:0;
@@ -7600,7 +7921,7 @@ function analysisDetailActions(node,meta,ref){
     :'Check this result again with the model verifier (one result, a few calls'+(guestLimit?`; guests re-check ${guestLimit} results per analysis, ${Math.max(0,guestLimit-used)} left`:'')+')';
   if(spent&&!status.textContent)status.textContent=`Guests can re-check ${guestLimit} results of an analysis — sign in to re-check more.`;
   recheckButton.onclick=()=>recheckAnalysisNode(node,status,recheckButton);
-  const formalize=analyzeEl('button','','∎ Formalize statement'); formalize.type='button';
+  const formalize=analyzeEl('button','run-change','∎ Formalize statement'); formalize.type='button';
   formalize.disabled=!run||running;
   formalize.title=running?'Available when the analysis finishes':'Formalize this statement in Lean on this server (statements only; proofs are not attempted)';
   formalize.onclick=()=>formalizeAnalysisNode(node);

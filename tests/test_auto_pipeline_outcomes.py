@@ -290,6 +290,60 @@ class AutoPipelineOutcomeTests(unittest.TestCase):
         self.assertEqual(state["proof_outcome"], "attention")
         self.assertEqual(state["status"], "partial")
 
+    @staticmethod
+    def _start_without_draft(workspace: Path, record: dict) -> dict:
+        """Run the pipeline of a run that ended with no proof draft at all."""
+        with patch.object(auto_pipeline, "_run_record", return_value=record):
+            auto_pipeline.start(
+                run_id="no-draft",
+                workspace=workspace,
+                owner_id=7,
+                model="offline-test",
+                engine=str(record.get("engine") or "claude"),
+            )
+            with auto_pipeline._ACTIVE_LOCK:
+                worker = auto_pipeline._ACTIVE.get(str(workspace.resolve()))
+            if worker is not None:
+                worker.join(10)
+        return auto_pipeline.load_state(workspace)
+
+    def test_a_run_stopped_before_its_draft_is_stopped_not_failed(self) -> None:
+        cases = (
+            ({"status": "stopped", "engine": "claude"}, "stopped", "proof draft"),
+            # Stages an informal-only run never asked for stay off.
+            ({"status": "stopped", "engine": "codex", "formalize": False}, "off", "proof draft"),
+            ({"status": "stopped", "run_kind": "analyze", "engine": "analyze"}, "stopped", "graph"),
+        )
+        for record, formal, missing in cases:
+            with self.subTest(record=record):
+                with tempfile.TemporaryDirectory() as tmp:
+                    state = self._start_without_draft(Path(tmp), record)
+
+                self.assertEqual(state["status"], "stopped")
+                self.assertEqual(state["proof_outcome"], "not_run")
+                informal = state["stages"]["informal_dag"]
+                self.assertEqual(informal["status"], "stopped")
+                self.assertEqual(informal["outcome"], "not_run")
+                self.assertIn("stopped before", informal["detail"])
+                self.assertIn(missing, informal["detail"])
+                for name in ("lean", "formal_dag", "coverage"):
+                    self.assertEqual(state["stages"][name]["status"], formal)
+                    self.assertEqual(state["stages"][name]["outcome"], "not_run")
+
+    def test_a_failed_run_without_a_draft_still_blocks_its_stages(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            state = self._start_without_draft(
+                Path(tmp), {"status": "failed", "engine": "claude"}
+            )
+
+        self.assertEqual(state["status"], "failed")
+        for name in ("informal_dag", "lean", "formal_dag", "coverage"):
+            self.assertEqual(state["stages"][name]["status"], "skipped")
+            self.assertEqual(state["stages"][name]["outcome"], "blocked")
+            self.assertEqual(
+                state["stages"][name]["detail"], "The engine produced no proof draft"
+            )
+
     def test_manual_failed_check_with_source_refreshes_structural_views(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             workspace = Path(tmp)

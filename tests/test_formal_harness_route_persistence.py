@@ -341,6 +341,7 @@ class FormalHarnessRoutePersistenceTests(unittest.TestCase):
                 ),
                 patch("agent_monitor.claude_login.account_home", return_value=account_home),
                 patch("agent_monitor.claude_login.account_login_ready", return_value=True),
+                patch("agent_monitor.auth.is_operator_account", return_value=True),
                 patch("agent_monitor.engines_registry._cli_available", return_value=(True, "echo {prompt}")),
                 patch.object(lean_verify, "toolchain_status", return_value=toolchain),
                 patch("agent_monitor.lean_verify.threading.Thread", FakeThread),
@@ -568,12 +569,12 @@ class FormalHarnessRoutePersistenceTests(unittest.TestCase):
             with (
                 patch("agent_monitor.settings.codex_enabled", return_value=True),
                 patch("agent_monitor.codex_login.account_login_ready") as ready,
-                patch("agent_monitor.lean_verify.subprocess.run") as run,
+                patch("agent_monitor.runners.codex_backend._run_codex_process") as run,
             ):
                 with self.assertRaisesRegex(ValueError, "cannot silently fall back"):
                     lean_verify._codex_subscription_interaction(
                         workspace=Path(tmp),
-                        user={"id": 17},
+                        user={"id": 17, "is_admin": True},
                         run_record={"auth_route": "api_key", "owner_id": 17},
                         prompt="Audit.",
                         lean_source="theorem main : True := by trivial",

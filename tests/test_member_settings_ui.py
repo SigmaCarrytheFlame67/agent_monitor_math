@@ -387,6 +387,34 @@ console.log(JSON.stringify(out));
             ],
         )
 
+    def test_only_the_operator_is_offered_a_provider_base_url(self) -> None:
+        # A member's runs use the provider's standard endpoint whatever it
+        # stores (the server refuses a custom base), so it gets no field.
+        source = "\n".join(_js_function(name) for name in ("viewerIsAdmin", "renderSettingsModal"))
+        program = f"""
+const LIB_ESC=value=>String(value);
+const els={{}};
+const $=id=>els[id]||(els[id]={{id,innerHTML:'',querySelectorAll:()=>[]}});
+let CURRENT_USER=null, GUEST_POLICY=null;
+const runtimeModelOptions=()=>[], providerVisual=()=>({{tone:'',mark:'',description:''}});
+const renderRuntimeSelector=()=>{{}}, syncRuntimeModelControls=()=>{{}}, syncApiProviderGroup=()=>{{}};
+const refreshCodexCard=()=>{{}}, refreshClaudeCard=()=>{{}};
+const provider=(id,base_var,base_url)=>({{id,label:id,key_var:id.toUpperCase()+'_API_KEY',base_var,base_url,default_base:base_url,models:[],settings:[],api_key_set:true}});
+const SETTINGS={{providers:[provider('openai','OPENAI_BASE_URL','https://api.openai.com/v1'),provider('kimi','KIMI_API_BASE','https://kimi.example/v1')]}};
+{source}
+const out=[];
+for(const user of [{{is_admin:false}},{{is_admin:true}},{{is_admin:false,guest:true}}]){{
+  CURRENT_USER=user; renderSettingsModal();
+  const html=els['settings-body'].innerHTML;
+  out.push([html.includes('data-key="OPENAI_BASE_URL"'),html.includes('data-key="KIMI_API_BASE"'),html.includes('data-key="OPENAI_API_KEY"')]);
+}}
+console.log(JSON.stringify(out));
+"""
+        self.assertEqual(
+            _run(program),
+            [[False, False, True], [True, True, True], [False, False, True]],
+        )
+
     def test_continue_is_sent_once_and_reports_an_already_running_run(self) -> None:
         pending = SCRIPT[SCRIPT.index("const CONTINUE_PENDING=") :]
         program = f"""

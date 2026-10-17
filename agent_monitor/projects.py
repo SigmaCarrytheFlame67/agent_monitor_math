@@ -16,6 +16,11 @@ MAX_NODES = 100_000
 ID = re.compile(r'[A-Za-z0-9:_-]{1,100}')
 
 
+class NotProjectOwner(PermissionError):
+    """A member asked for an owner-only action (403); a plain PermissionError
+    means the caller is not a member, and the project stays hidden (404)."""
+
+
 def connect():
     DB_PATH.parent.mkdir(parents=True, exist_ok=True)
     fd = os.open(DB_PATH, os.O_CREAT | os.O_RDWR, 0o600); os.close(fd)
@@ -24,7 +29,42 @@ def connect():
     db.executescript('''CREATE TABLE IF NOT EXISTS projects (id TEXT PRIMARY KEY, title TEXT NOT NULL, owner INTEGER NOT NULL, doc TEXT NOT NULL, revision INTEGER NOT NULL DEFAULT 0, invite TEXT UNIQUE, created REAL NOT NULL);
 CREATE TABLE IF NOT EXISTS members (project TEXT NOT NULL, user INTEGER NOT NULL, name TEXT NOT NULL, seen REAL NOT NULL, PRIMARY KEY(project,user));
 CREATE TABLE IF NOT EXISTS runs (run_id TEXT PRIMARY KEY, project TEXT NOT NULL, user INTEGER NOT NULL, task TEXT NOT NULL, created REAL NOT NULL);''')
+    if not _has_untrusted(db):
+        _add_untrusted(db)
     return db
+
+
+def _has_untrusted(db):
+    return bool(db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='untrusted'").fetchone())
+
+
+def _add_untrusted(db):
+    """Create the untrusted table (see _untrusted), filled once on a database
+    from before it.  A table of its own, not a projects column, so an older
+    console still writes projects.
+
+    It lists each project with a member, or a registered run, of an account
+    that is not an operator; a member removed earlier left no other trace.
+    """
+    from agent_monitor.auth import is_operator_account
+    db.execute('BEGIN IMMEDIATE')
+    try:
+        if not _has_untrusted(db):  # another connection may have added it meanwhile
+            db.execute('CREATE TABLE untrusted (project TEXT PRIMARY KEY)')
+            for (uid,) in db.execute('SELECT user FROM members UNION SELECT user FROM runs').fetchall():
+                if not is_operator_account(uid):
+                    db.execute('INSERT OR IGNORE INTO untrusted SELECT project FROM members WHERE user=? UNION SELECT project FROM runs WHERE user=?',(uid,uid))
+        db.commit()
+    except BaseException:
+        db.rollback();raise
+
+
+def _note_writer(db, pid, uid):
+    """``uid`` can now write in the project's document: an account that is not
+    an operator marks the project untrusted for good (see _untrusted)."""
+    from agent_monitor.auth import is_operator_account
+    if not is_operator_account(uid):
+        db.execute('INSERT OR IGNORE INTO untrusted VALUES (?)',(pid,))
 
 
 def _member(db, pid, uid):
@@ -55,7 +95,10 @@ def _payload(db, row, uid):
     text, ids = _render(json.loads(row['doc']))
     members = [dict(r) for r in db.execute('SELECT user, name, seen FROM members WHERE project=? ORDER BY seen DESC',(row['id'],))]
     runs = [dict(r) for r in db.execute('SELECT run_id,user,task,created FROM runs WHERE project=? ORDER BY created DESC LIMIT 200',(row['id'],))]
-    return {'id':row['id'],'title':row['title'],'owner_id':row['owner'],'is_owner':row['owner']==uid,'problem':text,'character_ids':ids,'revision':row['revision'],'members':members,'runs':runs}
+    from agent_monitor.account_policy import tool_free_engines
+    # The only engines an untrusted project's proofs may use, for its launch form.
+    allowed = sorted(tool_free_engines()) if _untrusted(db,row['id']) else None
+    return {'id':row['id'],'title':row['title'],'owner_id':row['owner'],'is_owner':row['owner']==uid,'problem':text,'character_ids':ids,'revision':row['revision'],'members':members,'runs':runs,'tool_free_engines':allowed}
 
 
 def create(user, title, text):
@@ -67,6 +110,7 @@ def create(user, title, text):
     with connect() as db:
         db.execute('INSERT INTO projects VALUES (?,?,?,?,0,NULL,?)',(pid,title,user['id'],json.dumps(nodes),time.time()))
         db.execute('INSERT INTO members VALUES (?,?,?,?)',(pid,user['id'],str(user.get('name') or 'Project owner')[:100],time.time()))
+        _note_writer(db,pid,user['id'])
         return _payload(db,_member(db,pid,user['id']),user['id'])
 
 
@@ -88,6 +132,7 @@ def edit(pid, uid, operations):
     with connect() as db:
         db.execute('BEGIN IMMEDIATE')
         row=_member(db,pid,uid); nodes=json.loads(row['doc']); index={n['id']:n for n in nodes}
+        _note_writer(db,pid,uid)
         for op in operations:
             if not isinstance(op,dict): raise ValueError('Invalid edit operation.')
             key=op.get('id','')
@@ -113,7 +158,7 @@ def edit(pid, uid, operations):
 def invite(pid, uid, revoke=False):
     with connect() as db:
         row=_member(db,pid,uid)
-        if row['owner']!=uid: raise PermissionError('Only the project owner can manage invitations.')
+        if row['owner']!=uid: raise NotProjectOwner('Only the project owner can manage invitations.')
         token=None if revoke else (row['invite'] or secrets.token_urlsafe(32))
         db.execute('UPDATE projects SET invite=? WHERE id=?',(token,pid))
         return token
@@ -125,13 +170,15 @@ def join(token,user):
         row=db.execute('SELECT * FROM projects WHERE invite=?',(token,)).fetchone()
         if not row: raise PermissionError('Invitation unavailable or revoked.')
         db.execute('INSERT OR IGNORE INTO members VALUES (?,?,?,?)',(row['id'],user['id'],str(user.get('name') or 'Collaborator')[:100],time.time()))
+        _note_writer(db,row['id'],user['id'])
         return {'id':row['id']}
 
 
 def remove_member(pid, uid, member):
     with connect() as db:
         row=_member(db,pid,uid)
-        if row['owner']!=uid or member==uid: raise PermissionError('Only the owner can remove other members.')
+        if row['owner']!=uid: raise NotProjectOwner('Only the owner can remove other members.')
+        if member==uid: raise ValueError('The project owner cannot remove themselves.')
         db.execute('DELETE FROM members WHERE project=? AND user=?',(pid,member))
         # Old invite links must not let removed members immediately rejoin.
         db.execute('UPDATE projects SET invite=NULL WHERE id=?',(pid,))
@@ -148,6 +195,25 @@ def can_read_run(rid, uid):
         return False
     with connect() as db:
         return bool(db.execute('SELECT 1 FROM runs r JOIN members m ON m.project=r.project WHERE r.run_id=? AND m.user=?',(rid,uid)).fetchone())
+
+
+def _untrusted(db, pid):
+    """An account that is not an operator can write, or once could, in the
+    project's document, so its runs stay tool-free
+    (account_policy.PROJECT_TOOL_FREE_ERROR).  Removing a member keeps the
+    text it wrote and no character records its author, so the flag is never
+    cleared."""
+    from agent_monitor.auth import is_operator_account
+    return bool(db.execute('SELECT 1 FROM untrusted WHERE project=?',(pid,)).fetchone()) or any(not is_operator_account(r['user']) for r in db.execute('SELECT user FROM members WHERE project=?',(pid,)))
+
+
+def untrusted_run(rid):
+    """Whether run ``rid`` belongs to an untrusted project (see _untrusted)."""
+    if not DB_PATH.exists():
+        return False
+    with connect() as db:
+        row=db.execute('SELECT project FROM runs WHERE run_id=?',(rid,)).fetchone()
+        return bool(row) and _untrusted(db,row['project'])
 
 
 class ProjectsMixin:
@@ -190,6 +256,7 @@ class ProjectsMixin:
                 remove_member(pid,user['id'],int(body.get('user_id')));result={'ok':True}
             else:
                 self._project_send(404,{'error':'Not found.'});return True
+        except NotProjectOwner as exc:self._project_send(403,{'error':str(exc)})
         except PermissionError as exc:self._project_send(404,{'error':str(exc)})
         except (ValueError,TypeError) as exc:self._project_send(400,{'error':str(exc)})
         else:self._project_send(200,result)
@@ -218,11 +285,13 @@ def prepare_run(body, user):
 
 
 def start_run(pid, uid, task, launch):
+    """Launch with ``launch(tool_free)``: whether the project is untrusted
+    (see _untrusted), decided here so that a member who just joined counts."""
     if not pid:
-        return launch()
+        return launch(False)
     # Serialize membership removal and run registration with launch admission.
     with connect() as db:
         db.execute('BEGIN IMMEDIATE');_member(db,pid,uid)
-        job=launch()
+        job=launch(_untrusted(db,pid))
         db.execute('INSERT INTO runs VALUES (?,?,?,?,?)',(job['run_id'],pid,uid,str(task or '')[:2000],time.time()))
         return job

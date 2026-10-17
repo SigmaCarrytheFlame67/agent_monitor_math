@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import unittest
 import traceback
 from typing import Any
@@ -412,6 +413,57 @@ class ApiBackendProviderMatrixTests(unittest.TestCase):
         self.assertNotIn(secret, rendered)
         self.assertIn("[redacted]", rendered)
 
+    def test_cached_and_reasoning_tokens_reach_a_cgm_runs_usage(self) -> None:
+        from agent_monitor import usage_ledger
+        from agent_monitor.cli_events import CLIEventParser
+        from agent_monitor.runners import math_harness_runner
+
+        replies = {
+            "openai": ("gpt-5.6-sol", {
+                "output": [{"content": [{"type": "output_text", "text": "Proof text"}]}],
+                "usage": {
+                    "input_tokens": 2000,
+                    "output_tokens": 300,
+                    "input_tokens_details": {"cached_tokens": 1536},
+                    "output_tokens_details": {"reasoning_tokens": 200},
+                },
+            }),
+            "xai": ("grok-4.5", {
+                "choices": [{"message": {"role": "assistant", "content": "Proof text"}}],
+                "usage": {
+                    "prompt_tokens": 2000,
+                    "completion_tokens": 300,
+                    "prompt_tokens_details": {"cached_tokens": 1536},
+                    "completion_tokens_details": {"reasoning_tokens": 200},
+                },
+            }),
+        }
+        for provider, (model, reply) in replies.items():
+            with self.subTest(provider=provider):
+                with (
+                    patch.dict(api_backend.os.environ, _OWNER_ENV, clear=True),
+                    patch("agent_monitor.settings._http_json", return_value=(200, reply)),
+                ):
+                    result = api_backend.api_chat("System", "User", model=model)
+                # Lean and graph calls book the same reply with these counts.
+                derived = usage_ledger.http_usage(provider, reply)
+                self.assertEqual(
+                    (result.usage["cached_input_tokens"], result.usage["reasoning_output_tokens"]),
+                    (derived["cached_input_tokens"], derived["reasoning_tokens"]),
+                )
+                # A CGM run books it from its event stream: cached input is
+                # priced at the cache rate, and reasoning is recorded.
+                events: list[dict] = []
+                math_harness_runner._emit_stage_usage(
+                    "worker-1", math_harness_runner._clean_usage(result.usage), out=events.append
+                )
+                parser = CLIEventParser("codex", source_engine="math_harness")
+                parser.feed("".join(json.dumps(event) + "\n" for event in events))
+                self.assertEqual(
+                    {name: parser.usage[name] for name in ("input_tokens", "cache_read_tokens", "reasoning_tokens")},
+                    {"input_tokens": 2000, "cache_read_tokens": 1536, "reasoning_tokens": 200},
+                )
+
 
 class ApiBackendPerCallParameterTests(unittest.TestCase):
     """Per-call knobs are explicit arguments, so concurrent callers never
@@ -571,6 +623,68 @@ class ApiBackendPerCallParameterTests(unittest.TestCase):
             sorted(seen),
             sorted((effort, limit, f"{effort}:{limit}") for effort, limit in jobs),
         )
+
+
+class ApiBackendFailureKindTests(unittest.TestCase):
+    """An own key's refusal that every later call would repeat says so
+    (``APIBackendError.kind``); one that may pass on a retry does not."""
+
+    def _kind(self, model: str, code: int, body: object, **env: str) -> str | None:
+        with (
+            patch.dict(api_backend.os.environ, {**_OWNER_ENV, **env}, clear=True),
+            patch("agent_monitor.settings._http_json", return_value=(code, body)),
+            patch("agent_monitor.kimi_k3.time.sleep"),
+            self.assertRaises(api_backend.APIBackendError) as raised,
+        ):
+            api_backend.api_chat("system", "problem", model=model)
+        return raised.exception.kind
+
+    def test_refusals_every_later_call_would_repeat(self) -> None:
+        cases = (
+            ("gpt-5.6-sol", 401, {"error": {"message": "Incorrect API key provided: sk-x.", "code": "invalid_api_key"}},
+             "auth"),
+            ("claude-sonnet-5", 403, {"type": "error", "error": {"type": "permission_error", "message": "denied"}},
+             "auth"),
+            ("gemini-3.6-flash", 400, {"error": {"code": 400, "message": "API key not valid. Please pass a valid API key.",
+                                                 "status": "INVALID_ARGUMENT", "details": [{"reason": "API_KEY_INVALID"}]}},
+             "auth"),
+            ("deepseek-v4-flash", 402, {"error": {"message": "Insufficient Balance", "type": "unknown_error"}},
+             "usage_limit"),
+            ("gpt-5.6-sol", 429, {"error": {"message": "You exceeded your current quota, please check your plan.",
+                                            "type": "insufficient_quota", "code": "insufficient_quota"}},
+             "usage_limit"),
+            ("claude-sonnet-5", 400, {"type": "error", "error": {
+                "type": "invalid_request_error",
+                "message": "Your credit balance is too low to access the Anthropic API."}}, "usage_limit"),
+            ("gpt-5.6-sol", 404, {"error": {"message": "The model does not exist.", "code": "model_not_found"}}, "model"),
+        )
+        for model, code, body, kind in cases:
+            with self.subTest(model=model, code=code):
+                self.assertEqual(self._kind(model, code, body), kind)
+
+    def test_failures_that_may_pass_have_no_kind(self) -> None:
+        cases = (
+            ("gpt-5.6-sol", 429, {"error": {"message": "Rate limit reached for requests", "code": "rate_limit_exceeded"}}),
+            ("gpt-5.6-sol", 500, {"error": {"message": "The server had an error"}}),
+            ("deepseek-v4-flash", 503, "Service Unavailable"),
+            ("gpt-5.6-sol", 400, {"error": {"message": "This model's maximum context length is exceeded"}}),
+            ("gpt-5.6-sol", 0, "timed out"),
+        )
+        for model, code, body in cases:
+            with self.subTest(model=model, code=code):
+                self.assertIsNone(self._kind(model, code, body))
+
+    def test_a_sponsored_refusal_keeps_its_own_failure(self) -> None:
+        with (
+            patch.dict(api_backend.os.environ, {"AGENT_MONITOR_SPONSORED_KIMI": "1"}, clear=True),
+            patch("agent_monitor.settings._http_json", return_value=(401, {"error": {"type": "unauthorized"}})),
+            self.assertRaises(api_backend.APIBackendError) as raised,
+        ):
+            api_backend.api_chat("system", "problem", model="kimi-k3",
+                                 env={"AGENT_MONITOR_SPONSORED_KIMI": "1", "KIMI_API_KEY": "broker-token",
+                                      "KIMI_API_BASE": "https://run.kimi.invalid/v1"})
+        self.assertIsNone(raised.exception.kind)
+        self.assertEqual(raised.exception.failure.kind, "unauthorized")
 
 
 if __name__ == "__main__":

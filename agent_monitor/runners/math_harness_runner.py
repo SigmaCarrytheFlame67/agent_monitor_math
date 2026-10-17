@@ -245,6 +245,10 @@ _WAIT_POLL_SECONDS = 0.2
 _STRATEGIST_BUSY_WAITS = (30.0, 60.0, 120.0)
 _RESCUE_WORKER_WAIT = 60.0
 _BUSY_WAIT_MARGIN_SECONDS = 300.0
+# Claude Code / Codex failure kinds (ClaudeBackendError.kind,
+# CodexBackendError.kind) that every later call on the same linked account
+# would hit as well; the Analyze runner stops its checks on the same kinds.
+_ACCOUNT_STOP_KINDS = frozenset({"auth", "usage_limit", "model"})
 
 
 class MathHarnessError(RuntimeError):
@@ -471,9 +475,31 @@ def emit_item(item: dict[str, Any]) -> None:
 def _emit_backend_event(
     event: dict[str, Any], *, out: Callable[[dict[str, Any]], None] | None = None
 ) -> None:
-    """Forward activity while reserving usage projection for each stage."""
-    if event.get("type") != "turn.completed":
-        (out or _out)(event)
+    """Forward activity while reserving usage projection for each stage.
+
+    A provider call's own terminal events never end the run: usage is
+    projected per stage (``_emit_stage_usage``) and a failed call (Codex
+    ``turn.failed`` / ``turn.cancelled``) is shown as a non-terminal error
+    item.  The pipeline itself decides the run's outcome (a failed curator or
+    verifier call degrades the run; it does not unpublish its proof) and
+    reports a fatal error with its own terminal error item.
+    """
+    event_type = event.get("type")
+    if event_type == "turn.completed":
+        return
+    if event_type in {"turn.failed", "turn.cancelled"}:
+        detail = event.get("error") or event.get("message") or event_type
+        if isinstance(detail, Mapping):
+            detail = detail.get("message") or json.dumps(detail, ensure_ascii=False)
+        event = {
+            "type": "item.completed",
+            "item": {
+                "type": "error",
+                "message": "provider call failed: "
+                + " ".join(str(detail).split())[-1200:],
+            },
+        }
+    (out or _out)(event)
 
 
 def _emit_stage_usage(
@@ -805,6 +831,10 @@ class _Ctx:
     busy_waits: list[float] = field(default_factory=list)
     # Whether any call of the run may have reached processing (_Turn.processed).
     processed: bool = False
+    # Routes whose linked account failed in a way every later call would
+    # repeat (_ACCOUNT_STOP_KINDS), with why: no later verification, repair
+    # or curator call goes to them.
+    stopped_routes: dict[Route, str] = field(default_factory=dict)
     # Prefix of the per-call progress notes (other response-only runners that
     # reuse this turn machinery, such as Analyze, name themselves here).
     label: str = "Math Harness"
@@ -1052,6 +1082,31 @@ def _refused(ctx: _Ctx, turn: _Turn, exc: BaseException) -> bool:
     """Whether ``turn`` failed with ``exc`` and every call it made was
     refused before any processing, so none of them was billed."""
     return _not_processed(exc) and not ctx.turn_processed(turn)
+
+
+def _stop_route(ctx: _Ctx, stage: str, error: ProviderCallError) -> None:
+    """Stop ``stage``'s route after a failure every later call would repeat.
+
+    A linked Claude Code or Codex account that must sign in again, has
+    reached its usage limit or cannot use the model fails each further call
+    the same way.  Claude Code leaves a sign-in failure to its typed error
+    (see claude_backend.forward_as_codex_event), which a stage that degrades
+    past it swallows, so that one is shown here, once.
+    """
+    cause = error.__cause__
+    kind = getattr(cause, "kind", None)
+    route = ctx.route_for(stage)
+    if kind not in _ACCOUNT_STOP_KINDS or route in ctx.stopped_routes:
+        return
+    ctx.stopped_routes[route] = " ".join(str(cause).split())[:400]
+    if kind == "auth" and route.transport == "claude_code":
+        emit_item({"type": "error", "message": " ".join(str(error).split())[:1200]})
+
+
+def _stopped(ctx: _Ctx, stage: str) -> str | None:
+    """Why the route answering ``stage`` (a call stage such as ``repair-2``)
+    takes no further call this run, if it was stopped."""
+    return ctx.stopped_routes.get(ctx.route_for(stage))
 
 
 def _busy_wait_fits(ctx: _Ctx, seconds: float) -> bool:
@@ -2137,6 +2192,7 @@ def _run_verification_wave(
             continue
         if isinstance(error, ProviderCallError) and not isinstance(error, EmptyReplyError):
             ctx.degrade("verifier-provider-failure")
+            _stop_route(ctx, entry.stage, error)
             settled[entry.position] = "stopped"
             continue
         if error is None:
@@ -2252,6 +2308,12 @@ def _verify_attempt(
             wave.append(_WaveEntry(position=position, label=label, key=key, user=user))
         if not wave:
             break
+        if _stopped(ctx, f"verify-{ctx.verify_seq + 1}"):
+            # The verifier's account failed in an earlier wave; these blocks
+            # stay unverified (never accepted by default).
+            for entry in wave:
+                settled[entry.position] = "stopped"
+            break
         _run_verification_wave(ctx, attempt, wave, cache, verifications, settled)
 
     # Verdicts in written order, whatever order the waves settled them in.
@@ -2347,6 +2409,7 @@ def _repair(
     except ProviderCallError as exc:
         repaired.error = str(exc)
         ctx.degrade("repair-provider-failure")
+        _stop_route(ctx, stage, exc)
     except PromptBoundError as exc:
         repaired.error = str(exc)
         ctx.degrade("repair-prompt-too-large")
@@ -2422,7 +2485,10 @@ def _run_cgm(
     verified_candidates = 0
     stop_all = False
     for attempt in _verification_order(attempts):
-        if verified_candidates >= ctx.budgets.max_verify_candidates:
+        if (
+            verified_candidates >= ctx.budgets.max_verify_candidates
+            or _stopped(ctx, f"verify-{ctx.verify_seq + 1}")
+        ):
             break
         verified_candidates += 1
         current = attempt
@@ -2437,8 +2503,13 @@ def _run_cgm(
             if outcome != "rejected":
                 break
             # A repair needs its own call, at least one verification and the
-            # curator reserve.
-            if repairs_used >= ctx.budgets.max_repairs or not ctx.can_call(reserve=2):
+            # curator reserve, on accounts that still answer.
+            if (
+                repairs_used >= ctx.budgets.max_repairs
+                or not ctx.can_call(reserve=2)
+                or _stopped(ctx, f"repair-{ctx.repair_seq + 1}")
+                or _stopped(ctx, f"verify-{ctx.verify_seq + 1}")
+            ):
                 break
             repairs_used += 1
             plan = plans[current.worker - 1]
@@ -2676,6 +2747,9 @@ def _unverified_reason(result: _PipelineResult, ctx: _Ctx) -> str:
         return "the selected worker produced no proof of the main theorem."
     if "verification-stopped-by-budget" in ctx.degraded:
         return "the verification budget ran out before the theorem was checked."
+    stopped = _stopped(ctx, f"verify-{max(ctx.verify_seq, 1)}")
+    if stopped:
+        return f"verification stopped before the theorem was checked ({stopped.rstrip('. ')})."
     if "verifier-provider-failure" in ctx.degraded:
         return "a verifier call failed before the theorem was checked."
     return "the theorem closure was not verified."
@@ -3072,7 +3146,10 @@ def _curate(
 ) -> list[dict[str, Any]]:
     _emit_stage(ctx, "curate")
     notes: dict[str, cgm_parsing.CuratorNote] = {}
-    if ctx.can_call():
+    if _stopped(ctx, "curator"):
+        ctx.degrade("curator-skipped-by-provider-failure")
+        _note("4 Curate · curator skipped (its account failed earlier in this run); deterministic rules only")
+    elif ctx.can_call():
         try:
             user = _curator_prompt(result.problem, snapshot)
             job = _run_single(
@@ -3101,6 +3178,8 @@ def _curate(
                     note.status, note.score, note.comment, cited
                 )
         except (ParseError, ProviderCallError, PromptBoundError, _BudgetExhausted) as exc:
+            if isinstance(exc, ProviderCallError):
+                _stop_route(ctx, "curator", exc)
             ctx.degrade("curator-deterministic")
             _note(f"4 Curate · curator unavailable ({type(exc).__name__}); deterministic rules only")
     else:

@@ -832,8 +832,13 @@ def _claude_account_ready(user: dict[str, Any] | None) -> bool:
     if not user or user.get("id") is None:
         return False
     from agent_monitor import claude_login
+    from agent_monitor.auth import is_operator_account
 
-    return claude_login.account_login_ready(claude_login.account_home(user["id"]))
+    # Only the administrator may use a subscription, so a member's sign-in
+    # from before that policy never pulls its DAG work off the API route.
+    return is_operator_account(user["id"]) and claude_login.account_login_ready(
+        claude_login.account_home(user["id"])
+    )
 
 
 def _run_claude_prompt(
@@ -864,8 +869,10 @@ def _run_claude_prompt(
         route="claude_subscription",
         user_id=(user or {}).get("id"),
     )
-    requested = str(model or "").strip().lower()
-    selected = requested if requested in _CLAUDE_ACCOUNT_MODELS else "sonnet"
+    from agent_monitor.jobs import _canonical_claude_continuation_model
+
+    # Records carry resolved names (claude-opus-5-5): keep the run's model.
+    selected = _canonical_claude_continuation_model(model) or "sonnet"
     effective_timeout = (
         _claude_derived_timeout(env) if timeout is None else timeout
     )
@@ -897,8 +904,12 @@ def _codex_account_ready(user: dict[str, Any] | None) -> bool:
     if not user or user.get("id") is None:
         return False
     from agent_monitor import codex_login
+    from agent_monitor.auth import is_operator_account
 
-    return codex_login.account_login_ready(codex_login.account_home(user["id"]))
+    # As for Claude: an API failure never falls back to a member's sign-in.
+    return is_operator_account(user["id"]) and codex_login.account_login_ready(
+        codex_login.account_home(user["id"])
+    )
 
 
 def _run_codex_prompt_env(
@@ -1858,14 +1869,42 @@ def generate(
     from agent_monitor.jobs import _route_from_record
 
     recorded_route = "api_key" if is_guest else _route_from_record(run_record)
+    if recorded_route == "api_key" and not model:
+        from agent_monitor.auto_pipeline import _api_model
+
+        # A rebuild that names no model uses the run's own model, as the
+        # automatic stages do, not the account's current default.
+        model = _api_model(
+            (run_record or {}).get("requested_model") or (run_record or {}).get("model")
+        )
     requested = str(model or "").strip().lower()
     requested_codex = requested in {"codex", "codex-cli", "codex cli"}
     requested_claude = requested in _CLAUDE_ACCOUNT_MODELS
+    from agent_monitor import account_policy
+
+    # Only a legacy run (no recorded route) may pick a subscription by model
+    # name or account preference, and never a member's: subscriptions are the
+    # administrator's, even a sign-in a member linked before that policy.
+    may_pick_subscription = recorded_route is None and not account_policy.is_member(user)
     use_codex = recorded_route == "codex_subscription" or (
-        requested_codex and allow_codex_fallback
+        requested_codex and allow_codex_fallback and may_pick_subscription
     )
+    if requested_codex and allow_codex_fallback and not use_codex:
+        # Say why "codex" is refused rather than letting it fail as an API
+        # model name: a member gets the note its Settings show, anyone else
+        # the route the run was recorded on.
+        route_name = {
+            "api_key": "an API key",
+            "claude_subscription": "a Claude subscription",
+        }.get(str(recorded_route), str(recorded_route).replace("_", " "))
+        raise ValueError(
+            account_policy.member_route_error(user, "codex_subscription")
+            or f"This run was recorded on {route_name}, so its DAG is rebuilt on "
+            "that route, not on a Codex subscription; leave the model empty to "
+            "use the run's own model"
+        )
     use_claude = recorded_route == "claude_subscription"
-    if recorded_route is None and not use_claude:
+    if may_pick_subscription and not use_claude:
         from agent_monitor.settings import claude_enabled
 
         use_claude = (
@@ -1877,7 +1916,13 @@ def generate(
         chosen_model, content = _run_claude_prompt(
             user,
             prompt,
-            model=model or str((run_record or {}).get("model") or "").strip() or None,
+            model=model
+            or str(
+                (run_record or {}).get("requested_model")
+                or (run_record or {}).get("model")
+                or ""
+            ).strip()
+            or None,
             source_env=env,
         )
     elif not use_codex:
@@ -1887,11 +1932,16 @@ def generate(
             )
         except ValueError:
             if allow_codex_fallback:
-                # Manual DAG generation may use the user's connected Codex
-                # account, subject to their preference.
+                # Manual DAG generation of a legacy run (no recorded route) may
+                # use the user's connected Codex account, subject to their
+                # preference; a run recorded on an API key stays on it.
                 from agent_monitor.settings import codex_enabled
 
-                if codex_enabled(user, env=env) and _codex_account_ready(user):
+                if (
+                    may_pick_subscription
+                    and codex_enabled(user, env=env)
+                    and _codex_account_ready(user)
+                ):
                     use_codex = True
                 else:
                     raise

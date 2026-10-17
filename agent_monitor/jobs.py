@@ -1,6 +1,7 @@
 """Background job manager for engine runs."""
 from __future__ import annotations
 
+import errno
 import hashlib
 import json
 import math
@@ -286,7 +287,8 @@ def _check_cgm_problem_size(engine: str, text: str) -> None:
 
 def _analyze_model(user: dict[str, Any] | None, model: str | None) -> str:
     """The model of an Analyze run: Kimi K3 for guests (sponsored only), the
-    requested one, else the account's saved default, else Kimi K3."""
+    requested one, else the account's saved default (a member's as
+    account_policy.member_run_model resolves it), else Kimi K3."""
     from agent_monitor.settings import GUEST_DEFAULT_MODEL
 
     requested = str(model or "").strip()
@@ -300,6 +302,11 @@ def _analyze_model(user: dict[str, Any] | None, model: str | None) -> str:
         # Public mode: the saved default would be the server's (see
         # account_policy.member_analyze_sponsored_only).
         return GUEST_DEFAULT_MODEL
+    if account_policy.is_member(user):
+        # As for a blank Plain model: the model the console's Analyze form
+        # offers, not a saved default (a new account's Kimi K3) that the
+        # member's keys cannot run.
+        return account_policy.member_run_model(user, _ANALYZE_ENGINE, None) or GUEST_DEFAULT_MODEL
     if user is not None:
         from agent_monitor.settings import resolved_user_env
 
@@ -307,6 +314,65 @@ def _analyze_model(user: dict[str, Any] | None, model: str | None) -> str:
         if saved and not cgm_max.is_max_model(saved):
             return saved
     return GUEST_DEFAULT_MODEL
+
+
+def _saved_default_model(
+    user: dict[str, Any], *, engine: str, auth_route: str | None
+) -> str | None:
+    """An administrator's saved default model, for a run that names none.
+
+    Only a model the run's route can run (the requested route or, as
+    ``_selected_auth_route`` picks it, the account runtime's): one of the
+    linked Claude Code or Codex account that the engine supports, or on the
+    API route one the account's keys can run (``_api_keys_run``), or Kimi K3
+    where the sponsored service serves the engine.  Never Max, which is always
+    a deliberate choice.  Otherwise None, and the harness uses its own default.
+    """
+    from agent_monitor.engines_registry import supported_models
+    from agent_monitor.settings import account_runtime, resolved_user_env
+
+    env = resolved_user_env(user)
+    saved = str(env.get("AGENT_MONITOR_MODEL") or "").strip()
+    if not saved or cgm_max.is_max_model(saved):
+        return None
+    route = str(auth_route or "").strip().lower() or {
+        "api": "api_key",
+        "codex": "codex_subscription",
+        "claude": "claude_subscription",
+    }[account_runtime(user, env=env)]
+    if route in {"claude_subscription", "codex_subscription"}:
+        allowed = supported_models(engine)
+        if allowed and saved not in allowed:
+            return None
+        try:
+            _validate_subscription_model(route=route, model=saved, user=user, field="Selected model")
+        except ValueError:
+            return None
+        return saved
+    if route != "api_key":
+        return None
+    if _is_kimi_model(saved) and _sponsored_broker_serves(engine, saved):
+        return saved
+    return saved if _api_keys_run(env, saved) else None
+
+
+def _api_keys_run(env: dict[str, str], model: str | None) -> bool:
+    """Whether the API route can run ``model`` on the keys in ``env``.
+
+    As the API runners resolve it: the model names its provider (a listed
+    model, or a custom ID with the provider's prefix, as Settings allows) and
+    that provider's key is set.  A subscription alias such as ``opus`` names
+    no provider.
+    """
+    from agent_monitor.proof_graph import _resolve_llm_provider
+
+    if not str(model or "").strip():
+        return False
+    try:
+        _resolve_llm_provider(dict(env), model)
+    except ValueError:
+        return False
+    return True
 
 
 def _analyze_api_timeout(sponsored: bool) -> int:
@@ -639,7 +705,7 @@ def _write_run_locked(run: dict[str, Any]) -> Path:
         "owner_id", "owner", "created_at", "problem_id",
         "guest", "use_subagents", "subagent_model", "auth_route", "credential_source",
         "model", "requested_model", "reasoning_effort", "speed_mode", "max_iterations", "formalize",
-        "route_plan", "run_kind", "analyze",
+        "route_plan", "run_kind", "analyze", "tool_free",
         "engine_impl", "engine_impl_version", "artifact_schema", "graph_schema",
     ):
         if run.get(k) in (None, "", "continue") and old.get(k) not in (None, "", "continue"):
@@ -1059,6 +1125,16 @@ def _configure_auth_route(
     _scrub_provider_route_env(configured)
     if user_id is None:
         raise ValueError("A signed-in ProvingConsole account is required for subscription mode")
+    from agent_monitor.auth import is_operator_account
+
+    if not is_operator_account(user_id):
+        # Subscriptions and Max are the administrator's alone, whichever path
+        # (run, continuation, DAG or Formal work) asks: the stored role decides,
+        # so a sign-in a member linked before that policy is never used.
+        raise ValueError(
+            account_policy.member_route_error({"id": user_id}, route)
+            or "Account subscriptions are limited to the site administrator"
+        )
 
     if route == cgm_max.ROUTE:
         from agent_monitor import claude_login, codex_login
@@ -1225,6 +1301,35 @@ def _validate_subscription_model(
         )
 
 
+def _raise_long_effort_timeouts(
+    env: dict[str, str], *, engine: str, route: str, effort: object
+) -> None:
+    """Give extra-high and maximum effort CGM and Analyze calls 30 minutes.
+
+    Those calls on a linked account are long (Max allows them 30 minutes
+    each) and would otherwise get the 600 s default; a timed-out call is
+    never retried.  Every call stays capped at the run's deadline, so the
+    watchdogs are unchanged.  Other engines read these variables with
+    defaults of their own.  An operator setting wins, the shared Claude
+    timeout included (the CGM-specific one would take precedence over it).
+    """
+    if (
+        engine not in _CGM_ENGINES | {_ANALYZE_ENGINE}
+        or route not in {"claude_subscription", "codex_subscription"}
+        or effort not in {"xhigh", "max"}
+    ):
+        return
+    for names, seconds in (
+        (
+            ("AGENT_MONITOR_MATH_HARNESS_CLAUDE_TIMEOUT", "AGENT_MONITOR_CLAUDE_TIMEOUT"),
+            cgm_max.CLAUDE_CALL_TIMEOUT,
+        ),
+        (("AGENT_MONITOR_CODEX_TIMEOUT",), cgm_max.CODEX_CALL_TIMEOUT),
+    ):
+        if not any(str(env.get(name) or os.environ.get(name) or "").strip() for name in names):
+            env[names[0]] = str(seconds)
+
+
 def start_job(
     *,
     engine: str,
@@ -1244,6 +1349,7 @@ def start_job(
     run_kind: str | None = None,
     source: object = None,
     analyze: object = None,
+    tool_free: bool = False,
 ) -> dict[str, Any]:
     """Start one run (``run_kind`` ``"prove"``, the default, or ``"analyze"``).
 
@@ -1251,6 +1357,11 @@ def start_job(
     ``{"text", "format"?}``) or manuscript ``attachments``, and ``analyze``
     options (``{"max_nodes"?, "focus"?}``); ``formalize`` defaults to false for
     it and to true for proofs.  See :mod:`agent_monitor.analyze_runs`.
+
+    ``tool_free`` marks a proof from a project that has, or had, a member who
+    is not an administrator: it runs only a tool-free engine on an API key,
+    without subagents (``account_policy.PROJECT_TOOL_FREE_ERROR``, an
+    ``account_policy.ProjectPolicyError``).
     """
     from agent_monitor.engines_registry import all_engine_ids, list_engines, supported_models
 
@@ -1293,6 +1404,14 @@ def start_job(
         subagent_model = None
     elif formalize is None:
         formalize = True
+    tool_free = tool_free and kind == "prove"
+    if tool_free:
+        refusal = account_policy.project_run_error(engine, model=model, auth_route=auth_route)
+        if refusal:
+            raise account_policy.ProjectPolicyError(refusal)
+        use_subagents = False
+        subagent_model = None
+        auth_route = "api_key"
     max_plan: dict[str, Any] | None = None
     if cgm_max.is_max_model(model) or str(auth_route or "").strip().lower() == cgm_max.ROUTE:
         # Max: Claude Code leads and Codex works, on the run owner's two linked
@@ -1342,6 +1461,16 @@ def start_job(
         model = model or GUEST_DEFAULT_MODEL
         if model != GUEST_DEFAULT_MODEL:
             raise ValueError(f"Kimi Proof uses {GUEST_DEFAULT_MODEL}")
+    if (
+        not str(model or "").strip()
+        and user is not None
+        and not is_guest
+        and not account_policy.is_member(user)
+    ):
+        # A blank model (the Projects page's "Default account model", or an
+        # API caller's) is the saved default, as it is for members.  Resolved
+        # before the provider keys are projected for it.
+        model = _saved_default_model(user, engine=engine, auth_route=auth_route) or model
 
     extra_env = _user_extra_env(user, model, subagent_model)
     if is_guest:
@@ -1448,8 +1577,9 @@ def start_job(
             auth_modes=auth_modes,
             user=user,
             env=extra_env,
-            # A member's runtime is always the API route, whatever it stored.
-            enforce_account_runtime=not account_policy.is_member(user),
+            # A member's runtime (and a tool-free run's) is always the API
+            # route, whatever the account stored.
+            enforce_account_runtime=not (account_policy.is_member(user) or tool_free),
         )
     if route not in auth_modes and route != cgm_max.ROUTE:
         raise ValueError(
@@ -1470,6 +1600,16 @@ def start_job(
         raise ValueError("Kimi K3 is an API model and cannot use a linked account subscription")
     if route == "api_key" and user is not None and not has_api_key:
         raise ValueError("No compatible API key is configured; add and verify one in Settings")
+    if (
+        engine == "codex"
+        and route == "api_key"
+        and not selected_kimi
+        and user is not None
+        and not str(extra_env.get("OPENAI_API_KEY") or "").strip()
+    ):
+        # Codex signs in only with an OpenAI key; another provider's key would
+        # leave it nothing to use but the service account's own login.
+        raise ValueError("Codex CLI on the API route needs an OpenAI API key; add one in Settings")
 
     # Validate both the main and delegated model against the selected billing
     # route. A stale API model in either field must never flip a subscription
@@ -1508,6 +1648,9 @@ def start_job(
     )
     if max_plan is not None:
         cgm_max.apply_models(extra_env, max_plan)
+    _raise_long_effort_timeouts(
+        extra_env, engine=engine, route=route, effort=tuning.get("reasoning_effort")
+    )
     # Carry the UI toggle into every external harness. Engines without an
     # internal delegation tool ignore it; DeepAgents uses it to remove `task`.
     extra_env["AGENT_MONITOR_USE_SUBAGENTS"] = "1" if use_subagents else "0"
@@ -1597,6 +1740,7 @@ def start_job(
             analyze_request=analyze_request,
             analyze_route=analyze_route,
             analyze_caps=analyze_caps,
+            tool_free=tool_free,
         )
     except BaseException:
         if gate_key is not None:
@@ -1631,6 +1775,7 @@ def _start_job_launch(
     analyze_request: dict[str, Any] | None,
     analyze_route: str,
     analyze_caps: dict[str, int],
+    tool_free: bool = False,
 ) -> dict[str, Any]:
     """The launch half of :func:`start_job`: credentials, workspace, record,
     worker thread and derived pipeline (everything validated already)."""
@@ -1743,6 +1888,9 @@ def _start_job_launch(
             # False keeps the run informal: the derived pipeline skips Lean.
             "formalize": bool(formalize),
             **analyze_fields,
+            # Its prompt carries a non-administrator's project text for good,
+            # whoever belongs to the project later (see tool_free_run).
+            **({"tool_free": True} if tool_free else {}),
             **(
                 {
                     "route_plan": {
@@ -1877,6 +2025,21 @@ def _user_extra_env(
     return dict(project_provider_env(env, requested_models))
 
 
+def _account_awaits_reconnect(route: str, user_id: int | None) -> bool:
+    """True when the route's linked login was rejected and needs a new sign-in."""
+    if user_id is None:
+        return False
+    if route == "codex_subscription":
+        from agent_monitor import codex_login
+
+        return codex_login.account_reauth_required(codex_login.account_home(int(user_id)))
+    if route == "claude_subscription":
+        from agent_monitor import claude_login
+
+        return claude_login.account_reauth_required(claude_login.account_home(int(user_id)))
+    return False
+
+
 def _continuation_auth_environment(
     *,
     run_data: dict[str, Any],
@@ -1960,6 +2123,10 @@ def _continuation_auth_environment(
         # this compatibility branch and therefore always fails closed.
         if not legacy_unpinned or route == "api_key" or "api_key" not in auth_modes:
             raise
+        # A login waiting for Reconnect is still the selected account, and
+        # Settings promises its API keys are never the fallback.
+        if _account_awaits_reconnect(route, owner_id):
+            raise
         route = "api_key"
         configured = _configure_auth_route(env, route=route, user_id=None)
     if sponsored_run and _is_kimi_model(model) and engine != "plain":
@@ -1983,7 +2150,10 @@ def _continuation_auth_environment(
         cgm_max.apply_models(configured, cgm_max.record_plan(run_data))
     from agent_monitor.run_tuning import from_record as apply_recorded_tuning
 
-    apply_recorded_tuning(configured, run_data)
+    tuning = apply_recorded_tuning(configured, run_data) or {}
+    _raise_long_effort_timeouts(
+        configured, engine=engine, route=route, effort=tuning.get("reasoning_effort")
+    )
     return configured, route
 
 
@@ -2156,8 +2326,15 @@ def _execute_job_body(
                 raise LookupError("user library disabled for isolated Kimi service")
             from agent_monitor import library as user_library
 
-            materialized = user_library.materialize(ws)
-            lib_ctx = user_library.compose_context()
+            # Records of the operator's own runs reach only the operator's runs.
+            if owner_id is None:
+                operator_run = True
+            else:
+                from agent_monitor.auth import is_operator_account
+
+                operator_run = is_operator_account(int(owner_id))
+            materialized = user_library.materialize(ws, run_memories=operator_run)
+            lib_ctx = user_library.compose_context(run_memories=operator_run)
             library_snapshot = user_library.get_library()
             runtime_library = {
                 "materialized": list(materialized.get("written") or []),
@@ -2274,6 +2451,10 @@ def _execute_job_body(
                     "--component", f"cfg_claude_author.model={model}",
                     "--component", f"cfg_claude_critic.model={model}",
                 ]
+                # The Claude worker is not a codex command, so the component
+                # model never reaches its command line: it reads this variable
+                # (and otherwise falls back to Haiku).
+                extra_env = {**(extra_env or {}), "AGENT_MONITOR_CLAUDE_MODEL": model}
             elif str(model or "").lower().startswith("kimi-"):
                 improof_args = ["--model", "*=models/kimi/k3"]
             result = improof_runner.run_problem(
@@ -2408,21 +2589,18 @@ def _execute_job_body(
             status = "failed"
         _update_job(job_id, status=status, error=result_run.get("error"))
         # Full record in the human-in-the-loop chat: summary + final answer.
-        t = result_run.get("totals") or {}
-        summary = (
-            f"{'✓' if status == 'finished' else '✗'} run {status} · "
-            f"{len(result_run.get('agents') or [])} agents · "
-            f"in {t.get('input_tokens') or 0} / out {t.get('output_tokens') or 0} tokens"
-            + (f" · ${t.get('cost_usd'):.4f}" if t.get("cost_usd") else "")
-            + f" · {int(time.time() - started)}s"
-        )
+        summary = _run_finished_line(result_run, status, time.time() - started, analyze=analyze_run)
         _append_chat(run_id, "system", summary)
         final_out = ""
         for a in reversed(result_run.get("agents") or []):
             if a.get("output"):
                 final_out = str(a["output"])
                 break
-        if final_out:
+        if analyze_run:
+            # An analysis's last agent is its process log: the Progress panel
+            # gets a plain summary instead (the report is in the Sandbox).
+            _append_chat(run_id, "system", _analyze_chat_summary(result_run, status))
+        elif final_out:
             _append_chat(run_id, "assistant", final_out[:3000])
         # Neither the standalone public service nor an anonymous guest run
         # imports, reads, or writes the operator's persistent user library.
@@ -2968,6 +3146,87 @@ def _finalize_analyze_record(run: dict[str, Any], workspace: Path) -> None:
         pass
 
 
+def _analyze_running_label(workspace: Path) -> str:
+    """"Analyze · <title>" once the running analysis has read its manuscript
+    (``analysis/manuscript.json`` exists), else ``""``."""
+    if not (workspace / "analysis" / "manuscript.json").is_file():
+        return ""
+    from agent_monitor.analyze import record as analyze_record
+    from agent_monitor.analyze_runs import problem_text as analyze_problem_text
+
+    try:
+        block = analyze_record.run_block(workspace) or {}
+    except Exception:  # noqa: BLE001 - the label waits for the finished record
+        return ""
+    title = _analyze_title(block)
+    return analyze_problem_text(title, str(block.get("focus") or "")) if title else ""
+
+
+def _plural(count: int, one: str, many: str) -> str:
+    return f"{count} {one if count == 1 else many}"
+
+
+def _run_finished_line(run: dict[str, Any], status: str, seconds: float, *, analyze: bool = False) -> str:
+    """A run's closing line in its chat. An analysis counts its model calls,
+    as its Progress pane does: its agents are the runner's process log."""
+    totals = run.get("totals") or {}
+    if analyze:
+        calls = int((((run.get("analyze") or {}).get("summary") or {}).get("calls")) or 0)
+        count = _plural(calls, "model call", "model calls")
+    else:
+        count = f"{len(run.get('agents') or [])} agents"
+    return (
+        f"{'✓' if status == 'finished' else '✗'} run {status} · {count} · "
+        f"in {totals.get('input_tokens') or 0} / out {totals.get('output_tokens') or 0} tokens"
+        + (f" · ${totals.get('cost_usd'):.4f}" if totals.get("cost_usd") else "")
+        + f" · {int(seconds)}s"
+    )
+
+
+def _analyze_chat_summary(run: dict[str, Any], status: str) -> str:
+    """The closing message of an analysis in its Progress panel: what was
+    checked, in plain words (never the runner's process log or model output)."""
+    block = run.get("analyze") or {}
+    summary = block.get("summary") or {}
+    head = {"finished": "Analysis finished", "stopped": "Analysis stopped"}.get(status, "Analysis failed")
+    parts: list[str] = []
+    if summary:
+        coverage = summary.get("coverage") or {}
+        checked, total = int(coverage.get("checked") or 0), int(coverage.get("total") or 0)
+        # Results with a located proof that were not checked (statements
+        # without a proof are never checkable and are not counted here).
+        unchecked = max(0, total - checked)
+        counts = [
+            text for value, text in (
+                (summary.get("checked"), f"{int(summary.get('checked') or 0)} with no issue found"),
+                (summary.get("gap"), _plural(int(summary.get("gap") or 0), "with a gap", "with gaps")),
+                (summary.get("error"), _plural(int(summary.get("error") or 0), "with an error", "with errors")),
+                (summary.get("unclear"), f"{int(summary.get('unclear') or 0)} unclear"),
+                (unchecked, f"{unchecked} not checked"),
+            ) if value
+        ]
+        if checked:
+            parts.append(f"{head}: {checked} of {total} results checked"
+                         + (f" ({', '.join(counts)})" if counts else "") + ".")
+            parts.append("The report is in the Sandbox and the verdicts are in the DAG. "
+                         "Checked by a model verifier — not a certificate.")
+        else:
+            parts.append(f"{head}: no result was checked. The report in the Sandbox says why.")
+    else:
+        parts.append(f"{head}; no report was published.")
+    if status == "failed":
+        errors = [
+            " ".join(str(agent.get("output") or "").split())
+            for agent in run.get("agents") or []
+            if isinstance(agent, dict) and str(agent.get("stage_name") or "").endswith("(error)")
+        ]
+        error = next((item for item in reversed(errors) if item), "") or re.sub(
+            r"^Ansatz Analyze exited with code \d+: ", "", " ".join(str(run.get("error") or "").split()))
+        if error:
+            parts.append(error[:600])
+    return "\n\n".join(parts)
+
+
 def _analyze_memory_label(run: dict[str, Any]) -> str:
     """The operator-memory line of an analysis: its label and verdict counts."""
     block = run.get("analyze") or {}
@@ -3445,7 +3704,8 @@ def _run_hermes(
     try:
         result = agent.run_conversation(prompt)
         initial_final = str((result or {}).get("final_response") or "")
-        _persist_text_final_answer(initial_final, workspace, engine="Hermes")
+        if not _hermes_text_is_error_report(result):
+            _persist_text_final_answer(initial_final, workspace, engine="Hermes")
         if (
             not stop_ev.is_set()
             and _hermes_audit_last_mile_needed(problem_text, workspace)
@@ -3466,7 +3726,12 @@ def _run_hermes(
         raise StopRequested(run_id)
     elapsed = time.time() - started
     final = (result or {}).get("final_response") or ""
-    proof = _persist_text_final_answer(final, workspace, engine="Hermes")
+    turn_error = _hermes_turn_error(result)
+    proof = (
+        _root_proof_artifact(workspace)
+        if _hermes_text_is_error_report(result)
+        else _persist_text_final_answer(final, workspace, engine="Hermes")
+    )
     completed = bool((result or {}).get("completed", True)) and proof is not None
     final_status = "finished" if completed else "failed"
     try:
@@ -3533,7 +3798,11 @@ def _run_hermes(
             "live": {**live, "tools_recent": live["tools_recent"][-10:]},
             "status": final_status,
             "completed": completed,
-            "error": None if completed else "Hermes finished without creating a non-empty proof.md or proof.tex",
+            "error": None if completed else (
+                f"Hermes stopped: {turn_error}"
+                if turn_error
+                else "Hermes finished without creating a non-empty proof.md or proof.tex"
+            ),
             "updated_at": _now(),
             "workspace": str(workspace),
             "pipeline": _pipeline_for("hermes"),
@@ -3554,7 +3823,39 @@ def _run_hermes(
     return _attach_analysis(run, workspace)
 
 
-def _ensure_codex_auth(env: dict[str, str], owner_id: int | None = None) -> None:
+_ANSI_ESCAPE_RE = re.compile(r"\x1b\[[0-9;?]*[ -/]*[@-~]")
+
+
+def _hermes_turn_error(result: Any) -> str:
+    """The reason Hermes ended a turn unsuccessfully (a Codex usage limit,
+    an expired login, a crashed app-server), cleaned for the run record."""
+    if not isinstance(result, dict) or result.get("completed") is not False:
+        return ""
+    raw = str(result.get("error") or "").strip()
+    if not raw:
+        return ""
+    # Codex app-server failures append its stderr tail; keep the reason.
+    raw = raw.split("\ncodex stderr", 1)[0]
+    return " ".join(_ANSI_ESCAPE_RE.sub("", raw).split())[:600]
+
+
+def _hermes_text_is_error_report(result: Any) -> bool:
+    """Whether Hermes' final text is its own failure report, never a proof draft.
+
+    A crashed app-server ("Codex app-server turn failed: ..."), a result
+    marked ``failed`` or text that is the error itself is a report.  A turn
+    cut short (truncated, a usage limit mid-answer) still returns the model's
+    partial draft, which is kept as before.
+    """
+    if not isinstance(result, dict) or result.get("completed") is not False:
+        return False
+    text = str(result.get("final_response") or "").strip()
+    if result.get("failed") is True or text.startswith("Codex app-server turn failed"):
+        return True
+    return bool(text) and text == str(result.get("error") or "").strip()
+
+
+def _ensure_codex_auth(env: dict[str, str], owner_id: int | None = None) -> Path | None:
     """Point codex at a CODEX_HOME with valid credentials.
 
     Prefers the *run owner's* ChatGPT/OpenAI-account (OAuth) login — set up
@@ -3566,14 +3867,16 @@ def _ensure_codex_auth(env: dict[str, str], owner_id: int | None = None) -> None
     ``AGENT_MONITOR_CODEX_AUTH_MODE=apikey`` to force API-key mode even when
     an account login exists.
 
-    Falls back to a per-key CODEX_HOME (auto logged in with OPENAI_API_KEY)
-    when no account login is present (or no owner is known); keying that
-    home dir by the API key keeps different users' credentials separate and
-    auto-refreshes when a key changes in Settings.
+    Falls back to a private CODEX_HOME made for this run and logged in with
+    OPENAI_API_KEY when no account login is present (or no owner is known).
+    ``codex login`` stores the key in plaintext, so that home lives outside
+    the data directory and is returned for the caller to remove
+    (``_remove_codex_api_home``) once Codex has exited. An account's API-key
+    run without an OpenAI key gets that home empty, so Codex reports it is
+    not logged in rather than signing in as the service account's ~/.codex.
     """
-    import hashlib
-    import shutil
     import subprocess
+    import tempfile
 
     if owner_id is not None:
         from agent_monitor import codex_login
@@ -3584,21 +3887,22 @@ def _ensure_codex_auth(env: dict[str, str], owner_id: int | None = None) -> None
         force_apikey = mode in {"api_key", "apikey"} or not use_codex
         if not force_apikey and codex_login.account_login_ready(account_home):
             env["CODEX_HOME"] = str(account_home)
-            return
+            return None
 
     key = env.get("OPENAI_API_KEY")
-    if not key:
-        return
-    home = CACHE_DIR.parent / "codex_home" / hashlib.sha256(key.encode("utf-8")).hexdigest()[:16]
-    home.mkdir(parents=True, exist_ok=True)
+    if not key and (owner_id is None or env.get("AGENT_MONITOR_CODEX_SUBSCRIPTION") == "1"):
+        # A local run without an account keeps the invoking user's own Codex
+        # setup; a subscription run keeps the account home its route set.
+        return None
+    home = Path(tempfile.mkdtemp(prefix="agent-monitor-codex-"))
     env["CODEX_HOME"] = str(home)
-    if (home / "auth.json").exists():
-        return
+    if not key:
+        return home
     from agent_monitor.engines_registry import which_tool
 
     codex = shutil.which("codex", path=env.get("PATH")) or which_tool("codex")
     if not codex:
-        return
+        return home
     try:
         from agent_monitor.subprocess_env import child_process_env
 
@@ -3617,6 +3921,41 @@ def _ensure_codex_auth(env: dict[str, str], owner_id: int | None = None) -> None
         )
     except (OSError, subprocess.TimeoutExpired):
         pass
+    return home
+
+
+def _remove_codex_api_home(home: Path | None) -> None:
+    """Delete a run's private API-key CODEX_HOME (from ``_ensure_codex_auth``)."""
+    if home is not None:
+        shutil.rmtree(home, ignore_errors=True)
+
+
+# Earlier versions kept one Codex login per API key at codex_home/<16 hex>.
+_LEGACY_CODEX_KEY_HOME = re.compile(r"[0-9a-f]{16}")
+
+
+def remove_legacy_codex_key_homes() -> int:
+    """Delete the per-key Codex logins earlier versions left in the data directory.
+
+    Each held an OpenAI key in plaintext, outside the encrypted settings, and
+    nothing removed it when the key changed. Account sign-ins (``users/``)
+    are kept. Returns how many were removed.
+    """
+    root = CACHE_DIR.parent / "codex_home"
+    try:
+        entries = list(root.iterdir())
+    except OSError:
+        return 0
+    removed = 0
+    for entry in entries:
+        if (
+            _LEGACY_CODEX_KEY_HOME.fullmatch(entry.name)
+            and entry.is_dir()
+            and not entry.is_symlink()
+        ):
+            shutil.rmtree(entry, ignore_errors=True)
+            removed += 1
+    return removed
 
 
 def _cli_failure_reason(
@@ -3636,7 +3975,8 @@ def _cli_failure_reason(
         return f"{label} exited with code {returncode}{suffix}"
     if proof_missing:
         return f"{label} exited successfully but produced no {artifact}"
-    return f"{label} failed before producing a {artifact}"
+    suffix = f": {detail.strip()}" if detail and detail.strip() else ""
+    return f"{label} failed before producing a {artifact}{suffix}"
 
 
 def _analysis_published(workspace: Path) -> bool:
@@ -3755,6 +4095,11 @@ def _cli_timeout_seconds(engine: str, env: dict[str, str]) -> int:
     except (TypeError, ValueError):
         requested = default
     bounded = max(60, min(requested, 86_400))
+    if normalized == "MATH_HARNESS" and env.get(cgm_max.ROUTE_MODE_ENV) == "max":
+        # Max fixes its own call and run limits (cgm_max.apply_models), and a
+        # runner the watchdog stops publishes nothing: operator timeouts may
+        # raise a Max run's watchdog but never cut the run short.
+        bounded = max(bounded, default, cgm_max.RUN_SECONDS + 300)
     if env.get("AGENT_MONITOR_SPONSORED_KIMI") == "1":
         bounded = min(bounded, _SPONSORED_KIMI_CLI_TIMEOUT_MAX)
     return bounded
@@ -3969,7 +4314,14 @@ def _run_cli_engine(
     """Run an external CLI harness (codex / openclaude / openhands / …) live."""
     import subprocess
 
-    from agent_monitor.engines_registry import CLI_ENGINES, build_cli_command, proof_prompt
+    from agent_monitor.engines_registry import (
+        CLI_ENGINES,
+        build_cli_command,
+        discard_prompt_file,
+        prompt_on_stdin,
+        proof_prompt,
+        send_prompt_on_stdin,
+    )
 
     spec = CLI_ENGINES.get(engine) or {}
     # Keep execution-only library/persona context out of the user-visible
@@ -4041,6 +4393,9 @@ def _run_cli_engine(
     from agent_monitor.cli_events import CLIEventParser
 
     parser = CLIEventParser(spec.get("parser_style") or engine, source_engine=engine)
+    # An analysis is listed as "Analyze · <title>" as soon as the runner has
+    # read the manuscript (not only once it has exited).
+    analyze_label: dict[str, str] = {}
 
     def _flush(
         output_tail: str,
@@ -4048,6 +4403,11 @@ def _run_cli_engine(
         *,
         error: str | None = None,
     ) -> dict[str, Any]:
+        nonlocal record_problem_text
+        if analyze_run and not analyze_label:
+            label = _analyze_running_label(workspace)
+            if label:
+                analyze_label["text"] = record_problem_text = label
         u = parser.usage
         # One node per model call/turn when the CLI streams JSON events;
         # otherwise fall back to a single session node (e.g. openhands TTY).
@@ -4196,6 +4556,10 @@ def _run_cli_engine(
             },
             engine=engine,  # type: ignore[arg-type]
         )
+        if analyze_label:
+            # The run list's label comes from the session problems.
+            run["problems"] = _seed_problems(record_problem_text, source="initial")
+            run["problem_text_preview"] = record_problem_text[:500]
         _attach_analysis(run, workspace)
         _write_run(run)
         return run
@@ -4229,19 +4593,21 @@ def _run_cli_engine(
         # Raw Codex CLI ignores OPENAI_BASE_URL and its modern custom-provider
         # path emits OpenAI-specific extensions.  The wrapper uses an isolated
         # Responses provider plus a loopback sanitizer, while preserving native
-        # Codex JSONL events for Conversation/Monitor/DAG.
+        # Codex JSONL events for Conversation/Monitor/DAG.  Like native Codex
+        # it reads the prompt from stdin ("-", see prompt_on_stdin).
         argv = [
             sys.executable,
             "-u",
             str(Path(__file__).resolve().parent / "runners" / "kimi_codex_runner.py"),
-            prompt,
+            "-",
         ]
     elif engine == "codex":
         from agent_monitor.run_tuning import codex_config_args
 
         config_args = codex_config_args(env, requested_model)
         if config_args:
-            insert_at = len(argv) - 1 if argv and argv[-1] == prompt else len(argv)
+            # Before the prompt, or the "-" that reads it from stdin.
+            insert_at = len(argv) - 1 if argv and argv[-1] in {prompt, "-"} else len(argv)
             argv[insert_at:insert_at] = config_args
     if engine == "openclaude" and max_iterations is not None:
         env["AGENT_MONITOR_OPENCLAUDE_MAX_TURNS"] = str(
@@ -4290,8 +4656,9 @@ def _run_cli_engine(
     extra = engine_extra_path(engine)
     if extra:
         env["PATH"] = os.pathsep.join([*extra, env.get("PATH", "")])
+    codex_api_home = None
     if engine == "codex" and not _is_kimi_model(requested_model):
-        _ensure_codex_auth(env, owner_id)
+        codex_api_home = _ensure_codex_auth(env, owner_id)
     # Cap node heap so openclaw survives this small-RAM host (no swap).
     if engine == "openclaw":
         env.setdefault("NODE_OPTIONS", "--max-old-space-size=256")
@@ -4304,12 +4671,13 @@ def _run_cli_engine(
     timeout_s = _cli_timeout_seconds(engine, env)
     stop_ev = _stop_event(run_id)
     buf: list[str] = []
+    stdin_prompt = prompt_on_stdin(engine, argv)
     try:
         proc = subprocess.Popen(
             argv,
             cwd=str(workspace),
             env=env,
-            stdin=subprocess.DEVNULL,
+            stdin=subprocess.PIPE if stdin_prompt else subprocess.DEVNULL,
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
             text=True,
@@ -4317,9 +4685,26 @@ def _run_cli_engine(
             start_new_session=True,
         )
     except OSError as exc:
-        return _flush(f"failed to launch: {exc}", status="failed")
+        _remove_codex_api_home(codex_api_home)
+        discard_prompt_file(workspace)
+        label = str(spec.get("label") or engine)
+        reason = f"{label} could not start: {exc.strerror or exc}"
+        if getattr(exc, "errno", None) == errno.E2BIG:
+            # Linux limits one command-line argument to 128 KiB.  The prompt
+            # also holds the agent profile and library context, and up to
+            # 40,000 characters of attachment excerpts.
+            reason = (
+                f"{label} could not start: the task prompt is too large to pass "
+                "on the command line (it holds the problem text plus the agent "
+                "profile, library context and attachment excerpts); shorten the "
+                "problem text, or move long material into an attachment, of "
+                "which only an excerpt is included"
+            )
+        return _flush(f"failed to launch: {exc}", status="failed", error=reason)
 
     _register_proc(run_id, proc)
+    if stdin_prompt:
+        send_prompt_on_stdin(proc, prompt)
     import queue
     import signal
     import threading
@@ -4401,6 +4786,10 @@ def _run_cli_engine(
         if proc.stdout is not None:
             proc.stdout.close()
         _unregister_proc(run_id)
+        _remove_codex_api_home(codex_api_home)
+        # A wrapper that ended, or was stopped, before reading its prompt
+        # file leaves it behind.
+        discard_prompt_file(workspace)
     if engine == "openhands":
         parser.finalize_openhands()
     elif engine == "openclaw":
@@ -4408,8 +4797,31 @@ def _run_cli_engine(
         _persist_openclaw_final_answer(parser, workspace)
     if stopped or stop_ev.is_set():
         return _flush(parser.output(), status="stopped")
+    reconnect_codex = False
+    if engine == "codex" and not _is_kimi_model(requested_model) and env.get("CODEX_HOME"):
+        from agent_monitor import codex_login
+
+        # Settings offers Reconnect once Codex rejects a linked login.
+        reconnect_codex = codex_login.note_turn_outcome(
+            env["CODEX_HOME"],
+            completed=parser.terminal_status == "completed",
+            failure=(parser.terminal_error or "") if parser.terminal_status == "failed" else "",
+        )
+    # Wrappers (claude_runner and friends) report their typed failure on
+    # stderr as "[agent-monitor] <reason>"; it is the run's best explanation
+    # when the structured stream itself carries none.
+    runner_detail = next(
+        (
+            line.strip()[len("[agent-monitor] "):].strip()
+            for line in reversed(buf)
+            if line.strip().startswith("[agent-monitor] ")
+        ),
+        "",
+    )
     if engine in {"codex", "claude"} and parser.terminal_status is None:
-        parser.terminal_error = "CLI ended without a terminal completion event"
+        parser.terminal_error = (
+            runner_detail[-1200:] or "CLI ended without a terminal completion event"
+        )
     ok = proc.returncode == 0 and not timed_out and not parser.terminal_error
     proof_missing = False
     if analyze_run:
@@ -4427,13 +4839,25 @@ def _run_cli_engine(
     failure_reason = None
     if not ok:
         label = str(spec.get("label") or engine)
+        # claude_runner's typed failure quotes the CLI's own result text and
+        # adds what a web user can do ("reconnect Claude Code in Settings"
+        # rather than the CLI's "Please run /login"), so it comes first.
+        detail = (
+            (runner_detail[-1200:] or parser.terminal_error)
+            if engine == "claude"
+            else (parser.terminal_error or runner_detail[-1200:])
+        )
+        if reconnect_codex and detail:
+            # Likewise for a linked Codex login, instead of its CLI's "Please
+            # log out and sign in again".
+            detail = f"{detail.rstrip('. ')}; {codex_login.RECONNECT_ADVICE}."
         failure_reason = _cli_failure_reason(
             label=label,
             returncode=proc.returncode,
             timed_out=timed_out,
             timeout_s=timeout_s,
             proof_missing=proof_missing,
-            detail=parser.terminal_error,
+            detail=detail or None,
             artifact="analysis report" if analyze_run else "proof artifact",
         )
     return _flush(
@@ -5019,8 +5443,9 @@ def _continuation_model(run_data: dict[str, Any], requested: str | None) -> str 
         # A Max run continues as Max; its two models come from the route plan.
         return cgm_max.MODEL_ID
     if explicit:
-        # Explicit input is validated against the recorded route below; never
-        # reinterpret an invalid user selection as another account model.
+        # Explicit input is checked against the recorded route by the caller
+        # (``_member_continuation_model``); never reinterpret a selection as
+        # another account model.
         return explicit
     live = run_data.get("live") or {}
     agents = run_data.get("agents") or []
@@ -5044,9 +5469,11 @@ def _continuation_model(run_data: dict[str, Any], requested: str | None) -> str 
             str(candidate or "").strip() not in {"", "—"}
             for candidate in candidates
         ):
+            # The console's follow-ups keep the run's model and offer no
+            # choice, so point to a new run rather than ask for a model.
             raise ValueError(
-                "This run stored an unsupported Claude account model; "
-                "choose sonnet, opus, fable, or claude-haiku-4-5"
+                "This run stored an unsupported Claude account model and cannot "
+                "continue; start a new run on sonnet, opus, fable, or claude-haiku-4-5"
             )
         return None
     for candidate in candidates:
@@ -5054,6 +5481,36 @@ def _continuation_model(run_data: dict[str, Any], requested: str | None) -> str 
         if value:
             return value
     return None
+
+
+def _recorded_route_runs(
+    user: dict[str, Any] | None, engine: str, run_data: dict[str, Any], model: str | None
+) -> bool:
+    """Whether the run's recorded route can run ``model`` on ``engine``.
+
+    As a start checks it: Max only on the Max route, the ``kimi`` engine only
+    Kimi K3, and a linked account only a model of its own that the engine
+    supports.  Any other API model is left to the continuation's credential
+    check.
+    """
+    from agent_monitor.engines_registry import supported_models
+    from agent_monitor.settings import GUEST_DEFAULT_MODEL
+
+    route = _route_from_record(run_data)
+    if cgm_max.is_max_model(model):
+        return route == cgm_max.ROUTE
+    if engine == "kimi":
+        return model == GUEST_DEFAULT_MODEL
+    if route not in {"claude_subscription", "codex_subscription"}:
+        return True
+    allowed = supported_models(engine)
+    if allowed and model not in allowed:
+        return False
+    try:
+        _validate_subscription_model(route=route, model=model, user=user, field="Selected model")
+    except ValueError:
+        return False
+    return True
 
 
 def _member_continuation_model(
@@ -5065,18 +5522,21 @@ def _member_continuation_model(
     """The continuation's model, after refusing what a member may not run.
 
     A member continues only on an engine and recorded route it may start
-    (never a subscription or Max).  The chat composer sends the launcher's
-    current model, which may belong to the other Ansatz CGM engine (Kimi K3,
-    or a model from the member's own keys); a model the member may not run on
-    this engine leaves the run on its recorded model.  For every other
-    account this is ``_continuation_model``.
+    (never a subscription or Max).  A requested model the account may not run
+    on this engine, or that the run's recorded route cannot run, leaves the
+    run on its recorded model: an older console's chat composer sends the
+    launcher's current model, which may belong to another route or to the
+    other Ansatz CGM engine (Kimi K3, or a model from the member's own keys).
     """
     route_error = account_policy.member_continuation_error(user, _route_from_record(run_data))
     error = account_policy.member_engine_error(user, engine) or route_error
     if error:
         raise ValueError(error)
     model = _continuation_model(run_data, requested)
-    if str(requested or "").strip() and account_policy.member_model_error(user, engine, model):
+    if str(requested or "").strip() and (
+        account_policy.member_model_error(user, engine, model)
+        or not _recorded_route_runs(user, engine, run_data, model)
+    ):
         model = _continuation_model(run_data, None)
     error = account_policy.member_model_error(user, engine, model)
     if error:
@@ -5091,6 +5551,35 @@ def _owner_user(owner_id: int | None) -> dict[str, Any] | None:
     from agent_monitor.auth import is_operator_account
 
     return {"id": owner_id, "is_admin": is_operator_account(int(owner_id))}
+
+
+def tool_free_run(run_id: str, run: dict[str, Any]) -> bool:
+    """Whether a proof's prompt carries project text that an account which is
+    not an administrator could write: it started so, or its project has, or
+    had, such a member.  It, its follow-ups and its Formal harness stay
+    tool-free (``account_policy.PROJECT_TOOL_FREE_ERROR``)."""
+    if run.get("tool_free"):
+        return True
+    if run.get("run_kind") == "analyze" or run.get("engine") == _ANALYZE_ENGINE:
+        return False  # an analysis never receives the project's document
+    from agent_monitor import projects
+
+    return projects.untrusted_run(run_id)
+
+
+def _tool_free_follow_up(
+    run_id: str, run: dict[str, Any], engine: str, model: str | None
+) -> bool:
+    """Whether a follow-up must stay tool-free; ProjectPolicyError when this
+    one would use a tool engine, a subscription or Max."""
+    if not tool_free_run(run_id, run):
+        return False
+    # A follow-up keeps the run's recorded route; one never recorded would
+    # take the account's runtime, which may be a subscription.
+    route = _route_from_record(run)
+    if route != "api_key" or account_policy.project_run_error(engine, model=model, auth_route=route):
+        raise account_policy.ProjectPolicyError(account_policy.PROJECT_TOOL_FREE_ERROR)
+    return True
 
 
 def _feedback_entries(raw: str) -> list[dict[str, Any]]:
@@ -5241,6 +5730,7 @@ def _launch_pending_feedback(
         return None
     authors = [owner_id if entry["author_id"] is None else entry["author_id"] for entry in entries]
     started: set[int] = set()
+    dropped: set[int] = set()
     result: dict[str, Any] | None = None
     for author in dict.fromkeys(authors):
         batch = [index for index, item in enumerate(authors) if item == author]
@@ -5260,6 +5750,12 @@ def _launch_pending_feedback(
                 user=_owner_user(author),
                 problems_recorded=True,
             )
+        except account_policy.ProjectPolicyError as exc:
+            # The project's rule never lifts for this run, so the feedback
+            # would wait forever; the messages stay in the chat.
+            _append_chat(run_id, "system", f"Queued feedback was not applied: {exc}")
+            dropped.update(batch)
+            continue
         except Exception as exc:  # noqa: BLE001
             # This author's feedback waits; another author's may still start.
             _append_chat(run_id, "system", f"Queued feedback could not start yet: {exc}")
@@ -5269,7 +5765,7 @@ def _launch_pending_feedback(
         # Otherwise another continuation started first: all of it waits.
         break
     _requeue_human_feedback(
-        workspace, [entry for index, entry in enumerate(entries) if index not in started]
+        workspace, [entry for index, entry in enumerate(entries) if index not in started | dropped]
     )
     return result
 
@@ -5330,8 +5826,8 @@ def send_human_message(
     if retired_error:
         raise ValueError(retired_error)
     _refuse_analyze_continuation({**recorded, "engine": recorded_engine})
+    model = _member_continuation_model(user, recorded_engine, recorded, model)
     if account_policy.is_member(user):
-        model = _member_continuation_model(user, recorded_engine, recorded, model)
         feedback_error = account_policy.member_feedback_error(
             message,
             run_feedback_chars=_human_feedback_chars(recorded),
@@ -5339,6 +5835,19 @@ def send_human_message(
         )
         if feedback_error:
             raise ValueError(feedback_error)
+    _tool_free_follow_up(run_id, recorded, recorded_engine, model)
+    if not run_is_active(run_id):
+        # This message would continue the run now, so its route must pass
+        # (linked accounts, keys) before anything is recorded; the launch
+        # checks again.  Feedback for an active run is checked when it starts.
+        preflight_model = _continuation_model(recorded, model)
+        _continuation_auth_environment(
+            run_data=recorded,
+            engine=recorded_engine,
+            model=preflight_model,
+            user=user,
+            env=_user_extra_env(user, preflight_model, recorded.get("subagent_model")),
+        )
 
     attached = research_attachments.save(ws, attachment_batch)
     display_message = message or (
@@ -5429,6 +5938,8 @@ def _continue_with_message(
 
     _stop_event(run_id).clear()
     engine = run_data.get("engine") or run_id.split("_", 1)[0]
+    # Re-checked at launch, after send_human_message's check.
+    tool_free = _tool_free_follow_up(run_id, run_data, engine, effective_model)
     first_problem = _problem_item_text(problems[0]) if problems else (
         run_data.get("problem_text") or message
     )
@@ -5461,7 +5972,7 @@ def _continue_with_message(
     })
 
     _append_chat(run_id, "system", "Continuing proof with your feedback…")
-    continued_subagents = bool(run_data.get("use_subagents", True))
+    continued_subagents = bool(run_data.get("use_subagents", True)) and not tool_free
     continue_env["AGENT_MONITOR_USE_SUBAGENTS"] = "1" if continued_subagents else "0"
     continued_subagent_model = run_data.get("subagent_model") if continued_subagents else None
     if continued_subagent_model:
@@ -5494,6 +6005,31 @@ def _continue_with_message(
         "user": user_entry,
     }
 
+
+
+def _interrupted_continuation_record(
+    previous: dict[str, Any], current: dict[str, Any], *, job_id: str
+) -> dict[str, Any]:
+    """The record to keep when a follow-up stops or fails before finishing.
+
+    Live heartbeats of most follow-ups (Hermes, the CLI engines) hold only the
+    follow-up's own nodes and totals.  Writing that back as the final record
+    would erase the run's earlier sessions (and their usage), so merge it onto
+    the record as it was before the follow-up.  Node ids cannot tell whether
+    that already happened (Hermes' ``{run_id}::iter-N`` restart every session);
+    a live merge (IMProof) tags the follow-up's nodes with this job instead.
+    """
+    def agents(run: dict[str, Any]) -> list[dict[str, Any]]:
+        return [agent for agent in run.get("agents") or [] if isinstance(agent, dict)]
+
+    previous_agents, current_agents = agents(previous), agents(current)
+    if not previous_agents or current_agents == previous_agents:
+        # Nothing to keep, or the follow-up wrote no live record yet.
+        return current
+    if any(agent.get("continuation_job_id") == job_id for agent in current_agents):
+        # Already merged onto the history while it ran.
+        return current
+    return _merge_continuation_run(previous, current, job_id=job_id)
 
 
 def _continuation_proof_excerpt(workspace: Path) -> tuple[str, str]:
@@ -5640,6 +6176,10 @@ def _execute_continue(
                 max_iterations=max_iterations,
                 owner_id=owner_id,
             )
+        if _stop_event(run_id).is_set() or result_run.get("status") == "stopped":
+            # A Stop wins over what the stopped engine returned (IMProof
+            # reports its killed workflow as failed), as on a first run.
+            raise StopRequested(run_id)
         result_run = _merge_continuation_run(
             previous_run_data, result_run, job_id=job_id
         )
@@ -5677,15 +6217,24 @@ def _execute_continue(
                     f"Automatic Lean/DAG refresh could not start: {exc}",
                 )
     except StopRequested:
-        stopped_run = _load_run_record(run_id)
-        stopped_run["status"] = "stopped"
-        stopped_run["updated_at"] = _now()
-        _write_run(stopped_run)
+        try:
+            stopped_run = _interrupted_continuation_record(
+                previous_run_data, _load_run_record(run_id), job_id=job_id
+            )
+            stopped_run["status"] = "stopped"
+            stopped_run["updated_at"] = _now()
+            _write_run(stopped_run)
+        except FileNotFoundError:
+            # The run was deleted, which stops its follow-up too.
+            pass
+        # No chat line here: stop_run has posted it, and a deleted run must not
+        # get its workspace back.
         _update_job(job_id, status="stopped")
-        _append_chat(run_id, "system", "Run stopped by user.")
     except Exception as exc:  # noqa: BLE001
         try:
-            failed_run = _load_run_record(run_id)
+            failed_run = _interrupted_continuation_record(
+                previous_run_data, _load_run_record(run_id), job_id=job_id
+            )
             failed_run["status"] = "failed"
             failed_run["error"] = str(exc)
             failed_run["updated_at"] = _now()
@@ -5730,6 +6279,8 @@ def _run_improof_continuation(
             "--component", f"cfg_claude_author.model={model}",
             "--component", f"cfg_claude_critic.model={model}",
         ]
+        # See _execute_job_body: the Claude worker reads its model from here.
+        extra_env = {**(extra_env or {}), "AGENT_MONITOR_CLAUDE_MODEL": model}
     try:
         result = improof_runner.run_problem(
             prompt_path,
@@ -5773,8 +6324,9 @@ def _refuse_analyze_continuation(record: dict[str, Any] | None) -> None:
 
 
 # One node of a finished analysis is re-checked by the runner itself
-# (``analyze_runner.py --recheck <node_id>``, at most 8 calls and 900 s) with
-# the run's own route environment; the outer watchdog adds one call and
+# (``analyze_runner.py --recheck <node_id>``, 8 calls and 900 s, more for a
+# proof checked in more parts; see ``analyze_runner.recheck_caps``) with the
+# run's own route environment; the outer watchdog adds one call and
 # publication.
 _RECHECK_GRACE_SECONDS = 180
 
@@ -5814,6 +6366,7 @@ def start_analysis_recheck(
     """
     from agent_monitor import analyze_runs
     from agent_monitor.analyze import graph as analysis_graph
+    from agent_monitor.analyze import recheck as analyze_recheck
 
     handed_off = False
     gate_key: str | None = None
@@ -5875,6 +6428,10 @@ def start_analysis_recheck(
         model = _continuation_model(record, None)
         sponsored = str(record.get("credential_source") or "") == "sponsored_kimi"
         guest = bool(record.get("guest"))
+        too_long = analyze_recheck.guest_refusal(ws, node_id) if guest else ""
+        if too_long:
+            # As in the analysis; nothing is reserved or counted (the runner refuses it too).
+            raise analyze_runs.AnalyzeRequestError(too_long)
         if not sponsored and account_policy.member_analyze_sponsored_only(user):
             raise analyze_runs.AnalyzeRequestError(
                 "This analysis ran on an API key, which members can't use on this site; "
@@ -5896,9 +6453,10 @@ def start_analysis_recheck(
         if not sponsored and _is_kimi_model(model):
             configured["AGENT_MONITOR_KIMI_BASE_URL"] = _operator_kimi_base()
         env = _analyze_recheck_env(configured, model=model)
-        from agent_monitor.runners import analyze_runner
-
-        timeout = analyze_runner.RECHECK_SECONDS + _analyze_api_timeout(sponsored) + _RECHECK_GRACE_SECONDS
+        # The runner's own time limit for this proof (sponsored and guest runs
+        # check it in the bounded prompt budget's smaller parts).
+        caps = analyze_recheck.node_caps(ws, node_id, bounded=sponsored or guest)
+        timeout = caps["max_seconds"] + _analyze_api_timeout(sponsored) + _RECHECK_GRACE_SECONDS
         job_id = uuid.uuid4().hex[:10]
         label = str(node.get("label") or node_id)[:120]
         started_at = _now()
@@ -6131,12 +6689,16 @@ def _book_recheck_usage(run_id: str, output: str, *, model: str | None) -> dict[
         usage = usage_ledger.cli_usage(raw, input_includes_cache=raw.get("input_excludes_cache") is not True)
         cost = None
         try:
+            # Priced as usage_ledger.record_usage does: the input includes the
+            # cache reads and writes (Claude's writes cost more than input).
             cached = int(usage.get("cached_input_tokens") or 0)
+            written = int(usage.get("cache_write_tokens") or 0)
             cost = _estimate_cost(
                 model,
-                input_tokens=max(0, int(usage.get("input_tokens") or 0) - cached),
+                input_tokens=max(0, int(usage.get("input_tokens") or 0) - cached - written),
                 output_tokens=int(usage.get("output_tokens") or 0),
                 cache_read=cached,
+                cache_write=written,
             )
         except Exception:  # noqa: BLE001 - a price estimate is best-effort
             cost = None
@@ -6168,6 +6730,8 @@ def _execute_recheck(
     result: dict[str, Any] | None = None
     error = ""
     spent: dict[str, Any] = {}
+    # A re-check that never reached a model gives its sponsored start back.
+    unsent = False
     try:
         runner = Path(__file__).resolve().parent / "runners" / "analyze_runner.py"
         argv = [sys.executable, "-u", str(runner), "--recheck", node_id]
@@ -6179,6 +6743,7 @@ def _execute_recheck(
             )
         except OSError as exc:
             error = f"The re-check could not start ({type(exc).__name__})"
+            unsent = True
         else:
             _register_proc(run_id, proc)
             deadline = time.monotonic() + timeout
@@ -6211,6 +6776,8 @@ def _execute_recheck(
             except Exception:  # noqa: BLE001 - accounting must not lose the outcome
                 spent = {}
             result, terminal = _recheck_outcome(output or "")
+            # Exit 2 is a configuration refusal: nothing was sent to a model.
+            unsent = proc.returncode == 2
             if proc.returncode == 0 and result is not None:
                 status = "done"
             elif proc.returncode == 128 + int(signal.SIGTERM) or _stop_event(run_id).is_set():
@@ -6248,7 +6815,7 @@ def _execute_recheck(
         if gate_key is not None:
             from agent_monitor import analyze_runs
 
-            analyze_runs.GATE.release(gate_key)
+            analyze_runs.GATE.release(gate_key, refund=unsent)
         if callable(on_exit):
             try:
                 on_exit()
@@ -6366,6 +6933,7 @@ def _continue_claimed_run(
     if retired_error:
         raise ValueError(retired_error)
     effective_model = _member_continuation_model(user, engine, run_data, model)
+    tool_free = _tool_free_follow_up(run_id, run_data, engine, effective_model)
     problems = ensure_problems(run_data, run_id)
     first_problem = _problem_item_text(problems[0]) if problems else (
         run_data.get("problem_text") or ""
@@ -6384,7 +6952,7 @@ def _continue_claimed_run(
         user=user,
         env=_user_extra_env(user, effective_model, run_data.get("subagent_model")),
     )
-    continued_subagents = bool(run_data.get("use_subagents", True))
+    continued_subagents = bool(run_data.get("use_subagents", True)) and not tool_free
     continue_env["AGENT_MONITOR_USE_SUBAGENTS"] = "1" if continued_subagents else "0"
     continued_subagent_model = run_data.get("subagent_model") if continued_subagents else None
     if continued_subagent_model:

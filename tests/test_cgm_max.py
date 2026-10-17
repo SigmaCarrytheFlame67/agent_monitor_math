@@ -1,10 +1,13 @@
 """Ansatz CGM "Max": Claude Code leads (strategist, verifier, curator), Codex works."""
 from __future__ import annotations
 
+import base64
 import copy
 import json
+import re
 import tempfile
 import unittest
+from contextlib import ExitStack
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
@@ -43,9 +46,12 @@ MAX_ENV = {
 
 
 class _Providers:
-    """Scripted Claude (advisor) and Codex (worker) backends."""
+    """Scripted Claude (advisor) and Codex (worker) backends.
 
-    def __init__(self, claude_replies: list[str], codex_replies: list[str]):
+    A reply that is an exception is raised instead, as the backend would.
+    """
+
+    def __init__(self, claude_replies: list, codex_replies: list):
         self.claude_replies = list(claude_replies)
         self.codex_replies = list(codex_replies)
         self.claude_calls: list[dict] = []
@@ -56,6 +62,8 @@ class _Providers:
         if not self.claude_replies:
             raise AssertionError("unexpected Claude call")
         text = self.claude_replies.pop(0)
+        if isinstance(text, Exception):
+            raise text
         return SimpleNamespace(
             text=text,
             usage={"input_tokens": 5, "output_tokens": 9, "cache_read_tokens": 2},
@@ -67,10 +75,52 @@ class _Providers:
         self.codex_calls.append({"system": system, "user": user, **kwargs})
         if not self.codex_replies:
             raise AssertionError("unexpected Codex call")
+        text = self.codex_replies.pop(0)
+        if isinstance(text, Exception):
+            raise text
         return SimpleNamespace(
-            text=self.codex_replies.pop(0),
+            text=text,
             usage={"input_tokens": 7, "output_tokens": 30, "reasoning_output_tokens": 12},
         )
+
+
+class _ClaudeByBlock:
+    """A Claude advisor answering each verifier call by the block it checks."""
+
+    def __init__(self, verdicts: dict[str, object], other: object):
+        self.verdicts = verdicts
+        self.other = other  # the curator's reply
+        self.calls: list[str] = []
+
+    def __call__(self, system: str, user: str, **kwargs):
+        if system == runner.cgm_prompts.STRATEGIST_SYSTEM:
+            name, reply = "strategist", _strategist(1)
+        elif system == runner.cgm_prompts.VERIFIER_SYSTEM:
+            label = re.match(r"Verify the candidate fact labelled (\w+)\.", user).group(1)
+            name, reply = f"verify {label}", self.verdicts[label]
+        else:
+            name, reply = "curator", self.other
+        self.calls.append(name)
+        if isinstance(reply, Exception):
+            raise reply
+        return SimpleNamespace(text=reply, usage={"input_tokens": 5, "output_tokens": 9}, model="claude-fable-5-1", events=[])
+
+
+# L1; L2 uses L1; L3 stands alone; the THEOREM uses L2 and L3.  Two at a
+# time, L1 and L3 are verified first and L2 waits for L1.
+_THREE_LEMMA_WORKER = "\n\n".join(
+    [
+        "=== LEMMA L1 ===\nSubgoal: S1\nUses: none\nStatement:\nFor all integers m and n, 2m + 2n = 2(m + n).\n"
+        "Proof:\nDistributivity of multiplication over addition in Z.\n=== END ===",
+        "=== LEMMA L2 ===\nSubgoal: S1\nUses: L1\nStatement:\nFor all integers m and n, 2m + 2n is twice an integer.\n"
+        "Proof:\nBy L1 it equals 2(m + n), and m + n is an integer.\n=== END ===",
+        "=== LEMMA L3 ===\nSubgoal: S1\nUses: none\nStatement:\nEvery even integer equals 2k for some integer k.\n"
+        "Proof:\nThis is the definition of an even integer.\n=== END ===",
+        f"=== THEOREM ===\nUses: L2, L3\nStatement:\n{PROBLEM}\n"
+        "Proof:\nBy L3 write a = 2m and b = 2n; by L2, a + b is twice an integer, so it is even.\n=== END ===",
+        "=== STATUS ===\nsolved\n=== END ===",
+    ]
+)
 
 
 def _run_max(workspace: Path, providers: _Providers, env: dict[str, str] | None = None):
@@ -190,6 +240,95 @@ class MaxRunnerTests(unittest.TestCase):
             self.assertIn(("repair-1", "codex_subscription"), stages)
             self.assertEqual(receipt["verdict"], "accepted")
             self.assertEqual(len(providers.codex_calls), 2)
+
+    def test_a_codex_account_at_its_limit_takes_no_more_repairs_while_claude_carries_on(self) -> None:
+        limit = runner._codex_backend.CodexBackendError(
+            "codex exec failed: You've hit your usage limit. Try again at 5:00 PM.", kind="usage_limit"
+        )
+        providers = _Providers(
+            claude_replies=[_strategist(2), _wrong(), _wrong(), _curator()],
+            codex_replies=[_worker("first", lemma=False), _worker("second", lemma=False), limit, limit],
+        )
+        with tempfile.TemporaryDirectory() as raw:
+            workspace = Path(raw)
+            code, events = _run_max(workspace, providers)
+            self.assertEqual(code, 0)
+            receipt = _receipt(workspace)
+            # The second rejection gets no repair: Codex would refuse it too.
+            self.assertEqual(len(providers.codex_calls), 3)
+            self.assertEqual(
+                [call["stage"] for call in receipt["calls"]],
+                ["strategist", "worker-1", "worker-2", "verify-1", "repair-1", "verify-2", "curator"],
+            )
+            # Claude, on its own account, still verifies and curates.
+            self.assertEqual(len(providers.claude_calls), 4)
+            self.assertIn("repair-provider-failure", receipt["workflow"]["degraded"])
+            self.assertNotIn("curator-skipped-by-provider-failure", receipt["workflow"]["degraded"])
+            # Codex reports its own limit; the runner adds no error of its own.
+            self.assertFalse([e for e in events if (e.get("item") or {}).get("type") == "error"])
+
+    def test_a_rejected_claude_login_ends_a_single_route_runs_calls(self) -> None:
+        signed_out = runner._claude_backend.ClaudeAuthenticationError(
+            "Claude Code subscription authentication failed: Not logged in · Please run /login; "
+            "reconnect Claude Code in Settings (the linked account needs a new sign-in) and retry."
+        )
+        providers = _Providers(
+            claude_replies=[
+                _strategist(2), _worker("first", lemma=False), _worker("second", lemma=False),
+                _wrong(), signed_out, signed_out, signed_out,
+            ],
+            codex_replies=[],
+        )
+        with tempfile.TemporaryDirectory() as raw:
+            workspace = Path(raw)
+            code, events = _run_max(
+                workspace,
+                providers,
+                {"AGENT_MONITOR_CGM_ROUTE_MODE": "", "AGENT_MONITOR_CODEX_SUBSCRIPTION": "0"},
+            )
+            self.assertEqual(code, 0)
+            receipt = _receipt(workspace)
+            # After the repair's sign-in failure, neither the second worker's
+            # verification nor the curator calls Claude again.
+            self.assertEqual(
+                [call["stage"] for call in receipt["calls"]],
+                ["strategist", "worker-1", "worker-2", "verify-1", "repair-1"],
+            )
+            self.assertIn("curator-skipped-by-provider-failure", receipt["workflow"]["degraded"])
+            errors = [e["item"] for e in events if (e.get("item") or {}).get("type") == "error"]
+            self.assertEqual(len(errors), 1)
+            self.assertIn("Not logged in · Please run /login", errors[0]["message"])
+            self.assertNotIn("terminal", errors[0])
+            proof = (workspace / "proof.md").read_text()
+            self.assertIn("verification stopped before the theorem was checked", proof)
+            self.assertIn("reconnect Claude Code in Settings", proof)
+
+    def test_a_rejected_claude_login_ends_verification_mid_attempt(self) -> None:
+        signed_out = runner._claude_backend.ClaudeAuthenticationError(
+            "Claude Code subscription authentication failed: Not logged in · Please run /login; "
+            "reconnect Claude Code in Settings (the linked account needs a new sign-in) and retry."
+        )
+        env = {"AGENT_MONITOR_MATH_HARNESS_MAX_WORKERS": "1", "AGENT_MONITOR_CGM_CONCURRENCY": "2"}
+        for name, l1 in (("L1 accepted", _ok()), ("L1 rejected", _wrong())):
+            with self.subTest(name), tempfile.TemporaryDirectory() as raw:
+                workspace = Path(raw)
+                claude = _ClaudeByBlock(
+                    {"L1": l1, "L2": signed_out, "L3": signed_out, "THEOREM": signed_out}, signed_out
+                )
+                providers = _Providers([], [_THREE_LEMMA_WORKER, _THREE_LEMMA_WORKER])
+                providers.claude = claude
+                code, _events = _run_max(workspace, providers, env)
+                self.assertEqual(code, 0)
+                # L3's sign-in failure ends the run's Claude calls: L2's wave
+                # and the curator never go out, and no repair is written that
+                # nobody could verify.
+                self.assertEqual(claude.calls[0], "strategist")
+                self.assertEqual(sorted(claude.calls[1:]), ["verify L1", "verify L3"])
+                self.assertEqual(len(providers.codex_calls), 1)
+                receipt = _receipt(workspace)
+                self.assertNotEqual(receipt["verdict"], "accepted")
+                self.assertFalse((workspace / "math_harness" / "project" / "TARGET.md").exists())
+                self.assertIn("curator-skipped-by-provider-failure", receipt["workflow"]["degraded"])
 
     def test_max_needs_both_account_routes(self) -> None:
         providers = _Providers([], [])
@@ -399,6 +538,12 @@ def _accounts(tmp: Path, *, codex: bool = True, claude: bool = True, codex_model
 
 
 class MaxJobTests(unittest.TestCase):
+    def setUp(self) -> None:
+        # Max binds only an administrator's accounts; _ADMIN has no database row.
+        operator = patch("agent_monitor.auth.is_operator_account", return_value=True)
+        operator.start()
+        self.addCleanup(operator.stop)
+
     def _start(self, tmp: Path, *, user=_ADMIN, engine="kimi", model="max", accounts=None, **kwargs):
         written: list[dict] = []
         workspace = tmp / "workspace"
@@ -466,6 +611,31 @@ class MaxJobTests(unittest.TestCase):
         projected = dict(env)
         jobs._apply_selected_model_env(projected, engine="math_harness", model="max")
         self.assertEqual((projected["AGENT_MONITOR_CLAUDE_MODEL"], projected["AGENT_MONITOR_CODEX_MODEL"]), ("fable", "gpt-6-astra"))
+
+    def test_operator_cli_timeouts_never_cut_a_max_run_short(self) -> None:
+        from agent_monitor.subprocess_env import child_process_env
+
+        with tempfile.TemporaryDirectory() as raw:
+            _job, _written, captured, *_ = self._start(Path(raw))
+        extra = captured["extra_env"]
+
+        def watchdog(operator: dict[str, str], extra_env: dict[str, str] = extra) -> int:
+            # The runner thread copies the service environment, then the run's.
+            with patch.dict("os.environ", operator):
+                return jobs._cli_timeout_seconds("math_harness", child_process_env(extra=extra_env))
+
+        # A Max run stopped by the watchdog publishes nothing, so the generic
+        # limit (.env.example) and the engine's own may only raise it.
+        for operator in (
+            {"AGENT_MONITOR_CLI_TIMEOUT": "3600"},
+            {"AGENT_MONITOR_CLI_TIMEOUT": "7200"},
+            {"AGENT_MONITOR_MATH_HARNESS_TIMEOUT": "3600"},
+        ):
+            self.assertGreaterEqual(watchdog(operator), cgm_max.RUN_SECONDS + 300, operator)
+        self.assertEqual(watchdog({"AGENT_MONITOR_CLI_TIMEOUT": "20000"}), 20_000)
+        # A single Claude-subscription CGM run keeps the operator's lower limit.
+        claude_only = {key: value for key, value in extra.items() if key != cgm_max.ROUTE_MODE_ENV}
+        self.assertEqual(watchdog({"AGENT_MONITOR_CLI_TIMEOUT": "3600"}, claude_only), 3_600)
 
     def test_worker_falls_back_to_the_best_codex_model_the_account_offers(self) -> None:
         with tempfile.TemporaryDirectory() as raw:
@@ -544,6 +714,81 @@ class MaxJobTests(unittest.TestCase):
                         run_data=record, engine="math_harness", model="max", user=_ADMIN, env={}
                     )
 
+    def _follow_up(self, tmp: Path, run_id: str, message: str, *, claude=True, codex=True):
+        account_patches, *_ = _accounts(tmp, claude=claude, codex=codex)
+        upload = {"name": "notes.md", "data": base64.b64encode(b"Try induction on n.").decode("ascii")}
+        with ExitStack() as stack:
+            for item in (
+                patch("agent_monitor.engines_registry.list_engines", return_value=[dict(_HARNESS)]),
+                patch.object(jobs, "_user_extra_env", return_value={"HOME": "/srv/home"}),
+                patch("agent_monitor.jobs.threading.Thread", _FakeThread),
+                *account_patches,
+            ):
+                stack.enter_context(item)
+            return jobs.send_human_message(run_id, message, user=_ADMIN, attachments=[upload])
+
+    def test_a_follow_up_refused_on_its_route_is_not_recorded(self) -> None:
+        max_record = {
+            "run_id": "math_harness_max_follow_up",
+            "engine": "math_harness",
+            "status": "finished",
+            "owner_id": 17,
+            "model": "max",
+            "auth_route": "dual_subscription",
+            "live": {"auth_mode": "dual_subscription", "model": "max"},
+            "reasoning_effort": "max",
+            "speed_mode": "standard",
+            "route_plan": {"advisor": {"model": "fable"}, "worker": {"model": "gpt-6-astra"}},
+            "problem_text": "Prove 1+1=2",
+            "problems": [{"text": "Prove 1+1=2", "source": "initial"}],
+        }
+        codex_record = {
+            **{key: value for key, value in max_record.items() if key != "route_plan"},
+            "run_id": "math_harness_codex_follow_up",
+            "model": "gpt-6-astra",
+            "auth_route": "codex_subscription",
+            "live": {"auth_mode": "chatgpt_subscription", "model": "gpt-6-astra"},
+            "reasoning_effort": "high",
+        }
+        with tempfile.TemporaryDirectory() as raw, ExitStack() as stack:
+            tmp = Path(raw)
+            stack.enter_context(patch.object(jobs, "RUNS_DIR", tmp / "runs"))
+            stack.enter_context(patch.object(jobs, "CACHE_DIR", tmp / "cache"))
+            stack.enter_context(patch.object(jobs, "_JOBS", {}))
+            stack.enter_context(patch.object(jobs, "_STOP_EVENTS", {}))
+            for record, refusal, disconnected in (
+                (max_record, "Claude Code is not connected", {"claude": False}),
+                (max_record, "Codex is not connected", {"codex": False}),
+                (codex_record, "Codex is not connected", {"codex": False}),
+            ):
+                run_id = record["run_id"]
+                workspace = jobs.workspace_dir(run_id)
+                jobs._write_run(copy.deepcopy(record))
+                with self.assertRaisesRegex(ValueError, refusal):
+                    self._follow_up(tmp, run_id, "Now also prove 2+2=4", **disconnected)
+                # Nothing shows as sent: no chat entry, session problem or file.
+                self.assertEqual(jobs.list_chat(run_id), [], refusal)
+                self.assertEqual([item["text"] for item in jobs._load_run_record(run_id)["problems"]], ["Prove 1+1=2"])
+                self.assertFalse((workspace / "problems.json").exists())
+                self.assertFalse((workspace / "attachments").exists())
+                self.assertFalse(jobs.run_is_active(run_id))
+
+            # Once the account is back, the same message is sent exactly once.
+            run_id = max_record["run_id"]
+            result = self._follow_up(tmp, run_id, "Now also prove 2+2=4")
+            self.assertEqual(result["status"], "continuing")
+            chat = jobs.list_chat(run_id)
+            self.assertEqual([entry["content"] for entry in chat if entry["role"] == "user"], ["Now also prove 2+2=4"])
+            self.assertEqual(len(chat[0]["attachments"]), 1)
+            problems = [item["text"] for item in jobs._load_run_record(run_id)["problems"]]
+            self.assertEqual(len(problems), 2)
+            self.assertTrue(problems[1].startswith("Now also prove 2+2=4"))
+            # Feedback for a running continuation is still queued; its route
+            # is checked when it starts.
+            self.assertTrue(jobs.run_is_active(run_id))
+            queued = self._follow_up(tmp, run_id, "Then prove 3+3=6", claude=False)
+            self.assertEqual(queued["status"], "queued")
+
     def test_billing_tuning_and_route_records(self) -> None:
         self.assertEqual(usage_ledger.billing_class({"auth_route": "dual_subscription"}), "subscription")
         caps = run_tuning.capabilities("max", "dual_subscription", "math_harness")
@@ -589,6 +834,7 @@ from pathlib import Path
 KIND = __KIND__
 REPLIES = __REPLIES__
 CATALOG = __CATALOG__
+FAILURES = __FAILURES__
 
 
 def role(system):
@@ -634,6 +880,17 @@ else:
         system = args[args.index("--system-prompt") + 1] if "--system-prompt" in args else ""
         reply = answer(os.environ["CLAUDE_CONFIG_DIR"], role(system), {"argv": [a for a in args if a != system], "env": env})
         model = "claude-" + args[args.index("--model") + 1] + "-5-1"
+        if role(system) in FAILURES:
+            # Claude Code 2.1.x: a synthetic API error message, then an error result.
+            category, text = FAILURES[role(system)]
+            for event in ({"type": "system", "subtype": "init", "model": model, "session_id": "fake"},
+                          {"type": "assistant", "is_api_error_message": True, "error": category,
+                           "message": {"model": "<synthetic>", "role": "assistant", "content": [{"type": "text", "text": text}],
+                                       "usage": {"input_tokens": 0, "output_tokens": 0}}},
+                          {"type": "result", "subtype": "success", "is_error": True, "result": text,
+                           "terminal_reason": "api_error", "usage": {"input_tokens": 0, "output_tokens": 0}}):
+                print(json.dumps(event))
+            sys.exit(1)
         for event in ({"type": "system", "subtype": "init", "model": model, "session_id": "fake"},
                       {"type": "assistant", "message": {"model": model, "content": [{"type": "text", "text": reply}]}},
                       {"type": "result", "subtype": "success", "is_error": False, "result": reply,
@@ -645,14 +902,21 @@ else:
 '''
 
 
-def write_fake_clis(bin_dir: Path, replies: dict[str, list[str]]) -> None:
-    """Install fake ``codex`` and ``claude`` executables answering ``replies`` by role."""
+def write_fake_clis(
+    bin_dir: Path, replies: dict[str, list[str]], claude_failures: dict[str, tuple[str, str]] | None = None
+) -> None:
+    """Install fake ``codex`` and ``claude`` executables answering ``replies`` by role.
+
+    ``claude_failures`` maps a role to the API error ``(category, text)`` Claude
+    Code fails that role's calls with.
+    """
     bin_dir.mkdir(parents=True, exist_ok=True)
     for kind in ("codex", "claude"):
         script = (
             _FAKE_CLI.replace("__KIND__", repr(kind))
             .replace("__REPLIES__", repr(replies))
             .replace("__CATALOG__", repr(str(_CATALOG)))
+            .replace("__FAILURES__", repr(claude_failures or {}))
         )
         path = bin_dir / kind
         path.write_text(script)
@@ -731,3 +995,53 @@ class MaxSubprocessIntegrationTests(unittest.TestCase):
             usage = {e["stage"]: e["usage"] for e in events if e.get("type") == "turn.completed"}
             self.assertEqual(usage["worker-1"]["input_tokens"], 120)
             self.assertTrue(usage["strategist"].get("input_excludes_cache"))
+
+    def test_a_claude_login_rejected_at_verification_is_reported_and_ends_claude_calls(self) -> None:
+        expired = "Failed to authenticate: OAuth session expired and could not be refreshed"
+        with tempfile.TemporaryDirectory() as raw:
+            tmp = Path(raw)
+            bin_dir, workspace = tmp / "bin", tmp / "workspace"
+            codex_home, claude_home, call_home = tmp / "codex-home", tmp / "claude-home", tmp / "service-home"
+            for path in (workspace, codex_home, claude_home, call_home):
+                path.mkdir()
+            write_fake_clis(
+                bin_dir,
+                {"strategist": [_strategist(2)], "worker": [_worker("first"), _worker("second")],
+                 "verify": [_ok()], "curator": [_curator()], "unknown": ["unexpected role"]},
+                claude_failures={role: ("authentication_failed", expired) for role in ("verify", "curator")},
+            )
+            (workspace / "problem.txt").write_text(PROBLEM)
+            env = {
+                "PATH": f"{bin_dir}{os.pathsep}{os.environ.get('PATH', os.defpath)}",
+                "PYTHONPATH": str(_REPO),
+                "LANG": "C.UTF-8",
+                **{k: v for k, v in MAX_ENV.items() if k not in {"CODEX_HOME", "CLAUDE_CONFIG_DIR", "HOME", "AGENT_MONITOR_CODEX_CALL_HOME"}},
+                "CODEX_HOME": str(codex_home),
+                "CLAUDE_CONFIG_DIR": str(claude_home),
+                "HOME": str(claude_home),
+                "AGENT_MONITOR_CODEX_CALL_HOME": str(call_home),
+            }
+            completed = subprocess.run(
+                [sys.executable, "-u", str(_REPO / "agent_monitor" / "runners" / "math_harness_runner.py")],
+                cwd=workspace, env=env, capture_output=True, text=True, timeout=180, check=False,
+            )
+            # Still an unattested candidate, as for any verifier failure...
+            self.assertEqual(completed.returncode, 0, completed.stdout[-2000:] + completed.stderr[-2000:])
+            events = [json.loads(line) for line in completed.stdout.splitlines() if line.startswith("{")]
+            self.assertIn("not verifier-accepted (unattested candidate)", events[-1]["item"]["text"])
+            # ...but the run says why, once, without ending as a failure.
+            errors = [e["item"] for e in events if (e.get("item") or {}).get("type") == "error"]
+            self.assertEqual(len(errors), 1, errors)
+            self.assertIn("OAuth session expired", errors[0]["message"])
+            self.assertIn("reconnect Claude Code in Settings", errors[0]["message"])
+            self.assertNotIn("terminal", errors[0])
+            proof = (workspace / "proof.md").read_text()
+            self.assertIn("verification stopped before the theorem was checked", proof)
+            self.assertIn("OAuth session expired", proof)
+            # The curator never calls the rejected login (the second verify
+            # call is the backend's single OAuth replay).
+            claude_calls = [json.loads(line)["role"] for line in (claude_home / "calls.jsonl").read_text().splitlines()]
+            self.assertEqual(claude_calls, ["strategist", "verify", "verify"])
+            degraded = _receipt(workspace)["workflow"]["degraded"]
+            self.assertIn("verifier-provider-failure", degraded)
+            self.assertIn("curator-skipped-by-provider-failure", degraded)

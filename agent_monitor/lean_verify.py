@@ -48,7 +48,7 @@ import time
 from pathlib import Path
 from typing import Any
 
-from agent_monitor import lean_broker, usage_ledger
+from agent_monitor import account_policy, lean_broker, usage_ledger
 from agent_monitor.proof_graph import (  # reuse LLM plumbing and safe reads
     CLAUDE_DERIVED_TIMEOUT_ENV,
     MAX_PROBLEM_BYTES as MAX_WORKSPACE_PROBLEM_BYTES,
@@ -813,12 +813,56 @@ def _write_cached(workspace: Path, value: dict[str, Any]) -> None:
             pass
 
 
-def _harness_conversation(workspace: Path, cached: dict[str, Any]) -> dict[str, Any]:
-    """Normalize a Codex-style JSONL harness log into bounded UI events.
+def _claude_tool_command(block: dict[str, Any]) -> str:
+    """One display line for a Claude tool call: its shell command, or tool and target."""
+    tool_input = block.get("input") if isinstance(block.get("input"), dict) else {}
+    if tool_input.get("command"):
+        return str(tool_input["command"])
+    target = (
+        tool_input.get("file_path") or tool_input.get("path") or tool_input.get("pattern") or ""
+    )
+    return f"{block.get('name') or 'Tool'} {target}".strip()
 
-    Started items are replaced by their completed form, so a command appears
-    once with its command, full captured output and exit state. Non-JSON stderr
-    is kept as runtime output instead of being silently discarded.
+
+def _claude_tool_output(content: Any) -> str:
+    """A Claude tool_result's content: a string, or a list of text blocks."""
+    if isinstance(content, list):
+        return "\n".join(
+            str(part.get("text") or "") for part in content if isinstance(part, dict)
+        ).strip()
+    return str(content or "")
+
+
+def _claude_usage(raw: dict[str, Any]) -> dict[str, int]:
+    """Claude's final usage in Codex's shape, the one the monitor reads.
+
+    Claude counts cache reads and writes apart from ``input_tokens``; Codex's
+    ``input_tokens`` includes the cached input.
+    """
+
+    def count(name: str) -> int:
+        try:
+            return int(raw.get(name) or 0)
+        except (TypeError, ValueError):
+            return 0
+
+    cache_read = count("cache_read_input_tokens")
+    cache_write = count("cache_creation_input_tokens")
+    return {
+        "input_tokens": count("input_tokens") + cache_read + cache_write,
+        "cached_input_tokens": cache_read,
+        "cache_write_input_tokens": cache_write,
+        "output_tokens": count("output_tokens"),
+    }
+
+
+def _harness_conversation(workspace: Path, cached: dict[str, Any]) -> dict[str, Any]:
+    """Normalize a harness log (Codex JSONL or Claude stream-json) into bounded UI events.
+
+    Started items are replaced by their completed form, and a Claude tool call
+    is paired with its result, so a command appears once with its command,
+    full captured output and exit state. Non-JSON stderr is kept as runtime
+    output instead of being silently discarded.
     """
     safe_log = _read_optional_workspace_text(
         workspace,
@@ -861,6 +905,55 @@ def _harness_conversation(workspace: Path, cached: dict[str, Any]) -> dict[str, 
                     usage[str(key)] = int(value or 0)
                 except (TypeError, ValueError):
                     continue
+        elif etype == "assistant" and isinstance(event.get("message"), dict):
+            # Claude Code stream-json (the claude and openclaude harnesses).
+            for block in event["message"].get("content") or []:
+                if not isinstance(block, dict):
+                    continue
+                kind = block.get("type")
+                if kind == "text" and str(block.get("text") or "").strip():
+                    item = {"type": "agent_message", "text": block["text"]}
+                elif kind == "thinking" and str(block.get("thinking") or "").strip():
+                    item = {"type": "reasoning", "text": block["thinking"]}
+                elif kind == "tool_use":
+                    # Its tool_result arrives in a later line, under this id.
+                    item = {
+                        "id": block.get("id"),
+                        "type": "command_execution",
+                        "command": _claude_tool_command(block),
+                        "status": "in_progress",
+                    }
+                else:
+                    continue
+                item_id = str(item.pop("id", None) or f"event_{serial}")
+                serial += 1
+                if item_id not in items:
+                    order.append(item_id)
+                items[item_id] = item
+        elif etype == "user" and isinstance(event.get("message"), dict):
+            for block in event["message"].get("content") or []:
+                if not isinstance(block, dict) or block.get("type") != "tool_result":
+                    continue
+                item = items.get(str(block.get("tool_use_id") or ""))
+                if item is not None:
+                    item["aggregated_output"] = _claude_tool_output(block.get("content"))
+                    item["status"] = "failed" if block.get("is_error") else "completed"
+        elif etype == "result":
+            # The final, authoritative total; per-message usage would double count.
+            if isinstance(event.get("usage"), dict) and event["usage"]:
+                usage = _claude_usage(event["usage"])
+            if event.get("is_error") or str(event.get("subtype") or "success") != "success":
+                errors = event.get("errors") if isinstance(event.get("errors"), list) else []
+                text = (
+                    str(event.get("result") or "").strip()
+                    or "; ".join(str(error).strip() for error in errors if str(error).strip())
+                    or str(event.get("subtype") or "Claude Code reported an error")
+                )
+                # The result usually repeats the last message: show it once.
+                if not any(str(item.get("text") or "") == text for item in items.values()):
+                    order.append(f"event_{serial}")
+                    items[f"event_{serial}"] = {"type": "error", "text": text, "status": "failed"}
+                    serial += 1
 
     conversation: list[dict[str, Any]] = []
     if runtime_lines:
@@ -2612,11 +2705,19 @@ _FORMAL_RUNTIME_ENV_NAMES = (
 
 
 def _claude_account_model(model: str | None, env: dict[str, str]) -> str:
-    selected = str(model or "").strip().lower()
-    if selected in _CLAUDE_ACCOUNT_MODELS:
-        return selected
-    configured = str(env.get("AGENT_MONITOR_CLAUDE_MODEL") or "").strip().lower()
-    return configured if configured in _CLAUDE_ACCOUNT_MODELS else "sonnet"
+    """The Claude Code account alias to route to.
+
+    Records and provider telemetry carry resolved names such as
+    ``claude-opus-5-5``; they map back to their alias (``opus``) instead of
+    silently falling back to Sonnet.
+    """
+    from agent_monitor.jobs import _canonical_claude_continuation_model as canonical
+
+    return (
+        canonical(model)
+        or canonical(env.get("AGENT_MONITOR_CLAUDE_MODEL"))
+        or "sonnet"
+    )
 
 
 def _llm_environment(
@@ -2691,6 +2792,14 @@ def _llm_environment(
             "codex": "codex_subscription",
             "claude": "claude_subscription",
         }.get(selected_runtime, "api_key")
+        owner_id = (user or {}).get("id") or (run_record or {}).get("owner_id")
+        if route != "api_key" and owner_id is not None:
+            from agent_monitor.auth import is_operator_account
+
+            if not is_operator_account(owner_id):
+                # A member's runtime is always the API route: a setting stored
+                # before subscriptions became administrator-only never counts.
+                route = "api_key"
     if route in {"claude_subscription", "codex_subscription"}:
         env = _configure_auth_route(
             env,
@@ -2721,8 +2830,14 @@ def _llm_environment(
             )
         )
     if route == "claude_subscription":
-        recorded_model = str((run_record or {}).get("model") or "").strip().lower()
-        if recorded_model in _CLAUDE_ACCOUNT_MODELS:
+        from agent_monitor.jobs import _canonical_claude_continuation_model as canonical
+
+        # The native Claude Code engine records the resolved model name
+        # (claude-opus-5-5); the selection itself is in requested_model.
+        recorded_model = canonical((run_record or {}).get("requested_model")) or canonical(
+            (run_record or {}).get("model")
+        )
+        if recorded_model:
             env["AGENT_MONITOR_CLAUDE_MODEL"] = recorded_model
     from agent_monitor.run_tuning import from_record as apply_recorded_tuning
 
@@ -2768,7 +2883,9 @@ def _chat(
         content = str(result.text or "").strip()
         if not content:
             raise ValueError("Claude Code returned an empty Lean response")
-        return _ObservedModel(str(result.model or selected), result.model), content
+        # Route every later repair to the selected alias; the resolved model
+        # name is authorship evidence only (see proof_graph.ObservedModel).
+        return _ObservedModel(selected, result.model), content
     if env.get("AGENT_MONITOR_CODEX_SUBSCRIPTION") == "1":
         from agent_monitor.proof_graph import _run_codex_prompt_env
 
@@ -4830,6 +4947,36 @@ def _intervention_lock(workspace: Path) -> threading.Lock:
         return _INTERVENTION_LOCKS.setdefault(key, threading.Lock())
 
 
+# The Codex intervention is a coding agent with a shell on this server, on a
+# linked subscription: administrator-only, like the Formal harness and the
+# local-tool engines (see account_policy).
+_MEMBER_LEAN_AGENT_ERROR = (
+    "Lean coding agents run local tools and are limited to the site administrator"
+)
+
+
+def _codex_route_model(
+    user: dict[str, Any] | None,
+    run_record: dict[str, Any] | None,
+    model: str | None,
+) -> str | None:
+    """``model`` when the run's Codex subscription route offers it, else None.
+
+    A cached Lean model may be an API or Claude model, or a generic label
+    such as "Codex subscription"; binding it to ``codex --model`` would fail.
+    """
+    selected = str(model or "").strip()
+    if not selected:
+        return None
+    try:
+        options = harness_model_options(user, run_record)
+    except (OSError, ValueError):
+        return None
+    if options.get("auth_route") != "codex_subscription":
+        return None
+    return selected if selected in (options.get("models") or []) else None
+
+
 def _codex_subscription_interaction(
     *,
     workspace: Path,
@@ -4838,18 +4985,22 @@ def _codex_subscription_interaction(
     prompt: str,
     lean_source: str,
     edit: bool,
+    model: str | None = None,
 ) -> dict[str, Any]:
     """Run the user's OAuth Codex in a disposable copy of lean/.
 
     The real workspace is never exposed to an unsandboxed intervention call;
     edited source is copied back only after this function returns and the
-    normal checker path validates it.
+    normal checker path validates it. ``model`` (with the run's tuning) is
+    passed to Codex; without one the CLI uses its default model.
     """
     if (user or {}).get("guest") or (run_record or {}).get("guest"):
         raise ValueError("Guest Formal actions use the included Kimi service")
+    if account_policy.is_member(user):
+        raise ValueError(_MEMBER_LEAN_AGENT_ERROR)
     from agent_monitor import codex_login
     from agent_monitor.cli_events import CLIEventParser
-    from agent_monitor.engines_registry import build_cli_command
+    from agent_monitor.engines_registry import build_cli_command, prompt_on_stdin
     from agent_monitor.jobs import _route_from_record
     from agent_monitor.settings import codex_enabled
 
@@ -4896,34 +5047,59 @@ def _codex_subscription_interaction(
         )
         if not argv:
             raise ValueError("Codex CLI is not installed on this server")
+        from agent_monitor.runners.codex_backend import _run_codex_process
+
+        selected_model = str(model or "").strip() or None
+        env = _harness_env(
+            "codex",
+            user,
+            model=selected_model,
+            run_record=run_record,
+            auth_route="codex_subscription" if recorded_route else None,
+        )
+        if selected_model:
+            argv = _selected_harness_argv(
+                engine="codex",
+                model=selected_model,
+                prompt=task_prompt,
+                default=argv,
+                env=env,
+            )
         try:
-            proc = subprocess.run(
+            # Its own process group: the npm launcher cannot forward SIGKILL,
+            # so a timeout must stop native Codex and its tools directly.
+            proc = _run_codex_process(
                 argv,
-                cwd=str(isolated),
-                env=_harness_env(
-                    "codex",
-                    user,
-                    run_record=run_record,
-                    auth_route="codex_subscription" if recorded_route else None,
-                ),
-                stdin=subprocess.DEVNULL,
-                capture_output=True,
-                text=True,
+                input=task_prompt if prompt_on_stdin("codex", argv) else "",
                 timeout=timeout_s,
-                check=False,
+                env=env,
+                cwd=str(isolated),
             )
         except subprocess.TimeoutExpired as exc:
             raise ValueError(f"Codex intervention timed out after {timeout_s}s") from exc
         parser = CLIEventParser("codex")
         parser.feed((proc.stdout or "") + "\n" + (proc.stderr or ""))
+        reconnect = False
+        if env.get("CODEX_HOME"):
+            # Settings offers Reconnect once Codex rejects a linked login.
+            reconnect = codex_login.note_turn_outcome(
+                env["CODEX_HOME"],
+                completed=parser.terminal_status == "completed",
+                failure=(parser.terminal_error or "") if parser.terminal_status == "failed" else "",
+            )
         usage_ledger.record_usage(
-            model=str(parser.usage.get("model") or "codex"),
+            model=str(parser.usage.get("model") or selected_model or "codex"),
             usage=usage_ledger.cli_usage(parser.usage, input_includes_cache=True),
             billing="subscription",
         )
         answer = parser.final_message().strip()
         if proc.returncode != 0:
             detail = (parser.output() or proc.stderr or proc.stdout or "Codex failed")[-1200:]
+            if reconnect:
+                # Codex's own reason and what to do, as a native Codex run's
+                # error says.
+                reason = (parser.terminal_error or "").rstrip(". ")
+                detail = f"{reason}; {codex_login.RECONNECT_ADVICE}."
             raise ValueError(f"Codex intervention failed (exit {proc.returncode}): {detail}")
         revised = (
             _read_optional_workspace_text(
@@ -4944,7 +5120,9 @@ def _codex_subscription_interaction(
         return {
             "answer": answer[:6000],
             "lean": revised,
-            "model": str(parser.usage.get("model") or "Codex subscription"),
+            "model": str(
+                parser.usage.get("model") or selected_model or "Codex subscription"
+            ),
         }
 
 
@@ -4980,7 +5158,7 @@ def _answer_lean_question(
             raise
         from agent_monitor.jobs import _is_kimi_model
 
-        if _is_kimi_model(effective_model):
+        if _is_kimi_model(effective_model) or account_policy.is_member(user):
             raise
         result = _codex_subscription_interaction(
             workspace=workspace,
@@ -4989,6 +5167,7 @@ def _answer_lean_question(
             prompt=prompt,
             lean_source=lean_src,
             edit=False,
+            model=_codex_route_model(user, run_record, effective_model),
         )
         return str(result["model"]), str(result["answer"])
 
@@ -5054,8 +5233,10 @@ def _revise_with_feedback_impl(
 
         if env.get("AGENT_MONITOR_CLAUDE_SUBSCRIPTION") == "1":
             raise
-        if _is_kimi_model(effective_model):
+        # A member keeps the model's own error: the fallback is a local agent.
+        if _is_kimi_model(effective_model) or account_policy.is_member(user):
             raise
+        codex_model = _codex_route_model(user, run_record, effective_model)
         codex_result = _codex_subscription_interaction(
             workspace=workspace,
             user=user,
@@ -5063,6 +5244,7 @@ def _revise_with_feedback_impl(
             prompt=prompt,
             lean_source=lean_src,
             edit=True,
+            model=codex_model,
         )
         codex_mode = True
         chosen_model = str(codex_result["model"])
@@ -5117,6 +5299,7 @@ def _revise_with_feedback_impl(
                     prompt=repair_prompt,
                     lean_source=lean_src,
                     edit=True,
+                    model=codex_model,
                 )
                 lean_src = str(codex_result["lean"])
                 notes = str(codex_result["answer"] or notes)
@@ -6557,6 +6740,14 @@ def harness_model_options(
         models = list(api_settings.get("api_models") or [])
         preferred = str(api_settings.get("default_model") or "").strip()
     recorded = _recorded_harness_model(run_record)
+    if route == "claude_subscription":
+        from agent_monitor.jobs import _canonical_claude_continuation_model as canonical
+
+        recorded = (
+            canonical((run_record or {}).get("requested_model"))
+            or canonical(recorded)
+            or recorded
+        )
     if recorded and recorded in models:
         models = [recorded, *(item for item in models if item != recorded)]
     return {
@@ -6749,12 +6940,16 @@ def harness_job(workspace: Path) -> dict[str, Any] | None:
 def stop_harness(workspace: Path) -> dict[str, Any]:
     with _HARNESS_LOCK:
         job = _HARNESS_JOBS.get(_harness_key(workspace))
-        proc = job.get("proc") if job else None
-        if job:
-            job["stopping"] = True
-    if proc is None:
-        raise ValueError("No harness run in progress")
-    _terminate_process_group(proc)
+        if not job:
+            raise ValueError("No harness run in progress")
+        if job.get("state") == "finishing":
+            # The agent already exited; its result is being checked and audited.
+            return {"stopping": False, "finishing": True}
+        job["stopping"] = True
+        proc = job.get("proc")
+    # Still launching: the worker stops the agent as soon as it has a process.
+    if proc is not None:
+        _terminate_process_group(proc)
     return {"stopping": True}
 
 
@@ -6930,6 +7125,7 @@ def _selected_harness_argv(
     env: dict[str, str] | None = None,
 ) -> list[str]:
     """Bind the Formal Codex process to the exact selected model."""
+    from agent_monitor.engines_registry import prompt_on_stdin
     from agent_monitor.jobs import _is_kimi_model
 
     if engine != "codex":
@@ -6940,6 +7136,7 @@ def _selected_harness_argv(
             "Codex Formal Lean requires an explicit model for this run route"
         )
     if _is_kimi_model(selected):
+        # The wrapper reads the prompt from stdin ("-"), as native Codex does.
         return [
             sys.executable,
             "-u",
@@ -6948,8 +7145,20 @@ def _selected_harness_argv(
                 / "runners"
                 / "kimi_codex_runner.py"
             ),
-            prompt,
+            "-",
         ]
+
+    def prompt_index(argv: list[str], what: str) -> int:
+        # The "-" that reads the prompt from stdin, or an operator command's
+        # prompt argument.
+        if prompt_on_stdin(engine, argv):
+            return len(argv) - 1
+        try:
+            return argv.index(prompt)
+        except ValueError as exc:
+            raise ValueError(
+                f"Codex harness command cannot bind {what} before its prompt"
+            ) from exc
 
     def with_tuning(argv: list[str]) -> list[str]:
         from agent_monitor.run_tuning import codex_config_args
@@ -6957,13 +7166,8 @@ def _selected_harness_argv(
         args = codex_config_args(env or {}, selected)
         if not args:
             return argv
-        try:
-            prompt_index = argv.index(prompt)
-        except ValueError as exc:
-            raise ValueError(
-                "Codex harness command cannot bind run tuning before its prompt"
-            ) from exc
-        argv[prompt_index:prompt_index] = args
+        index = prompt_index(argv, "run tuning")
+        argv[index:index] = args
         return argv
 
     argv = list(default)
@@ -6976,13 +7180,8 @@ def _selected_harness_argv(
         if token.startswith("--model="):
             argv[index] = f"--model={selected}"
             return with_tuning(argv)
-    try:
-        prompt_index = argv.index(prompt)
-    except ValueError as exc:
-        raise ValueError(
-            "Codex harness command cannot bind the selected model before its prompt"
-        ) from exc
-    argv[prompt_index:prompt_index] = ["--model", selected]
+    index = prompt_index(argv, "the selected model")
+    argv[index:index] = ["--model", selected]
     return with_tuning(argv)
 
 
@@ -7018,6 +7217,81 @@ def _running_record(
     }
 
 
+def _close_running_harness_record(
+    workspace: Path, *, state: str, notes: str, error: str = ""
+) -> bool:
+    """Replace a harness record still marked running with a terminal failure.
+
+    A result the worker already persisted is never overwritten. The Lean
+    source, attempts, chat and fidelity stay as they are, so nothing claims a
+    check that did not happen.
+    """
+    cached = load_cached(workspace)
+    if not cached:
+        return False
+    harness = cached.get("harness") if isinstance(cached.get("harness"), dict) else {}
+    if cached.get("status") != "running" and harness.get("state") != "running":
+        return False
+    record = dict(cached)
+    record["status"] = "failed"
+    record["notes"] = notes
+    record["harness"] = {
+        **harness,
+        "state": state,
+        "finished_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+    }
+    if error:
+        record["harness"]["error"] = error
+        record["log"] = (
+            str(record.get("log") or "") + f"\n[agent-monitor] harness error: {error}"
+        ).strip()[-16000:]
+    # auto_deploy treats this flag, like a running state, as active work.
+    record.pop("harness_running", None)
+    _write_cached(workspace, record)
+    return True
+
+
+HARNESS_INTERRUPTED_NOTE = (
+    "Harness run did not finish — the server may have restarted. "
+    "Press Compile/Check on the source below, or run it again."
+)
+
+
+def reconcile_orphaned_harness(workspace: Path) -> bool:
+    """Persist the end of a running harness record no live worker owns.
+
+    Harness workers are daemon threads of this process, so after a restart (or
+    a dead worker) the record can never finish by itself, and auto_deploy
+    waits on it for good. A live harness, like every other Lean action, holds
+    the workspace's formal reservation: taking it proves the record is an
+    orphan.
+    """
+    try:
+        token = _reserve_formal_operation(workspace, "harness recovery")
+    except ValueError:
+        return False
+    try:
+        return _close_running_harness_record(
+            workspace, state="interrupted", notes=HARNESS_INTERRUPTED_NOTE
+        )
+    except (OSError, TypeError, ValueError):
+        return False
+    finally:
+        _release_formal_operation(workspace, token)
+
+
+def reconcile_orphaned_harnesses(workspaces_root: Path) -> list[str]:
+    """At startup, close every harness record a previous process left running."""
+    closed: list[str] = []
+    for result in sorted(Path(workspaces_root).glob(f"*/{RESULT_FILENAME}")):
+        workspace = result.parent
+        if workspace.is_symlink():
+            continue
+        if reconcile_orphaned_harness(workspace):
+            closed.append(workspace.name)
+    return closed
+
+
 def _reset_harness_log(ldir: Path) -> Path:
     """Start each harness with a fresh transcript, never a prior run's log."""
     log_path = ldir / "harness.log"
@@ -7034,14 +7308,21 @@ def _start_harness_reserved(
     model: str | None = None,
     lean: str | None = None,
     audit: bool = True,
+    run_id: str | None = None,
     _operation_token: object,
 ) -> dict[str, Any]:
     """Launch a coding agent on Proof.lean in the background.
 
     Returns immediately with a ``running`` record; the selected model is bound
-    to both the harness process and its post-run audit.
+    to both the harness process and its post-run audit. With ``run_id`` a
+    finished harness that changed Proof.lean refreshes the run's derived
+    formal views.
     """
-    from agent_monitor.engines_registry import CLI_ENGINES, build_cli_command
+    from agent_monitor.engines_registry import (
+        CLI_ENGINES,
+        build_cli_command,
+        discard_prompt_file,
+    )
 
     spec = CLI_ENGINES.get(engine)
     if not spec or engine in _HARNESS_EXCLUDE:
@@ -7134,6 +7415,55 @@ def _start_harness_reserved(
             f"{spec.get('label') or engine} is not configured on this server — "
             f"{spec.get('install_hint') or 'install it first'}"
         )
+    try:
+        return _launch_harness(
+            workspace=workspace,
+            ldir=ldir,
+            argv=argv,
+            engine=engine,
+            spec=spec,
+            selected_model=selected_model,
+            prompt=prompt,
+            harness_env=harness_env,
+            auth_route=auth_route,
+            lean_src=lean_src,
+            initial_fingerprint=initial_fingerprint,
+            user=user,
+            run_record=run_record,
+            problem=problem,
+            informal=informal,
+            audit=audit,
+            run_id=run_id,
+            _operation_token=_operation_token,
+        )
+    except BaseException:
+        # No worker will run: remove a prompt file nothing will read.
+        discard_prompt_file(ldir)
+        raise
+
+
+def _launch_harness(
+    *,
+    workspace: Path,
+    ldir: Path,
+    argv: list[str],
+    engine: str,
+    spec: dict[str, Any],
+    selected_model: str | None,
+    prompt: str,
+    harness_env: dict[str, str],
+    auth_route: str | None,
+    lean_src: str,
+    initial_fingerprint: dict[str, Any] | None,
+    user: dict[str, Any] | None,
+    run_record: dict[str, Any] | None,
+    problem: str,
+    informal: str,
+    audit: bool,
+    run_id: str | None,
+    _operation_token: object,
+) -> dict[str, Any]:
+    """Record the running harness and start its worker thread."""
     argv = _selected_harness_argv(
         engine=engine,
         model=selected_model,
@@ -7156,6 +7486,10 @@ def _start_harness_reserved(
     record["harness"]["auth_route"] = auth_route
     record["harness"]["model"] = selected_model or ""
     record["harness"]["initial_sha256"] = (initial_fingerprint or {}).get("sha256")
+    if str(prev.get("lean") or "").strip() == lean_src.strip():
+        # This record replaces the status of the very source the agent starts
+        # from; _harness_finish restores it if the agent leaves the file alone.
+        record["harness"]["initial_status"] = str(prev.get("status") or "")
     _write_cached(workspace, record)
 
     job: dict[str, Any] = {
@@ -7171,9 +7505,11 @@ def _start_harness_reserved(
         target=_harness_worker_guarded,
         kwargs={
             "operation_token": _operation_token,
+            "run_id": run_id,
             "workspace": workspace,
             "ldir": ldir,
             "argv": argv,
+            "prompt": prompt,
             "engine": engine,
             "label": label,
             "user": user,
@@ -7209,6 +7545,7 @@ def start_harness(
     model: str | None = None,
     lean: str | None = None,
     audit: bool = True,
+    run_id: str | None = None,
 ) -> dict[str, Any]:
     """Reserve a proof workspace and launch its Formal Lean harness."""
     if (user or {}).get("guest") or (run_record or {}).get("guest"):
@@ -7224,6 +7561,7 @@ def start_harness(
             model=model,
             lean=lean,
             audit=audit,
+            run_id=run_id,
             _operation_token=token,
         )
     except BaseException:
@@ -7234,17 +7572,57 @@ def start_harness(
 def _harness_worker_guarded(
     *,
     operation_token: object,
+    run_id: str | None = None,
     **kwargs,
 ) -> None:
     """Release a cross-thread harness reservation on every worker exit path."""
     workspace = Path(kwargs["workspace"])
     key = _harness_key(workspace)
     try:
-        _harness_worker(**kwargs)
+        result = _harness_worker(**kwargs)
+    except Exception as exc:
+        # Still holding the reservation: never leave the record running.
+        detail = (str(exc).strip() or exc.__class__.__name__)[:300]
+        label = str(kwargs.get("label") or kwargs.get("engine") or "The")
+        try:
+            _close_running_harness_record(
+                workspace,
+                state="error",
+                notes=(
+                    f"{label} harness failed before its result was recorded: "
+                    f"{detail}. Press Compile/Check on the source below, or run it again."
+                ),
+                error=detail,
+            )
+        except (OSError, TypeError, ValueError):
+            pass
+        raise
     finally:
+        from agent_monitor.engines_registry import discard_prompt_file
+
+        # A wrapper deletes its prompt file once read; an agent that never
+        # read it (another command line, or no launch) leaves it behind.
+        if kwargs.get("ldir"):
+            discard_prompt_file(Path(kwargs["ldir"]))
         with _HARNESS_LOCK:
             _HARNESS_JOBS.pop(key, None)
         _release_formal_operation(workspace, operation_token)
+    if run_id and ((result or {}).get("harness") or {}).get("artifact_fresh"):
+        # A new Proof.lean: re-derive the run's Lean, formal DAG and coverage
+        # stages as a manual Check does (only now, with the reservation free).
+        from agent_monitor import auto_pipeline
+
+        run_record = kwargs.get("run_record") or {}
+        try:
+            auto_pipeline.refresh_formal(
+                run_id=run_id,
+                workspace=workspace,
+                owner_id=(kwargs.get("user") or {}).get("id") or run_record.get("owner_id"),
+                model=kwargs.get("model") or result.get("model"),
+                engine=str(run_record.get("engine") or "unknown"),
+            )
+        except Exception:  # noqa: BLE001 - the harness result is already saved
+            pass
 
 
 def _harness_worker(
@@ -7263,7 +7641,15 @@ def _harness_worker(
     base: dict[str, Any],
     initial_fingerprint: dict[str, Any] | None,
     audit: bool,
-) -> None:
+    prompt: str = "",
+) -> dict[str, Any]:
+    """Run the agent to its end and return the persisted result.
+
+    ``prompt`` goes on stdin when the command reads it from there (Codex's
+    ``-``); other commands carry their prompt themselves.
+    """
+    from agent_monitor.engines_registry import prompt_on_stdin, send_prompt_on_stdin
+
     key = _harness_key(workspace)
     timeout_s = int(os.environ.get("AGENT_MONITOR_LEAN_HARNESS_TIMEOUT", "1200"))
     log_path = ldir / "harness.log"
@@ -7271,6 +7657,11 @@ def _harness_worker(
     started = time.time()
     exit_code: int | None = None
     stopped = False
+    timed_out = False
+    # What the starting source scored at launch. The agent can rewrite
+    # lean_verify.json, so the finish never reads this back from it.
+    initial_status = str((base.get("harness") or {}).get("initial_status") or "")
+    initial_audit = (base.get("fidelity") or {}).get("audit")
 
     def flush(note: str | None = None) -> None:
         rec = dict(base)
@@ -7287,12 +7678,26 @@ def _harness_worker(
         except (OSError, TypeError, ValueError):
             pass
 
+    from agent_monitor.jobs import _ensure_codex_auth, _is_kimi_model, _remove_codex_api_home
+
+    codex_api_home = None
+    stdin_prompt = prompt_on_stdin(engine, argv)
     try:
+        if (
+            engine == "codex"
+            and env.get("AGENT_MONITOR_AUTH_MODE") == "api_key"
+            and not _is_kimi_model(model)
+        ):
+            # A login of its own with the run's OpenAI key, never the service
+            # account's ~/.codex; it is removed once the harness exits.
+            codex_api_home = _ensure_codex_auth(
+                env, (user or {}).get("id") or (run_record or {}).get("owner_id")
+            )
         proc = subprocess.Popen(
             argv,
             cwd=str(ldir),
             env=env,
-            stdin=subprocess.DEVNULL,
+            stdin=subprocess.PIPE if stdin_prompt else subprocess.DEVNULL,
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
             text=True,
@@ -7300,8 +7705,11 @@ def _harness_worker(
             start_new_session=True,
         )
     except OSError as exc:
+        _remove_codex_api_home(codex_api_home)
         lines.append(f"failed to launch {label}: {exc}\n")
-        _harness_finish(
+        with _HARNESS_LOCK:
+            stopped = bool((_HARNESS_JOBS.get(key) or {}).get("stopping"))
+        result = _harness_finish(
             workspace=workspace,
             engine=engine,
             label=label,
@@ -7315,15 +7723,24 @@ def _harness_worker(
             informal=informal,
             audit=audit,
             initial_fingerprint=initial_fingerprint,
-            stopped=False,
+            stopped=stopped,
+            initial_status=initial_status,
+            initial_audit=initial_audit,
         )
         with _HARNESS_LOCK:
             _HARNESS_JOBS.pop(key, None)
-        return
+        return result
 
     with _HARNESS_LOCK:
-        if key in _HARNESS_JOBS:
-            _HARNESS_JOBS[key]["proc"] = proc
+        job = _HARNESS_JOBS.get(key)
+        if job is not None:
+            job["proc"] = proc
+        stop_requested = bool((job or {}).get("stopping"))
+    if stdin_prompt:
+        send_prompt_on_stdin(proc, prompt)
+    if stop_requested:
+        # Stop was pressed while the agent was still launching.
+        _terminate_process_group(proc)
 
     output_queue: queue.Queue[str | None] = queue.Queue()
 
@@ -7347,6 +7764,8 @@ def _harness_worker(
         while True:
             now = time.time()
             if now > deadline:
+                # A child that already exited (output still draining) did not.
+                timed_out = proc.poll() is None
                 _terminate_process_group(proc, force=True)
                 lines.append(f"\n[agent-monitor] harness timeout after {timeout_s}s — killed\n")
                 break
@@ -7376,22 +7795,43 @@ def _harness_worker(
         reader.join(timeout=1)
         if proc.stdout is not None:
             proc.stdout.close()
+        _remove_codex_api_home(codex_api_home)
         with _HARNESS_LOCK:
             job = _HARNESS_JOBS.get(key) or {}
             stopped = bool(job.get("stopping"))
             job["proc"] = None
+            # The agent is done; the Lean check and the audit run next.
+            job["state"] = "finishing"
     try:
         log_path.write_text("".join(lines), encoding="utf-8")
     except OSError:
         pass
+    child_error = ""
+    if engine == "codex" and env.get("CODEX_HOME"):
+        from agent_monitor import codex_login
+        from agent_monitor.cli_events import CLIEventParser
+
+        parser = CLIEventParser("codex")
+        parser.feed("".join(lines))
+        # Settings offers Reconnect once Codex rejects a linked login, and the
+        # result says so, as a native Codex run's error does.
+        if codex_login.note_turn_outcome(
+            env["CODEX_HOME"],
+            completed=parser.terminal_status == "completed",
+            failure=(parser.terminal_error or "") if parser.terminal_status == "failed" else "",
+        ):
+            child_error = (
+                f"{(parser.terminal_error or '').rstrip('. ')}; {codex_login.RECONNECT_ADVICE}"
+            )
 
     try:
-        _harness_finish(
+        return _harness_finish(
             workspace=workspace,
             engine=engine,
             label=label,
             log="".join(lines),
             exit_code=exit_code,
+            child_error=child_error,
             elapsed=round(time.time() - started, 1),
             user=user,
             run_record=run_record,
@@ -7401,6 +7841,9 @@ def _harness_worker(
             audit=audit,
             initial_fingerprint=initial_fingerprint,
             stopped=stopped,
+            timeout_limit=timeout_s if timed_out else None,
+            initial_status=initial_status,
+            initial_audit=initial_audit,
         )
     finally:
         with _HARNESS_LOCK:
@@ -7421,11 +7864,17 @@ def _harness_fidelity_audit(
     from agent_monitor.jobs import _route_from_record
 
     if _route_from_record(run_record) != "codex_subscription":
-        env = _llm_environment(user, run_record)
-        guest = bool((user or {}).get("guest") or (run_record or {}).get("guest"))
+        try:
+            env = _llm_environment(user, run_record)
+            guest = bool((user or {}).get("guest") or (run_record or {}).get("guest"))
+            audit_model = _audit_model(env, model, guest=guest)
+        except Exception as exc:  # noqa: BLE001 - e.g. a sign-in revoked during
+            # the run: like a provider outage, that means "no audit", never a
+            # lost kernel-checked result.
+            return {"ok": False, "error": (str(exc).strip() or exc.__class__.__name__)[:300]}
         return _audit_faithfulness(
             env,
-            _audit_model(env, model, guest=guest),
+            audit_model,
             problem=problem,
             proof=proof,
             lean=lean,
@@ -7444,11 +7893,13 @@ def _harness_fidelity_audit(
             prompt=prompt,
             lean_source=lean,
             edit=False,
+            # The harness's own model and tuning judge its fidelity.
+            model=_codex_route_model(user, run_record, model),
         )
         used = str(result.get("model") or model or "Codex subscription")
         data = _extract_json_object(str(result.get("answer") or ""))
-    except (ValueError, json.JSONDecodeError, KeyError, TypeError) as exc:
-        return {"ok": False, "error": str(exc)[:300]}
+    except Exception as exc:  # noqa: BLE001 - see the direct-API branch above
+        return {"ok": False, "error": (str(exc).strip() or exc.__class__.__name__)[:300]}
     return _parse_audit_payload(data, used)
 
 
@@ -7491,6 +7942,7 @@ def _harness_finish(
     label: str,
     log: str,
     exit_code: int | None,
+    child_error: str = "",
     elapsed: float,
     user: dict[str, Any] | None,
     run_record: dict[str, Any] | None,
@@ -7500,8 +7952,19 @@ def _harness_finish(
     audit: bool,
     initial_fingerprint: dict[str, Any] | None,
     stopped: bool,
+    timeout_limit: int | None = None,
+    initial_status: str = "",
+    initial_audit: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    """Re-check a fresh regular artifact, but never forgive a failed child."""
+    """Re-check a fresh regular artifact, but never forgive a failed child.
+
+    ``child_error`` says why a failed child failed, when the user must act on
+    it (Codex rejected the linked login).
+    ``timeout_limit`` is the limit, in seconds, at which the worker killed a
+    still-running child; a user Stop takes precedence over it.
+    ``initial_status`` and ``initial_audit`` are the status and fidelity audit
+    the starting source had at launch, as the worker holds them.
+    """
     from agent_monitor.jobs import _route_from_record
 
     prev = load_cached(workspace) or {}
@@ -7536,15 +7999,20 @@ def _harness_finish(
         )
     )
     child_exit_ok = exit_code == 0
+    timed_out = timeout_limit is not None and not stopped
     rejection_reasons: list[str] = []
     if stopped:
         rejection_reasons.append("the run was stopped")
-    if not child_exit_ok:
-        rejection_reasons.append(
+    elif timed_out:
+        rejection_reasons.append(f"the harness exceeded its {timeout_limit}s limit")
+    if not child_exit_ok and not timed_out:
+        # After a timeout the exit status is only the worker's own kill.
+        exited = (
             "the child process did not exit successfully"
             if exit_code is None
             else f"the child process exited {exit_code}"
         )
+        rejection_reasons.append(f"{exited}: {child_error}" if child_error else exited)
     if not artifact_regular:
         rejection_reasons.append(artifact_reason or "Proof.lean is not a regular root file")
     elif not lean_src:
@@ -7553,12 +8021,18 @@ def _harness_finish(
         rejection_reasons.append("Proof.lean is unchanged from the pre-run artifact")
 
     artifact_accepted = bool(
-        child_exit_ok and artifact_regular and artifact_fresh and lean_src and not stopped
+        child_exit_ok
+        and artifact_regular
+        and artifact_fresh
+        and lean_src
+        and not stopped
+        and not timed_out
     )
     harness_meta = {
         "engine": engine,
         "label": label,
-        "state": "stopped" if stopped else "finished",
+        "state": "stopped" if stopped else "timed_out" if timed_out else "finished",
+        "timed_out": timed_out,
         "exit_code": exit_code,
         "child_exit_ok": child_exit_ok,
         "elapsed_s": elapsed,
@@ -7614,10 +8088,30 @@ def _harness_finish(
     sorry_n = _count_sorry(lean_src)
     kernel_status = _status_from_check(check, sorry_n, mode="check")
     status = kernel_status
+    kept = False
+    audit_result: dict[str, Any] | None = None
     if stopped:
         status = "stopped"
     elif not artifact_accepted:
+        # A clean exit that left the file as it was keeps the status the file
+        # had before the run while Lean still bears it out; it never promotes.
+        kept = bool(
+            child_exit_ok
+            and not timed_out
+            and not artifact_fresh
+            and kernel_status in {"verified", "incomplete"}
+            and initial_status in {"verified", "unfaithful", "incomplete", "compiled"}
+            and (initial_status != "verified" or kernel_status == "verified")
+        )
         status = "failed"
+        if kept:
+            # With the audit it had at launch, never one the agent could have
+            # written into lean_verify.json since, and no better than today's
+            # red flags allow.
+            audit_result = initial_audit if isinstance(initial_audit, dict) else {}
+            status = _apply_fidelity(
+                initial_status, _fidelity_flags(lean_src), audit_result
+            )
 
     attempts = list(prev.get("attempts") or [])
     attempts.append(
@@ -7657,7 +8151,6 @@ def _harness_finish(
         }
     )
 
-    audit_result: dict[str, Any] | None = None
     if audit and artifact_accepted and status in {"verified", "incomplete"}:
         audit_result = _harness_fidelity_audit(
             workspace=workspace,
@@ -7670,16 +8163,25 @@ def _harness_finish(
         )
         status = _apply_fidelity(status, _fidelity_flags(lean_src), audit_result)
 
-    notes = _check_summary(lean_src, check, status)
+    # A rejected artifact's Failed or Stopped is not Lean's verdict on it.
+    notes = _check_summary(
+        lean_src, check, status if artifact_accepted or kept else kernel_status
+    )
     if rejection_reasons:
         notes = (
             "Artifact rejected: "
             + "; ".join(rejection_reasons)
-            + ". The outer Lean result is diagnostic only. "
+            + (
+                ". The earlier Lean result stands. "
+                if kept and status == initial_status
+                else ". The outer Lean result is diagnostic only. "
+            )
             + notes
         )
     fid_note = _fidelity_summary(_fidelity_flags(lean_src), audit_result)
-    verdict = "stopped by user" if stopped else f"exit {exit_code}"
+    verdict = (
+        "stopped by user" if stopped else "timed out" if timed_out else f"exit {exit_code}"
+    )
     notes = f"{label} harness ({verdict}, {elapsed}s). {notes} {fid_note}".strip()
     compiler_log = (
         (check.get("stderr") or "") + "\n" + (check.get("stdout") or "")

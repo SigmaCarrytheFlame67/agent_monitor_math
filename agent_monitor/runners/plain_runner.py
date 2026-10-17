@@ -4,7 +4,7 @@
 One single model call: problem in, proof out. The baseline to compare every
 harness against. Streams codex-style JSONL events; writes proof.md in cwd.
 
-Usage: plain_runner.py "<prompt>"   (cwd = run workspace)
+Usage: plain_runner.py --prompt-file PATH | "<prompt>"   (cwd = run workspace)
 """
 from __future__ import annotations
 
@@ -24,6 +24,7 @@ if __package__:
     )
     from .codex_backend import CodexBackendError, codex_exec, subscription_enabled
     from .outcome_contract import canonicalize_outcome_text
+    from .task_prompt import read_task_prompt
 else:
     # The engine registry launches this file by absolute path from the run
     # workspace. Import through the package so transitive relative imports
@@ -45,6 +46,7 @@ else:
         subscription_enabled,
     )
     from agent_monitor.runners.outcome_contract import canonicalize_outcome_text
+    from agent_monitor.runners.task_prompt import read_task_prompt
 
 
 SYSTEM_PROMPT = (
@@ -255,16 +257,20 @@ def _api_chat_with_output_limit(
 
 
 def main() -> int:
-    prompt = sys.argv[1] if len(sys.argv) > 1 else ""
+    try:
+        prompt = read_task_prompt(sys.argv)
+    except (OSError, UnicodeDecodeError) as exc:
+        emit_item({"type": "error", "message": f"could not read the task prompt ({type(exc).__name__})", "terminal": True})
+        return 2
     if not prompt.strip():
-        emit_item({"type": "error", "message": "empty prompt"})
+        emit_item({"type": "error", "message": "empty prompt", "terminal": True})
         return 2
 
     guest_output_limit = _guest_plain_output_limit()
     use_codex = subscription_enabled()
     use_claude = claude_subscription_enabled()
     if use_codex and use_claude:
-        emit_item({"type": "error", "message": "Codex and Claude account routes cannot both be active"})
+        emit_item({"type": "error", "message": "Codex and Claude account routes cannot both be active", "terminal": True})
         return 2
     model = (
         os.environ.get("AGENT_MONITOR_CODEX_MODEL", "gpt-5.6-sol")
@@ -283,7 +289,7 @@ def main() -> int:
             result = codex_exec(system, prompt, model=model, emit_event=emit)
             _save_result(prompt, result.text)
         except (CodexBackendError, ValueError) as exc:
-            emit_item({"type": "error", "message": str(exc)})
+            emit_item({"type": "error", "message": str(exc), "terminal": True})
             return 1
         return 0
 
@@ -298,7 +304,7 @@ def main() -> int:
             )
             _save_result(prompt, result.text)
         except (ClaudeBackendError, ValueError) as exc:
-            emit_item({"type": "error", "message": str(exc)})
+            emit_item({"type": "error", "message": str(exc), "terminal": True})
             return 1
         return 0
 
@@ -313,11 +319,11 @@ def main() -> int:
             max_output_tokens=guest_output_limit,
         )
     except APIBackendError as exc:
-        emit_item({"type": "error", "message": str(exc)})
+        emit_item({"type": "error", "message": str(exc), "terminal": True})
         return 1
     text = normalize_proof_markdown(result.text)
     if not text.strip():
-        emit_item({"type": "error", "message": "Model returned an empty proof; no proof artifact was saved"})
+        emit_item({"type": "error", "message": "Model returned an empty proof; no proof artifact was saved", "terminal": True})
         return 1
     issues = _api_artifact_issues(text)
     if issues:
@@ -362,15 +368,15 @@ def main() -> int:
                     max_output_tokens=None,
                 )
             except APIBackendError as exc:
-                emit_item({"type": "error", "message": str(exc)})
+                emit_item({"type": "error", "message": str(exc), "terminal": True})
                 return 1
+            # Both replies are billed: sum every count, cached and reasoning too.
+            counts = dict.fromkeys(["input_tokens", "output_tokens", *result.usage, *repaired.usage])
             result = type(result)(
                 text=normalize_proof_markdown(repaired.text),
                 usage={
-                    "input_tokens": int(result.usage.get("input_tokens") or 0)
-                    + int(repaired.usage.get("input_tokens") or 0),
-                    "output_tokens": int(result.usage.get("output_tokens") or 0)
-                    + int(repaired.usage.get("output_tokens") or 0),
+                    name: int(result.usage.get(name) or 0) + int(repaired.usage.get(name) or 0)
+                    for name in counts
                 },
                 model=repaired.model,
                 provider=repaired.provider,

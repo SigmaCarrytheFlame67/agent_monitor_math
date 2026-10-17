@@ -49,6 +49,15 @@ def _emit(event: dict) -> None:
     print(json.dumps(event, ensure_ascii=False), flush=True)
 
 
+def _report_failure(reason: object) -> None:
+    """Give the console the run's error: one ``[agent-monitor]`` stderr line.
+
+    The console takes only the last such line, so a multi-line Codex error
+    (it carries the CLI's stderr tail) is joined into one.
+    """
+    print(f"[agent-monitor] {' '.join(str(reason).split())}", file=sys.stderr, flush=True)
+
+
 def _lean_mode() -> bool:
     return os.environ.get("AGENT_MONITOR_KIMI_CODEX_MODE", "").strip().lower() == "lean"
 
@@ -128,9 +137,12 @@ def _normalize_informal_outcome(path: Path) -> bool:
 
 
 def main() -> int:
-    prompt = " ".join(sys.argv[1:]).strip()
+    # The console passes "-" and writes the prompt to stdin, as for native
+    # Codex: one command-line argument is limited to 128 KiB.
+    args = sys.argv[1:]
+    prompt = (sys.stdin.read() if args == ["-"] else " ".join(args)).strip()
     if not prompt:
-        print("Kimi Codex runner requires a prompt", file=sys.stderr)
+        _report_failure("Kimi Codex runner requires a prompt")
         return 2
     model = os.environ.get("AGENT_MONITOR_SELECTED_MODEL", "kimi-k3").strip()
     artifact_before = _artifact_snapshot()
@@ -144,27 +156,22 @@ def main() -> int:
             workspace=Path.cwd(),
             sandbox="danger-full-access",
             enable_tools=True,
+            # Kimi can end a turn with no visible text; the deliverable is
+            # the fresh artifact checked below.
+            allow_empty_text=True,
         )
     except (CodexBackendError, OSError, ValueError) as exc:
-        print(f"Kimi Codex adapter failed: {exc}", file=sys.stderr, flush=True)
+        _report_failure(f"Kimi Codex adapter failed: {exc}")
         return 1
 
     artifact = _fresh_artifact(artifact_before)
     if artifact is None:
         expected = "Proof.lean" if _lean_mode() else "proof.md or proof.tex"
-        print(
-            f"Kimi Codex adapter finished without a new substantive {expected}",
-            file=sys.stderr,
-            flush=True,
-        )
+        _report_failure(f"Kimi Codex adapter finished without a new substantive {expected}")
         return 1
 
     if not _normalize_informal_outcome(artifact):
-        print(
-            "Kimi Codex adapter could not normalize proof.md outcome contract",
-            file=sys.stderr,
-            flush=True,
-        )
+        _report_failure("Kimi Codex adapter could not normalize proof.md outcome contract")
         return 1
 
     # codex_exec already streamed the native events.  Keep the final text as a

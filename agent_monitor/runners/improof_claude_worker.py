@@ -137,6 +137,10 @@ def main(argv: list[str] | None = None) -> int:
         or DEFAULT_MODEL
     ).strip()
     try:
+        target = _safe_output(args.output)
+        # ProofStack collects the output file whatever this exit status is, so
+        # a failed turn must not leave the previous round's file behind.
+        target.unlink(missing_ok=True)
         result = claude_exec(
             _ROLE_SYSTEM[args.role],
             prompt,
@@ -145,7 +149,7 @@ def main(argv: list[str] | None = None) -> int:
             source_env=source_env,
             emit_event=_emit_projected,
         )
-        _write_output(_safe_output(args.output), result.text)
+        _write_output(target, result.text)
     except (ClaudeBackendError, OSError, ValueError) as exc:
         sys.stderr.write(f"IMProof Claude {args.role} failed: {exc}\n")
         return 1

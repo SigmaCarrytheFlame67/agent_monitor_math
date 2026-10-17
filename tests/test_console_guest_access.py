@@ -1372,6 +1372,20 @@ def test_guest_kimi_default_and_locked_account_engines(guest_console):
             assert status == 403, raw
 
 
+def test_guest_engines_name_only_the_api_route(guest_console):
+    """A guest, and the member it becomes on sign-up, bills an API key: the
+    engine menu must not offer Plain on "Codex / Claude Code / API"."""
+    with running_server() as port:
+        _, cookie, _ = _issue_guest(port)
+        status, _, raw = request(port, "GET", f"{APP_MOUNT}/api/engines", headers={"Cookie": cookie})
+    assert status == 200
+    engines = {engine["id"]: engine for engine in json.loads(raw)["engines"]}
+    for engine in ("kimi", "plain", "math_harness"):
+        assert engines[engine]["auth_modes"] == ["api_key"], engine
+    # Administrator-only entries still describe the engine itself.
+    assert "codex_subscription" in engines["codex"]["auth_modes"]
+
+
 def test_guest_ten_run_budget_survives_deleted_runs_and_restart(guest_console, monkeypatch):
     calls = []
     monkeypatch.setenv("AGENT_MONITOR_GUEST_RUNS_PER_HOUR", "24")
@@ -1407,6 +1421,60 @@ def test_failed_guest_validation_refunds_usage(guest_console, monkeypatch):
                                body={"problem_text": "Prove it."}, headers={"Cookie": cookie})
         assert status == 400
         assert auth.guest_runs_started(guest["id"]) == 0
+
+
+def test_refused_guest_starts_give_back_the_hourly_run_slots(guest_console, monkeypatch):
+    # A guest without a key presses Prove as often as the hourly limit allows,
+    # then adds a key as the banner says: that start must still run.
+    started: list[dict] = []
+
+    def start_job(**kwargs):
+        if not settings.resolved_user_env(kwargs["user"]).get("KIMI_API_KEY"):
+            raise ValueError(
+                "Kimi K3 requires your own API key, or the sponsored Kimi service must be available"
+            )
+        started.append(kwargs)
+        return {"run_id": "kimi_keyed_run", "status": "running"}
+
+    monkeypatch.setattr(console.job_manager, "start_job", start_job)
+    monkeypatch.setattr(console.job_manager, "list_jobs", lambda **_kwargs: [])
+    client = "203.0.113.9"
+    body = {"engine": "kimi", "problem_text": "Prove it."}
+    with running_server() as port:
+        guest, cookie, _ = _issue_guest(port)
+        headers = {"Cookie": cookie, "X-Forwarded-For": client}
+        for _ in range(console.guest_runs_per_hour()):
+            status, _, raw = request(port, "POST", f"{APP_MOUNT}/api/runs", body=body, headers=headers)
+            assert status == 400 and "own API key" in raw, raw
+        assert not console._GUEST_RUN_WINDOWS.get(guest["id"])
+        assert not console._GUEST_RUN_CLIENT_WINDOWS.get(client)
+        assert not console._GUEST_GLOBAL_RUN_WINDOW
+        saved, _, saved_raw = request(
+            port, "POST", f"{APP_MOUNT}/api/settings",
+            body={"updates": {"KIMI_API_KEY": "sk-guest-kimi-123456789"}}, headers=headers,
+        )
+        assert saved == 200, saved_raw
+        status, _, raw = request(port, "POST", f"{APP_MOUNT}/api/runs", body=body, headers=headers)
+    assert status == 200, raw
+    assert len(started) == 1
+    assert auth.guest_runs_started(guest["id"]) == 1
+    assert len(console._GUEST_RUN_WINDOWS[guest["id"]]) == 1
+    assert len(console._GUEST_GLOBAL_RUN_WINDOW) == 1
+
+
+def test_a_guest_refused_by_the_session_limit_keeps_its_hourly_run_slots(guest_console, monkeypatch):
+    monkeypatch.setattr(auth, "reserve_guest_run", lambda *_args, **_kwargs: False)
+    monkeypatch.setattr(console.job_manager, "list_jobs", lambda **_kwargs: [])
+    client = "203.0.113.9"
+    with running_server() as port:
+        guest, cookie, _ = _issue_guest(port)
+        status, _, raw = request(port, "POST", f"{APP_MOUNT}/api/runs",
+                                 body={"engine": "kimi", "problem_text": "Prove it."},
+                                 headers={"Cookie": cookie, "X-Forwarded-For": client})
+    assert status == 403 and "Guest limit reached" in raw
+    assert not console._GUEST_RUN_WINDOWS.get(guest["id"])
+    assert not console._GUEST_RUN_CLIENT_WINDOWS.get(client)
+    assert not console._GUEST_GLOBAL_RUN_WINDOW
 
 
 def test_hosted_kimi_key_is_not_in_general_guest_settings(guest_console, monkeypatch):
@@ -1787,6 +1855,9 @@ def _owned_guest_run(monkeypatch, workspace: Path, owner: dict) -> None:
         console.Handler, "_owns_run", lambda _self, _run_id, _user: True
     )
     monkeypatch.setattr(
+        console.Handler, "_is_run_owner", lambda _self, _run_id, _user: True
+    )
+    monkeypatch.setattr(
         console,
         "_run_record_for",
         lambda _run_id: {
@@ -2060,6 +2131,36 @@ def test_shared_profile_and_library_writes_are_operator_only(
     assert len(writes) == len(checks)
 
 
+def test_members_never_read_the_operators_run_records_in_the_library(
+    guest_console, monkeypatch: pytest.MonkeyPatch
+):
+    admin = auth.register("admin@example.test", "long-enough-password")
+    member = auth.register("member@example.test", "long-enough-password")
+    items = [
+        {"id": "memory_run_codex_adhoc_1", "type": "memory", "name": "Run p1 (codex)",
+         "content": "Problem: the operator's private problem", "source": "run:codex_adhoc_1"},
+        {"id": "memory_notes", "type": "memory", "name": "Notes", "content": "Shared notes"},
+        {"id": "skill_lean", "type": "skill", "name": "lean", "content": "Use Lean."},
+    ]
+    monkeypatch.setattr(library, "get_library", lambda: {
+        "items": items, "counts": {"memory": 2, "skill": 1, "tool": 0}, "settings": {"auto_memory": True},
+    })
+
+    with running_server() as port:
+        def read(account):
+            cookie = {"Cookie": f"{auth.SESSION_COOKIE}={auth.create_session(account['id'])}"}
+            status, _, raw = request(port, "GET", APP_MOUNT + "/api/library", headers=cookie)
+            assert status == 200, raw
+            return json.loads(raw)
+
+        shown = read(member)
+        everything = read(admin)
+    assert [item["id"] for item in shown["items"]] == ["memory_notes", "skill_lean"]
+    assert shown["counts"] == {"memory": 1, "skill": 1, "tool": 0}
+    assert "private problem" not in json.dumps(shown)
+    assert [item["id"] for item in everything["items"]] == [item["id"] for item in items]
+
+
 def test_finished_guest_run_starts_its_derived_pipeline_immediately(
     guest_console, guest_derived_state, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ):
@@ -2099,3 +2200,21 @@ def test_finished_guest_run_starts_its_derived_pipeline_immediately(
     record["status"] = "finished"
     jobs._notify_guest_completion("kimi_run", guest["id"], tmp_path)
     assert len(started) == 1
+
+
+def test_enabled_records_of_the_operators_runs_reach_only_the_operators_runs(tmp_path: Path):
+    from unittest.mock import patch
+
+    record = {"id": "memory_run_codex_adhoc_1", "type": "memory", "name": "Run p1 (codex)",
+              "content": "Problem: the operator's private problem", "source": "run:codex_adhoc_1"}
+    notes = {"id": "memory_notes", "type": "memory", "name": "Notes", "content": "Shared notes"}
+    with patch.object(library, "enabled_items",
+                      side_effect=lambda item_type=None: [record, notes] if item_type == "memory" else []):
+        member_ctx = library.compose_context(run_memories=False)
+        operator_ctx = library.compose_context()
+        library.materialize(tmp_path / "member", run_memories=False)
+        library.materialize(tmp_path / "operator")
+    assert "private problem" not in member_ctx and "Shared notes" in member_ctx
+    assert "private problem" in operator_ctx
+    assert "private problem" not in (tmp_path / "member" / "_library" / "MEMORY.md").read_text()
+    assert "private problem" in (tmp_path / "operator" / "_library" / "MEMORY.md").read_text()

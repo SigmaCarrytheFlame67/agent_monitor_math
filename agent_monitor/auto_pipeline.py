@@ -345,15 +345,20 @@ def _run_record(run_id: str) -> dict[str, Any] | None:
 def _run_user(
     owner_id: int | None, run_record: dict[str, Any] | None
 ) -> dict[str, Any] | None:
-    """Keep the persisted guest role when background work rebuilds its owner.
+    """Keep the owner's role when background work rebuilds its owner.
 
     The guest account may already have been removed by logout or expiry. The
     run's role still applies: deriving its views must never gain an account's
     provider permissions merely because only its numeric owner was retained.
+    An administrator keeps its role (looked up, never read from the run), so
+    its automatic stages use the server keys and its own endpoints, as its
+    manual Lean and DAG actions do.
     """
     if (run_record or {}).get("guest"):
         return {"id": owner_id, "guest": True}
-    return {"id": owner_id} if owner_id is not None else None
+    from agent_monitor.jobs import _owner_user
+
+    return _owner_user(owner_id)
 
 
 def _source_signature(workspace: Path, run_record: dict[str, Any] | None) -> str:
@@ -927,9 +932,10 @@ def _analysis_batch(
         )
         return False
     # The Analyze switches cover the automatic statement formalization too.
-    # The rebuilt owner carries no admin flag (see _run_user), and the run was
-    # admitted when it started, so only the switches matter here: Analyze off,
-    # guests off for a guest's analysis, sponsored Analyze off for a sponsored one.
+    # The run was admitted when it started, so the owner's role is not checked
+    # again (a member's would refuse an operator's ANALYZE_CMD); only the
+    # switches matter here: Analyze off, guests off for a guest's analysis,
+    # sponsored Analyze off for a sponsored one.
     guest_run = bool((run_record or {}).get("guest") or (user or {}).get("guest"))
     refusal = analyze_runs.derived_work_error({"guest": True} if guest_run else None, run_record)
     if refusal is not None:
@@ -1322,6 +1328,37 @@ def refresh_formal(
 _ANALYSIS_WAIT_MARGIN_SECONDS = 900 + 300 + 300
 
 
+def max_run_wait_seconds() -> float:
+    """How long the pipeline waits for an Ansatz CGM Max run: its own wall
+    clock, the CLI watchdog's margin and the record write."""
+    from agent_monitor import cgm_max
+
+    return float(cgm_max.RUN_SECONDS + 300 + 300)
+
+
+def cgm_run_wait_seconds(engine: str) -> float:
+    """How long the pipeline waits for a CGM run (``math_harness``, ``kimi``):
+    its outer watchdog under the console's budgets, and the record write.
+
+    The run's own environment only lowers that bound (guest and sponsored
+    profiles), so the console's environment gives an upper bound.
+    """
+    from agent_monitor.jobs import _cli_timeout_seconds
+
+    return float(_cli_timeout_seconds(engine, dict(os.environ)) + 300)
+
+
+def _is_max_run(run_id: str) -> bool:
+    """Whether ``run_id`` is a Max run (``_run_record`` returns its worker view)."""
+    try:
+        from agent_monitor import cgm_max
+        from agent_monitor.jobs import _load_run_record
+
+        return cgm_max.is_max_record(_load_run_record(run_id))
+    except (FileNotFoundError, OSError, ValueError):
+        return False
+
+
 def analysis_wait_seconds(workspace: Path) -> float:
     """How long the pipeline waits for an analysis to end: never less than the
     analysis's own watchdog (an administrator's may run four hours)."""
@@ -1350,10 +1387,31 @@ def _run(
     if is_analysis_run(_run_record(run_id)):
         # Its derived views come from the published graph, once it has ended.
         timeout = max(timeout, analysis_wait_seconds(workspace))
+    elif _is_max_run(run_id):
+        # An Ansatz CGM Max run may take three hours and writes proof.md only
+        # when it publishes; giving up at the default two hours left every
+        # long Max run without derived views ("produced no proof draft").
+        timeout = max(timeout, max_run_wait_seconds())
+    else:
+        from agent_monitor.jobs import _CGM_ENGINES
+
+        if engine in _CGM_ENGINES:
+            # A CGM run also publishes proof.md only at its end, which an
+            # operator-raised wall clock (AGENT_MONITOR_CGM_MAX_SECONDS) can
+            # put past the default wait.
+            timeout = max(timeout, cgm_run_wait_seconds(engine))
     processed_sig = ""
     try:
         sig, record = _wait_for_source(run_id, workspace, timeout=timeout)
         if not sig:
+            if str((record or {}).get("status") or "") in {"stopped", "cancelled"}:
+                _stopped_before_source(
+                    workspace,
+                    "The analysis was stopped before it published a graph"
+                    if is_analysis_run(record)
+                    else "The run was stopped before it produced a proof draft",
+                )
+                return
             still_running = str((record or {}).get("status") or "") not in _TERMINAL
             missing = (
                 (
@@ -1588,6 +1646,30 @@ def reconcile_orphaned(workspace: Path, detail: str) -> bool:
         return False
     mark_interrupted(workspace, detail)
     return True
+
+
+def _stopped_before_source(workspace: Path, detail: str) -> None:
+    """Close the stages of a run its user stopped before anything existed to
+    derive: a stop is not a failure, so nothing reads as an error."""
+    def update(state: dict[str, Any]) -> None:
+        for name in ("informal_dag", "lean", "formal_dag", "coverage"):
+            stage = state.setdefault("stages", {}).setdefault(name, {})
+            if stage.get("status") == "off":
+                continue  # an informal-only run never asked for it
+            stage.update(
+                {
+                    "status": "stopped",
+                    "outcome": "not_run",
+                    "detail": detail,
+                    "finished_at": _now(),
+                }
+            )
+        # _aggregate_status would read stages that never ran as done.
+        state["status"] = "stopped"
+        state["proof_outcome"] = "not_run"
+        state["finished_at"] = _now()
+
+    _mutate(workspace, update)
 
 
 def mark_stale(workspace: Path, detail: str = "proof.md was edited") -> None:

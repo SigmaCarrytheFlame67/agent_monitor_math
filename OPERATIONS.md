@@ -131,12 +131,22 @@ ceilings, so an environment value can only lower them.
   `AGENT_MONITOR_CGM_REASONING_EFFORT` (`low`, `high` or
   `max`) overrides the Kimi effort of every stage but the curator. Guest and
   sponsored CGM calls always have an 8192-token output ceiling.
+- On one linked Codex or Claude Code account each call may take 600 s
+  (`AGENT_MONITOR_CODEX_TIMEOUT`; `AGENT_MONITOR_MATH_HARNESS_CLAUDE_TIMEOUT`,
+  where Claude Code workers and repairs get 1200 s). At Extra high or Ultra
+  effort, CGM and Analyze calls, follow-ups included, get 1800 s unless one
+  of those or `AGENT_MONITOR_CLAUDE_TIMEOUT` is set. Every call still ends
+  with the run's wall clock.
 - A problem statement may be at most 44,000 bytes of UTF-8 text; larger ones
   are refused before a run slot or a sponsored credential is used.
 - Calls still in flight 15 s after `AGENT_MONITOR_CGM_MAX_SECONDS` are
   abandoned. Stop sends SIGTERM: the runner abandons its in-flight calls,
   publishes nothing and exits 143 (`kimi` and `math_harness` alike); any
   other failure exits 1.
+- A run writes `proof.md` only when it publishes, so the derived-views
+  pipeline (Lean and the DAGs) waits at least the run's outer watchdog, which
+  follows `AGENT_MONITOR_CGM_MAX_SECONDS`, plus 300 s
+  (`AGENT_MONITOR_AUTO_PIPELINE_TIMEOUT`, default 7200 s, only raises it).
 - Every published run carries `math_harness/project/engine_receipt.json`.
   The current writer records receipt schema 3 (schema 4 for Max, below) with verification policy
   `solved-first-topological-waves-stop-on-target@1` (the first block, in the
@@ -159,12 +169,21 @@ ceilings, so an environment value can only lower them.
   billed to an API key. Each call sees only its own account: Codex calls get
   `CODEX_HOME` and the service `HOME`, never `CLAUDE_CONFIG_DIR`, and Claude
   calls never get `CODEX_HOME`. Each call may take 1800 s and the run 10800 s
-  (`agent_monitor/cgm_max.py`); concurrency stays 1. The receipt is schema 4:
+  (`agent_monitor/cgm_max.py`); concurrency stays 1. The outer watchdog is at
+  least 11100 s: `AGENT_MONITOR_CLI_TIMEOUT` and
+  `AGENT_MONITOR_MATH_HARNESS_TIMEOUT` can raise it but never lower it, since
+  a stopped run publishes nothing. The receipt is schema 4:
   transport `hybrid`, with `workflow.routes` naming the advisor (Claude Code)
-  and worker (Codex) models, and every call checked against its side. A
+  and worker (Codex) models, and every call checked against its side. When
+  an account must sign in again, reaches its usage limit or cannot use its
+  model during a run (any Claude Code or Codex route), the run says why and
+  sends that account no further verifier, repair or curator call; a verifier
+  stopped so leaves the candidate unattested, with the reason in `proof.md`. A
   follow-up continues as Max, or stops if either account was disconnected.
   Lean and graph work after a Max run uses the Codex account with the worker
-  model at high effort.
+  model at high effort. Derived Codex calls have a fixed per-call limit, so
+  the same cap applies after any Codex-subscription run made at extra-high or
+  maximum effort; the console's run-profile note says so.
 - Sponsored calls go through the Kimi broker's credential gateway, which runs
   at most `PUBLIC_KIMI_GATEWAY_CONCURRENCY` (default 8) upstream calls at once.
   Each guest run keeps up to 2 in flight, so a few concurrent runs can fill

@@ -1084,6 +1084,30 @@ def _attest_claude_session_model(
     return records
 
 
+def _claude_backend_failure_reason(account_home: Path) -> str:
+    """Explain an OpenClaw run whose Claude Code backend never replied."""
+    from agent_monitor import claude_login
+
+    # The Claude bridge marks the account when Claude Code rejects its login,
+    # and refuses to start once it is marked.
+    try:
+        reauth_required = claude_login.account_reauth_required(account_home)
+    except OSError:
+        reauth_required = False
+    if reauth_required:
+        return (
+            "Claude Code subscription authentication failed before OpenClaw got "
+            "a model reply; reconnect Claude Code in Settings (the linked "
+            "account needs a new sign-in) and retry."
+        )
+    return (
+        "OpenClaw's Claude Code backend stopped before any model reply. If the "
+        "Claude Code usage limit is reached, retry after it resets; if Claude "
+        "Code asks to sign in again, reconnect it in Settings. OpenClaw's own "
+        "message is in the run log."
+    )
+
+
 def _terminate_process_group(proc: subprocess.Popen[bytes], sig: int) -> None:
     try:
         os.killpg(proc.pid, sig)
@@ -1353,6 +1377,25 @@ def main() -> int:
                     requested=model_id,
                 )
             except ValueError as exc:
+                if returncode != 0 and not _session_model_usage_since(
+                    state_dir, terminal_offsets, session_key
+                ):
+                    # Claude never answered (a usage limit, a login to
+                    # reconnect): keep OpenClaw's exit code and say why. A
+                    # clean exit without model records still fails closed.
+                    print(
+                        "[agent-monitor] "
+                        + _claude_backend_failure_reason(account_home),
+                        file=sys.stderr,
+                        flush=True,
+                    )
+                    if formal_lean_mode:
+                        _emit_formal_lean_artifact_status(
+                            False,
+                            "OpenClaw ended before completing the formal Lean run "
+                            f"(exit {returncode}); Proof.lean was not promoted.",
+                        )
+                    return returncode
                 print(
                     json.dumps(
                         {

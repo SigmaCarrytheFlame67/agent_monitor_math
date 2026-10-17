@@ -470,7 +470,9 @@ def cli_usage(usage: dict[str, Any] | None, *, input_includes_cache: bool) -> di
         "cached_input_tokens": cache_read,
         # Not a ledger metric; only lets record_usage price writes correctly.
         "cache_write_tokens": cache_write,
-        "reasoning_tokens": _num(usage.get("reasoning_tokens")),
+        "reasoning_tokens": _num(
+            usage.get("reasoning_tokens") or usage.get("reasoning_output_tokens")
+        ),
     }
 
 
