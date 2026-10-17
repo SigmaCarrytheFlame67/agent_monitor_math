@@ -1847,7 +1847,8 @@ class Handler(RunSharingMixin, ProjectsMixin, ResearchMixin, BaseHTTPRequestHand
     def log_request(self, code="-", size="-"):
         """Log request paths without query strings that may contain reset tokens."""
         path = urlparse(self.path).path
-        path = re.sub(r"/(?:api/)?shared/[^/]+|/invite/[^/]+", "/private-link/[redacted]", path)
+        # /static/vendor/shared/ is an asset path, not a share link.
+        path = re.sub(r"(?<!/static/vendor)/(?:api/)?shared/[^/]+|/invite/[^/]+", "/private-link/[redacted]", path)
         self.log_message('"%s %s %s" %s %s', self.command, path, self.request_version, code, size)
 
     def _send(self, code: int, body: str, ctype: str = "application/json", headers: dict[str, str] | None = None):
@@ -2444,6 +2445,11 @@ class Handler(RunSharingMixin, ProjectsMixin, ResearchMixin, BaseHTTPRequestHand
 
     def _request_base_path(self) -> str:
         return getattr(self, "_resolved_base_path", BASE_PATH)
+
+    def _inject_base_html(self, html: str, base_path: str) -> str:
+        # Shared pages (run_sharing) need the same base-path snippet; the
+        # server module may be __main__, so it is handed over, not imported.
+        return _inject_base(html, base_path)
 
     def _resolve_path(self) -> str | None:
         """Parse the URL, enforce the configured gate, and record its mount."""

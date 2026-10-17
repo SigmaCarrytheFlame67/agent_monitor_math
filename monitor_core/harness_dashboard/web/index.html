@@ -318,6 +318,8 @@ header .hdr-actions { flex-wrap: wrap; min-width: 0; max-width: 100%; }
   .view-toggle .vt-hint { width: 100%; margin-left: 0; }
   .tabs .tab { flex: 0 0 auto; }
 }
+/* Shared runs (read-only): nothing to rebuild or export. */
+html.shared-view #btn-rebuild, html.shared-view #btn-export-logs { display: none !important; }
 </style>
 <style id="monitor-theme-style">
 /* Shared Ansatz palette. Keep geometry in the monitor-layout-style block. */
@@ -734,7 +736,8 @@ function agentsLackUsage(analysis) {
 
 function renderInsights(run) {
   const a = run.analysis;
-  if (!a) return '';
+  // A shared run carries no cost data, so its cost analysis is not shown.
+  if (!a || run.shared) return '';
   const stages = Object.entries(a.stage_costs || {});
   const pipeline = run.pipeline || [];
   const order = Object.fromEntries(pipeline.map((s, i) => [String(s.id), i]));
@@ -852,7 +855,7 @@ function renderAgentFlowSection(run) {
     stripHtml += `<div class="pipe-stage" style="border-top-color:${stageColor(st.id)}">
       <div class="pipe-stage-hdr">${esc(st.label)}</div>
       <div class="pipe-stage-sub">${esc(st.title)}</div>
-      <div class="pipe-stage-tot">${st.agent_count} agents · ${fmtUsd(st.cost_usd)}</div>
+      <div class="pipe-stage-tot">${st.agent_count} agents${st.cost_usd == null ? '' : ' · ' + fmtUsd(st.cost_usd)}</div>
       ${roles || '<div class="pipe-role"><span class="nm">—</span></div>'}
     </div>`;
   });

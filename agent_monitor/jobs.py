@@ -695,6 +695,10 @@ def _merge_continuation_run(
 def _write_run_locked(run: dict[str, Any]) -> Path:
     cache = _cache_dir()
     path = cache / f"{run['run_id']}.json"
+    if run["run_id"] in _DELETED_RUNS:
+        # A worker still finishing a deleted run must not write its record
+        # back: that resurrected the run without its owner (and its share).
+        return path
     old: dict[str, Any] = {}
     if path.exists():
         try:
@@ -5185,7 +5189,6 @@ def _append_chat(
     ledger_text: str | None = None,
 ) -> dict[str, Any]:
     path = _chat_file(run_id)
-    path.parent.mkdir(parents=True, exist_ok=True)
     entry = {"role": role, "content": content, "ts": _now()}
     if attachments:
         entry["attachments"] = attachments
@@ -5193,6 +5196,11 @@ def _append_chat(
         # The session ledger stores the prompt-facing form of this turn. Record
         # it so ledger recovery below does not re-add the turn as a duplicate.
         entry["ledger_text"] = ledger_text
+    if run_id in _DELETED_RUNS:
+        # A worker still finishing a deleted run must not recreate its
+        # workspace for its closing lines.
+        return entry
+    path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("a", encoding="utf-8") as f:
         f.write(json.dumps(entry, ensure_ascii=False) + "\n")
     return entry
@@ -7077,6 +7085,10 @@ def delete_run(run_id: str) -> dict[str, Any]:
         _DELETED_RUNS.add(run_id)
         for jid in [k for k, j in _JOBS.items() if j.get("run_id") == run_id]:
             _JOBS.pop(jid, None)
+    # A deleted run's shared links end with it.
+    from agent_monitor import run_sharing
+
+    run_sharing.forget(run_id)
     if proc is not None:
         _terminate_registered_proc(proc)
 
@@ -7093,10 +7105,13 @@ def delete_run(run_id: str) -> dict[str, Any]:
         except (json.JSONDecodeError, OSError):
             pass
 
-    for path in (run_json, RUNS_DIR / f"{run_id}.json"):
-        if path.exists():
-            path.unlink()
-            removed["deleted"].append(str(path))
+    # Under the write lock: a worker already inside _write_run for this run
+    # finishes first, so it cannot publish the record again after the unlink.
+    with _RUN_WRITE_LOCK:
+        for path in (run_json, RUNS_DIR / f"{run_id}.json"):
+            if path.exists():
+                path.unlink()
+                removed["deleted"].append(str(path))
 
     pdf = cache / "pdf" / f"{run_id}.pdf"
     if pdf.exists():

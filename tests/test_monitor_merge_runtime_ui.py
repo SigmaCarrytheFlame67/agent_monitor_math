@@ -96,7 +96,9 @@ class MergedMonitorViewTests(unittest.TestCase):
         self.assertEqual(tabs, ["sandbox", "lean", "monitor", "dag"])
         view = CONSOLE.split('<div id="view-monitor">', 1)[1].split('<div id="view-dag">', 1)[0]
         self.assertLess(view.index('id="monitor-frame"'), view.index('id="convo-col"'))
-        self.assertIn("f.src=pcUrl('/monitor?layout=flow')", SCRIPT)
+        self.assertIn(":pcUrl('/monitor?layout=flow')", SCRIPT)
+        # A shared run embeds its own read-only Monitor page.
+        self.assertIn("f.src=globalThis.__PC_SHARED__?.monitor?globalThis.__PC_SHARED__.monitor+'?layout=flow'", SCRIPT)
 
     def test_legacy_conversation_view_maps_to_the_monitor_view(self) -> None:
         program = r"""

@@ -243,9 +243,10 @@ class ProjectsMixin:
             elif path=='/api/projects/join' and method=='POST':result=join(body.get('token'),user)
             elif len(parts)==4 and method=='GET':
                 result=get(pid,user['id'])
-                from agent_monitor.run_sharing import record
+                from agent_monitor.run_sharing import _record_exists, record
                 for run in result['runs']:
-                    data=record(run['run_id']);run['status']=data.get('status','pending') if data else 'deleted'
+                    # This poll reads at most 10 MB of a record: a larger one is unavailable here, not deleted.
+                    data=record(run['run_id']);run['status']=data.get('status','pending') if data else ('unavailable' if _record_exists(run['run_id']) else 'deleted')
                     run['engine']=data.get('engine','') if data else ''
                     # "prove" or "analyze" (records without run_kind are proofs).
                     run['run_kind']=('analyze' if data and (data.get('run_kind')=='analyze' or data.get('engine')=='analyze') else 'prove')

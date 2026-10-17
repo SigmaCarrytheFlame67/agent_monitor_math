@@ -158,7 +158,7 @@ A graph shows dependencies. It does not certify an argument on its own.
 ### Collaborate and share {#collaborate-and-share}
 
 - **Collaborative projects** (signed in): create a project, write the problem and notes together, and invite editors, who sign in and accept. Each member launches runs with their own account settings, and project runs appear in **Project results**. Members can inspect every project run, including its prompts and files, so invite only people who should have that access. Only the member who started a run can continue, stop or change it. Agents read the shared document, so once a member who is not a site administrator has joined a project, its runs use the tool-free engines (Ansatz CGM or Plain) on an API key, even after that member leaves.
-- **Share** a run as a read-only link. The link includes the problem, the proof, agent summaries, the saved graphs and the Lean source. It excludes account settings, chat, attachments and the rest of the workspace. You can update or revoke it at any time; revoking cannot recall copies a reader already saved.
+- **Share** a run as a read-only link. Visitors see the run in the console's own interface, read only: the problem, the proof, the agents' messages and reasoning summaries, the commands their tools ran (not what the tools returned), the DAG views, and the Lean source with its checker record. It excludes account settings, prompts, your chat messages, attachments, the rest of the workspace and costs. You can update or revoke it at any time; revoking cannot recall copies a reader already saved.
 - **Library** (signed in): enabled memory, skills and tools are copied into a run’s workspace and added to its prompt context.
 
 ### Keep your account safe {#keep-your-account-safe}

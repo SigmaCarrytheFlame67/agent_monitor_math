@@ -11,7 +11,7 @@ import time
 ROOT=Path(__file__).resolve().parent.parent
 LIVE=Path('/home/ubuntu/agent_monitor_math')
 ALLOWED={'agent_monitor/web/console.html','agent_monitor/web/login.html',
-         'monitor_core/harness_dashboard/web/index.html','agent_monitor/web/run-viewer.css'}
+         'monitor_core/harness_dashboard/web/index.html'}
 
 def digest(content):return hashlib.sha256(content).hexdigest()
 

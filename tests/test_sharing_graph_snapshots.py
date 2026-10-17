@@ -43,7 +43,7 @@ def test_real_stored_engine_graphs_are_separate_from_outline_and_formal(workspac
     before = {str(p.relative_to(workspace)): p.read_bytes() for p in workspace.rglob('*') if p.is_file()}
     result = shares.snapshot('run-1', {'engine': 'math_harness', 'problem_text': 'An even integer.'})
     graphs = result['graphs']
-    assert result['version'] == 2 and set(graphs) == set(shares.GRAPH_MODES)
+    assert result['version'] == 3 and set(graphs) == set(shares.GRAPH_MODES)
     assert graphs['outline']['graph']['nodes'][0]['id'] == 'outline-only'
     assert graphs['facts']['graph_role'] == 'fact-dependency'
     assert graphs['explore']['graph_role'] == 'workflow'
@@ -133,7 +133,9 @@ def test_missing_fact_artifacts_and_forged_compiler_cache_fail_closed(workspace)
     result = shares.snapshot('run-1', {'engine': 'math_harness'})
     assert result['graphs']['facts']['status'] == result['graphs']['explore']['status'] == 'unavailable'
     assert result['graphs']['compiler']['status'] == 'unavailable'
-    assert result['graphs']['formal']['graph']['nodes'][0]['id'] == 'decl'
+    # Like the console, a run without Lean source has no Formal graph, so a
+    # stored graph cannot stand in for one.
+    assert result['graphs']['formal']['status'] == 'unavailable' and not result['graphs']['formal']['graph']['nodes']
 
 
 def test_only_prevalidated_source_bound_compiler_metadata_is_projected(workspace, monkeypatch):
@@ -235,7 +237,9 @@ def test_analysis_manuscript_keeps_verdicts_without_source_notes(workspace):
     assert node['verdict'] == 'checked' and node['main_result'] is True
     assert node['status'] == 'checked by a model verifier'
     assert result['graphs']['outline']['graph'] == result['graphs']['manuscript']['graph']
-    assert result['agents'] == [] and 'PRIVATE' not in json.dumps(result)
+    # Steps by name only: no transcript text.
+    assert [agent['summary'] for agent in result['agents']] == ['(not included in shared analysis snapshots)']
+    assert 'PRIVATE' not in json.dumps(result)
     assert result['graphs']['facts']['status'] == result['graphs']['explore']['status'] == 'unavailable'
 
 
@@ -257,7 +261,7 @@ def test_legacy_share_stays_frozen_and_only_owner_refresh_adds_graphs(workspace,
     fetched = shares.lookup(token)
     assert fetched['version'] == 1 and fetched['proof'] == 'Earlier proof' and 'graphs' not in fetched
     refreshed = shares.create('run-1', 7, shares.snapshot('run-1', {'engine': 'plain'}))
-    assert refreshed['token'] == token and shares.lookup(token)['version'] == 2
+    assert refreshed['token'] == token and shares.lookup(token)['version'] == 3
     shares.revoke('run-1', 8)
     assert shares.lookup(token) is not None
     shares.revoke('run-1', 7)

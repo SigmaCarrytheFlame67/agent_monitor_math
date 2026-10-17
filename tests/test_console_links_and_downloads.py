@@ -107,7 +107,9 @@ class ConsoleLinkTests(unittest.TestCase):
         self.assertIn("'share-run-btn'", hidden)
         self.assertIn("'projects-link'", hidden)
         sharing = (WEB / "sharing.js").read_text(encoding="utf-8")
-        self.assertIn("if(typeof CURRENT_USER!=='undefined'&&CURRENT_USER?.guest)button.style.display='none';", sharing)
+        # Share is shown only to the run's owner (never a guest), once the run is known.
+        self.assertIn("button.style.display='none';side.prepend(button);", sharing)
+        self.assertIn("const mine=!!me&&!me.guest&&!!run&&", sharing)
 
     def test_failed_delete_is_reported(self) -> None:
         delete = _js_function("deleteRun")
