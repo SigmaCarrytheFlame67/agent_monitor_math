@@ -768,6 +768,29 @@ def test_sponsored_kimi_goes_through_the_attested_loopback_broker(tmp_path):
     assert {seen["payload"]["model"] for seen in server.seen} == {kimi_k3.MODEL_ID}
 
 
+def test_a_manuscript_without_a_title_is_named_by_its_reading_guide(tmp_path, model):
+    untitled = PAPER.replace("\\title{Sums of evens}\n", "").replace("\\maketitle\n", "")
+    model(guide=lambda _user: guide_json(title="Even sums, two lemmas"))
+    run(tmp_path, write_request(tmp_path, text=untitled), kimi_env())
+    assert load(tmp_path, "manuscript.json")["title"] == "Pasted manuscript"
+    assert (tmp_path / "readability" / "readable.md").read_text().startswith("# Even sums, two lemmas — Readable version")
+    assert load(tmp_path, "paper_map.json")["title"] == "Even sums, two lemmas"
+    assert load(tmp_path, "receipt.json")["title"] == "Even sums, two lemmas"
+    # The run list names it too.
+    assert record.run_block(tmp_path)["source"]["title"] == "Even sums, two lemmas"
+    # The manuscript's own title wins over the guide's.
+    titled = tmp_path / "titled"
+    run(titled, write_request(titled), kimi_env())
+    assert load(titled, "receipt.json")["title"] == "Sums of evens"
+    assert record.run_block(titled)["source"]["title"] == "Sums of evens"
+    # Without a model guide the placeholder stays.
+    outline = tmp_path / "outline"
+    model(guide=lambda _user: "no JSON here")
+    run(outline, write_request(outline, text=untitled), kimi_env())
+    assert load(outline, "receipt.json")["guide"] == "outline"
+    assert record.run_block(outline)["source"]["title"] == "Pasted manuscript"
+
+
 def test_missing_parser_packages_are_a_configuration_error(tmp_path, model, monkeypatch):
     fake = model()
     monkeypatch.setattr(analyze_runner, "missing_packages", lambda: ["pylatexenc"])
@@ -804,6 +827,24 @@ def test_a_question_without_a_passage_uses_the_guide_or_the_results_part(tmp_pat
     assert "<CONTEXT>\nnone: the guide below is all the context" in fake.calls[-1]["user"]
     ask.write_request(tmp_path, "bbbbbbbbbbbb", {"question": "Why?", "node_id": "lem:sum"})
     assert runner.run_ask(tmp_path, "bbbbbbbbbbbb", route_env=kimi_env())["part"] == 1
+
+
+def test_a_question_from_the_paper_map_names_the_result_it_is_about(tmp_path, model):
+    fake = model(ask=lambda _user: "By \\emph{distributivity}, see Lemma~\\ref{lem:sum}.")
+    run(tmp_path, write_request(tmp_path), kimi_env())
+    ask.write_request(tmp_path, "eeeeeeeeeeee", {"question": "Why does this result hold?", "node_id": "lem:sum"})
+    answer = runner.run_ask(tmp_path, "eeeeeeeeeeee", route_env=kimi_env())
+    user = fake.calls[-1]["user"]
+    about = user.split("<ABOUT_RESULT>\n", 1)[1].split("\n</ABOUT_RESULT>", 1)[0]
+    assert about.startswith("Lemma 2.2 [[result:lem:sum]]\n") and "$2a+2b=2(a+b)$" in about
+    assert user.index("</QUESTION>") < user.index("<ABOUT_RESULT>") < user.index("<PASSAGE>")
+    assert '"this result" means' in prompts.READABLE_ASK_SYSTEM
+    # Leftover LaTeX in the answer reads as in the readable version.
+    assert answer["answer"] == "By *distributivity*, see Lemma 2.2."
+    # A question without a result has no such block.
+    ask.write_request(tmp_path, "ffffffffffff", {"question": "What is this about?"})
+    runner.run_ask(tmp_path, "ffffffffffff", route_env=kimi_env())
+    assert "<ABOUT_RESULT>" not in fake.calls[-1]["user"]
 
 
 def test_a_failed_answer_is_recorded_and_raises(tmp_path, model):

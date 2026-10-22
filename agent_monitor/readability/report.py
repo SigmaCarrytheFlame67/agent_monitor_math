@@ -32,7 +32,7 @@ from typing import Any, Mapping, Sequence
 
 from agent_monitor.analyze.report import _LINK_RE, _LINK_SYNTAX_RE, ROUTE_TEXT
 from agent_monitor.analyze.titles import plain_title
-from agent_monitor.readability import parse
+from agent_monitor.readability import parse, texprose
 from agent_monitor.readability.prompts import AUDIENCE_LABELS, MARKER_RE
 from agent_monitor.readability.references import resolve
 
@@ -158,7 +158,7 @@ def at_a_glance(guide: Mapping[str, Any], labels: Mapping[str, str],
     refs = references or {}
 
     def line(value: object, limit: int) -> str:
-        return _line(resolve(str(value or ""), refs), limit)
+        return _line(texprose.convert(resolve(str(value or ""), refs), labels), limit)
 
     out = ["## At a glance"]
     if guide.get("one_line"):
@@ -210,7 +210,7 @@ def render_part(part: Mapping[str, Any], *, labels: Mapping[str, str], original:
         if status == "unchecked":
             out.append(f"> **Not checked** ({_line(part.get('reason') or 'no check', 300)}): no model compared "
                        "this part with the original.")
-        markdown = resolve(str(part.get("markdown") or ""), references or {})
+        markdown = texprose.convert(resolve(str(part.get("markdown") or ""), references or {}), labels)
         out.append(anchors(normalize_headings(markdown)))
         return "\n\n".join(out)
     if part.get("kind") == "references":

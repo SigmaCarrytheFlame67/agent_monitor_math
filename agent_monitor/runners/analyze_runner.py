@@ -83,7 +83,7 @@ from agent_monitor import kimi_k3, safe_fetch
 from agent_monitor.analyze import graph as analysis_graph
 from agent_monitor.analyze import latex_structure, limits, prompts, report, sources, text_structure, verdicts
 from agent_monitor.analyze import request as analysis_request
-from agent_monitor.analyze.titles import tex_text_refs
+from agent_monitor.analyze.titles import PLACEHOLDER_TITLES, tex_text_refs
 from agent_monitor.cgm.parsing import ParseError
 from agent_monitor.runners import math_harness_runner as harness
 
@@ -507,8 +507,7 @@ class ManuscriptRun:
         _write_json(self.folder / "segments.json", segments)
         manuscript = bundle.manuscript(root_file=segments.get("root_file"), fmt=segments.get("format") or fmt)
         if not manuscript["title"]:
-            manuscript["title"] = segments.get("title") or {
-                "paste": "Pasted manuscript", "upload": "Uploaded manuscript"}.get(bundle.source_kind, "")
+            manuscript["title"] = segments.get("title") or PLACEHOLDER_TITLES.get(bundle.source_kind, "")
         if segments.get("math_fidelity"):
             manuscript["math_fidelity"] = segments["math_fidelity"]
         manuscript["warnings"] = list(dict.fromkeys(manuscript["warnings"] + segments["warnings"]))[:20]

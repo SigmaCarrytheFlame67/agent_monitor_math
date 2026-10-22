@@ -19,6 +19,7 @@ from pathlib import Path
 from typing import Any
 
 from agent_monitor.analyze.record import _load
+from agent_monitor.analyze.titles import PLACEHOLDER_TITLES
 from agent_monitor.readability import request as readability_request
 
 SCHEMA = "ansatze-readability-v1"
@@ -70,4 +71,8 @@ def run_block(workspace: Path) -> dict[str, Any] | None:
         block["caps"] = {key: caps[key] for key in ("max_parts", "max_calls") if isinstance(caps.get(key), int)}
         block["summary"] = summary(receipt)
         block["stopped"] = bool(receipt.get("stopped"))
+        title = " ".join(str(receipt.get("title") or "").split())[:300]
+        if title and block["source"].get("title", "") in ("", *PLACEHOLDER_TITLES.values()):
+            # The published title (the reading guide's) names a manuscript that gave none.
+            block["source"]["title"] = title
     return block

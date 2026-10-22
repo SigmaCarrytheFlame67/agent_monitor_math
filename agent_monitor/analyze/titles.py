@@ -402,6 +402,10 @@ _DOLLAR_MATH = re.compile(r"(?<![\\$])\$(?=\S)([^$\n]{1,600}?)(?<=\S)\$(?!\d)")
 _PAREN_MATH = re.compile(r"\\\((.{1,600}?)\\\)", re.S)
 
 
+# A manuscript's title when it gives none, by where it came from.
+PLACEHOLDER_TITLES = {"paste": "Pasted manuscript", "upload": "Uploaded manuscript"}
+
+
 def plain_title(value: object, limit: int | None = None) -> str:
     """One line of readable text for a title that may hold inline TeX or HTML."""
     text = str(value or "")

@@ -70,11 +70,12 @@ if not __package__:
 from agent_monitor import safe_fetch
 from agent_monitor.analyze import latex_structure, sources, text_structure
 from agent_monitor.analyze.prompts import utf8_len
+from agent_monitor.analyze.titles import PLACEHOLDER_TITLES
 from agent_monitor.cgm.parsing import ParseError
 from agent_monitor.readability import ask as readability_ask
 from agent_monitor.readability import document as readability_document
 from agent_monitor.readability import limits as readability_limits
-from agent_monitor.readability import paper_map, parse, prompts, references, report
+from agent_monitor.readability import paper_map, parse, prompts, references, report, texprose
 from agent_monitor.readability import request as readability_request
 from agent_monitor.readability import structure as readability_structure
 from agent_monitor.runners import analyze_runner as runner
@@ -624,7 +625,11 @@ class ReadabilityRun(runner.ManuscriptRun):
         nodes = segments.get("nodes") or []
         labels = {node["id"]: prompts.printed(node) for node in nodes}
         refs = references.label_map(segments)
-        title = str(manuscript.get("title") or self.guide.get("title") or "")
+        title = str(manuscript.get("title") or "")
+        if title in PLACEHOLDER_TITLES.values() and self.guide_source == "model":
+            # "Pasted manuscript" names no manuscript; the reading guide's title does.
+            title = " ".join(str(self.guide.get("title") or "").split()) or title
+        title = title or str(self.guide.get("title") or "")
         counts = self.counts(outcomes)
         model_guide = self.guide if self.guide_source == "model" else None
         part_of = {node_id: outcome.part.index for outcome in outcomes for node_id in outcome.part.nodes}
@@ -659,7 +664,7 @@ class ReadabilityRun(runner.ManuscriptRun):
                                        "parts": [{key: value for key, value in part.items() if key != "markdown"}
                                                  for part in parts]},
         }
-        receipt = self.receipt(segments, manuscript, counts)
+        receipt = {**self.receipt(segments, manuscript, counts), "title": title[:300]}
         for path, value in written.items():
             target = self.workspace / path
             if isinstance(value, bytes):
@@ -835,9 +840,12 @@ def run_ask(
         original_lines=_text_file(folder / "original.txt").split("\n"),
         parts=[item for item in check.get("parts") or [] if isinstance(item, dict) and isinstance(item.get("index"), int)],
         node_parts={node["id"]: node.get("part") for node in paper["nodes"]}, limit=limit)
+    about = next((node for node in nodes if isinstance(node, dict) and question.get("node_id")
+                  and node.get("id") == question["node_id"]), None)
     user = prompts.ask_prompt(question=question["question"], passage=question["selection"], context=context,
                               guide=prompts.guide_summary(guide, run.summary_bytes),
-                              results=prompts.results_list(nodes, run.guide_bytes[0]))
+                              results=prompts.results_list(nodes, run.guide_bytes[0]),
+                              about=prompts.about_result(about))
     ids = [node["id"] for node in nodes if isinstance(node, dict) and node.get("id")]
     answer: dict[str, Any] = {"schema": ANSWER_SCHEMA, "ask_id": ask_id, "part": part,
                               "model": run.info.route.model, "route": run.info.name}
@@ -854,8 +862,10 @@ def run_ask(
                         limit=prompts.ASK_REPLY_BYTES, parse=partial(parse.parse_answer, node_ids=ids),
                         family=prompts.ASK_FAMILY))
                 parsed, reply = harness._job_result(job)
-                # Leftover LaTeX references read as in the readable version.
-                parsed["answer"] = references.resolve(parsed["answer"], references.label_map(segments))
+                # Leftover LaTeX reads as in the readable version.
+                labels = {node["id"]: prompts.printed(node) for node in nodes if isinstance(node, dict) and node.get("id")}
+                parsed["answer"] = texprose.convert(
+                    references.resolve(parsed["answer"], references.label_map(segments)), labels)
                 answer.update(parsed, status="done", model=(reply.observed_model or reply.model or run.info.route.model))
             except harness.RunCancelled:
                 raise Stopped("The question was stopped; nothing was answered") from None
