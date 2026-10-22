@@ -10,8 +10,9 @@
     if (value != null) element.textContent = text(value);
     return element;
   };
-  const renderText = (target, value) => {
-    if (window.AnsatzSharedText?.render) window.AnsatzSharedText.render(target, text(value), { manuscript: analysis });
+  // `options.macros`: the author's TeX macros (a readable version's).
+  const renderText = (target, value, options = {}) => {
+    if (window.AnsatzSharedText?.render) window.AnsatzSharedText.render(target, text(value), { manuscript: analysis, macros: options.macros });
     else { target.textContent = text(value); target.classList.add('rv-plain-text'); }
   };
   const statusLabel = value => text(value).replace(/_/g, ' ').replace(/^./, ch => ch.toUpperCase());

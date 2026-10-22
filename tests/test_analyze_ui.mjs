@@ -644,7 +644,7 @@ test('the shared viewer renders the report as Markdown and reads TeX references 
   const text = readFileSync(new URL('../agent_monitor/web/run-viewer-text.js', import.meta.url), 'utf8')
   // The report goes through the shared Markdown renderer (which drops the
   // report's \| and &lt; escapes) in manuscript mode, never as raw text.
-  assert.match(viewer, /AnsatzSharedText\.render\(target, text\(value\), \{ manuscript: analysis \}\)/)
+  assert.match(viewer, /AnsatzSharedText\.render\(target, text\(value\), \{ manuscript: analysis, macros: options\.macros \}\)/)
   const sandbox = { window: {}, document: {}, NodeFilter: {}, location: { href: 'https://example.test/' } }
   vm.runInNewContext(text, sandbox)
   const prose = sandbox.window.AnsatzSharedText.manuscriptProse

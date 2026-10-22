@@ -62,7 +62,8 @@
   function tex(element, value, macros) {
     element.textContent = value;
     if (!value || typeof window.katex?.render !== 'function') return;
-    try { window.katex.render(value, element, { throwOnError: false, displayMode: false, trust: false, macros: { ...macros }, maxExpand: 200 }); }
+    const all = window.AnsatzSharedText?.withKatexFallbacks?.(macros, value) || { ...macros };
+    try { window.katex.render(value, element, { throwOnError: false, displayMode: false, trust: false, macros: all, maxExpand: 200 }); }
     catch { element.textContent = value; }
   }
   function placeAnchors(target, labels) {
@@ -168,7 +169,7 @@
     const sections = [notationSection(view), mapSection(view, target)];
     target.after(...sections);
     // Meanings, titles and roles may hold inline math (the symbols are typeset already).
-    sections.forEach(section => window.AnsatzSharedText?.math?.(section));
+    sections.forEach(section => window.AnsatzSharedText?.math?.(section, { macros: view.macros }));
     return view;
   }
   const api = { render, parts, katexMacros, withAnchorTokens, importance, sectionLabel };

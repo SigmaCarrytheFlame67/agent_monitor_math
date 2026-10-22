@@ -4585,7 +4585,26 @@ async function finishSandboxEdit(){
 }
 // Display environments written without $$ (manuscripts: \begin{align} ... \end{align}) render too.
 function mathEnvDelimiters(){ return ['equation','equation*','align','align*','alignat','alignat*','gather','gather*'].map(env=>({left:'\\begin{'+env+'}',right:'\\end{'+env+'}',display:true})); }
-function renderMathIn(el,macros){ if(window.renderMathInElement){ try{ renderMathInElement(el,{delimiters:[...mathEnvDelimiters(),{left:'$$',right:'$$',display:true},{left:'\\[',right:'\\]',display:true},{left:'$',right:'$',display:false},{left:'\\(',right:'\\)',display:false}],ignoredTags:['script','noscript','style','textarea','pre','code','option'],throwOnError:false,...(macros&&typeof macros==='object'?{macros:{...macros},maxExpand:200}:{})}); }catch(e){} } }
+function renderMathIn(el,macros){ if(window.renderMathInElement){ try{ renderMathInElement(el,{delimiters:[...mathEnvDelimiters(),{left:'$$',right:'$$',display:true},{left:'\\[',right:'\\]',display:true},{left:'$',right:'$',display:false},{left:'\\(',right:'\\)',display:false}],ignoredTags:['script','noscript','style','textarea','pre','code','option'],throwOnError:false,macros:withKatexFallbacks(macros,el.textContent),...(macros&&typeof macros==='object'?{maxExpand:200}:{})}); }catch(e){} } }
+/* Commands KaTeX 0.16.11 does not know, as the nearest it does, so that a
+   write-up's $\qed$ or a manuscript's \abs{x} is typeset instead of shown as
+   a red error. Every KaTeX call takes them, under the author's own macros
+   (theirs win). */
+const KATEX_FALLBACK_MACROS=Object.freeze({
+  '\\qed':'\\square','\\qedhere':'','\\mathbbm':'\\mathbb','\\mathds':'\\mathbb','\\symbb':'\\mathbb','\\divides':'\\mid','\\textsc':'\\text',
+  '\\abs':'\\left\\lvert #1\\right\\rvert','\\norm':'\\left\\lVert #1\\right\\rVert','\\ceil':'\\left\\lceil #1\\right\\rceil','\\floor':'\\left\\lfloor #1\\right\\rfloor',
+  '\\ref':'\\text{#1}','\\cref':'\\text{#1}','\\Cref':'\\text{#1}','\\autoref':'\\text{#1}','\\eqref':'(\\text{#1})','\\cite':'[\\text{#1}]',
+  // A label is dropped: its argument is taken and nothing is written.
+  '\\label':'\\@firstoftwo{}{#1}',
+});
+// The macros for typesetting `text`: the fallbacks, then the author's. KaTeX
+// refuses \newcommand for a name it knows, so a fallback is left out where
+// the text defines that name itself.
+function withKatexFallbacks(author,text){
+  const macros={...KATEX_FALLBACK_MACROS};
+  for(const match of String(text||'').matchAll(/\\newcommand\*?\s*(?:\{\s*)?(\\[A-Za-z]+)/g))delete macros[match[1]];
+  return Object.assign(macros,author&&typeof author==='object'?author:{});
+}
 function liveSandboxText(run){
   const agents=run?.agents||[];
   const writes=[];

@@ -492,7 +492,7 @@ const doc={firstElementChild:elements[0],querySelectorAll:()=>elements.filter(el
 })
 
 test('notation: symbols are typeset by KaTeX without trust; meanings and places are set as text', () => {
-  const view = run(['analyzeEl', 'dagDetailText', 'readabilityNotation', 'readabilityTex', 'readabilityTable', 'readabilityWhereCell', 'renderReadabilityNotation'], [],
+  const view = run(['analyzeEl', 'dagDetailText', 'readabilityNotation', 'withKatexFallbacks', 'readabilityTex', 'readabilityTable', 'readabilityWhereCell', 'renderReadabilityNotation'], ['KATEX_FALLBACK_MACROS'],
     miniDom + `
 const typeset=[]; const window={katex:{render(tex,el,options){ typeset.push([tex,options]); el.textContent='KATEX:'+tex; }}};
 const readabilityMacros=()=>({'\\\\R':'\\\\mathbb{R}'}), renderMathIn=()=>{};`,
@@ -505,7 +505,9 @@ const readabilityMacros=()=>({'\\\\R':'\\\\mathbb{R}'}), renderMathIn=()=>{};`,
   assert.equal(out.typeset[0][0], '\\alpha_n<script>')
   assert.equal(out.typeset[0][1].trust, false)
   assert.equal(out.typeset[0][1].throwOnError, false)
-  assert.deepEqual(out.typeset[0][1].macros, { '\\R': '\\mathbb{R}' })
+  // The author's macros, over the console's stand-ins for commands KaTeX lacks.
+  assert.equal(out.typeset[0][1].macros['\\R'], '\\mathbb{R}')
+  assert.equal(out.typeset[0][1].macros['\\qed'], '\\square')
   // Model text arrives as text nodes, never markup.
   assert.ok(out.texts.includes('<img src=x onerror=alert(1)> a $\\mathbb{R}$-valued sequence'))
   assert.ok(out.texts.includes('§2 <b>bold</b>'))

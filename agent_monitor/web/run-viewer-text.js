@@ -227,6 +227,28 @@
     }).join('; ') + '.');
   }
 
+  // Commands KaTeX 0.16.11 does not know, as the nearest it does (the
+  // console's list), so a write-up's $\qed$ or a manuscript's \abs{x} is
+  // typeset rather than shown as an error. Under the author's macros.
+  const fallbackMacros = Object.freeze({
+    '\\qed': '\\square', '\\qedhere': '', '\\mathbbm': '\\mathbb', '\\mathds': '\\mathbb', '\\symbb': '\\mathbb',
+    '\\divides': '\\mid', '\\textsc': '\\text',
+    '\\abs': '\\left\\lvert #1\\right\\rvert', '\\norm': '\\left\\lVert #1\\right\\rVert',
+    '\\ceil': '\\left\\lceil #1\\right\\rceil', '\\floor': '\\left\\lfloor #1\\right\\rfloor',
+    '\\ref': '\\text{#1}', '\\cref': '\\text{#1}', '\\Cref': '\\text{#1}', '\\autoref': '\\text{#1}',
+    '\\eqref': '(\\text{#1})', '\\cite': '[\\text{#1}]',
+    // A label is dropped: its argument is taken and nothing is written.
+    '\\label': '\\@firstoftwo{}{#1}',
+  });
+  // The macros for typesetting `text`: the fallbacks, then the author's. KaTeX
+  // refuses \newcommand for a name it knows, so a fallback is left out where
+  // the text defines that name itself.
+  function withKatexFallbacks(author, text) {
+    const macros = { ...fallbackMacros };
+    for (const match of String(text || '').matchAll(/\\newcommand\*?\s*(?:\{\s*)?(\\[A-Za-z]+)/g)) delete macros[match[1]];
+    return Object.assign(macros, author && typeof author === 'object' ? author : {});
+  }
+
   function math(target, options = {}) {
     if (typeof window.renderMathInElement !== 'function') return;
     if (options.manuscript) {
@@ -237,6 +259,7 @@
       }
     }
     window.renderMathInElement(target, {
+      macros: withKatexFallbacks(options.macros, target.textContent),
       delimiters: [
         ...environments.map(name => ({ left: '\\begin{' + name + '}', right: '\\end{' + name + '}', display: true })),
         { left: '$$', right: '$$', display: true },
@@ -277,8 +300,8 @@
       (_, index) => escape(slots[Number(index)] || ''));
     target.replaceChildren(sanitize(html));
     target.classList.add('md-view');
-    math(target);
+    math(target, { macros: options.macros });
   }
 
-  window.AnsatzSharedText = Object.freeze({ render, math, manuscriptProse, closureCitedLemmas });
+  window.AnsatzSharedText = Object.freeze({ render, math, manuscriptProse, closureCitedLemmas, withKatexFallbacks });
 })();
