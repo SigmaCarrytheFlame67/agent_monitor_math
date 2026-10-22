@@ -826,5 +826,50 @@ async function fetch(url){
         self.assertTrue(all(fill == [] for fill in output["engineFills"]))
 
 
+class WrittenProofMarkupTests(unittest.TestCase):
+    """The written-proof switch that the console and the shared page script against.
+
+    Its behaviour (defaults, banner, sanitizing, polls) is pinned in
+    tests/test_cgm_writeup_ui.mjs.
+    """
+
+    def _switch(self, markup: str, switch_id: str) -> list[tuple[str, str, str]]:
+        match = re.search(rf'<div ([^>]*\bid="{switch_id}"[^>]*)>(.*?)</div>', markup, re.S)
+        self.assertIsNotNone(match, switch_id)
+        opening, body = match.groups()
+        self.assertIn('role="radiogroup"', opening)
+        self.assertIn('aria-label="Proof document"', opening)
+        # Hidden until the run has a write-up.
+        self.assertRegex(opening, r"\bhidden\b")
+        return re.findall(
+            r'<button type="button" role="radio" data-proof-doc="(\w+)" aria-checked="(\w+)"[^>]*>(.*?)</button>', body
+        )
+
+    def test_the_console_proof_toolbar_offers_both_documents(self) -> None:
+        toolbar = HTML.split('<div class="proof-toolbar">', 1)[1].split('<div class="prompt-strip', 1)[0]
+        self.assertEqual(
+            self._switch(toolbar, "proof-doc-switch"),
+            [
+                ("writeup", "false", 'Written proof<span class="writeup-chip" id="writeup-chip"></span>'),
+                ("facts", "true", "Verified facts"),
+            ],
+        )
+        self.assertLess(toolbar.index('id="proof-doc-switch"'), toolbar.index('id="proof-edit-btn"'))
+
+    def test_the_shared_page_offers_both_documents_without_inline_script(self) -> None:
+        viewer = (Path(__file__).parents[1] / "agent_monitor" / "web" / "run-viewer.html").read_text(encoding="utf-8")
+        self.assertEqual(
+            self._switch(viewer, "rv-proof-doc-switch"),
+            [
+                ("writeup", "false", 'Written proof<span id="rv-writeup-chip" class="rv-writeup-chip"></span>'),
+                ("facts", "true", "Verified facts"),
+            ],
+        )
+        self.assertIn('<div id="rv-writeup-banner" class="rv-writeup-banner" role="note" hidden></div>', viewer)
+        # The shared page's CSP runs only same-origin script files.
+        self.assertIsNone(re.search(r"<script(?![^>]*\bsrc=)", viewer))
+        self.assertIsNone(re.search(r"\son[a-z]+=", viewer))
+
+
 if __name__ == "__main__":
     unittest.main()

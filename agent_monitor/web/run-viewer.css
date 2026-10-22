@@ -14,3 +14,11 @@
 @media(prefers-reduced-motion:reduce){*,*:before,*:after{scroll-behavior:auto!important;transition:none!important;animation:none!important}}
 
 .rv-activity-preview li.rv-no-activity{display:block;line-height:1.6;padding:0}
+
+/* The written proof of a CGM run: a two-way switch beside the document and a status banner above it. Blue marks a model verifier's acceptance and amber its problems; green stays reserved for Lean. */
+.rv-proof-doc-switch{display:inline-flex;flex-shrink:0;gap:1px;padding:2px;border:1px solid var(--border);border-radius:999px;background:var(--panel2)}.rv-proof-doc-switch button{border:0;border-radius:999px;padding:4px 11px;background:transparent;color:var(--muted);font-size:11px;font-weight:600;white-space:nowrap}.rv-proof-doc-switch button:hover{color:var(--fg)}.rv-proof-doc-switch button[aria-checked="true"]{background:var(--panel);color:var(--fg);box-shadow:0 1px 5px rgba(0,0,0,.09)}
+.rv-writeup-chip[data-status="accepted"]{color:var(--accent)}.rv-writeup-chip[data-status="rejected"]{color:var(--warn)}
+.rv-writeup-banner{max-width:850px;margin:0 auto 20px;padding:10px 14px;border:1px solid var(--border);border-left:3px solid var(--dim);border-radius:8px;background:var(--bg2);color:var(--muted);font-size:12px;line-height:1.6}.rv-writeup-banner[data-status="accepted"]{border-left-color:var(--accent)}.rv-writeup-banner[data-status="rejected"]{border-left-color:var(--warn)}.rv-writeup-banner p+p{margin-top:4px}.rv-writeup-stale{color:var(--fg);font-weight:600}
+@media(min-width:1700px){.rv-writeup-banner{max-width:950px}}
+.rv-sandbox .rv-toolbar{flex-wrap:wrap;row-gap:8px}
+@media(forced-colors:active){.rv-proof-doc-switch button[aria-checked="true"]{outline:2px solid Highlight}}
