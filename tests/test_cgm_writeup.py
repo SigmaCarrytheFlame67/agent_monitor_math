@@ -1623,6 +1623,34 @@ def _assert_gone(pid: int) -> None:
         time.sleep(0.05)
 
 
+# A runner double in its round whose model call (a CLI in a session of its
+# own) takes 0.9 s to exit on SIGTERM; the runner itself reports at once.
+_SLOW_CALL_RUNNER = r"""
+import json, os, signal, subprocess, sys, time
+from pathlib import Path
+stopped = []
+signal.signal(signal.SIGTERM, lambda *_: stopped.append(True))
+def emit(item):
+    print(json.dumps({"type": "item.completed", "item": item}), flush=True)
+Path("proof.md").write_text("# Proof\n\n" + "Both are even, so their sum is even. " * 20)
+project = Path("math_harness/project"); project.mkdir(parents=True, exist_ok=True)
+(project / ".r.tmp").write_text("{}"); os.replace(project / ".r.tmp", project / "engine_receipt.json")
+call = subprocess.Popen(
+    [sys.executable, "-c", "import signal, sys, time\n"
+     "signal.signal(signal.SIGTERM, lambda *a: (time.sleep(0.9), sys.exit(0)))\n"
+     "open('call_ready', 'w').close()\ntime.sleep(60)"],
+    start_new_session=True, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+while not Path("call_ready").exists():
+    time.sleep(0.01)
+emit({"type": "reasoning", "text": "Math Harness · Write-up · writing one proof"})
+Path("held").write_text("")
+while not stopped:
+    time.sleep(0.02)
+emit({"type": "agent_message", "text": "Math Harness completed · accepted\nWritten proof: not written"})
+sys.exit(0)
+"""
+
+
 class WriteupStopTests(unittest.TestCase):
     """Stop or the watchdog in the written-proof round ends only the round;
     before publication they stop (or fail) the run, promptly and for good."""
@@ -1703,6 +1731,32 @@ class WriteupStopTests(unittest.TestCase):
         self.assertIn("Written proof: not written", log)
         self.assertIn("only the written-proof round was cut short", log)
 
+    def test_a_stop_in_the_round_is_recorded_finished_whatever_the_call_takes_to_end(self) -> None:
+        # Review: stop_run wrote "stopped" after waiting for the call processes,
+        # over the worker's "finished" (5 of 5 runs).
+        run_id, job_id = "math_harness_writeup_slow_call", "job-writeup-slow-call"
+        workspace = self._workspace(run_id, job_id)
+        self.enterContext(patch("agent_monitor.engines_registry.build_cli_command",
+                                return_value=[sys.executable, "-c", _SLOW_CALL_RUNNER]))
+        self.enterContext(patch("agent_monitor.agent_config.persona_preamble", return_value=""))
+        self.enterContext(patch.object(jobs, "_notify_guest_completion"))
+        jobs._write_run({"run_id": run_id, "engine": "math_harness", "status": "running", "agents": []})
+        worker = threading.Thread(target=jobs._execute_job, kwargs=dict(
+            job_id=job_id, run_id=run_id, engine="math_harness", problem_id="p", problem_text="Prove it.",
+            problem_path=None, model=None, max_iterations=1, workspace=str(workspace), owner_id=None, guest=True))
+        worker.start()
+        deadline = time.monotonic() + 30
+        while not (workspace / "held").exists() and time.monotonic() < deadline:
+            time.sleep(0.02)
+        self.assertTrue((workspace / "held").exists())
+        self.assertEqual(jobs.stop_run(run_id)["status"], "stopped")
+        worker.join(60)
+        self.assertFalse(worker.is_alive())
+        self.assertEqual(jobs._load_run_record(run_id)["status"], "finished")
+        self.assertEqual(jobs._JOBS[job_id]["status"], "finished")
+        chat = [message["content"].splitlines()[0] for message in jobs.list_chat(run_id)]
+        self.assertLess(chat.index("Run stopped by user."), next(i for i, line in enumerate(chat) if line.startswith("✓ run finished")))
+
     def test_a_stop_before_publication_still_stops_the_run(self) -> None:
         run = self._engine("hold", stop=True)
         self.assertEqual(run["status"], "stopped")
@@ -1725,6 +1779,33 @@ class WriteupStopTests(unittest.TestCase):
         run = self._engine("hold", stop=True, on_stop="linger", while_stopping=while_stopping)
         self.assertEqual((seen, run["status"]), (["stopped"], "stopped"))
         self.assertLess(self.wind_down, 10)
+
+    def test_an_operator_timeout_still_bounds_the_run_until_it_publishes(self) -> None:
+        # Review: the round's allowance was added to the only deadline, so a pipeline
+        # that had not published ran past the operator's timeout.
+        self.enterContext(patch.object(jobs, "_RUNNER_SETTLE_SECONDS", 2))
+        self.enterContext(patch.object(jobs, "_cgm_operator_timeout_seconds", return_value=1))
+        run = self._engine("hold", stop=False, timeout=60)
+        self.assertEqual(run["status"], "failed")
+        self.assertIn("timed out after 1s", run["error"])
+        self.assertFalse((self.workspace / "math_harness/project/engine_receipt.json").exists())
+        self.assertLess(self.wind_down, 15)
+        # A run that has published gets the round's allowance: the operator's
+        # timeout no longer applies (the watchdog then ends only the round).
+        run = self._engine("publish", stop=False, timeout=4)
+        self.assertEqual((run["status"], run["error"]), ("finished", None))
+        self.assertGreater(self.wind_down, 2)
+        self.assertIn("Written proof: not written", json.dumps(run["agents"]))
+
+    def test_operator_timeouts_are_read_for_cgm_runs_but_never_cut_max_short(self) -> None:
+        operator = jobs._cgm_operator_timeout_seconds
+        self.assertEqual(operator("kimi", {"AGENT_MONITOR_KIMI_TIMEOUT": "1800"}), 1_800)
+        self.assertEqual(operator("math_harness", {"AGENT_MONITOR_CLI_TIMEOUT": "30"}), 60)
+        self.assertIsNone(operator("math_harness", {}))
+        self.assertIsNone(operator("math_harness", {"AGENT_MONITOR_CLI_TIMEOUT": "x"}))
+        self.assertIsNone(operator("codex", {"AGENT_MONITOR_CLI_TIMEOUT": "900"}))
+        self.assertIsNone(operator("math_harness", {"AGENT_MONITOR_CLI_TIMEOUT": "900",
+                                                    "AGENT_MONITOR_CGM_ROUTE_MODE": "max"}))
 
     def test_a_runner_deaf_to_stop_is_killed_after_the_settle(self) -> None:
         self.enterContext(patch.object(jobs, "_RUNNER_SETTLE_SECONDS", 1))

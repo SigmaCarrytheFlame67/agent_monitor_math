@@ -470,6 +470,22 @@ def _apply_cgm_writeup_env(env: dict[str, str], *, engine: str) -> None:
     env["AGENT_MONITOR_CGM_WRITEUP"] = "1" if enabled else "0"
 
 
+def _cgm_operator_timeout_seconds(engine: str, env: dict[str, str]) -> int | None:
+    """The operator's timeout (``AGENT_MONITOR_<ENGINE>_TIMEOUT`` or
+    ``AGENT_MONITOR_CLI_TIMEOUT``) that bounds a CGM run up to its
+    publication; the written-proof round after it has its own allowance on
+    top (_cli_timeout_seconds).  ``None`` without one, and for Max, which
+    operator timeouts never cut short."""
+    normalized = str(engine or "").strip().upper().replace("-", "_")
+    if normalized not in {"MATH_HARNESS", "KIMI"} or env.get(cgm_max.ROUTE_MODE_ENV) == "max":
+        return None
+    override = env.get(f"AGENT_MONITOR_{normalized}_TIMEOUT") or env.get("AGENT_MONITOR_CLI_TIMEOUT")
+    try:
+        return max(60, min(int(override), 86_400)) if override else None
+    except (TypeError, ValueError):
+        return None
+
+
 def _cgm_writeup_allowance(env: dict[str, str]) -> int:
     """Seconds a CGM run's written-proof round may add after its pipeline."""
     try:
@@ -5072,6 +5088,7 @@ def _run_cli_engine(
     # see "ended_after_publication" below.
     cgm_run = engine in _CGM_ENGINES
     receipt_before = _cgm_receipt_signature(workspace) if cgm_run else None
+    operator_s = _cgm_operator_timeout_seconds(engine, env) if cgm_run else None
     try:
         proc = subprocess.Popen(
             argv,
@@ -5159,9 +5176,22 @@ def _run_cli_engine(
     timed_out = False
     last_flush = 0.0
     deadline = started + timeout_s
+    # An operator timeout bounds a CGM run until it publishes; only then may
+    # the written-proof round's allowance (in timeout_s) be used.
+    publish_by = started + min(operator_s, timeout_s) if operator_s else None
     try:
         while True:
             now = time.time()
+            if publish_by is not None and now > publish_by:
+                if _cgm_receipt_signature(workspace) in (None, receipt_before):
+                    _terminate_group()
+                    timeout_s = min(operator_s, timeout_s)
+                    parser.lines.append(
+                        f"[agent-monitor] timeout after {timeout_s}s before publication — terminated"
+                    )
+                    timed_out = True
+                    break
+                publish_by = None
             if stop_ev.is_set():
                 # stop_run has signalled the runner already.  A CGM runner
                 # gets no second SIGTERM: one arriving after its publication
@@ -7722,9 +7752,14 @@ def stop_run(run_id: str) -> dict[str, Any]:
     )
     if proc is not None:
         if graceful and active.get("engine") in _CGM_ENGINES:
+            # Recorded before the runner is signalled: stopped in its
+            # written-proof round, it publishes, reports and exits while its
+            # call processes are still being ended (up to a second), and its
+            # worker's outcome ("finished") must be the last word.
+            _record_stopped(run_id, active["job_id"])
             _stop_cgm_runner(proc)
-        else:
-            _terminate_registered_proc(proc, force=not graceful)
+            return {"ok": True, "status": "stopped", "run_id": run_id, "job_id": active["job_id"]}
+        _terminate_registered_proc(proc, force=not graceful)
     if not active:
         # Nothing runs here: a re-check (or a question) left "running" by a
         # lost worker is repaired so the run is usable again.
@@ -7745,6 +7780,12 @@ def stop_run(run_id: str) -> dict[str, Any]:
         _update_job(active["job_id"], status="stopped")
         return {"ok": True, "status": "stopped", "run_id": run_id, "job_id": active["job_id"],
                 active["kind"]: True}
+    _record_stopped(run_id, active["job_id"])
+    return {"ok": True, "status": "stopped", "run_id": run_id, "job_id": active["job_id"]}
+
+
+def _record_stopped(run_id: str, job_id: str) -> None:
+    """The run's record, job and chat say the user stopped it."""
     try:
         run_data = _load_run_record(run_id)
         run_data["status"] = "stopped"
@@ -7752,9 +7793,8 @@ def stop_run(run_id: str) -> dict[str, Any]:
         _write_run(run_data)
     except FileNotFoundError:
         pass
-    _update_job(active["job_id"], status="stopped")
+    _update_job(job_id, status="stopped")
     _append_chat(run_id, "system", "Run stopped by user.")
-    return {"ok": True, "status": "stopped", "run_id": run_id, "job_id": active["job_id"]}
 
 
 def continue_run(
