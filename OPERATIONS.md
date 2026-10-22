@@ -265,8 +265,16 @@ that text alone. A rejected text may be revised and checked again.
   publication of a generation first removes the previous write-up, and the
   console marks a write-up stale once `proof.md` or the receipt changed.
 - The round never fails or changes a published run: provider, budget and
-  format failures only degrade it (`writeup.json` and the run result list why),
-  and Stop during the round ends only the round (the runner still exits 0).
+  format failures only degrade it (`writeup.json` and the run result list why).
+- Stop during the round ends only the round. Stop sends the runner SIGTERM
+  (see above): before its publication the run is stopped and nothing is
+  published; after it, the runner records the write-up as far as it got,
+  reports and exits 0, and the console records the run as finished (a
+  receipt written during the run is the evidence) without starting queued
+  follow-ups. The watchdog firing during the round likewise leaves the run
+  finished. A server restart during the round marks the run interrupted, as
+  for any running run: its `proof.md` and receipt stay published and attest,
+  and the write-up may be missing or not checked.
 - The console decides per run: `AGENT_MONITOR_CGM_WRITEUP` (default on; `0`
   turns the round off for every CGM run) and
   `AGENT_MONITOR_CGM_WRITEUP_GUESTS` (default on; `0` turns it off for guest
@@ -285,8 +293,10 @@ that text alone. A rejected text may be revised and checked again.
   (check) timeouts.
 - The outer watchdog, a sponsored token's lifetime and the derived-views wait
   add the round's `MAX_SECONDS` plus 60 s when it is on (Max: at least
-  14760 s). A sponsored run stays within the 6600 s cap: 2400 + 900 + 300 +
-  1200 + 60 s at most.
+  14760 s), also on top of an operator's `AGENT_MONITOR_CLI_TIMEOUT` or
+  `AGENT_MONITOR_{KIMI,MATH_HARNESS}_TIMEOUT`, which bound the pipeline. A
+  sponsored run stays within the 6600 s cap: 2400 + 900 + 300 + 1200 + 60 s
+  at most.
 - Policy note for the owner: with the round on, a guest or sponsored run
   whose proof is accepted makes up to 4 more Kimi calls (16 recorded calls
   instead of 12, plus the run's shared six transport retries), counted

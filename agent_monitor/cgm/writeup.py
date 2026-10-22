@@ -190,17 +190,64 @@ _MARKER_RE = re.compile(
 )
 _HEADING_RE = re.compile(r"^ {0,3}#{1,6}(?:[ \t]|$)", re.MULTILINE)
 _FENCE_RE = re.compile(r"^ {0,3}(?:`{3,}|~{3,})", re.MULTILINE)
-_HTML_RE = re.compile(r"<!--|</?[A-Za-z][A-Za-z0-9-]*(?=[\s/>])")
-_HEX_RUN_RE = re.compile(r"[0-9a-f]{16,}")
-# Mathematics: $$...$$, \[...\], \(...\) and $...$ (an escaped \$ is a dollar).
-_MATH_RE = re.compile(
-    r"\$\$.+?\$\$|\\\[.+?\\\]|\\\(.+?\\\)|(?<!\\)\$(?:\\.|[^$\\])+?\$", re.DOTALL
+# Raw HTML as Markdown reads it, mathematics included: a comment, a closing
+# tag, or a whole opening tag with its attributes.  Comparisons such as
+# $a<b$ or $x<y, z>w$ are no tag.
+_HTML_RE = re.compile(
+    r"<!--"
+    r"|</[A-Za-z][A-Za-z0-9-]*\s*>"
+    r"|<[A-Za-z][A-Za-z0-9-]*"
+    r"(?:\s+[A-Za-z_:][A-Za-z0-9_.:-]*(?:\s*=\s*(?:[^\s\"'=<>`]+|'[^']*'|\"[^\"]*\"))?)*"
+    r"\s*/?>"
 )
+_HEX_RUN_RE = re.compile(r"[0-9a-f]{16,}")
+# Mathematics that may span lines: $$...$$, \[...\] and \(...\), as
+# (opening, closing) delimiters.
+_DELIMITED_MATH = (("$$", "$$"), ("\\[", "\\]"), ("\\(", "\\)"))
+# Inline $...$ within one line: the opening "$" stands before a non-space,
+# the closing one after a non-space and not before a digit, so "$5 and $3"
+# is no formula; an escaped \$ is a dollar.
+_INLINE_MATH_RE = re.compile(r"(?<!\\)\$(?=\S)(?:\\.|[^$\\\n])+(?<=\S)\$(?!\d)")
 
 
 def _prose(text: str) -> str:
-    """``text`` with its mathematics blanked out."""
-    return _MATH_RE.sub(" ", text)
+    """``text`` with its mathematics blanked out, in linear time.
+
+    The next occurrence of each delimiter is remembered, so an opening
+    delimiter that is never closed does not make the scan read the rest of
+    the text again.
+    """
+    found: dict[str, int] = {}
+
+    def find(token: str, start: int) -> int:
+        # Starts only grow: a remembered occurrence at or after this start
+        # (or none at all) is still the next one.
+        hit = found.get(token)
+        if hit is None or 0 <= hit < start:
+            hit = found[token] = text.find(token, start)
+        return hit
+
+    pieces: list[str] = []
+    index = 0
+    while True:
+        openings = [
+            (start, opening, closing)
+            for opening, closing in _DELIMITED_MATH
+            if (start := find(opening, index)) >= 0
+        ]
+        if not openings:
+            break
+        start, opening, closing = min(openings)
+        end = find(closing, start + len(opening))
+        if end < 0:
+            # Never closed: the delimiter is text.
+            pieces.append(text[index : start + len(opening)])
+            index = start + len(opening)
+        else:
+            pieces.append(text[index:start] + " ")
+            index = end + len(closing)
+    pieces.append(text[index:])
+    return _INLINE_MATH_RE.sub(" ", "".join(pieces))
 
 
 def _mentions(prose: str, label: str) -> bool:
@@ -260,11 +307,14 @@ def parse_writeup(text: str, labels: Iterable[str]) -> str:
         raise ParseError("the write-up uses a Markdown heading (#); use bold run-in titles")
     if _FENCE_RE.search(body):
         raise ParseError("the write-up uses a code fence")
-    prose = _prose(body)
-    if _HTML_RE.search(prose):
-        raise ParseError("the write-up contains raw HTML; write mathematics in $...$")
+    if _HTML_RE.search(body):
+        raise ParseError(
+            "the write-up contains raw HTML; write mathematics in $...$ "
+            "(angle brackets as \\langle and \\rangle)"
+        )
     if any(re.search(r"[a-f]", run) for run in _HEX_RUN_RE.findall(body)):
         raise ParseError("the write-up contains a 16-hex identifier; never mention identifiers")
+    prose = _prose(body)
     for label in labels:
         if _mentions(prose, label):
             raise ParseError(
@@ -359,6 +409,10 @@ def _short(value: object, limit: int = 240) -> str | None:
     return value[:limit] if isinstance(value, str) and value.strip() else None
 
 
+def _items(value: object) -> list[Any]:
+    return value if isinstance(value, list) else []
+
+
 def describe(
     writeup: bytes,
     sidecar: bytes | None,
@@ -375,7 +429,7 @@ def describe(
     ``proof.md`` and engine receipt (a continuation or an edit of proof.md
     leaves an earlier write-up stale).  ``check`` is ``None`` or
     ``{"verdict", "summary", "issues": [{"kind": "error"|"gap", "location",
-    "issue"}]}``.
+    "issue"}]}``.  Never raises: what a malformed sidecar holds is ignored.
     """
     view: dict[str, Any] = {
         "status": "unchecked",
@@ -402,7 +456,8 @@ def describe(
         and basis.get("receipt_binding_sha256") == current.get("binding_sha256")
     )
     check = record.get("check")
-    if isinstance(check, dict) and check.get("verdict") in {"correct", "wrong"}:
+    # A tuple, not a set: the recorded verdict may be any JSON value.
+    if isinstance(check, dict) and check.get("verdict") in ("correct", "wrong"):
         view["check"] = {
             "verdict": check["verdict"],
             "summary": _clip(check.get("summary"), 2_000),
@@ -413,7 +468,7 @@ def describe(
                     "issue": _clip(item.get("issue"), 2_000),
                 }
                 for field, kind in (("critical_errors", "error"), ("gaps", "gap"))
-                for item in (check.get(field) or [])[:_MAX_ISSUES]
+                for item in _items(check.get(field))[:_MAX_ISSUES]
                 if isinstance(item, dict)
             ],
         }

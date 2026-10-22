@@ -9,6 +9,7 @@ import os
 import re
 import signal
 import shutil
+import stat
 import sys
 import threading
 import time
@@ -2571,7 +2572,8 @@ def _execute_job_body(
                 include_persona=not guest and not analyze_run,
             )
 
-        if _stop_event(run_id).is_set():
+        published_before_stop = _published_before_stop(result_run)
+        if _stop_event(run_id).is_set() and not published_before_stop:
             result_run["status"] = "stopped"
         max_run = (extra_env or {}).get(cgm_max.ROUTE_MODE_ENV) == "max"
         if max_run:
@@ -4035,6 +4037,22 @@ def _analysis_published(workspace: Path) -> bool:
         return False
 
 
+def _cgm_receipt_signature(workspace: Path) -> tuple[int, int, int] | None:
+    """Which engine receipt a CGM run's workspace holds: (inode, mtime, size).
+
+    The runner writes the receipt last when it publishes a generation, as a
+    new file, so a signature that changed during a run means that run's
+    generation was published in full.
+    """
+    try:
+        info = (Path(workspace) / "math_harness" / "project" / "engine_receipt.json").lstat()
+    except OSError:
+        return None
+    if not stat.S_ISREG(info.st_mode):
+        return None
+    return info.st_ino, info.st_mtime_ns, info.st_size
+
+
 def _apply_analyze_runner_env(env: dict[str, str], extra_env: dict[str, str]) -> None:
     """What only the Analyze runner receives, after the child-env scrub.
 
@@ -4076,6 +4094,7 @@ def _cli_timeout_seconds(engine: str, env: dict[str, str]) -> int:
         if env.get("AGENT_MONITOR_SPONSORED_KIMI") == "1":
             bounded = min(bounded, _SPONSORED_KIMI_CLI_TIMEOUT_MAX)
         return bounded
+    writeup = 0
     if normalized == "DEEPAGENTS":
         default = 10_800
     elif normalized in {"MATH_HARNESS", "KIMI"}:
@@ -4135,13 +4154,11 @@ def _cli_timeout_seconds(engine: str, env: dict[str, str]) -> int:
         if normalized == "CLAUDE"
         else env.get(f"AGENT_MONITOR_{normalized}_TIMEOUT")
     )
-    raw = (
-        engine_override
-        or env.get("AGENT_MONITOR_CLI_TIMEOUT")
-        or str(default)
-    )
+    override = engine_override or env.get("AGENT_MONITOR_CLI_TIMEOUT")
     try:
-        requested = int(raw)
+        # An operator timeout bounds a CGM run up to its publication; the
+        # written-proof round after it adds its own allowance.
+        requested = int(override) + writeup if override else default
     except (TypeError, ValueError):
         requested = default
     bounded = max(60, min(requested, 86_400))
@@ -4149,9 +4166,7 @@ def _cli_timeout_seconds(engine: str, env: dict[str, str]) -> int:
         # Max fixes its own call and run limits (cgm_max.apply_models), and a
         # runner the watchdog stops publishes nothing: operator timeouts may
         # raise a Max run's watchdog but never cut the run short.
-        bounded = max(
-            bounded, default, cgm_max.RUN_SECONDS + 300 + _cgm_writeup_allowance(env)
-        )
+        bounded = max(bounded, default, cgm_max.RUN_SECONDS + 300 + writeup)
     if env.get("AGENT_MONITOR_SPONSORED_KIMI") == "1":
         bounded = min(bounded, _SPONSORED_KIMI_CLI_TIMEOUT_MAX)
     return bounded
@@ -4346,6 +4361,17 @@ def _apply_math_harness_iteration_env(
     env["MATH_HARNESS_MAX_ITERATIONS"] = str(bounded)
     if problem_id:
         env["AGENT_MONITOR_PROBLEM_ID"] = str(problem_id)[:240]
+
+
+# Set by _run_cli_engine on a CGM run the user stopped after it published.
+_PUBLISHED_BEFORE_STOP = "published_before_stop"
+
+
+def _published_before_stop(result: dict[str, Any]) -> bool:
+    """Whether a run the user stopped had already published its proof (an
+    Ansatz CGM run in its written-proof round), so it is not "stopped";
+    takes the flag off ``result``."""
+    return bool(result.pop(_PUBLISHED_BEFORE_STOP, False))
 
 
 def _run_cli_engine(
@@ -4726,6 +4752,10 @@ def _run_cli_engine(
     stop_ev = _stop_event(run_id)
     buf: list[str] = []
     stdin_prompt = prompt_on_stdin(engine, argv)
+    # A CGM runner publishes its generation before its written-proof round;
+    # see "ended_after_publication" below.
+    cgm_run = engine in _CGM_ENGINES
+    receipt_before = _cgm_receipt_signature(workspace) if cgm_run else None
     try:
         proc = subprocess.Popen(
             argv,
@@ -4790,6 +4820,21 @@ def _run_cli_engine(
         target=_read_output, name=f"{engine}-{run_id}-stdout", daemon=True
     )
     reader.start()
+
+    def _drain_output(until: float) -> None:
+        """Parse what a stopping runner still prints, until it exits."""
+        while time.time() < until:
+            try:
+                line = output_queue.get(timeout=0.5)
+            except queue.Empty:
+                if proc.poll() is not None:
+                    return
+                continue
+            if line is None:
+                return
+            buf.append(line)
+            parser.feed(line)
+
     stopped = False
     timed_out = False
     last_flush = 0.0
@@ -4798,7 +4843,11 @@ def _run_cli_engine(
         while True:
             now = time.time()
             if stop_ev.is_set():
-                _terminate_group()
+                # stop_run has signalled the runner already.  A CGM runner
+                # gets no second SIGTERM: one arriving after its publication
+                # could end it before its report.
+                if not cgm_run:
+                    _terminate_group()
                 parser.lines.append("[agent-monitor] stopped by user")
                 stopped = True
                 break
@@ -4829,8 +4878,13 @@ def _run_cli_engine(
             if now - last_flush > 2.0:
                 _flush(parser.output())
                 last_flush = now
+        settle = time.time() + 30
+        if cgm_run and (stopped or timed_out):
+            # On SIGTERM a CGM runner exits 143 before its publication, and
+            # after it ends its written-proof round and reports the run.
+            _drain_output(settle)
         try:
-            proc.wait(timeout=30)
+            proc.wait(timeout=max(0.1, settle - time.time()))
         except subprocess.TimeoutExpired:
             _terminate_group(force=True)
             proc.wait(timeout=10)
@@ -4849,7 +4903,22 @@ def _run_cli_engine(
     elif engine == "openclaw":
         parser.finalize_openclaw()
         _persist_openclaw_final_answer(parser, workspace)
-    if stopped or stop_ev.is_set():
+    # A Stop or the watchdog that reaches a CGM run after it published its
+    # generation (the receipt is written last) cuts short only its
+    # written-proof round: the run is complete, and is recorded so.
+    stop_requested = stopped or stop_ev.is_set()
+    ended_after_publication = (
+        cgm_run
+        and (stop_requested or timed_out)
+        and _cgm_receipt_signature(workspace) not in (None, receipt_before)
+    )
+    if ended_after_publication:
+        parser.lines.append(
+            "[agent-monitor] the proof was already published; only the "
+            "written-proof round was cut short"
+        )
+        timed_out = False
+    elif stop_requested:
         return _flush(parser.output(), status="stopped")
     reconnect_codex = False
     if engine == "codex" and not _is_kimi_model(requested_model) and env.get("CODEX_HOME"):
@@ -4876,7 +4945,11 @@ def _run_cli_engine(
         parser.terminal_error = (
             runner_detail[-1200:] or "CLI ended without a terminal completion event"
         )
-    ok = proc.returncode == 0 and not timed_out and not parser.terminal_error
+    ok = (
+        (proc.returncode == 0 or ended_after_publication)
+        and not timed_out
+        and not parser.terminal_error
+    )
     proof_missing = False
     if analyze_run:
         # An analysis succeeds when the runner exits 0 having published its
@@ -4914,11 +4987,15 @@ def _run_cli_engine(
             detail=detail or None,
             artifact="analysis report" if analyze_run else "proof artifact",
         )
-    return _flush(
+    run = _flush(
         parser.output(),
         status="finished" if ok else "failed",
         error=failure_reason,
     )
+    if ended_after_publication and stop_requested:
+        # For the worker (see _published_before_stop), not the record.
+        run[_PUBLISHED_BEFORE_STOP] = True
+    return run
 
 
 _OPENCLAUDE_EXECUTION_RETRY_MARKER = "OPENCLAUDE SAME-HARNESS RECOVERY:"
@@ -6230,7 +6307,10 @@ def _execute_continue(
                 max_iterations=max_iterations,
                 owner_id=owner_id,
             )
-        if _stop_event(run_id).is_set() or result_run.get("status") == "stopped":
+        published_before_stop = _published_before_stop(result_run)
+        if result_run.get("status") == "stopped" or (
+            _stop_event(run_id).is_set() and not published_before_stop
+        ):
             # A Stop wins over what the stopped engine returned (IMProof
             # reports its killed workflow as failed), as on a first run.
             raise StopRequested(run_id)
@@ -6881,15 +6961,19 @@ def stop_run(run_id: str) -> dict[str, Any]:
     """Stop a running job: signal the stop event and kill any subprocess.
 
     An Analyze runner (or re-check) gets SIGTERM first: it publishes the
-    results that had settled (a re-check restores the node) and exits 143;
-    the worker kills its group if it does not exit within 30 s.
+    results that had settled (a re-check restores the node) and exits 143.
+    So does an Ansatz CGM runner: before its publication it publishes nothing
+    and exits 143; after it, the stop ends only its written-proof round and
+    the run is recorded as finished.  The worker kills a group that does not
+    exit within 30 s.
     """
     active = _run_is_active(run_id)
     _stop_event(run_id).set()
     with _LOCK:
         proc = _PROCS.get(run_id)
     graceful = bool(active) and (
-        active.get("engine") == _ANALYZE_ENGINE or active.get("kind") == "recheck"
+        active.get("engine") in {_ANALYZE_ENGINE, *_CGM_ENGINES}
+        or active.get("kind") == "recheck"
     )
     if proc is not None:
         _terminate_registered_proc(proc, force=not graceful)

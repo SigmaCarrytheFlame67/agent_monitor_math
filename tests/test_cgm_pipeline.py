@@ -270,6 +270,35 @@ class RunPipelineEntryPointTests(unittest.TestCase):
             self.assertEqual(engine_graph.rebuild(workspace, {"engine": "math_harness"}, view="workflow"), workflow)
             self.assertEqual(engine_graph.load_cached(workspace, view="workflow"), workflow)
 
+    def test_a_proof_edit_keeps_the_lemma_names_of_its_facts(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            workspace = Path(raw)
+            _accepted(workspace)
+            labels = engine_graph.load_proof_labels(workspace)
+            proof = workspace / "proof.md"
+            proof.write_text(proof.read_text() + "\nA reader's note.\n")
+            # The edit unbinds the receipt, but its facts keep the names that
+            # proof.md still gives them.
+            facts = engine_graph.build(workspace, {"engine": "math_harness"})
+            self.assertEqual(facts["provenance"]["attestation"], "unattested")
+            self.assertEqual(engine_graph.load_proof_labels(workspace), labels)
+            outline = proof_graph.fact_graph_result(workspace)
+            self.assertEqual(
+                [node["label"] for node in outline["graph"]["nodes"]],
+                ["Lemma L1", "Lemma L2", "Target theorem"],
+            )
+            self.assertFalse(outline["attested"])
+            # Facts the receipt does not list exactly get no names from it.
+            path = workspace / "math_harness" / "project" / "engine_receipt.json"
+            receipt = json.loads(path.read_text())
+            receipt["facts"][0]["sha256"] = "0" * 64
+            path.write_text(json.dumps(receipt))
+            self.assertIsNone(engine_graph.load_proof_labels(workspace))
+            self.assertEqual(
+                [node["label"] for node in proof_graph.fact_graph_result(workspace)["graph"]["nodes"]],
+                ["Lemma 1", "Lemma 2", "Target theorem"],
+            )
+
 
 class ClosureRenderingTests(unittest.TestCase):
     FACTS = [
