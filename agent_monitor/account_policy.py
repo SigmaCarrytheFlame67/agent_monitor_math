@@ -17,6 +17,11 @@ rather than ``AGENT_MONITOR_MEMBER_ENGINES``, which lists proof engines; an
 public mode every account inherits the server's provider keys, so a member's
 analysis then runs on sponsored Kimi K3 only (see
 :func:`member_analyze_sponsored_only`).
+
+Ansatz Readability (``readability``) follows the same rules with its own
+switch (``AGENT_MONITOR_READABILITY_ENABLED``) and command override
+(``READABILITY_CMD``), and runs Kimi K3 only: sponsored, or on the member's
+own Kimi key.
 """
 from __future__ import annotations
 
@@ -24,17 +29,20 @@ import os
 from typing import Any
 
 # Tool-free engines: the reviewed set guests may use, plus the response-only
-# Ansatz CGM harness on the member's own keys, plus Ansatz Analyze.
-MEMBER_ELIGIBLE_ENGINES = frozenset({"kimi", "plain", "math_harness", "analyze"})
+# Ansatz CGM harness on the member's own keys, plus Ansatz Analyze and Ansatz
+# Readability.
+MEMBER_ELIGIBLE_ENGINES = frozenset({"kimi", "plain", "math_harness", "analyze", "readability"})
 # Proof engines named by AGENT_MONITOR_MEMBER_ENGINES (its default and ceiling).
 MEMBER_PROOF_ENGINES = frozenset({"kimi", "plain", "math_harness"})
 ANALYZE_ENGINE = "analyze"
+READABILITY_ENGINE = "readability"
 # A command override turns these engines into operator-selected local code.
 _COMMAND_OVERRIDES = {
     "plain": "PLAIN_CMD",
     "kimi": "KIMI_PROOF_CMD",
     "math_harness": "MATH_HARNESS_CMD",
     "analyze": "ANALYZE_CMD",
+    "readability": "READABILITY_CMD",
 }
 # Engines a member runs only on its own provider keys: never the sponsored
 # Kimi route, Max or a subscription.
@@ -119,13 +127,20 @@ def _analyze_enabled() -> bool:
     return analyze_limits.enabled()
 
 
+def _readability_enabled() -> bool:
+    from agent_monitor.readability import limits as readability_limits
+
+    return readability_limits.enabled()
+
+
 def member_engine_allowlist() -> frozenset[str]:
     """Operator-selected member engines, never beyond the tool-free ceiling.
 
-    ``AGENT_MONITOR_MEMBER_ENGINES`` selects the proof engines; Analyze follows
-    its own switch, so a deployment that narrowed the proof engines before
-    Analyze existed still offers it (``AGENT_MONITOR_ANALYZE_ENABLED=0`` turns
-    it off for everyone).
+    ``AGENT_MONITOR_MEMBER_ENGINES`` selects the proof engines; Analyze and
+    Readability follow their own switches, so a deployment that narrowed the
+    proof engines before they existed still offers them
+    (``AGENT_MONITOR_ANALYZE_ENABLED=0`` or
+    ``AGENT_MONITOR_READABILITY_ENABLED=0`` turns one off for everyone).
     """
     raw = os.environ.get("AGENT_MONITOR_MEMBER_ENGINES")
     requested = (
@@ -136,6 +151,8 @@ def member_engine_allowlist() -> frozenset[str]:
     allowed = requested & MEMBER_PROOF_ENGINES
     if _analyze_enabled():
         allowed.add(ANALYZE_ENGINE)
+    if _readability_enabled():
+        allowed.add(READABILITY_ENGINE)
     for engine, override in _COMMAND_OVERRIDES.items():
         if os.environ.get(override, "").strip():
             allowed.discard(engine)
@@ -160,6 +177,11 @@ def _engine_refusal(engine: str) -> tuple[str, str]:
             "Analyze is turned off on this site",
             "Turned off on this site",
         )
+    if engine == READABILITY_ENGINE and not _readability_enabled():
+        return (
+            "Readability is turned off on this site",
+            "Turned off on this site",
+        )
     override = _COMMAND_OVERRIDES.get(engine)
     if override and os.environ.get(override, "").strip():
         return (
@@ -177,6 +199,7 @@ def _engine_refusal(engine: str) -> tuple[str, str]:
 
 # In public mode a member's "own key" would be the server's (see above).
 ANALYZE_SPONSORED_ONLY_NOTE = "Members analyze on the included Kimi K3 on this site"
+READABILITY_KIMI_NOTE = "Readability runs on Kimi K3 for members: the included one or your own Kimi key"
 
 
 def member_analyze_sponsored_only(user: dict[str, Any] | None) -> bool:
@@ -215,6 +238,11 @@ def member_run_model(
     nothing else runs, a saved default the engine accepts stays, so the
     refusal names the key it needs (a new account's default is Kimi K3).
     """
+    if engine == READABILITY_ENGINE and is_member(user) and not str(model or "").strip():
+        # Readability runs Kimi K3 only (the included one or the member's own key).
+        from agent_monitor.kimi_k3 import MODEL_ID
+
+        return MODEL_ID
     if (
         str(model or "").strip()
         or not is_member(user)
@@ -266,6 +294,12 @@ def member_model_error(
 
         if selected and selected != MODEL_ID:
             return ANALYZE_SPONSORED_ONLY_NOTE
+        return None
+    if engine == READABILITY_ENGINE:
+        from agent_monitor.kimi_k3 import MODEL_ID
+
+        if selected and selected != MODEL_ID:
+            return READABILITY_KIMI_NOTE
         return None
     if engine not in OWN_KEY_ENGINES:
         return None

@@ -383,6 +383,35 @@ CLI_ENGINES: dict[str, dict[str, Any]] = {
         "parser_style": "codex",
         "modes": ["analyze"],
     },
+    # Ansatz Readability rewrites an existing manuscript part by part for a
+    # reader (keeping every statement and argument), with an independent
+    # model check of each part, a paper map and a notation table.  It is the
+    # only engine of the Readability mode (``run_kind: "readability"``) and is
+    # response-only and tool-free on every route (sponsored Kimi K3, an own
+    # Kimi key, or an administrator's Codex / Claude Code account).  The
+    # runner reads ``readability/request.json``; it is listed only while
+    # AGENT_MONITOR_READABILITY_ENABLED is on.
+    "readability": {
+        "id": "readability",
+        "label": "Ansatz Readability",
+        "vendor": "Ansatz · Readability",
+        "description": (
+            "Rewrites an existing manuscript so a reader can follow it, keeping every statement · "
+            "paper map and notation · checked against the original by a model, not a certificate"
+        ),
+        "kind": "cli",
+        "url": None,
+        "check_file": "agent_monitor/runners/readability_runner.py",
+        "cmd_env": "READABILITY_CMD",
+        "default_cmd": (
+            "{python} -u "
+            "{root}/agent_monitor/runners/readability_runner.py"
+        ),
+        "install_hint": "Ansatz Readability runner is missing",
+        "ready_detail": "tool-free readable versions ready",
+        "parser_style": "codex",
+        "modes": ["readability"],
+    },
 }
 
 # Console modes: every engine proves (``run_kind: "prove"``) unless its spec
@@ -390,6 +419,9 @@ CLI_ENGINES: dict[str, dict[str, Any]] = {
 # Analyze mode only when this server offers it.
 DEFAULT_MODES = ("prove",)
 ANALYZE_ENGINE_ID = "analyze"
+READABILITY_ENGINE_ID = "readability"
+# Engines that read a manuscript with the Analyze parsers.
+MANUSCRIPT_ENGINE_IDS = frozenset({ANALYZE_ENGINE_ID, READABILITY_ENGINE_ID})
 # Parser packages the Analyze runner imports (pinned in pyproject.toml).
 ANALYZE_PACKAGES = ("pylatexenc", "pypdf")
 
@@ -410,12 +442,18 @@ def _analyze_enabled() -> bool:
 
     return analyze_limits.enabled()
 
+
+def _readability_enabled() -> bool:
+    from agent_monitor.readability import limits as readability_limits
+
+    return readability_limits.enabled()
+
 _ROOT = Path(__file__).resolve().parent.parent
 CODEX_SUBSCRIPTION_ENGINES = frozenset(
-    {"hermes", "improof", "math_harness", "codex", "openclaude", "openhands", "openclaw", "deepagents", "metaharness", "plain", "deepseek_harness", "analyze"}
+    {"hermes", "improof", "math_harness", "codex", "openclaude", "openhands", "openclaw", "deepagents", "metaharness", "plain", "deepseek_harness", "analyze", "readability"}
 )
 CLAUDE_SUBSCRIPTION_ENGINES = frozenset(
-    {"claude", "improof", "math_harness", "openclaw", "deepagents", "plain", "metaharness", "analyze"}
+    {"claude", "improof", "math_harness", "openclaw", "deepagents", "plain", "metaharness", "analyze", "readability"}
 )
 # Manual Formal Lean harnesses must have a real root ``Proof.lean`` contract.
 # This is deliberately narrower than the informal/auth capability sets above:
@@ -443,6 +481,7 @@ ENGINE_AUTH_MODES: dict[str, list[str]] = {
     "metaharness": ["codex_subscription", "claude_subscription", "api_key"],
     "deepseek_harness": ["codex_subscription", "api_key"],
     "analyze": ["codex_subscription", "claude_subscription", "api_key"],
+    "readability": ["codex_subscription", "claude_subscription", "api_key"],
 }
 
 # ``~/.npm-global/bin`` comes first: it holds the exactly pinned, vetted Codex
@@ -537,14 +576,18 @@ def list_engines() -> list[dict[str, Any]]:
         if spec["id"] == ANALYZE_ENGINE_ID and not _analyze_enabled():
             # AGENT_MONITOR_ANALYZE_ENABLED=0 hides the Analyze mode entirely.
             continue
+        if spec["id"] == READABILITY_ENGINE_ID and not _readability_enabled():
+            # So does AGENT_MONITOR_READABILITY_ENABLED=0 for Readability.
+            continue
         ok, _cmd = _cli_available(spec)
         hint = spec.get("install_hint")
-        if ok and spec["id"] == ANALYZE_ENGINE_ID:
+        if ok and spec["id"] in MANUSCRIPT_ENGINE_IDS:
             missing = analyze_missing_packages()
             if missing:
                 ok = False
+                mode = "Analyze" if spec["id"] == ANALYZE_ENGINE_ID else "Readability"
                 hint = (
-                    "Analyze needs the Python package(s) " + ", ".join(missing)
+                    f"{mode} needs the Python package(s) " + ", ".join(missing)
                     + " installed on this server"
                 )
         out.append({

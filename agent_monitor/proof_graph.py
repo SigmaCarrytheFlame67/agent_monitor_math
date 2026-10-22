@@ -1560,6 +1560,12 @@ def _is_analysis_record(run_record: Mapping[str, Any] | None) -> bool:
     return str(record.get("run_kind") or "") == "analyze" or str(record.get("engine") or "") == "analyze"
 
 
+def _is_readability_record(run_record: Mapping[str, Any] | None) -> bool:
+    """A readability run (decided by the record, as for an analysis)."""
+    record = run_record or {}
+    return str(record.get("run_kind") or "") == "readability" or str(record.get("engine") or "") == "readability"
+
+
 def analysis_projection(workspace: Path) -> dict[str, Any] | None:
     """The deterministic ``proof_graph.json`` envelope of an Analyze run, from
     ``analysis/analysis_graph.json`` (``None`` before it is published); kept
@@ -1833,6 +1839,10 @@ def generate(
             _write_cached(workspace, out_name, deterministic)
             return deterministic
     else:
+        if _is_readability_record(run_record):
+            # A rewrite of someone's manuscript is never read as a proof; its
+            # paper map is built from the manuscript structure.
+            raise ValueError("A readability run has a paper map, not a proof DAG")
         if _is_analysis_record(run_record):
             # Regenerate guard: an analysis's DAG is its manuscript structure.
             # GRAPH_PROMPT never re-reads the report (or a model reply) as a proof.

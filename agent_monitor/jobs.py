@@ -47,20 +47,27 @@ _PROBLEM_ID_RE = re.compile(r"^[A-Za-z0-9_.()\[\]-]{1,128}$")
 
 # The tool-free Kimi harness speaks the same bounded chat-completions transport
 # as the Plain baseline, so it requests sponsored credentials under that name.
-# Ansatz Analyze reuses the CGM response-only transport, so it requests the
-# ``math_harness`` scope (the broker allowlists need no new engine).
-_SPONSORED_TRANSPORT_ENGINES = {"kimi": "plain", "analyze": "math_harness"}
+# Ansatz Analyze and Ansatz Readability reuse the CGM response-only transport,
+# so they request the ``math_harness`` scope (the broker allowlists need no
+# new engine).
+_SPONSORED_TRANSPORT_ENGINES = {"kimi": "plain", "analyze": "math_harness", "readability": "math_harness"}
 
 # Engines that run the Ansatz CGM pipeline (math_harness_runner.run_pipeline).
 # ``kimi`` is its tool-free, guest-safe Kimi K3 entry point.
 _CGM_ENGINES = frozenset({"kimi", "math_harness"})
 # Ansatz Analyze (run_kind "analyze"): the only engine of the Analyze mode.
 _ANALYZE_ENGINE = "analyze"
+# Ansatz Readability (run_kind "readability"): the only engine of its mode.
+_READABILITY_ENGINE = "readability"
+# Engines that read someone's manuscript: never a proof (no promotion, no
+# derived proof views, no library, no continuation; see
+# analyze_runs.is_manuscript_record).
+_MANUSCRIPT_ENGINES = frozenset({_ANALYZE_ENGINE, _READABILITY_ENGINE})
 # Kimi reasoning tokens count against max_tokens; guest and sponsored CGM runs
 # get exactly this bounded ceiling (the sponsored gateway's default clamp).
 _CGM_BOUNDED_OUTPUT_TOKENS = 8192
 # Engines whose guest and sponsored runs get exactly that ceiling.
-_BOUNDED_OUTPUT_ENGINES = _CGM_ENGINES | {_ANALYZE_ENGINE}
+_BOUNDED_OUTPUT_ENGINES = _CGM_ENGINES | _MANUSCRIPT_ENGINES
 
 # Called once when an anonymous guest run finishes, so the console can start
 # the bounded derived Formal/DAG pipeline under its guest admission limits.
@@ -145,12 +152,13 @@ audit acceptance alone is never a solution. Before returning, list the
 artifact paths and both validator results.
 """.strip()
 
-# Guests may start only these tool-free engines (Analyze behind its own guest
-# switch). A command override takes the engine outside that built-in
-# contract, so it disables it for guests.
-_GUEST_ENGINES = {"plain", "kimi", "analyze"}
+# Guests may start only these tool-free engines (Analyze and Readability
+# behind their own guest switches). A command override takes the engine
+# outside that built-in contract, so it disables it for guests.
+_GUEST_ENGINES = {"plain", "kimi", "analyze", "readability"}
 _GUEST_COMMAND_OVERRIDES = {
     "plain": "PLAIN_CMD", "kimi": "KIMI_PROOF_CMD", "analyze": "ANALYZE_CMD",
+    "readability": "READABILITY_CMD",
 }
 
 # Engines that can consume the run owner's Codex/ChatGPT subscription. Some
@@ -170,6 +178,7 @@ _CODEX_SUBSCRIPTION_ENGINES = {
     "plain",
     "deepseek_harness",
     "analyze",
+    "readability",
 }
 
 # Claude OAuth is intentionally exposed only through adapters that invoke the
@@ -177,7 +186,7 @@ _CODEX_SUBSCRIPTION_ENGINES = {
 # be copied into third-party provider clients.
 _CLAUDE_SUBSCRIPTION_ENGINES = {
     "claude", "improof", "math_harness", "openclaw", "deepagents",
-    "metaharness", "plain", "analyze",
+    "metaharness", "plain", "analyze", "readability",
 }
 # ``dual_subscription`` is Ansatz CGM Max: Claude Code and Codex together.
 _AUTH_ROUTES = {"api_key", "codex_subscription", "claude_subscription", cgm_max.ROUTE}
@@ -317,6 +326,29 @@ def _analyze_model(user: dict[str, Any] | None, model: str | None) -> str:
     return GUEST_DEFAULT_MODEL
 
 
+def _readability_model(
+    user: dict[str, Any] | None, model: str | None, auth_route: str | None
+) -> str:
+    """The model of a readability run: Kimi K3 for guests and members (the
+    sponsored one or their own key), the requested one for an administrator,
+    else, on an account route, the saved default that route can run, else
+    Kimi K3."""
+    from agent_monitor.settings import GUEST_DEFAULT_MODEL
+
+    requested = str(model or "").strip()
+    if user is not None and user.get("guest"):
+        if requested and requested != GUEST_DEFAULT_MODEL:
+            raise ValueError(f"Guest readability runs use {GUEST_DEFAULT_MODEL}")
+        return GUEST_DEFAULT_MODEL
+    if requested:
+        return requested
+    if user is not None and not account_policy.is_member(user) and str(auth_route or "") in {
+        "codex_subscription", "claude_subscription",
+    }:
+        return _saved_default_model(user, engine=_READABILITY_ENGINE, auth_route=auth_route) or GUEST_DEFAULT_MODEL
+    return GUEST_DEFAULT_MODEL
+
+
 def _saved_default_model(
     user: dict[str, Any], *, engine: str, auth_route: str | None
 ) -> str | None:
@@ -376,12 +408,13 @@ def _api_keys_run(env: dict[str, str], model: str | None) -> bool:
     return True
 
 
-def _analyze_api_timeout(sponsored: bool) -> int:
-    """The Analyze runner's per-call API timeout (it reads the same variables)."""
+def _analyze_api_timeout(sponsored: bool, *, variable: str = "AGENT_MONITOR_ANALYZE_API_TIMEOUT") -> int:
+    """The Analyze (or, with its ``variable``, Readability) runner's per-call
+    API timeout (the runners read the same variables)."""
     from agent_monitor import kimi_k3
 
     default = kimi_k3.SPONSORED_TIMEOUT_SECONDS if sponsored else 300
-    for name in ("AGENT_MONITOR_ANALYZE_API_TIMEOUT", "AGENT_MONITOR_CGM_API_TIMEOUT"):
+    for name in (variable, "AGENT_MONITOR_CGM_API_TIMEOUT"):
         raw = str(os.environ.get(name) or "").strip()
         if raw:
             try:
@@ -747,7 +780,7 @@ def _write_run_locked(run: dict[str, Any]) -> Path:
         "owner_id", "owner", "created_at", "problem_id",
         "guest", "use_subagents", "subagent_model", "auth_route", "credential_source",
         "model", "requested_model", "reasoning_effort", "speed_mode", "max_iterations", "formalize",
-        "route_plan", "run_kind", "analyze", "tool_free",
+        "route_plan", "run_kind", "analyze", "readability", "tool_free",
         "engine_impl", "engine_impl_version", "artifact_schema", "graph_schema",
     ):
         if run.get(k) in (None, "", "continue") and old.get(k) not in (None, "", "continue"):
@@ -921,6 +954,10 @@ def _upsert_manifest(run: dict[str, Any]) -> None:
         # itself is no longer "running").
         recheck = run["analyze"].get("recheck")
         entry["recheck_running"] = isinstance(recheck, dict) and recheck.get("status") == "running"
+    if isinstance(run.get("readability"), dict):
+        # Likewise for a question about a readability run.
+        question = run["readability"].get("ask")
+        entry["ask_running"] = isinstance(question, dict) and question.get("status") == "running"
     if not entry["problem_preview"]:
         # Runner flushes don't carry problem_text_preview — keep the stored one.
         entry.pop("problem_preview")
@@ -931,6 +968,15 @@ def _upsert_manifest(run: dict[str, Any]) -> None:
 
 
 def _pipeline_for(engine: str) -> list[dict]:
+    if engine == _READABILITY_ENGINE:
+        # The Readability runner reuses the CGM stage ids (cli_events trusts them).
+        return [
+            {"id": "scaffold", "label": "1 Ingest", "title": "Fetch, read and split the manuscript"},
+            {"id": "work", "label": "2 Guide", "title": "Reading guide: summary, roadmap, notation"},
+            {"id": "verify", "label": "3 Rewrite", "title": "Readable version, one part at a time"},
+            {"id": "curate", "label": "4 Check", "title": "Independent check of each part"},
+            {"id": "finalize", "label": "5 Publish", "title": "Readable version, paper map and notation"},
+        ]
     if engine == _ANALYZE_ENGINE:
         # The Analyze runner reuses the CGM stage ids (cli_events trusts them).
         return [
@@ -1346,7 +1392,7 @@ def _validate_subscription_model(
 def _raise_long_effort_timeouts(
     env: dict[str, str], *, engine: str, route: str, effort: object
 ) -> None:
-    """Give extra-high and maximum effort CGM and Analyze calls 30 minutes.
+    """Give extra-high and maximum effort CGM, Analyze and Readability calls 30 minutes.
 
     Those calls on a linked account are long (Max allows them 30 minutes
     each) and would otherwise get the 600 s default; a timed-out call is
@@ -1356,7 +1402,7 @@ def _raise_long_effort_timeouts(
     timeout included (the CGM-specific one would take precedence over it).
     """
     if (
-        engine not in _CGM_ENGINES | {_ANALYZE_ENGINE}
+        engine not in _CGM_ENGINES | _MANUSCRIPT_ENGINES
         or route not in {"claude_subscription", "codex_subscription"}
         or effort not in {"xhigh", "max"}
     ):
@@ -1391,14 +1437,19 @@ def start_job(
     run_kind: str | None = None,
     source: object = None,
     analyze: object = None,
+    readability: object = None,
     tool_free: bool = False,
 ) -> dict[str, Any]:
-    """Start one run (``run_kind`` ``"prove"``, the default, or ``"analyze"``).
+    """Start one run (``run_kind`` ``"prove"``, the default, ``"analyze"`` or
+    ``"readability"``).
 
     An Analyze run takes ``engine="analyze"``, a ``source`` (``{"url"}`` or
     ``{"text", "format"?}``) or manuscript ``attachments``, and ``analyze``
     options (``{"max_nodes"?, "focus"?}``); ``formalize`` defaults to false for
-    it and to true for proofs.  See :mod:`agent_monitor.analyze_runs`.
+    it and to true for proofs.  See :mod:`agent_monitor.analyze_runs`.  A
+    readability run takes ``engine="readability"``, a source as Analyze does
+    and ``readability`` options (``{"audience"?, "focus"?}``); it is never
+    formalized.  See :mod:`agent_monitor.readability_runs`.
 
     ``tool_free`` marks a proof from a project that has, or had, a member who
     is not an administrator: it runs only a tool-free engine on an API key,
@@ -1410,14 +1461,20 @@ def start_job(
     is_guest = bool(user and user.get("guest"))
     if engine not in all_engine_ids():
         raise ValueError(f"Unsupported engine: {engine}")
-    kind = str(run_kind or ("analyze" if engine == _ANALYZE_ENGINE else "prove")).strip().lower()
-    if kind not in {"prove", "analyze"}:
-        raise ValueError('run_kind must be "prove" or "analyze"')
+    default_kind = {_ANALYZE_ENGINE: "analyze", _READABILITY_ENGINE: "readability"}.get(engine, "prove")
+    kind = str(run_kind or default_kind).strip().lower()
+    if kind not in {"prove", "analyze", "readability"}:
+        raise ValueError('run_kind must be "prove", "analyze" or "readability"')
     if engine == _ANALYZE_ENGINE and kind != "analyze":
         raise ValueError(
             "Ansatz Analyze runs in the Analyze mode; reload the console and choose Analyze"
         )
+    if engine == _READABILITY_ENGINE and kind != "readability":
+        raise ValueError(
+            "Ansatz Readability runs in the Readability mode; reload the console and choose Readability"
+        )
     analyze_request: dict[str, Any] | None = None
+    readability_request: dict[str, Any] | None = None
     if kind == "analyze":
         from agent_monitor import analyze_runs
 
@@ -1442,6 +1499,25 @@ def start_job(
             analyze_request["label"], analyze_request["focus"]
         )
         model = _analyze_model(user, model)
+        use_subagents = False
+        subagent_model = None
+    elif kind == "readability":
+        from agent_monitor import readability_runs
+
+        refusal = readability_runs.availability_error(user)
+        if refusal is not None:
+            raise refusal
+        readability_request = readability_runs.normalize_request(
+            {"engine": engine, "source": source, "attachments": attachments, "readability": readability},
+            user,
+        )
+        formalize = False
+        # The manuscript is the source; the record shows "Readability · <label>".
+        problem_id = f"readable_{uuid.uuid4().hex[:8]}"
+        problem_text = readability_runs.problem_text(
+            readability_request["label"], readability_request["focus"]
+        )
+        model = _readability_model(user, model, auth_route)
         use_subagents = False
         subagent_model = None
     elif formalize is None:
@@ -1534,7 +1610,7 @@ def start_job(
         extra_env["AGENT_MONITOR_MAX_OUTPUT_TOKENS"] = str(int(max_output_tokens))
     if (
         is_guest
-        and kind != "analyze"
+        and kind == "prove"
         and not extra_env.get("KIMI_API_KEY")
         and not _sponsored_broker_serves(engine, model)
     ):
@@ -1560,14 +1636,14 @@ def start_job(
     selected_kimi = _is_kimi_model(model)
     if is_guest and selected_kimi and not extra_env.get("KIMI_API_KEY") and os.environ.get("AGENT_MONITOR_GUEST_HOSTED_KIMI", "1").lower() in {"0", "false", "off", "no"}:
         raise ValueError("Hosted Kimi is disabled; add your own Kimi API key in Settings")
-    sponsored_only = kind == "analyze" and (
+    sponsored_only = kind in {"analyze", "readability"} and (
         is_guest or account_policy.member_analyze_sponsored_only(user)
     )
     if sponsored_only:
-        # Guests analyze on the sponsored Kimi K3 route only: never a key of
-        # their own (or the hosted guest key, which would skip the broker's
-        # per-client and gateway caps).  So do members in public mode, whose
-        # "own" keys would be the server's.
+        # Guests read manuscripts on the sponsored Kimi K3 route only: never a
+        # key of their own (or the hosted guest key, which would skip the
+        # broker's per-client and gateway caps).  So do members in public
+        # mode, whose "own" keys would be the server's.
         try:
             sponsored_kimi = _apply_sponsored_kimi_route(
                 extra_env, engine=engine, model=model, force=True
@@ -1575,19 +1651,18 @@ def start_job(
         except ValueError:
             sponsored_kimi = False
         if not sponsored_kimi:
+            one, many = ("an analysis", "analyses") if kind == "analyze" else ("a readability run", "readability runs")
             raise ValueError(
-                "Sponsored Kimi K3 is not available right now, so guests can't "
-                "start an analysis; try again later"
+                f"Sponsored Kimi K3 is not available right now, so guests can't start {one}; try again later"
                 if is_guest
-                else "Sponsored Kimi K3 is not available right now, so analyses can't "
-                "start; try again later"
+                else f"Sponsored Kimi K3 is not available right now, so {many} can't start; try again later"
             )
     else:
         sponsored_kimi = _apply_sponsored_kimi_route(
             extra_env, engine="plain" if engine == "kimi" else engine, model=model
         )
-    if engine == _ANALYZE_ENGINE and not sponsored_kimi and _is_kimi_model(model):
-        # Own-key Kimi analyses use the operator's endpoint, like the kimi engine.
+    if engine in _MANUSCRIPT_ENGINES and not sponsored_kimi and _is_kimi_model(model):
+        # Own-key Kimi manuscript runs use the operator's endpoint, like the kimi engine.
         extra_env["AGENT_MONITOR_KIMI_BASE_URL"] = _operator_kimi_base()
     if engine == "kimi" and not sponsored_kimi:
         # Own-key runs use the operator's endpoint; a user-settable
@@ -1640,6 +1715,12 @@ def start_job(
         )
     if route != "api_key" and selected_kimi:
         raise ValueError("Kimi K3 is an API model and cannot use a linked account subscription")
+    if readability_request is not None:
+        from agent_monitor import readability_runs
+
+        refusal_text = readability_runs.model_error(model, route)
+        if refusal_text:
+            raise ValueError(refusal_text)
     if route == "api_key" and user is not None and not has_api_key:
         raise ValueError("No compatible API key is configured; add and verify one in Settings")
     if (
@@ -1703,7 +1784,7 @@ def start_job(
 
     attachment_batch = (
         research_attachments.validate(attachments, guest=is_guest, analyze=True)
-        if analyze_request is not None
+        if analyze_request is not None or readability_request is not None
         else research_attachments.validate(attachments, guest=is_guest)
     )
     if attachment_batch and not (problem_text or "").strip() and not problem_id:
@@ -1755,8 +1836,41 @@ def start_job(
             # 429/403 with a plain message); released when the worker exits.
             analyze_runs.GATE.reserve(run_id, run_id=run_id, guest=is_guest)
             gate_key = run_id
-    # Until the worker starts, a failure returns the sponsored Analyze slot
-    # (and its daily count); afterwards the worker releases it on exit.
+    readability_route = ""
+    readability_caps: dict[str, int] = {}
+    if readability_request is not None:
+        from agent_monitor import analyze_runs, readability_runs
+
+        readability_route = "sponsored_kimi" if sponsored_kimi else route
+        effective = readability_runs.effective_caps(
+            analyze_runs.role_of(user),
+            sponsored=sponsored_kimi,
+            subscription=route in {"codex_subscription", "claude_subscription"},
+            requested=readability_runs.request_caps(sponsored=sponsored_kimi),
+        )
+        # The request carries the effective caps, as for an analysis.
+        readability_caps = {
+            "max_parts": effective.max_parts,
+            "max_calls": effective.max_calls,
+            "max_seconds": effective.max_seconds,
+        }
+        extra_env[readability_runs.WATCHDOG_ENV] = str(
+            readability_runs.watchdog_seconds(
+                effective, sponsored=sponsored_kimi,
+                api_timeout=_analyze_api_timeout(
+                    sponsored_kimi, variable="AGENT_MONITOR_READABILITY_API_TIMEOUT"),
+            )
+        )
+        if not sponsored_kimi:
+            extra_env["AGENT_MONITOR_SPONSORED_KIMI"] = "0"
+            extra_env.pop("AGENT_MONITOR_SPONSORED_KIMI_URL", None)
+        if sponsored_kimi:
+            # The same sponsored pool as Analyze, worded for Readability.
+            analyze_runs.GATE.reserve(run_id, run_id=run_id, guest=is_guest,
+                                      messages=readability_runs.GATE_MESSAGES)
+            gate_key = run_id
+    # Until the worker starts, a failure returns the sponsored slot (and its
+    # daily count); afterwards the worker releases it on exit.
     try:
         return _start_job_launch(
             engine=engine,
@@ -1782,6 +1896,9 @@ def start_job(
             analyze_request=analyze_request,
             analyze_route=analyze_route,
             analyze_caps=analyze_caps,
+            readability_request=readability_request,
+            readability_route=readability_route,
+            readability_caps=readability_caps,
             tool_free=tool_free,
         )
     except BaseException:
@@ -1817,6 +1934,9 @@ def _start_job_launch(
     analyze_request: dict[str, Any] | None,
     analyze_route: str,
     analyze_caps: dict[str, int],
+    readability_request: dict[str, Any] | None = None,
+    readability_route: str = "",
+    readability_caps: dict[str, int] | None = None,
     tool_free: bool = False,
 ) -> dict[str, Any]:
     """The launch half of :func:`start_job`: credentials, workspace, record,
@@ -1856,7 +1976,7 @@ def _start_job_launch(
     ws = workspace_dir(run_id)
     attached = research_attachments.save(ws, attachment_batch)
     (ws / "problem.txt").write_text(text, encoding="utf-8")
-    analyze_fields: dict[str, Any] = {}
+    manuscript_fields: dict[str, Any] = {}
     if analyze_request is not None:
         from agent_monitor import analyze_runs
         from agent_monitor.analyze import record as analyze_record
@@ -1877,9 +1997,33 @@ def _start_job_launch(
             reasoning_effort=str(tuning.get("reasoning_effort") or "default"),
             sponsored=bool(sponsored_kimi),
         )
-        analyze_fields = {
+        manuscript_fields = {
             "run_kind": "analyze",
             "analyze": analyze_record.run_block(ws) or {},
+        }
+    if readability_request is not None:
+        from agent_monitor import analyze_runs
+        from agent_monitor.readability import record as readability_record
+        from agent_monitor.readability import request as readability_request_file
+
+        readability_source = dict(readability_request["source"])
+        if readability_source["kind"] == "upload":
+            readability_source["attachments"] = [str(item["id"]) for item in attached]
+        readability_request_file.write(
+            ws,
+            source=readability_source,
+            caps=readability_caps or {},
+            audience=readability_request["audience"],
+            focus=readability_request["focus"],
+            role=analyze_runs.role_of(user),
+            route=readability_route,
+            model=str(model or ""),
+            reasoning_effort=str(tuning.get("reasoning_effort") or "default"),
+            sponsored=bool(sponsored_kimi),
+        )
+        manuscript_fields = {
+            "run_kind": "readability",
+            "readability": readability_record.run_block(ws) or {},
         }
     run = normalize_run(
         {
@@ -1902,6 +2046,8 @@ def _start_job_launch(
                     "output": (
                         "Starting Ansatz Analyze…"
                         if analyze_request is not None
+                        else "Starting Ansatz Readability…"
+                        if readability_request is not None
                         else f"Starting {engine} engine…"
                     ),
                     "status": "running",
@@ -1931,7 +2077,7 @@ def _start_job_launch(
             "credential_source": "sponsored_kimi" if sponsored_kimi else "user",
             # False keeps the run informal: the derived pipeline skips Lean.
             "formalize": bool(formalize),
-            **analyze_fields,
+            **manuscript_fields,
             # Its prompt carries a non-administrator's project text for good,
             # whoever belongs to the project later (see tool_free_run).
             **({"tool_free": True} if tool_free else {}),
@@ -1974,7 +2120,7 @@ def _start_job_launch(
         "auth_route": route,
         "credential_source": "sponsored_kimi" if sponsored_kimi else "user",
         "problem_preview": _problem_preview(text),
-        **({"run_kind": "analyze"} if analyze_request is not None else {}),
+        **({"run_kind": kind} if kind != "prove" else {}),
     }
     with _LOCK:
         _JOBS[job_id] = job
@@ -2009,9 +2155,11 @@ def _start_job_launch(
     # for guests), then derives Lean and both DAG views from that proof.
     # Lightweight Thread doubles used by embedders/tests intentionally do not
     # launch background work and therefore have no is_alive method.
+    # A readability run has no proof and no derived views: no sidecar.
     if (
         hasattr(thread, "is_alive")
         and not is_guest
+        and kind != "readability"
         and os.environ.get("AGENT_MONITOR_DISABLE_AUTO_PIPELINE", "").strip() != "1"
     ):
         from agent_monitor import auto_pipeline
@@ -2304,7 +2452,10 @@ def _execute_job(
     started = time.time()
     ws = Path(workspace)
     extra_env = dict(extra_env or {})
-    analyze_run = run_kind == "analyze" or engine == _ANALYZE_ENGINE
+    if run_kind == "analyze" or engine == _ANALYZE_ENGINE:
+        run_kind = "analyze"
+    elif run_kind == "readability" or engine == _READABILITY_ENGINE:
+        run_kind = "readability"
     try:
         _execute_job_body(
             job_id=job_id, run_id=run_id, engine=engine, problem_id=problem_id,
@@ -2312,13 +2463,13 @@ def _execute_job(
             max_iterations=max_iterations, workspace=workspace, extra_env=extra_env,
             use_subagents=use_subagents, subagent_model=subagent_model,
             reasoning_effort=reasoning_effort, speed_mode=speed_mode,
-            owner_id=owner_id, guest=guest, analyze_run=analyze_run,
+            owner_id=owner_id, guest=guest, run_kind=run_kind,
             started=started, ws=ws,
         )
     finally:
-        if analyze_run:
+        if run_kind in {"analyze", "readability"}:
             # Every exit path (finished, failed, stopped, crashed) frees the
-            # sponsored Analyze slot; a server restart starts with none held.
+            # sponsored slot; a server restart starts with none held.
             from agent_monitor import analyze_runs
 
             analyze_runs.GATE.release(run_id)
@@ -2342,10 +2493,16 @@ def _execute_job_body(
     speed_mode: str,
     owner_id: int | None,
     guest: bool,
-    analyze_run: bool,
+    run_kind: str,
     started: float,
     ws: Path,
 ) -> None:
+    # A manuscript run (Analyze, Readability) reads someone's manuscript with
+    # a fixed prompt pack: no library, no DAG memory, no persona, no
+    # attachment excerpts, and no proof in its outcome.
+    analyze_run = run_kind == "analyze"
+    readability_run = run_kind == "readability"
+    manuscript_run = analyze_run or readability_run
     public_kimi_runtime = (
         os.environ.get("AGENT_MONITOR_PUBLIC_KIMI", "").strip() == "1"
     )
@@ -2363,7 +2520,7 @@ def _execute_job_body(
         "enabled_tools": [],
         "persistent_skill_mutation": False,
     }
-    if not guest and not analyze_run:
+    if not guest and not manuscript_run:
         # An analysis checks someone else's manuscript with a fixed prompt
         # pack: neither the user library nor published DAG memory applies.
         try:
@@ -2420,7 +2577,7 @@ def _execute_job_body(
             _append_chat(run_id, "system", f"profile skill materialization unavailable: {exc}")
     # Only explicitly published, provenance-gated DAG results are retrievable;
     # community discussions never become executable harness instructions.
-    if not guest and not analyze_run and not public_kimi_runtime and not sponsored_kimi_runtime:
+    if not guest and not manuscript_run and not public_kimi_runtime and not sponsored_kimi_runtime:
         try:
             from agent_monitor.research import compose_context as dag_context
 
@@ -2432,8 +2589,8 @@ def _execute_job_body(
         except (OSError, ValueError, sqlite3.Error):
             pass
     engine_problem_text = (lib_ctx + "\n" + problem_text) if lib_ctx else problem_text
-    # The Analyze runner reads its uploads from analysis/request.json.
-    attachment_context = "" if analyze_run else research_attachments.context(ws)
+    # The manuscript runners read their uploads from their request.json.
+    attachment_context = "" if manuscript_run else research_attachments.context(ws)
     if attachment_context:
         engine_problem_text += "\n\n" + attachment_context
     engine_problem_text = _augment_research_audit_prompt(engine_problem_text)
@@ -2569,7 +2726,7 @@ def _execute_job_body(
                 requested_model=model,
                 max_iterations=max_iterations,
                 owner_id=owner_id,
-                include_persona=not guest and not analyze_run,
+                include_persona=not guest and not manuscript_run,
             )
 
         published_before_stop = _published_before_stop(result_run)
@@ -2626,6 +2783,8 @@ def _execute_job_body(
         _attach_analysis(result_run, ws)
         if analyze_run:
             _finalize_analyze_record(result_run, ws)
+        elif readability_run:
+            _finalize_readability_record(result_run, ws)
         result_run["updated_at"] = _now()
         _write_run(result_run)
         status = result_run.get("status") or "finished"
@@ -2635,7 +2794,8 @@ def _execute_job_body(
             status = "failed"
         _update_job(job_id, status=status, error=result_run.get("error"))
         # Full record in the human-in-the-loop chat: summary + final answer.
-        summary = _run_finished_line(result_run, status, time.time() - started, analyze=analyze_run)
+        summary = _run_finished_line(result_run, status, time.time() - started, analyze=analyze_run,
+                                     readability=readability_run)
         _append_chat(run_id, "system", summary)
         final_out = ""
         for a in reversed(result_run.get("agents") or []):
@@ -2646,6 +2806,8 @@ def _execute_job_body(
             # An analysis's last agent is its process log: the Progress panel
             # gets a plain summary instead (the report is in the Sandbox).
             _append_chat(run_id, "system", _analyze_chat_summary(result_run, status))
+        elif readability_run:
+            _append_chat(run_id, "system", _readability_chat_summary(result_run, status))
         elif final_out:
             _append_chat(run_id, "assistant", final_out[:3000])
         # Neither the standalone public service nor an anonymous guest run
@@ -2658,17 +2820,20 @@ def _execute_job_body(
                 problem_id=problem_id,
                 status=status,
                 problem_text=(
-                    _analyze_memory_label(result_run) if analyze_run else problem_text
+                    _analyze_memory_label(result_run) if analyze_run
+                    else _readability_memory_label(result_run) if readability_run
+                    else problem_text
                 ),
                 outcome=summary,
-                # Manuscript text is untrusted: an analysis adds its label and
-                # outcome to the operator's memory, never report excerpts.
-                final_out="" if analyze_run else final_out,
+                # Manuscript text is untrusted: a manuscript run adds its label
+                # and outcome to the operator's memory, never excerpts.
+                final_out="" if manuscript_run else final_out,
                 owner_id=owner_id,
             )
-        if guest and status == "finished" and not public_kimi_runtime:
+        if guest and status == "finished" and not public_kimi_runtime and not readability_run:
             # Guests get the bounded derived Formal/DAG pipeline as soon as the
-            # proof exists; opening the run later remains a fallback.
+            # proof exists; opening the run later remains a fallback.  A
+            # readability run has no proof and no derived views.
             _notify_guest_completion(run_id, owner_id, ws)
     except StopRequested:
         stopped_run = _load_run_record(run_id)
@@ -2698,7 +2863,7 @@ def _execute_job_body(
                 "reasoning_effort": reasoning_effort,
                 "speed_mode": speed_mode,
                 "max_iterations": max_iterations,
-                **({"run_kind": "analyze"} if analyze_run else {}),
+                **({"run_kind": run_kind} if manuscript_run else {}),
                 "agents": [
                     {
                         "trace_id": f"{run_id}::error",
@@ -3128,12 +3293,13 @@ def _attach_analysis(run: dict[str, Any], workspace: Path | None) -> dict[str, A
     """Add the Run Analysis / Agent Flow block the dashboard renders.
 
     (The Monitor's ``run["analysis"]`` block; an Analyze run's results are
-    ``run["analyze"]``.)  An Analyze run has no proof: its workspace holds a
-    third-party manuscript under ``analysis/source``, so no proof file is
-    looked for, rewritten or attributed.
+    ``run["analyze"]``.)  A manuscript run (Analyze, Readability) has no
+    proof: its workspace holds a third-party manuscript under
+    ``analysis/source`` or ``readability/source``, so no proof file is looked
+    for, rewritten or attributed.
     """
-    analyze_run = str(run.get("engine") or "") == _ANALYZE_ENGINE
-    if not analyze_run:
+    manuscript_run = str(run.get("engine") or "") in _MANUSCRIPT_ENGINES
+    if not manuscript_run:
         _normalize_terminal_kimi_outcome(run, workspace)
     try:
         from harness_dashboard.analysis import compute_run_analysis
@@ -3147,7 +3313,7 @@ def _attach_analysis(run: dict[str, Any], workspace: Path | None) -> dict[str, A
         )
     except Exception:  # noqa: BLE001 — analysis is best-effort
         pass
-    if run.get("status") in {"finished", "failed", "stopped"} and not analyze_run:
+    if run.get("status") in {"finished", "failed", "stopped"} and not manuscript_run:
         _attach_proof_provenance(run.get("agents") or [], workspace)
         _attach_final_latex(run)
     return run
@@ -3208,16 +3374,115 @@ def _analyze_running_label(workspace: Path) -> str:
     return analyze_problem_text(title, str(block.get("focus") or "")) if title else ""
 
 
+def _finalize_readability_record(run: dict[str, Any], workspace: Path) -> None:
+    """Store ``run["readability"]`` (keeping its questions) and the run-list
+    label "Readability · <title>" once the runner has exited."""
+    from agent_monitor.readability import record as readability_record
+
+    run["run_kind"] = "readability"
+    try:
+        stored = dict(_load_run_record(str(run.get("run_id"))).get("readability") or {})
+    except (FileNotFoundError, json.JSONDecodeError, OSError):
+        stored = {}
+    try:
+        block = readability_record.run_block(workspace)
+    except Exception:  # noqa: BLE001 - a damaged artifact must not lose the run
+        block = None
+    block = dict(block if block is not None else stored)
+    for key in ("ask", "asks", "asks_started", "ask_usage"):
+        if stored.get(key) and key not in block:
+            block[key] = stored[key]
+    run["readability"] = block
+    title = _analyze_title(block)
+    if not title:
+        return
+    from agent_monitor.readability_runs import problem_text as readability_problem_text
+
+    text = readability_problem_text(title, str(block.get("focus") or ""))
+    run["problem_text"] = text
+    run["problem_text_preview"] = text[:500]
+    run["problems"] = _seed_problems(text, source="initial")
+    try:
+        (workspace / "problem.txt").write_text(text, encoding="utf-8")
+    except OSError:
+        pass
+
+
+def _readability_running_label(workspace: Path) -> str:
+    """"Readability · <title>" once the running readability run has read its
+    manuscript (``readability/manuscript.json`` exists), else ``""``."""
+    if not (workspace / "readability" / "manuscript.json").is_file():
+        return ""
+    from agent_monitor.readability import record as readability_record
+    from agent_monitor.readability_runs import problem_text as readability_problem_text
+
+    try:
+        block = readability_record.run_block(workspace) or {}
+    except Exception:  # noqa: BLE001 - the label waits for the finished record
+        return ""
+    title = _analyze_title(block)
+    return readability_problem_text(title, str(block.get("focus") or "")) if title else ""
+
+
+def _readability_chat_summary(run: dict[str, Any], status: str) -> str:
+    """The closing message of a readability run in its Progress panel, in
+    plain words (never the runner's process log or model output)."""
+    summary = (run.get("readability") or {}).get("summary") or {}
+    head = {"finished": "Readable version published", "stopped": "Readability run stopped"}.get(
+        status, "Readability run failed")
+    parts: list[str] = []
+    if summary:
+        total, rewritten = int(summary.get("parts") or 0), int(summary.get("rewritten") or 0)
+        counts = ", ".join(
+            text for value, text in (
+                (summary.get("faithful"), f"{int(summary.get('faithful') or 0)} faithful"),
+                (summary.get("issues"), f"{int(summary.get('issues') or 0)} with issues"),
+                (summary.get("unchecked"), f"{int(summary.get('unchecked') or 0)} unchecked"),
+                (summary.get("not_rewritten"), f"{int(summary.get('not_rewritten') or 0)} not rewritten"),
+            ) if value
+        )
+        parts.append(f"{head}: {rewritten} of {total} parts rewritten" + (f" ({counts})" if counts else "") + ".")
+        parts.append("Read it in the Sandbox; the paper map is in the DAG. "
+                     "Each part was checked against the original by a model — not a certificate.")
+    else:
+        parts.append(f"{head}; no readable version was published.")
+    if status == "failed":
+        errors = [
+            " ".join(str(agent.get("output") or "").split())
+            for agent in run.get("agents") or []
+            if isinstance(agent, dict) and str(agent.get("stage_name") or "").endswith("(error)")
+        ]
+        error = next((item for item in reversed(errors) if item), "") or re.sub(
+            r"^Ansatz Readability exited with code \d+: ", "", " ".join(str(run.get("error") or "").split()))
+        if error:
+            parts.append(error[:600])
+    return "\n\n".join(parts)
+
+
+def _readability_memory_label(run: dict[str, Any]) -> str:
+    """The operator-memory line of a readability run: its label and counts."""
+    block = run.get("readability") or {}
+    title = _analyze_title(block) or "manuscript"
+    summary = block.get("summary") or {}
+    counts = (f"{summary.get('rewritten', 0)} of {summary.get('parts', 0)} parts rewritten, "
+              f"{summary.get('faithful', 0)} faithful") if summary else "nothing published"
+    return f"Readability · {title} ({counts}; checked by a model — not a certificate)"
+
+
 def _plural(count: int, one: str, many: str) -> str:
     return f"{count} {one if count == 1 else many}"
 
 
-def _run_finished_line(run: dict[str, Any], status: str, seconds: float, *, analyze: bool = False) -> str:
-    """A run's closing line in its chat. An analysis counts its model calls,
-    as its Progress pane does: its agents are the runner's process log."""
+def _run_finished_line(
+    run: dict[str, Any], status: str, seconds: float, *, analyze: bool = False, readability: bool = False
+) -> str:
+    """A run's closing line in its chat. An analysis or a readability run
+    counts its model calls, as its Progress pane does: its agents are the
+    runner's process log."""
     totals = run.get("totals") or {}
-    if analyze:
-        calls = int((((run.get("analyze") or {}).get("summary") or {}).get("calls")) or 0)
+    if analyze or readability:
+        block = run.get("readability" if readability else "analyze") or {}
+        calls = int(((block.get("summary") or {}).get("calls")) or 0)
         count = _plural(calls, "model call", "model calls")
     else:
         count = f"{len(run.get('agents') or [])} agents"
@@ -4025,6 +4290,19 @@ def _cli_failure_reason(
     return f"{label} failed before producing a {artifact}{suffix}"
 
 
+def _readability_published(workspace: Path) -> bool:
+    """The Readability runner's success artifacts: the readable version and
+    its receipt, written last (no proof)."""
+    folder = Path(workspace) / "readability"
+    try:
+        return all(
+            (folder / name).is_file() and not (folder / name).is_symlink()
+            for name in ("readable.md", "receipt.json")
+        )
+    except OSError:
+        return False
+
+
 def _analysis_published(workspace: Path) -> bool:
     """The Analyze runner's success artifacts: report and graph (no proof)."""
     analysis = Path(workspace) / "analysis"
@@ -4054,7 +4332,8 @@ def _cgm_receipt_signature(workspace: Path) -> tuple[int, int, int] | None:
 
 
 def _apply_analyze_runner_env(env: dict[str, str], extra_env: dict[str, str]) -> None:
-    """What only the Analyze runner receives, after the child-env scrub.
+    """What only the manuscript runners (Analyze, Readability) receive, after
+    the child-env scrub.
 
     * the operator's optional GitHub token (child_process_env removes it
       from every other child; the GitHub connector sends it only with its own
@@ -4080,14 +4359,14 @@ def _apply_analyze_runner_env(env: dict[str, str], extra_env: dict[str, str]) ->
 def _cli_timeout_seconds(engine: str, env: dict[str, str]) -> int:
     """Resolve a bounded CLI timeout, including multi-stage harness budgets."""
     normalized = str(engine or "").strip().upper().replace("-", "_")
-    if normalized == "ANALYZE":
+    if normalized in ("ANALYZE", "READABILITY"):
         # start_job sets the watchdog from the run's own caps: its deadline,
         # one in-flight call and publication.  Operator timeouts for other
-        # engines (AGENT_MONITOR_CLI_TIMEOUT) never cut an analysis short;
-        # the Analyze caps are the knob.  Without the variable (a re-check),
-        # the administrator ceiling applies.
+        # engines (AGENT_MONITOR_CLI_TIMEOUT) never cut an analysis or a
+        # readability run short; their caps are the knob.  Without the
+        # variable (a re-check, a question), the administrator ceiling applies.
         try:
-            requested = int(str(env.get("AGENT_MONITOR_ANALYZE_WATCHDOG_SECONDS") or "").strip())
+            requested = int(str(env.get(f"AGENT_MONITOR_{normalized}_WATCHDOG_SECONDS") or "").strip())
         except ValueError:
             requested = 14_400 + 900 + 300
         bounded = max(60, min(requested, 86_400))
@@ -4423,8 +4702,9 @@ def _run_cli_engine(
             print(f"[agent-monitor] persona preamble unavailable: {exc}")
             preamble = ""
     analyze_run = engine == _ANALYZE_ENGINE
-    if analyze_run:
-        # The runner reads analysis/request.json; its command has no {prompt}.
+    manuscript_run = engine in _MANUSCRIPT_ENGINES
+    if manuscript_run:
+        # The runner reads its request.json; its command has no {prompt}.
         # The record shows the run's label instead of a proof task prompt.
         prompt = record_problem_text
     else:
@@ -4471,9 +4751,10 @@ def _run_cli_engine(
     from agent_monitor.cli_events import CLIEventParser
 
     parser = CLIEventParser(spec.get("parser_style") or engine, source_engine=engine)
-    # An analysis is listed as "Analyze · <title>" as soon as the runner has
-    # read the manuscript (not only once it has exited).
-    analyze_label: dict[str, str] = {}
+    # An analysis is listed as "Analyze · <title>" (a readability run as
+    # "Readability · <title>") as soon as the runner has read the manuscript
+    # (not only once it has exited).
+    running_label: dict[str, str] = {}
 
     def _flush(
         output_tail: str,
@@ -4482,10 +4763,10 @@ def _run_cli_engine(
         error: str | None = None,
     ) -> dict[str, Any]:
         nonlocal record_problem_text
-        if analyze_run and not analyze_label:
-            label = _analyze_running_label(workspace)
+        if manuscript_run and not running_label:
+            label = (_analyze_running_label if analyze_run else _readability_running_label)(workspace)
             if label:
-                analyze_label["text"] = record_problem_text = label
+                running_label["text"] = record_problem_text = label
         u = parser.usage
         # One node per model call/turn when the CLI streams JSON events;
         # otherwise fall back to a single session node (e.g. openhands TTY).
@@ -4634,7 +4915,7 @@ def _run_cli_engine(
             },
             engine=engine,  # type: ignore[arg-type]
         )
-        if analyze_label:
+        if running_label:
             # The run list's label comes from the session problems.
             run["problems"] = _seed_problems(record_problem_text, source="initial")
             run["problem_text_preview"] = record_problem_text[:500]
@@ -4651,7 +4932,7 @@ def _run_cli_engine(
     from agent_monitor.subprocess_env import child_process_env
 
     env = child_process_env(extra=extra_env)
-    if analyze_run:
+    if manuscript_run:
         _apply_analyze_runner_env(env, extra_env or {})
     if engine == "kimi" and (extra_env or {}).get("AGENT_MONITOR_SPONSORED_KIMI") != "1":
         # Main-service availability flags are not authorization for this run.
@@ -4959,6 +5240,13 @@ def _run_cli_engine(
             parser.lines.append("[agent-monitor] Analyze exited successfully but published no report and graph")
             ok = False
             proof_missing = True
+    elif manuscript_run:
+        # Likewise a readability run: its readable version and receipt, and
+        # never a promoted manuscript file (readability/source/**/proof.tex).
+        if ok and not _readability_published(workspace):
+            parser.lines.append("[agent-monitor] Readability exited successfully but published no readable version")
+            ok = False
+            proof_missing = True
     elif ok and _promote_proof_artifact(workspace) is None:
         parser.lines.append("[agent-monitor] engine exited successfully but produced no proof.md or proof.tex")
         ok = False
@@ -4985,7 +5273,8 @@ def _run_cli_engine(
             timeout_s=timeout_s,
             proof_missing=proof_missing,
             detail=detail or None,
-            artifact="analysis report" if analyze_run else "proof artifact",
+            artifact=("analysis report" if analyze_run else "readable version" if manuscript_run
+                      else "proof artifact"),
         )
     run = _flush(
         parser.output(),
@@ -5431,7 +5720,7 @@ def reconcile_run_status(
                     auto_pipeline.reconcile_orphaned(workspace, reason)
                 except (OSError, ValueError):
                     pass
-            return reconcile_recheck_state(run_id, run)
+            return reconcile_ask_state(run_id, reconcile_recheck_state(run_id, run))
         if _record_age_seconds(run) < max(0.0, min_age_seconds):
             return run
 
@@ -5472,6 +5761,16 @@ def reconcile_run_status(
                 "system",
                 "Analysis interrupted: its worker is no longer active (the server "
                 "may have restarted). Start a new analysis to run it again.",
+            )
+            return run
+        if run.get("run_kind") == "readability" or run.get("engine") == _READABILITY_ENGINE:
+            run["interruption"]["recoverable"] = False
+            _write_run(run)
+            _append_chat(
+                run_id,
+                "system",
+                "Readability run interrupted: its worker is no longer active (the server "
+                "may have restarted). Start a new readability run to read it again.",
             )
             return run
         _append_chat(
@@ -5526,14 +5825,16 @@ def reconcile_stale_running_runs(*, min_age_seconds: float = 10.0) -> list[str]:
                 run_ids.append(state_path.parent.name)
 
     # An analysis whose re-check worker was lost is "finished" with a re-check
-    # still "running": the manifest flags it, so a restart repairs it too.
+    # still "running" (a readability run likewise with a question): the
+    # manifest flags it, so a restart repairs it too.
     if manifest_path.exists():
         try:
             entries = (json.loads(manifest_path.read_text(encoding="utf-8")) or {}).get("runs") or []
             run_ids.extend(
                 str(entry.get("run_id") or "")
                 for entry in entries
-                if entry.get("run_id") and entry.get("recheck_running") is True
+                if entry.get("run_id")
+                and (entry.get("recheck_running") is True or entry.get("ask_running") is True)
             )
         except (AttributeError, json.JSONDecodeError, OSError):
             pass
@@ -5691,8 +5992,10 @@ def tool_free_run(run_id: str, run: dict[str, Any]) -> bool:
     tool-free (``account_policy.PROJECT_TOOL_FREE_ERROR``)."""
     if run.get("tool_free"):
         return True
-    if run.get("run_kind") == "analyze" or run.get("engine") == _ANALYZE_ENGINE:
-        return False  # an analysis never receives the project's document
+    from agent_monitor import analyze_runs
+
+    if analyze_runs.is_manuscript_record(run):
+        return False  # a manuscript run never receives the project's document
     from agent_monitor import projects
 
     return projects.untrusted_run(run_id)
@@ -6450,9 +6753,12 @@ def _run_improof_continuation(
 
 
 def _refuse_analyze_continuation(record: dict[str, Any] | None) -> None:
-    """Analyze runs are not conversations: no continuation, no chat turn."""
-    from agent_monitor import analyze_runs
+    """Manuscript runs (Analyze, Readability) are not conversations: no
+    continuation, no chat turn."""
+    from agent_monitor import analyze_runs, readability_runs
 
+    if readability_runs.is_readability_record(record):
+        raise ValueError(readability_runs.CONTINUE_REFUSAL)
     if analyze_runs.is_analyze_record(record):
         raise ValueError(analyze_runs.CONTINUE_REFUSAL)
 
@@ -6465,18 +6771,21 @@ def _refuse_analyze_continuation(record: dict[str, Any] | None) -> None:
 _RECHECK_GRACE_SECONDS = 180
 
 
-def _analyze_recheck_env(extra_env: dict[str, str], *, model: str | None) -> dict[str, str]:
-    """The re-check child environment (the run's route; tool-free runner)."""
+def _analyze_recheck_env(
+    extra_env: dict[str, str], *, model: str | None, engine: str = _ANALYZE_ENGINE
+) -> dict[str, str]:
+    """The child environment of a re-check (or of a question about a
+    readability run, ``engine``): the run's route; tool-free runner."""
     from agent_monitor.engines_registry import engine_extra_path
     from agent_monitor.subprocess_env import child_process_env
 
     env = child_process_env(extra=extra_env)
     _apply_analyze_runner_env(env, extra_env)
-    _apply_selected_model_env(env, engine=_ANALYZE_ENGINE, model=model)
+    _apply_selected_model_env(env, engine=engine, model=model)
     if env.get("AGENT_MONITOR_CODEX_SUBSCRIPTION") == "1" or env.get("AGENT_MONITOR_CLAUDE_SUBSCRIPTION") == "1":
         _scrub_provider_route_env(env)
     env.setdefault("NO_COLOR", "1")
-    extra = engine_extra_path(_ANALYZE_ENGINE)
+    extra = engine_extra_path(engine)
     if extra:
         env["PATH"] = os.pathsep.join([*extra, env.get("PATH", "")])
     return env
@@ -6797,9 +7106,10 @@ def _recheck_outcome(output: str) -> tuple[dict[str, Any] | None, str]:
     return result, error
 
 
-def _book_recheck_usage(run_id: str, output: str, *, model: str | None) -> dict[str, Any]:
+def _book_recheck_usage(run_id: str, output: str, *, model: str | None, stage: str = "recheck") -> dict[str, Any]:
     """Book a re-check's model calls in the usage ledger (stage ``recheck``,
-    billed like the analysis) and return their tally.
+    billed like the analysis; a question about a readability run is stage
+    ``ask``) and return their tally.
 
     The runner reports each call as a Codex-style ``turn.completed`` event,
     exactly as for the analysis itself.  The analysis's own ``totals`` stay
@@ -6836,12 +7146,59 @@ def _book_recheck_usage(run_id: str, output: str, *, model: str | None) -> dict[
             )
         except Exception:  # noqa: BLE001 - a price estimate is best-effort
             cost = None
-        usage_ledger.record_usage(model=model, usage=usage, cost_usd=cost or 0.0, stage="recheck", run_id=run_id)
+        usage_ledger.record_usage(model=model, usage=usage, cost_usd=cost or 0.0, stage=stage, run_id=run_id)
         tally["calls"] += 1
         tally["input_tokens"] += int(usage.get("input_tokens") or 0)
         tally["output_tokens"] += int(usage.get("output_tokens") or 0)
         tally["cost_usd"] = round(float(tally["cost_usd"]) + float(cost or 0.0), 6)
     return tally
+
+
+def _watch_runner(
+    run_id: str, argv: list[str], *, workspace: Path, env: dict[str, str], timeout: int, timed_out: str
+) -> tuple[str, int | None, str]:
+    """Run a runner process for ``run_id`` (a re-check, a question) to its
+    end.  Stop and the time limit send SIGTERM first (the runner settles and
+    exits 143; ``timed_out`` is then the error), and the group is killed 30 s
+    later.  Returns the output, the exit code (``None``: it could not start,
+    the error names why) and the error."""
+    import subprocess
+
+    try:
+        proc = subprocess.Popen(
+            argv, cwd=str(workspace), env=env, stdin=subprocess.DEVNULL,
+            stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
+            start_new_session=True,
+        )
+    except OSError as exc:
+        return "", None, type(exc).__name__
+    _register_proc(run_id, proc)
+    deadline = time.monotonic() + timeout
+    escalate_at: float | None = None
+    output = ""
+    error = ""
+    try:
+        while True:
+            try:
+                output, _ = proc.communicate(timeout=1.0)
+                break
+            except subprocess.TimeoutExpired:
+                now = time.monotonic()
+                if escalate_at is None:
+                    if _stop_event(run_id).is_set():
+                        # Stop sent SIGTERM: the runner settles and exits
+                        # 143; the group is killed if it hangs.
+                        escalate_at = now + 30
+                    elif now > deadline:
+                        error = timed_out
+                        _terminate_registered_proc(proc, force=False)
+                        escalate_at = now + 30
+                elif now > escalate_at:
+                    _terminate_registered_proc(proc, force=True)
+                    escalate_at = now + 3600
+    finally:
+        _unregister_proc(run_id)
+    return output or "", proc.returncode, error
 
 
 def _execute_recheck(
@@ -6858,8 +7215,6 @@ def _execute_recheck(
     started_at: str,
     model: str | None = None,
 ) -> None:
-    import subprocess
-
     status = "failed"
     result: dict[str, Any] | None = None
     error = ""
@@ -6869,56 +7224,29 @@ def _execute_recheck(
     try:
         runner = Path(__file__).resolve().parent / "runners" / "analyze_runner.py"
         argv = [sys.executable, "-u", str(runner), "--recheck", node_id]
-        try:
-            proc = subprocess.Popen(
-                argv, cwd=str(workspace), env=env, stdin=subprocess.DEVNULL,
-                stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
-                start_new_session=True,
-            )
-        except OSError as exc:
-            error = f"The re-check could not start ({type(exc).__name__})"
+        output, returncode, error = _watch_runner(
+            run_id, argv, workspace=workspace, env=env, timeout=timeout,
+            timed_out=f"The re-check timed out after {timeout}s; the previous verdict is kept",
+        )
+        if returncode is None:
+            error = f"The re-check could not start ({error})"
             unsent = True
         else:
-            _register_proc(run_id, proc)
-            deadline = time.monotonic() + timeout
-            escalate_at: float | None = None
-            output = ""
-            try:
-                while True:
-                    try:
-                        output, _ = proc.communicate(timeout=1.0)
-                        break
-                    except subprocess.TimeoutExpired:
-                        now = time.monotonic()
-                        if escalate_at is None:
-                            if _stop_event(run_id).is_set():
-                                # Stop sent SIGTERM: the runner restores the node
-                                # and exits 143; the group is killed if it hangs.
-                                escalate_at = now + 30
-                            elif now > deadline:
-                                error = f"The re-check timed out after {timeout}s; the previous verdict is kept"
-                                _terminate_registered_proc(proc, force=False)
-                                escalate_at = now + 30
-                        elif now > escalate_at:
-                            _terminate_registered_proc(proc, force=True)
-                            escalate_at = now + 3600
-            finally:
-                _unregister_proc(run_id)
             try:
                 # Every call the re-check made is spent, whatever its outcome.
-                spent = _book_recheck_usage(run_id, output or "", model=model)
+                spent = _book_recheck_usage(run_id, output, model=model)
             except Exception:  # noqa: BLE001 - accounting must not lose the outcome
                 spent = {}
-            result, terminal = _recheck_outcome(output or "")
+            result, terminal = _recheck_outcome(output)
             # Exit 2 is a configuration refusal: nothing was sent to a model.
-            unsent = proc.returncode == 2
-            if proc.returncode == 0 and result is not None:
+            unsent = returncode == 2
+            if returncode == 0 and result is not None:
                 status = "done"
-            elif proc.returncode == 128 + int(signal.SIGTERM) or _stop_event(run_id).is_set():
+            elif returncode == 128 + int(signal.SIGTERM) or _stop_event(run_id).is_set():
                 status = "stopped"
                 error = error or "The re-check was stopped; nothing changed"
             else:
-                error = error or terminal or f"The re-check exited with code {proc.returncode}"
+                error = error or terminal or f"The re-check exited with code {returncode}"
     except Exception as exc:  # noqa: BLE001 - the record must say what happened
         error = f"The re-check failed ({type(exc).__name__})"
     finally:
@@ -6957,45 +7285,410 @@ def _execute_recheck(
                 pass
 
 
+# A question about a finished readability run is answered by the runner
+# itself (``readability_runner.py --ask <ask_id>``: one call, four with its
+# retries, and 15 minutes) with the run's own route environment; the outer
+# watchdog adds one call and the answer's publication.
+_ASK_GRACE_SECONDS = 180
+# Serializes every write of ``run["readability"]["ask"]`` and ``["asks"]``.
+_ASK_STATE_LOCK = threading.Lock()
+ASK_INTERRUPTED = "The question was interrupted (the server restarted); ask it again"
+
+
+def ask_count(record: dict[str, Any] | None) -> int:
+    """How many questions were asked about this run (``asks_started``)."""
+    block = (record or {}).get("readability")
+    try:
+        return max(0, int(block.get("asks_started") or 0)) if isinstance(block, dict) else 0
+    except (TypeError, ValueError):
+        return 0
+
+
+def start_readability_ask(
+    run_id: str,
+    body: dict[str, Any],
+    *,
+    user: dict[str, Any] | None,
+    on_exit: Any = None,
+) -> dict[str, Any]:
+    """Answer a question about a finished readability run in the background.
+
+    ``body`` is ``{question, selection?, view?, node_id?}``.  Returns
+    ``{"ok": True, "status": "asking", "run_id", "ask_id", "job_id"}`` at
+    once; the question waits in ``run["readability"]["ask"]`` and lands with
+    its answer in ``run["readability"]["asks"]`` (the last 50).  One question
+    at a time per run.  ``on_exit`` runs once when it is answered or did not
+    start.  Raises ``analyze_runs.AnalyzeRequestError`` (status 400, 403, 409
+    or 429) or ``FileNotFoundError``.
+    """
+    from agent_monitor import analyze_runs, readability_runs
+    from agent_monitor.readability import ask as readability_ask
+    from agent_monitor.readability import paper_map
+    from agent_monitor.runners.readability_runner import ASK_SECONDS
+
+    handed_off = False
+    gate_key: str | None = None
+    claimed = False
+    state_written: dict[str, Any] | None = None
+    try:
+        record = _load_run_record(run_id)
+    except (FileNotFoundError, json.JSONDecodeError, OSError):
+        if callable(on_exit):
+            on_exit()
+        raise FileNotFoundError("run not found") from None
+    try:
+        if not readability_runs.is_readability_record(record):
+            raise analyze_runs.AnalyzeRequestError("Only readability runs answer questions about a paper")
+        refusal = readability_runs.availability_error(user)
+        if refusal is not None:
+            raise refusal
+        try:
+            question = readability_ask.normalize(body)
+        except readability_ask.AskError as exc:
+            raise analyze_runs.AnalyzeRequestError(str(exc)) from None
+        ws = workspace_dir(run_id)
+        if not (ws / "readability" / "receipt.json").is_file():
+            raise analyze_runs.AnalyzeRequestError(
+                "This run has no readable version to ask about yet", status=409
+            )
+        if question["node_id"] and question["node_id"] not in {
+            node["id"] for node in (paper_map.load(ws) or {}).get("nodes") or []
+        }:
+            raise analyze_runs.AnalyzeRequestError("node_id must be a result of this run")
+        if str(record.get("status") or "") == "running" or run_is_active(run_id):
+            raise analyze_runs.AnalyzeRequestError(
+                "Wait for the run (or the question before) to finish", status=409
+            )
+        if not _claim_launch(run_id):
+            raise analyze_runs.AnalyzeRequestError(
+                "A question about this run is already being answered", status=409
+            )
+        claimed = True
+        # A guest asks a bounded number of questions per run (counted on the
+        # record, under the launch claim, so it holds across restarts).
+        requester_guest = bool(user and user.get("guest"))
+        if requester_guest:
+            try:
+                current = _load_run_record(run_id)
+            except (FileNotFoundError, json.JSONDecodeError, OSError):
+                current = record
+            if ask_count(current) >= readability_runs.GUEST_ASKS_PER_RUN:
+                raise analyze_runs.AnalyzeRequestError(
+                    readability_runs.GUEST_ASK_LIMIT_MESSAGE.format(limit=readability_runs.GUEST_ASKS_PER_RUN),
+                    status=403,
+                )
+        # The model and route the run used, exactly as a re-check does.
+        model = _continuation_model(record, None)
+        sponsored = str(record.get("credential_source") or "") == "sponsored_kimi"
+        guest = bool(record.get("guest"))
+        if not sponsored and account_policy.member_analyze_sponsored_only(user):
+            raise analyze_runs.AnalyzeRequestError(
+                "This run used an API key, which members can't use on this site; "
+                "start a new readability run on the included Kimi K3",
+                status=403,
+            )
+        if sponsored:
+            gate_key = readability_runs.ask_key(run_id)
+            # A slot of the sponsored pool, counted among the day's questions
+            # (not its manuscript runs); the guests' share follows who asks.
+            analyze_runs.GATE.reserve(gate_key, run_id=run_id, guest=requester_guest,
+                                      messages=readability_runs.ASK_GATE_MESSAGES,
+                                      daily=readability_runs.ASK_DAILY)
+        configured, _route = _continuation_auth_environment(
+            run_data=record,
+            engine=_READABILITY_ENGINE,
+            model=model,
+            user=user,
+            env=_user_extra_env(user, model),
+        )
+        _apply_bounded_run_env(configured, engine=_READABILITY_ENGINE, guest=guest, sponsored=sponsored)
+        if not sponsored and _is_kimi_model(model):
+            configured["AGENT_MONITOR_KIMI_BASE_URL"] = _operator_kimi_base()
+        env = _analyze_recheck_env(configured, model=model, engine=_READABILITY_ENGINE)
+        timeout = ASK_SECONDS + _analyze_api_timeout(
+            sponsored, variable="AGENT_MONITOR_READABILITY_API_TIMEOUT") + _ASK_GRACE_SECONDS
+        ask_id = uuid.uuid4().hex[:12]
+        readability_ask.write_request(ws, ask_id, question)
+        job_id = uuid.uuid4().hex[:10]
+        started_at = _now()
+        _register_claimed_job(run_id, {
+            "job_id": job_id,
+            "run_id": run_id,
+            "engine": _READABILITY_ENGINE,
+            "run_kind": "readability",
+            "kind": "ask",
+            "ask_id": ask_id,
+            "status": "running",
+            "created_at": started_at,
+            "updated_at": started_at,
+            "error": None,
+            "model": model,
+            "owner_id": record.get("owner_id"),
+            "guest": guest,
+            "auth_route": record.get("auth_route"),
+            "credential_source": record.get("credential_source"),
+            "problem_preview": "Ask · " + " ".join(question["question"].split())[:100],
+        })
+        claimed = False
+        _stop_event(run_id).clear()
+        state = {
+            "ask_id": ask_id,
+            "status": "running",
+            "question": question["question"],
+            "selection": question["selection"],
+            "view": question["view"],
+            "node_id": question["node_id"],
+            "job_id": job_id,
+            "started_at": started_at,
+        }
+        _set_ask_state(run_id, state, started=True)
+        state_written = state
+        thread = threading.Thread(
+            target=_execute_ask,
+            kwargs={
+                "run_id": run_id, "job_id": job_id, "state": state, "workspace": ws, "env": env,
+                "timeout": timeout, "gate_key": gate_key, "on_exit": on_exit, "model": model,
+            },
+            daemon=True,
+            name=f"readability-ask-{job_id}",
+        )
+        thread.start()
+        handed_off = True
+        return {"ok": True, "status": "asking", "run_id": run_id, "ask_id": ask_id, "job_id": job_id}
+    finally:
+        if not handed_off:
+            if claimed:
+                _release_launch(run_id)
+            if gate_key is not None:
+                analyze_runs.GATE.release(gate_key, refund=True)
+            with _LOCK:
+                for job in _JOBS.values():
+                    if job.get("run_id") == run_id and job.get("kind") == "ask" and job.get("status") == "running":
+                        job["status"] = "failed"
+            if state_written is not None:
+                _set_ask_state(run_id, {**state_written, "status": "failed", "finished_at": _now(),
+                                        "error": "The question could not be sent"})
+            if callable(on_exit):
+                on_exit()
+
+
+def _set_ask_state(
+    run_id: str,
+    state: dict[str, Any],
+    *,
+    started: bool = False,
+    usage: dict[str, Any] | None = None,
+) -> None:
+    """Record a question in ``run["readability"]``: ``ask`` while it runs,
+    then in ``asks`` (the last 50, oldest first).  ``asks_started`` counts
+    the questions asked (``started=True`` counts one) and ``ask_usage`` the
+    model calls, tokens and estimated cost they spent (``usage``)."""
+    from agent_monitor.readability_runs import ASKS_KEPT
+
+    with _ASK_STATE_LOCK:
+        try:
+            run = _load_run_record(run_id)
+        except (FileNotFoundError, json.JSONDecodeError, OSError):
+            return
+        block = dict(run.get("readability") or {})
+        if started:
+            block["asks_started"] = ask_count({"readability": block}) + 1
+        tally = dict(block.get("ask_usage") or {}) if isinstance(block.get("ask_usage"), dict) else {}
+        for key, value in (usage or {}).items():
+            if isinstance(value, (int, float)) and not isinstance(value, bool) and value:
+                tally[key] = round(float(tally.get(key) or 0) + float(value), 6)
+                if key != "cost_usd":
+                    tally[key] = int(tally[key])
+        if tally:
+            block["ask_usage"] = tally
+        if state.get("status") == "running":
+            block["ask"] = state
+        else:
+            current = block.get("ask") if isinstance(block.get("ask"), dict) else {}
+            if current.get("ask_id") == state.get("ask_id"):
+                block.pop("ask", None)
+            asks = [item for item in block.get("asks") or []
+                    if isinstance(item, dict) and item.get("ask_id") != state.get("ask_id")]
+            block["asks"] = (asks + [state])[-ASKS_KEPT:]
+        run["readability"] = block
+        run["updated_at"] = _now()
+        _write_run(run)
+
+
+def reconcile_ask_state(run_id: str, run: dict[str, Any] | None = None) -> dict[str, Any] | None:
+    """Repair a question that a lost worker left ``running`` (a restart, a
+    crash of its thread): it becomes ``interrupted``.  Returns the current
+    record."""
+    if run is None:
+        try:
+            run = _load_run_record(run_id)
+        except (FileNotFoundError, json.JSONDecodeError, OSError):
+            return None
+    block = run.get("readability") if isinstance(run.get("readability"), dict) else {}
+    question = block.get("ask") if isinstance(block.get("ask"), dict) else None
+    if not question or question.get("status") != "running" or _recheck_worker_alive(run_id, question.get("job_id")):
+        return run
+    with _ASK_STATE_LOCK:
+        try:
+            current = _load_run_record(run_id)
+        except (FileNotFoundError, json.JSONDecodeError, OSError):
+            return run
+        state = (current.get("readability") or {}).get("ask")
+        if (
+            not isinstance(state, dict)
+            or state.get("status") != "running"
+            or state.get("job_id") != question.get("job_id")
+            or _recheck_worker_alive(run_id, state.get("job_id"))
+        ):
+            return current
+    _set_ask_state(run_id, {**state, "status": "interrupted", "finished_at": _now(), "error": ASK_INTERRUPTED})
+    from agent_monitor import analyze_runs, readability_runs
+
+    # A slot held by a lost thread of this process is returned at once.
+    analyze_runs.GATE.release(readability_runs.ask_key(run_id))
+    try:
+        return _load_run_record(run_id)
+    except (FileNotFoundError, json.JSONDecodeError, OSError):
+        return current
+
+
+def _ask_outcome(output: str) -> tuple[dict[str, Any] | None, str]:
+    """The runner's ``readability.ask`` result, or its terminal error message."""
+    result: dict[str, Any] | None = None
+    error = ""
+    for line in output.splitlines():
+        line = line.strip()
+        if not line.startswith("{"):
+            continue
+        try:
+            event = json.loads(line)
+        except ValueError:
+            continue
+        if not isinstance(event, dict):
+            continue
+        if event.get("type") == "readability.ask" and isinstance(event.get("result"), dict):
+            result = event["result"]
+        item = event.get("item") if isinstance(event.get("item"), dict) else None
+        if item and item.get("type") == "error" and item.get("terminal") is True:
+            error = str(item.get("message") or "")[:600]
+    return result, error
+
+
+def _execute_ask(
+    *,
+    run_id: str,
+    job_id: str,
+    state: dict[str, Any],
+    workspace: Path,
+    env: dict[str, str],
+    timeout: int,
+    gate_key: str | None,
+    on_exit: Any,
+    model: str | None = None,
+) -> None:
+    status = "failed"
+    result: dict[str, Any] | None = None
+    error = ""
+    spent: dict[str, Any] = {}
+    # A question that never reached a model gives its sponsored start back.
+    unsent = False
+    try:
+        runner = Path(__file__).resolve().parent / "runners" / "readability_runner.py"
+        argv = [sys.executable, "-u", str(runner), "--ask", str(state["ask_id"])]
+        output, returncode, error = _watch_runner(
+            run_id, argv, workspace=workspace, env=env, timeout=timeout,
+            timed_out=f"The question timed out after {timeout}s",
+        )
+        if returncode is None:
+            error = f"The question could not be sent ({error})"
+            unsent = True
+        else:
+            try:
+                # Every call the answer took is spent, whatever its outcome.
+                spent = _book_recheck_usage(run_id, output, model=model, stage="ask")
+            except Exception:  # noqa: BLE001 - accounting must not lose the outcome
+                spent = {}
+            result, terminal = _ask_outcome(output)
+            # Exit 2 is a configuration refusal: nothing was sent to a model.
+            unsent = returncode == 2
+            if returncode == 0 and result is not None:
+                status = "done"
+            elif returncode == 128 + int(signal.SIGTERM) or _stop_event(run_id).is_set():
+                status = "stopped"
+                error = error or "The question was stopped"
+            else:
+                error = error or terminal or f"The question failed (exit code {returncode})"
+    except Exception as exc:  # noqa: BLE001 - the record must say what happened
+        error = f"The question failed ({type(exc).__name__})"
+    finally:
+        final = {**state, "status": status, "finished_at": _now()}
+        if result is not None:
+            final.update(
+                answer=str(result.get("answer") or "")[:20_000],
+                refs=[str(item)[:80] for item in (result.get("refs") or [])[:50]],
+                part=result.get("part") if isinstance(result.get("part"), int) else None,
+                model=str(result.get("model") or model or "")[:120],
+            )
+        if error:
+            final["error"] = error[:600]
+        if spent.get("calls"):
+            final["usage"] = {key: spent[key] for key in ("calls", "input_tokens", "output_tokens", "cost_usd")}
+        try:
+            _set_ask_state(run_id, final, usage=spent or None)
+        except Exception:  # noqa: BLE001
+            pass
+        _update_job(job_id, status="finished" if status == "done" else status, error=error or None)
+        if gate_key is not None:
+            from agent_monitor import analyze_runs
+
+            analyze_runs.GATE.release(gate_key, refund=unsent)
+        if callable(on_exit):
+            try:
+                on_exit()
+            except Exception:  # noqa: BLE001
+                pass
+
+
 def stop_run(run_id: str) -> dict[str, Any]:
     """Stop a running job: signal the stop event and kill any subprocess.
 
-    An Analyze runner (or re-check) gets SIGTERM first: it publishes the
-    results that had settled (a re-check restores the node) and exits 143.
-    So does an Ansatz CGM runner: before its publication it publishes nothing
-    and exits 143; after it, the stop ends only its written-proof round and
-    the run is recorded as finished.  The worker kills a group that does not
-    exit within 30 s.
+    An Analyze or Readability runner (or a re-check, or a question) gets
+    SIGTERM first: it publishes what had settled (a re-check restores the
+    node) and exits 143.  So does an Ansatz CGM runner: before its
+    publication it publishes nothing and exits 143; after it, the stop ends
+    only its written-proof round and the run is recorded as finished.  The
+    worker kills a group that does not exit within 30 s.
     """
     active = _run_is_active(run_id)
     _stop_event(run_id).set()
     with _LOCK:
         proc = _PROCS.get(run_id)
     graceful = bool(active) and (
-        active.get("engine") in {_ANALYZE_ENGINE, *_CGM_ENGINES}
-        or active.get("kind") == "recheck"
+        active.get("engine") in {*_MANUSCRIPT_ENGINES, *_CGM_ENGINES}
+        or active.get("kind") in ("recheck", "ask")
     )
     if proc is not None:
         _terminate_registered_proc(proc, force=not graceful)
     if not active:
-        # Nothing runs here: a re-check left "running" by a lost worker is
-        # repaired so the analysis is usable again.
+        # Nothing runs here: a re-check (or a question) left "running" by a
+        # lost worker is repaired so the run is usable again.
         before = None
         try:
             before = ((_load_run_record(run_id).get("analyze") or {}).get("recheck") or {}).get("status")
         except (FileNotFoundError, json.JSONDecodeError, OSError, AttributeError):
             pass
         after = ((reconcile_recheck_state(run_id) or {}).get("analyze") or {}).get("recheck") or {}
+        reconcile_ask_state(run_id)
         result = {"ok": True, "status": "not_running", "run_id": run_id}
         if before == "running" and after.get("status") == "interrupted":
             result["recheck"] = "interrupted"
         return result
-    if active.get("kind") == "recheck":
-        # Stopping a re-check changes nothing: the analysis keeps its status
-        # and every verdict (the runner restores the node it was checking).
+    if active.get("kind") in ("recheck", "ask"):
+        # Stopping a re-check (or a question) changes nothing: the run keeps
+        # its status and every result (a re-check restores its node).
         _update_job(active["job_id"], status="stopped")
         return {"ok": True, "status": "stopped", "run_id": run_id, "job_id": active["job_id"],
-                "recheck": True}
+                active["kind"]: True}
     try:
         run_data = _load_run_record(run_id)
         run_data["status"] = "stopped"

@@ -63,9 +63,10 @@ _CLAUDE_TUNING_ENGINES = frozenset(
     {"claude", "deepagents", "math_harness", "metaharness", "plain"}
 )
 # Engines that apply a profile exactly as another engine does.  The Analyze
-# runner reuses the CGM response-only turn machinery of ``math_harness``, so it
-# accepts the same reasoning and speed options on every route.
-_ENGINE_ALIASES = {"analyze": "math_harness"}
+# and Readability runners reuse the CGM response-only turn machinery of
+# ``math_harness``, so they accept the same reasoning and speed options on
+# every route.
+_ENGINE_ALIASES = {"analyze": "math_harness", "readability": "math_harness"}
 
 _REASONING_LABELS = {
     "default": "Default",

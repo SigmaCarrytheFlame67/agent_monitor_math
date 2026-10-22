@@ -127,33 +127,42 @@ def test_member_engine_list_marks_local_harnesses_admin_only(member_console):
 
 def test_operators_can_narrow_the_member_engines(monkeypatch):
     for name in ("AGENT_MONITOR_MEMBER_ENGINES", "AGENT_MONITOR_PUBLIC", "PLAIN_CMD", "KIMI_PROOF_CMD",
-                 "MATH_HARNESS_CMD", "ANALYZE_CMD", "AGENT_MONITOR_ANALYZE_ENABLED"):
+                 "MATH_HARNESS_CMD", "ANALYZE_CMD", "AGENT_MONITOR_ANALYZE_ENABLED", "READABILITY_CMD",
+                 "AGENT_MONITOR_READABILITY_ENABLED"):
         monkeypatch.delenv(name, raising=False)
-    # Ansatz Analyze joins the tool-free member engines; it follows its own
-    # switch, not the proof-engine list below.
-    assert account_policy.member_engine_allowlist() == {"kimi", "plain", "math_harness", "analyze"}
+    # Ansatz Analyze and Ansatz Readability join the tool-free member engines;
+    # they follow their own switches, not the proof-engine list below.
+    assert account_policy.member_engine_allowlist() == {"kimi", "plain", "math_harness", "analyze", "readability"}
     # The documented way back to the two sponsored-or-own-key engines.
     monkeypatch.setenv("AGENT_MONITOR_MEMBER_ENGINES", "kimi,plain")
-    assert account_policy.member_engine_allowlist() == {"kimi", "plain", "analyze"}
+    assert account_policy.member_engine_allowlist() == {"kimi", "plain", "analyze", "readability"}
     # The ceiling is fixed: naming a local harness cannot widen it.
     monkeypatch.setenv("AGENT_MONITOR_MEMBER_ENGINES", "kimi,codex,math_harness")
-    assert account_policy.member_engine_allowlist() == {"kimi", "math_harness", "analyze"}
+    assert account_policy.member_engine_allowlist() == {"kimi", "math_harness", "analyze", "readability"}
     monkeypatch.delenv("AGENT_MONITOR_MEMBER_ENGINES")
     # A command override makes the harness operator-chosen local code.
     monkeypatch.setenv("MATH_HARNESS_CMD", "/bin/true")
-    assert account_policy.member_engine_allowlist() == {"kimi", "plain", "analyze"}
+    assert account_policy.member_engine_allowlist() == {"kimi", "plain", "analyze", "readability"}
     monkeypatch.delenv("MATH_HARNESS_CMD")
     monkeypatch.setenv("ANALYZE_CMD", "/bin/true")
-    assert account_policy.member_engine_allowlist() == {"kimi", "plain", "math_harness"}
+    assert account_policy.member_engine_allowlist() == {"kimi", "plain", "math_harness", "readability"}
     monkeypatch.delenv("ANALYZE_CMD")
+    monkeypatch.setenv("READABILITY_CMD", "/bin/true")
+    assert account_policy.member_engine_allowlist() == {"kimi", "plain", "math_harness", "analyze"}
+    monkeypatch.delenv("READABILITY_CMD")
     # The Analyze kill switch removes it for members too.
     monkeypatch.setenv("AGENT_MONITOR_ANALYZE_ENABLED", "0")
-    assert account_policy.member_engine_allowlist() == {"kimi", "plain", "math_harness"}
+    assert account_policy.member_engine_allowlist() == {"kimi", "plain", "math_harness", "readability"}
     assert account_policy.member_engine_error({"id": 9}, "analyze") == "Analyze is turned off on this site"
     monkeypatch.delenv("AGENT_MONITOR_ANALYZE_ENABLED")
+    # So does the Readability one.
+    monkeypatch.setenv("AGENT_MONITOR_READABILITY_ENABLED", "0")
+    assert account_policy.member_engine_allowlist() == {"kimi", "plain", "math_harness", "analyze"}
+    assert account_policy.member_engine_error({"id": 9}, "readability") == "Readability is turned off on this site"
+    monkeypatch.delenv("AGENT_MONITOR_READABILITY_ENABLED")
     # Public mode gives every account the server's keys, so "own key" fails.
     monkeypatch.setenv("AGENT_MONITOR_PUBLIC", "1")
-    assert account_policy.member_engine_allowlist() == {"kimi", "plain", "analyze"}
+    assert account_policy.member_engine_allowlist() == {"kimi", "plain", "analyze", "readability"}
 
 
 def test_member_refusals_say_why_each_engine_is_unavailable(monkeypatch):
@@ -277,7 +286,7 @@ def test_member_may_start_tool_free_engines_but_not_local_harnesses(member_conso
         )
 
     assert refused[0] == 403, refused[2]
-    assert json.loads(refused[2])["allowed_engines"] == ["analyze", "kimi", "math_harness", "plain"]
+    assert json.loads(refused[2])["allowed_engines"] == ["analyze", "kimi", "math_harness", "plain", "readability"]
     assert accepted[0] == 200, accepted[2]
     assert [call["engine"] for call in member_console["started"]] == ["kimi"]
 

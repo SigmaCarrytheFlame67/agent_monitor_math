@@ -597,6 +597,136 @@ when the server offers it.
 | `AGENT_MONITOR_ANALYZE_API_TIMEOUT` | 300 s (630 s on sponsored Kimi) |
 | `AGENT_MONITOR_ANALYZE_GITHUB_TOKEN` | unset |
 
+## Readability runs
+
+Readability rewrites an existing manuscript (a link, pasted text or uploads)
+so that a chosen audience can follow it, keeping every statement and
+argument, and checks each rewritten part against the original with an
+independent model call. The runner is
+`agent_monitor/runners/readability_runner.py`; it reads
+`readability/request.json` (written by `jobs.py` with
+`agent_monitor.readability.request`) and reuses Analyze's ingest, its
+sandboxed parsers and the same response-only turn machinery and routes. The
+console offers it as the fourth mode: `POST /api/runs` with
+`run_kind: "readability"` (engine `readability`, `modes: ["readability"]` in
+the listing, with a per-viewer `readability` policy).
+
+- **Request.** `{run_kind: "readability", engine: "readability", model,
+  auth_route, reasoning_effort, speed_mode, source: {url} | {text, format?} |
+  attachments: [{name, data}], readability: {audience: "research" |
+  "graduate" | "undergraduate", focus: "≤ 2,000 characters"}, project_id?,
+  project_task?}`. The sources follow Analyze's rules by role (guests:
+  arXiv, GitHub and openai/math links, a paste of at most 20,000 characters,
+  the text-only guest uploads; accounts also HTTPS PDF/TeX/zip links, pastes
+  of 400,000 characters and PDF or archive uploads). The run list shows
+  "Readability · <title>"; a project's task becomes the focus.
+- **Routes.**
+
+  | Role | Route | Parts / calls / wall clock |
+  |---|---|---|
+  | guest | sponsored Kimi K3 only | 6 / 16 / 2,400 s |
+  | member | sponsored Kimi K3, or its own Kimi key (Kimi K3 only; never a subscription or Max) | sponsored 12 / 30 / 3,600 s; own key 40 / 90 / 3,600 s |
+  | admin | also its own Kimi key, or a Codex or Claude Code account (response-only, tool-free, one call in flight) | 120 / 300 / 14,400 s |
+
+  On an API key Readability runs Kimi K3 only (another provider's model is
+  refused, by `start_job` and by the runner); Max is refused. A sponsored run
+  is also held to 150 calls and 5,400 s. Guests start one readability run
+  per hour (three per client network) on top of the guest run limits;
+  members count against the member run limits (2 at once, 12 per hour).
+- **Sponsored capacity.** Readability shares Analyze's sponsored pool
+  (`AGENT_MONITOR_ANALYZE_SPONSORED_*`, the same daily count file): a run
+  holds the key `<run id>` and counts as one sponsored start. A question
+  holds `<run id>#ask` while it is answered but never uses up the
+  manuscript starts: it counts against the day's sponsored questions
+  (`asks` in the same file, guests at most half of them). Refusals name
+  Readability ("Sponsored Readability is busy …", "… at today's limit …",
+  "Sponsored questions are at today's limit …"). Credentials are issued
+  under the broker's `math_harness` scope.
+- **Stages.** 1 Ingest (`readability/source/`, `manuscript.json`,
+  `segments.json` as Analyze segments, and `original.txt`: the manuscript in
+  reading order; for TeX the root file with its `\input`/`\include`/`\subfile`
+  closure inlined, comments and `\iffalse` blocks removed, the body only; an
+  included file that is a document of its own, such as a subfile or a
+  standalone figure, gives its body only, and text after an
+  `\end{document}` is left out with a warning in `manuscript.json`, as is
+  any result the parser found outside the text that was read), 2 Guide
+  (one call: what the manuscript shows, its key idea, roadmap, notation and
+  terms, the role and importance of each result; a guide that fails becomes a
+  deterministic outline), 3 Rewrite (one call per part, in waves; parts
+  follow top-level sections, and the pages of a PDF fill each part in turn,
+  at most 30,000 characters of source, 12,000 on guest and sponsored runs;
+  the bibliography is never rewritten), 4 Check
+  (one independent call per rewritten part; outside guest and sponsored
+  runs, a part with major problems is rewritten once more and checked
+  again), 5 Publish (`readable.md`, `paper_map.json`, `notation.json`,
+  `guide.json`, `check.json`, and `receipt.json` written last).
+- **Budget.** The plan keeps a check for every part it rewrites: parts past
+  the part cap or the call budget are not rewritten, and `readable.md` shows
+  them in their original form, marked; nothing is dropped silently. A
+  rewrite must carry one `[[result:<id>]]` anchor per result its part holds;
+  one that only misses an anchor is accepted after its format reminder and
+  marked as a coverage issue.
+- **Statuses.** Each part is `faithful`, `issues` (the check found problems
+  that change the meaning; `readable.md` opens the part with a
+  "⚠ Check" blockquote), `unchecked` or `not-rewritten`. The counts
+  (receipt `parts`, the run record's summary, the provenance note) cover the
+  parts meant to be rewritten; the bibliography, kept as in the original, is
+  counted apart as `kept`. A stop publishes the parts whose rewrite had
+  already come back, unchecked. The checks are a model's judgement: the
+  receipt says `certificate: false`, and `readable.md` opens with a
+  provenance note (which also says when the text was extracted from a PDF,
+  so formulas may be garbled).
+- **Run record.** `run_kind: "readability"` and `run["readability"]`
+  (`agent_monitor.readability.record.run_block`: source card, caps,
+  audience, focus, summary), plus `ask` (a question in flight), `asks` (the
+  last 50 with their answers), `asks_started` and `ask_usage`. Success is exit
+  0 with `readability/readable.md` and `readability/receipt.json`; nothing is
+  promoted to `proof.md`, no derived-views pipeline starts, the library and
+  DAG memory are never injected, and a readability run never becomes shared
+  DAG memory. Continue, chat, proof editing, Lean actions, model-built DAGs
+  and compilation (`/pdf`, `final.pdf`, `final_latex`) are refused.
+- **HTTP API.** `GET /api/run/<id>` carries `sandbox_preview` with
+  `kind: "readability"` (the readable version, or the progress notes while
+  it runs, the parts and their checks, notation, macros, `original_path`;
+  at most 400,000 characters of the readable version, cut before a part
+  with a note saying so, as in a shared link).
+  `GET /api/run/<id>/proof_graph?kind=paper-map` returns the paper map
+  (results with label, statement, section, importance 1-5, role and part;
+  dependencies with `kind` proof or statement and provenance ref, inferred or
+  model). The owner reads `readability/original.txt` and the stored source
+  through `/api/workspace/<id>/file`. A shared snapshot holds the readable
+  version without the parts shown in their original form, the paper map, the
+  notation and the check summary; never `readability/source/**` or the
+  original text.
+- **Questions.** `POST /api/run/<id>/readability/ask {question (≤ 2,000
+  characters), selection? (≤ 4,000), view: "readable" | "original",
+  node_id?}` answers in the background (202 `{ask_id}`) with one call
+  (stage `ask`) on the run's own route: `readability_runner.py --ask <id>`
+  reads `readability/asks/<id>.json` and writes `<id>.reply.json`. The
+  context is the part holding the selected passage (else the selected
+  result's part, else the guide alone). One question at a time per run;
+  guests 3 per run and 6 per hour (12 per client network), members 30 per
+  hour, administrators 120. Answers, like rewrites, are refused when they
+  carry raw HTML outside math.
+  Project members read the answers but may not ask. Each call is booked in
+  the usage ledger as stage `ask`; a question a restart left running becomes
+  `interrupted`, and an in-flight question defers an automatic deploy.
+- **Exit status.** 0 published, 2 configuration, 143 stopped (what had
+  settled is published), 1 failed (also when no part could be rewritten;
+  what exists is still published).
+
+| Variable | Default |
+|---|---|
+| `AGENT_MONITOR_READABILITY_ENABLED` | on |
+| `AGENT_MONITOR_READABILITY_GUESTS` | as `AGENT_MONITOR_ANALYZE_GUESTS` |
+| `READABILITY_CMD` | unset (an override removes Readability from guests and members) |
+| `AGENT_MONITOR_READABILITY_<PROFILE>_MAX_PARTS`, `_MAX_CALLS`, `_MAX_SECONDS` (`GUEST`, `MEMBER_SPONSORED`, `MEMBER_OWN_KEY`, `ADMIN`) | 6/16/2400, 12/30/3600, 40/90/3600, 120/300/14400 (ceilings 120/300/14400) |
+| `AGENT_MONITOR_READABILITY_CONCURRENCY` | 3 (sponsored and guest at most 2, subscriptions 1) |
+| `AGENT_MONITOR_READABILITY_API_TIMEOUT` | 300 s (630 s on sponsored Kimi) |
+| `AGENT_MONITOR_READABILITY_WATCHDOG_SECONDS` | set per run: its deadline + one call + 300 s |
+| `AGENT_MONITOR_READABILITY_SPONSORED_ASKS_PER_DAY` | 200 sponsored questions per UTC day (0 turns them off) |
+| `AGENT_MONITOR_READABILITY_GUEST_SPONSORED_ASKS_PER_DAY` | half of the above |
+
 ## Research atlas and shared memory
 
 The Problems catalogue at `/problems` (`/research/open-problems.json`, schema 3)

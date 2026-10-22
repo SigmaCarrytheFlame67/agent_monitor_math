@@ -152,15 +152,17 @@ def _write_json(path: Path, value: Any) -> None:
 
 
 @contextmanager
-def analysis_lock(analysis: Path) -> Iterator[None]:
-    """One writer at a time for a run's ``analysis`` folder."""
+def analysis_lock(analysis: Path, *,
+                  busy: str = "Another analysis step is running for this run; try again when it finishes",
+                  ) -> Iterator[None]:
+    """One writer at a time for a run's ``analysis`` (or ``readability``) folder."""
     analysis.mkdir(mode=0o700, parents=True, exist_ok=True)
     descriptor = os.open(analysis / ".lock", os.O_RDWR | os.O_CREAT | os.O_CLOEXEC | getattr(os, "O_NOFOLLOW", 0), 0o600)
     try:
         try:
             fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
         except BlockingIOError:
-            raise AnalyzeError("Another analysis step is running for this run; try again when it finishes") from None
+            raise AnalyzeError(busy) from None
         yield
     finally:
         os.close(descriptor)
@@ -184,14 +186,29 @@ class RouteInfo:
         return self.sponsored or self.guest
 
 
-def configure_route(env: dict[str, str], req: Mapping[str, Any]) -> RouteInfo:
+@dataclass(frozen=True)
+class RouteRules:
+    """What one manuscript mode accepts, and how its refusals name it."""
+
+    mode: str = "Analyze"  # "Max is not available for Analyze"
+    run: str = "analysis"  # "No model was selected for this analysis"
+    runs: str = "analyses"  # "Guest analyses use Kimi K3"
+    model_env: str = "AGENT_MONITOR_ANALYZE_MODEL"
+    # Own API keys: Kimi K3 only (no other provider's model).
+    kimi_only: bool = False
+
+
+ANALYZE_ROUTES = RouteRules()
+
+
+def configure_route(env: dict[str, str], req: Mapping[str, Any], rules: RouteRules = ANALYZE_ROUTES) -> RouteInfo:
     """Select and attest the provider route (mutates ``env`` like kimi_runner:
     a Kimi route never uses a user-settable base or an ambient proxy)."""
     from agent_monitor.runners.kimi_runner import operator_base, sponsored_base
 
     guest = str(env.get("AGENT_MONITOR_GUEST") or "").strip() == "1" or req["role"] == "guest"
     if harness._max_mode(env):
-        raise ConfigError("Max is not available for Analyze; choose one account route")
+        raise ConfigError(f"Max is not available for {rules.mode}; choose one account route")
     use_codex = harness.codex_subscription_enabled(env)
     use_claude = harness.claude_subscription_enabled(env)
     if use_codex or use_claude:
@@ -205,7 +222,7 @@ def configure_route(env: dict[str, str], req: Mapping[str, Any]) -> RouteInfo:
             raise ConfigError(str(exc)) from None
         return RouteInfo(route, "codex_subscription" if use_codex else "claude_subscription", False, guest)
     model = str(
-        env.get("AGENT_MONITOR_ANALYZE_MODEL")
+        env.get(rules.model_env)
         or env.get("MATH_HARNESS_MODEL")
         or env.get("AGENT_MONITOR_SELECTED_MODEL")
         or req.get("model")
@@ -213,14 +230,16 @@ def configure_route(env: dict[str, str], req: Mapping[str, Any]) -> RouteInfo:
         or ""
     ).strip()
     if not model:
-        raise ConfigError("No model was selected for this analysis")
+        raise ConfigError(f"No model was selected for this {rules.run}")
     sponsored = str(env.get("AGENT_MONITOR_SPONSORED_KIMI") or "").strip() == "1"
     if req.get("sponsored") and not sponsored:
         raise ConfigError("The sponsored Kimi route is not configured for this run")
     kimi = model.lower().startswith("kimi")
+    if rules.kimi_only and model != kimi_k3.MODEL_ID:
+        raise ConfigError(f"{rules.runs.capitalize()} on an API key use Kimi K3")
     if sponsored:
         if not kimi or model != kimi_k3.MODEL_ID:
-            raise ConfigError("Sponsored analyses use Kimi K3")
+            raise ConfigError(f"Sponsored {rules.runs} use Kimi K3")
         base = sponsored_base(env.get("KIMI_API_BASE", ""))
         if base is None:
             raise ConfigError("Sponsored Kimi endpoint attestation failed")
@@ -236,7 +255,7 @@ def configure_route(env: dict[str, str], req: Mapping[str, Any]) -> RouteInfo:
         env["KIMI_API_BASE"] = base
         env["NO_PROXY"] = env["no_proxy"] = "*"
     if guest and not kimi:
-        raise ConfigError("Guest analyses use Kimi K3")
+        raise ConfigError(f"Guest {rules.runs} use Kimi K3")
     return RouteInfo(harness.Route("api", model, "api_chat"), "sponsored_kimi" if sponsored else "api_key", sponsored, guest)
 
 
@@ -261,8 +280,29 @@ class _Job:
     turn_job: Any = None
 
 
-class AnalysisRun:
-    """One analysis (or one re-check) of a run workspace."""
+class ManuscriptRun:
+    """What the manuscript modes share (Analyze, and Readability in
+    ``readability_runner``): the attested route and its caps, the model-call
+    context, progress events, and fetching and segmenting the manuscript into
+    the run's folder (``analysis/``, ``readability/``).  A mode sets the class
+    attributes below."""
+
+    LABEL = LABEL
+    STAGES = STAGES
+    FOLDER = "analysis"
+    ROUTES = ANALYZE_ROUTES
+    LIMITS: Any = limits
+    API_TIMEOUT_ENV = "AGENT_MONITOR_ANALYZE_API_TIMEOUT"
+    # What an earlier attempt left in the folder; ingest removes it.
+    STALE_DIRS: tuple[str, ...] = ("source", "nodes")
+    STALE_FILES: tuple[str, ...] = (
+        "manuscript.json", "segments.json", "analysis_graph.json", "report.md", "receipt.json", "pdf_text.txt")
+    # Segmentation announces this pipeline stage (None: it belongs to the
+    # stage before), may ask the model to locate results the parsers missed,
+    # and refuses a manuscript without results.
+    SEGMENT_STAGE: str | None = "work"
+    MODEL_SEGMENTS = True
+    REQUIRE_RESULTS = True
 
     def __init__(
         self,
@@ -277,13 +317,13 @@ class AnalysisRun:
         caps_override: Mapping[str, int] | None = None,
     ) -> None:
         self.workspace = Path(workspace).resolve()
-        self.analysis = self.workspace / "analysis"
+        self.folder = self.workspace / self.FOLDER
         self.req = dict(req)
         self.env = dict(env)
-        self.info = configure_route(self.env, self.req)
+        self.info = configure_route(self.env, self.req, self.ROUTES)
         role = "guest" if self.info.guest else self.req["role"]
         self.role = role
-        self.caps = limits.caps_for(
+        self.caps = self.LIMITS.caps_for(
             role,
             sponsored=self.info.sponsored or role == "guest",
             env=self.env,
@@ -297,16 +337,15 @@ class AnalysisRun:
         self.started_at = _utc_now()
         api_timeout = harness._bounded_int(
             self.env,
-            ("AGENT_MONITOR_ANALYZE_API_TIMEOUT", "AGENT_MONITOR_CGM_API_TIMEOUT"),
+            (self.API_TIMEOUT_ENV, "AGENT_MONITOR_CGM_API_TIMEOUT"),
             default=kimi_k3.SPONSORED_TIMEOUT_SECONDS if self.info.sponsored else 300,
             minimum=60,
             maximum=900,
         )
-        bounded = self.info.bounded
         self.ctx = harness._Ctx(
             route=self.info.route,
             budgets=harness.Budgets(max_calls=self.caps.max_calls, max_seconds=self.caps.max_seconds,
-                                    guest=bounded, concurrency=self.caps.concurrency),
+                                    guest=self.info.bounded, concurrency=self.caps.concurrency),
             started=time.monotonic(),
             env=self.env,
             api_timeout=api_timeout,
@@ -315,18 +354,14 @@ class AnalysisRun:
             emitter=self.emitter,
             sponsored_kimi=self.info.sponsored,
             kimi_retries=kimi_k3.RetryAllowance(kimi_k3.SPONSORED_RUN_RETRIES) if self.info.sponsored else None,
-            label=LABEL,
+            label=self.LABEL,
         )
-        self.budget = prompts.BOUNDED_BUDGET if bounded else prompts.FULL_BUDGET
         self.degraded: list[str] = []
         self.stopped = False
         self.provider_failure: str | None = None
         self.permanent_failure = False
         # Why the model could not locate results (named only if none were found).
         self.segment_failure: str | None = None
-        self.check_seq = 0
-        self.attempted = False
-        self.paper_map: dict[str, Any] = {}
 
     # -- events -------------------------------------------------------------
 
@@ -334,31 +369,31 @@ class AnalysisRun:
         self.emitter.deliver(obj)
 
     def note(self, text: str) -> None:
-        self.emit({"type": "item.completed", "item": {"type": "reasoning", "text": f"{LABEL} · {text}"[:2000]}})
+        self.emit({"type": "item.completed", "item": {"type": "reasoning", "text": f"{self.LABEL} · {text}"[:2000]}})
 
     def stage(self, stage_id: str, detail: str = "") -> None:
-        label = STAGES[stage_id]
+        label = self.STAGES[stage_id]
         self.emit({"type": "pipeline.stage", "stage": stage_id, "label": label, "detail": detail[:200]})
         self.note(label + (f" · {detail}" if detail else ""))
 
     def check_stop(self) -> None:
         if self.cancel.is_set():
-            raise harness.RunCancelled("the analysis was stopped")
+            raise harness.RunCancelled(f"the {self.ROUTES.run} was stopped")
 
-    # -- stages -------------------------------------------------------------
+    # -- ingest and segmentation -----------------------------------------------
 
     def ingest(self) -> sources.Bundle:
         source = self.req["source"]
         self.stage("scaffold", {"url": "link", "paste": "pasted text", "upload": "uploaded files"}[source["kind"]])
-        for name in ("source", "nodes"):
-            shutil.rmtree(self.analysis / name, ignore_errors=True)
-        for name in ("manuscript.json", "segments.json", "analysis_graph.json", "report.md", "receipt.json", "pdf_text.txt"):
-            (self.analysis / name).unlink(missing_ok=True)
+        for name in self.STALE_DIRS:
+            shutil.rmtree(self.folder / name, ignore_errors=True)
+        for name in self.STALE_FILES:
+            (self.folder / name).unlink(missing_ok=True)
         remaining = max(10.0, min(safe_fetch.BUNDLE_SECONDS, self.ctx.deadline - time.monotonic()))
         try:
             bundle = sources.fetch_bundle(
                 source,
-                self.analysis / "source",
+                self.folder / "source",
                 workspace=self.workspace,
                 role=self.role,
                 fetcher=self.fetcher,
@@ -382,7 +417,8 @@ class AnalysisRun:
         return bundle
 
     def segment(self, bundle: sources.Bundle) -> tuple[dict[str, Any], dict[str, Any]]:
-        self.stage("work")
+        if self.SEGMENT_STAGE:
+            self.stage(self.SEGMENT_STAGE)
         files = bundle.files()
         fmt = sources.bundle_format(files)
         segments: dict[str, Any] | None = None
@@ -390,13 +426,14 @@ class AnalysisRun:
         fallback_text = ""
         fallback_file = ""
         latex_statements = 0
+        stopped = f"the {self.ROUTES.run} was stopped"
         # Every parser runs in a resource-limited child; Stop ends it at once.
         if fmt == "tex":
-            temporary = self.analysis / ".segments-tex.json"
+            temporary = self.folder / ".segments-tex.json"
             try:
                 segments = latex_structure.run_sandboxed(bundle.root, temporary, cancel=self.cancel)
             except latex_structure.SandboxCancelled:
-                raise harness.RunCancelled("the analysis was stopped") from None
+                raise harness.RunCancelled(stopped) from None
             except latex_structure.ParserUnavailable as exc:
                 raise ConfigError(f"{exc}; please tell the operator") from None
             except latex_structure.LatexStructureError as exc:
@@ -427,18 +464,21 @@ class AnalysisRun:
         elif fmt == "pdf":
             pdf = next(item for item in files if item["role"] == "pdf")
             try:
-                segments = text_structure.pdf_document(bundle.root / pdf["path"], self.analysis / "pdf_text.txt",
+                segments = text_structure.pdf_document(bundle.root / pdf["path"], self.folder / "pdf_text.txt",
                                                        file=pdf["path"], cancel=self.cancel)
             except latex_structure.SandboxCancelled:
-                raise harness.RunCancelled("the analysis was stopped") from None
+                raise harness.RunCancelled(stopped) from None
             except latex_structure.ParserUnavailable as exc:
                 raise ConfigError(f"{exc}; please tell the operator") from None
             except text_structure.TextStructureError as exc:
                 raise AnalyzeError(str(exc)) from None
             fallback_file = pdf["path"]
-            fallback_text = "\n".join(_read_capped(self.analysis / "pdf_text.txt").split("\n" + text_structure.PAGE_MARK + "\n"))
+            fallback_text = "\n".join(_read_capped(self.folder / "pdf_text.txt").split("\n" + text_structure.PAGE_MARK + "\n"))
         else:
             raise AnalyzeError("The source has no TeX, Markdown, text or PDF file to analyze")
+        if segments is None and not self.REQUIRE_RESULTS:
+            # No structure at all: the manuscript is still read as running text.
+            segments = text_structure.segment_text("", file=fallback_file, fmt=fmt)
         if segments is None:
             raise AnalyzeError("No theorems, lemmas or other results were found in the source"
                                + (f" ({warnings[0]})" if warnings else ""))
@@ -447,8 +487,8 @@ class AnalysisRun:
         # The model only locates statements when no structure was found: a
         # TeX statement found by the LaTeX parser (with its labels, references
         # and included files) is never traded for model-located quotes.
-        if (not latex_statements and len(segments["nodes"]) < text_structure.MIN_STRUCTURED_NODES
-                and fallback_text.strip()):
+        if (self.MODEL_SEGMENTS and not latex_statements
+                and len(segments["nodes"]) < text_structure.MIN_STRUCTURED_NODES and fallback_text.strip()):
             modelled = self.model_segments(fallback_text, fallback_file, segments.get("format") or fmt)
             if modelled is not None and len(modelled["nodes"]) > len(segments["nodes"]):
                 modelled["warnings"] = segments["warnings"] + modelled["warnings"]
@@ -458,13 +498,13 @@ class AnalysisRun:
                 modelled["macros"] = segments.get("macros") or {}
                 modelled["bibliography"] = segments.get("bibliography") or {}
                 segments = modelled
-        if not segments["nodes"]:
+        if not segments["nodes"] and self.REQUIRE_RESULTS:
             if self.segment_failure:
                 # The model's provider failed, which says nothing about the manuscript.
                 raise AnalyzeError(f"The results in the source could not be located: {self.segment_failure}")
             raise AnalyzeError("No theorems, lemmas or other results were found in the source"
                                + (f" ({segments['warnings'][0]})" if segments["warnings"] else ""))
-        _write_json(self.analysis / "segments.json", segments)
+        _write_json(self.folder / "segments.json", segments)
         manuscript = bundle.manuscript(root_file=segments.get("root_file"), fmt=segments.get("format") or fmt)
         if not manuscript["title"]:
             manuscript["title"] = segments.get("title") or {
@@ -475,7 +515,7 @@ class AnalysisRun:
         manuscript["parser"] = segments.get("parser")
         if bundle.file_base_url:
             manuscript["file_base_url"] = bundle.file_base_url
-        _write_json(self.analysis / "manuscript.json", manuscript)
+        _write_json(self.folder / "manuscript.json", manuscript)
         edges = sum(1 for edge in segments["edges"] if not edge.get("weak"))
         self.note(f"Segment · {len(segments['nodes'])} statements · {edges} dependencies · {segments.get('parser')}")
         return segments, manuscript
@@ -483,10 +523,10 @@ class AnalysisRun:
     def segment_text_file(self, path: Path, file: str, fmt: str) -> dict[str, Any]:
         """Heading and header segmentation of one text file, in the sandboxed child."""
         try:
-            return text_structure.segment_sandboxed(path, self.analysis / ".segments-text.json", file=file, fmt=fmt,
+            return text_structure.segment_sandboxed(path, self.folder / ".segments-text.json", file=file, fmt=fmt,
                                                     cancel=self.cancel)
         except latex_structure.SandboxCancelled:
-            raise harness.RunCancelled("the analysis was stopped") from None
+            raise harness.RunCancelled(f"the {self.ROUTES.run} was stopped") from None
         except text_structure.TextStructureError as exc:
             raise AnalyzeError(f"The source could not be segmented: {exc}") from None
 
@@ -535,6 +575,66 @@ class AnalysisRun:
                 f"The model looked for statements in the first {max(1, covered // 1000)} KB of "
                 f"{max(1, len(text) // 1000)} KB of text only")
         return document
+
+    # -- failures shared by every model call -------------------------------------
+
+    def _stop_reason(self) -> str:
+        if self.cancel.is_set():
+            return f"the {self.ROUTES.run} was stopped"
+        if self.ctx.deadline_passed():
+            if "time-limit" not in self.degraded:
+                self.degraded.append("time-limit")
+            return f"the {self.ROUTES.run} reached its time limit"
+        if "budget" not in self.degraded:
+            self.degraded.append("budget")
+        return "the model-call budget for this run was used"
+
+    def _failure_reason(self, error: harness.ProviderCallError) -> tuple[str, bool]:
+        """A failed call's public reason (in words that fit every stage), and
+        whether every further call would fail the same way."""
+        failure = getattr(error, "failure", None)
+        message = ""
+        permanent = False
+        if isinstance(failure, kimi_k3.CallFailure):
+            message = kimi_k3.failure_message(failure, billed=self.ctx.run_processed())
+            permanent = failure.permanent
+        if not message:
+            # A linked Claude Code / Codex account that must sign in again, has
+            # reached its usage limit, or cannot use the model fails every
+            # further call the same way, as does an own API key the provider
+            # rejects or that is out of credit: say why, and start no more checks.
+            cause = error.__cause__
+            kind = getattr(cause, "kind", None)
+            if kind in _SUBSCRIPTION_STOP_KINDS:
+                message = " ".join(str(cause).split())[:400]
+                permanent = True
+            elif kind == "timeout":
+                message = "The model did not answer in time (" + " ".join(str(cause).split())[:200] + ")"
+            elif failure is None and isinstance(cause, harness.APIBackendError):
+                # An own key's provider says why (the key is redacted where it is raised).
+                message = " ".join(str(cause).split())[:400]
+        return message or "The model provider did not answer", permanent
+
+    def _note_failure(self, error: harness.ProviderCallError) -> str:
+        message, permanent = self._failure_reason(error)
+        if permanent:
+            self.permanent_failure = True
+        self.provider_failure = message
+        if "provider-failure" not in self.degraded:
+            self.degraded.append("provider-failure")
+        return message
+
+
+class AnalysisRun(ManuscriptRun):
+    """One analysis (or one re-check) of a run workspace."""
+
+    def __init__(self, workspace: Path, req: Mapping[str, Any], **kwargs: Any) -> None:
+        super().__init__(workspace, req, **kwargs)
+        self.analysis = self.folder
+        self.budget = prompts.BOUNDED_BUDGET if self.info.bounded else prompts.FULL_BUDGET
+        self.check_seq = 0
+        self.attempted = False
+        self.paper_map: dict[str, Any] = {}
 
     # -- checks ---------------------------------------------------------------
 
@@ -733,17 +833,6 @@ class AnalysisRun:
             total += calls
         return total
 
-    def _stop_reason(self) -> str:
-        if self.cancel.is_set():
-            return "the analysis was stopped"
-        if self.ctx.deadline_passed():
-            if "time-limit" not in self.degraded:
-                self.degraded.append("time-limit")
-            return "the analysis reached its time limit"
-        if "budget" not in self.degraded:
-            self.degraded.append("budget")
-        return "the model-call budget for this run was used"
-
     def _settle(self, job: _Job) -> tuple[str, _Job, Any]:
         turn_job = job.turn_job
         error = turn_job.error
@@ -771,41 +860,6 @@ class AnalysisRun:
         if isinstance(error, harness.RunCancelled):
             return ("stopped", job, "the analysis was stopped")
         return ("failed", job, "The check failed")
-
-    def _failure_reason(self, error: harness.ProviderCallError) -> tuple[str, bool]:
-        """A failed call's public reason (in words that fit every stage), and
-        whether every further call would fail the same way."""
-        failure = getattr(error, "failure", None)
-        message = ""
-        permanent = False
-        if isinstance(failure, kimi_k3.CallFailure):
-            message = kimi_k3.failure_message(failure, billed=self.ctx.run_processed())
-            permanent = failure.permanent
-        if not message:
-            # A linked Claude Code / Codex account that must sign in again, has
-            # reached its usage limit, or cannot use the model fails every
-            # further call the same way, as does an own API key the provider
-            # rejects or that is out of credit: say why, and start no more checks.
-            cause = error.__cause__
-            kind = getattr(cause, "kind", None)
-            if kind in _SUBSCRIPTION_STOP_KINDS:
-                message = " ".join(str(cause).split())[:400]
-                permanent = True
-            elif kind == "timeout":
-                message = "The model did not answer in time (" + " ".join(str(cause).split())[:200] + ")"
-            elif failure is None and isinstance(cause, harness.APIBackendError):
-                # An own key's provider says why (the key is redacted where it is raised).
-                message = " ".join(str(cause).split())[:400]
-        return message or "The model provider did not answer", permanent
-
-    def _note_failure(self, error: harness.ProviderCallError) -> str:
-        message, permanent = self._failure_reason(error)
-        if permanent:
-            self.permanent_failure = True
-        self.provider_failure = message
-        if "provider-failure" not in self.degraded:
-            self.degraded.append("provider-failure")
-        return message
 
     def _node_result(self, node: Mapping[str, Any], settled: list[tuple[str, _Job, Any]], *,
                      incomplete: str = "") -> dict[str, Any]:

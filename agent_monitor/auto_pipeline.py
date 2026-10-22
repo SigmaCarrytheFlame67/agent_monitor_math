@@ -209,6 +209,13 @@ def is_analysis_run(run_record: dict[str, Any] | None) -> bool:
     return str(record.get("run_kind") or "") == "analyze" or str(record.get("engine") or "") == "analyze"
 
 
+def is_readability_run(run_record: dict[str, Any] | None) -> bool:
+    """A readability run: a rewrite of someone's manuscript, never a proof,
+    so nothing is derived from it (no DAG, no Lean, no coverage)."""
+    record = run_record or {}
+    return str(record.get("run_kind") or "") == "readability" or str(record.get("engine") or "") == "readability"
+
+
 def formalization_requested(run_record: dict[str, Any] | None) -> bool:
     """False only for a run started as informal only (an analysis by default)."""
     return (run_record or {}).get("formalize") is not False
@@ -364,6 +371,9 @@ def _run_user(
 def _source_signature(workspace: Path, run_record: dict[str, Any] | None) -> str:
     from agent_monitor import proof_graph
 
+    if is_readability_run(run_record):
+        # Its final message is a reading guide, never a proof draft.
+        return ""
     if is_analysis_run(run_record):
         # An analysis has no proof: its derived views come from the published
         # analysis graph, once the runner is done with it.  A report is never
@@ -1511,6 +1521,16 @@ def start(
     engine: str,
 ) -> dict[str, Any]:
     """Start the durable sidecar once for a run and return its initial state."""
+    if str(engine or "").strip().lower() == "readability" or is_readability_run(_run_record(run_id)):
+        # A readability run has no proof: no derived views, no model calls.
+        return {
+            "version": 2,
+            "run_id": run_id,
+            "proof_engine": "readability",
+            "status": "disabled",
+            "detail": "A readability run has no proof to derive views from",
+            "stages": {},
+        }
     if os.environ.get("AGENT_MONITOR_DISABLE_AUTO_PIPELINE", "").strip() == "1":
         # The standalone public Kimi service is deliberately a single bounded
         # proof job.  Its request surface cannot re-enable derived model calls.
