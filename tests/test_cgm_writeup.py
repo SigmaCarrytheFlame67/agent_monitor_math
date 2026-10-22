@@ -1347,6 +1347,164 @@ class WriteupJobsTests(unittest.TestCase):
         self.assertLess(lifetimes["0"], bound)
 
 
+# The proof.md of a live accepted run (cgm-runs/wu-even-kimi-20261022T112750,
+# abridged), published before its written-proof round.
+LIVE_PROOF = """# Proof
+
+This proof is the verified fact closure of the target theorem. Each lemma and the main theorem were accepted one at a time by an independent, response-only model verifier that saw only that statement, its proof, and the statements of the facts it cites. Model-verifier acceptance is not a Lean or other formal certificate.
+
+## Lemma L2 · fact 941ea68438409973
+
+**Uses:** none.
+
+**Statement.**
+
+Let k be a natural number (where natural numbers are 0, 1, 2, ...). Set n = 2k. Then n^2 + n = 2(2k^2 + k), and 2k^2 + k is a natural number.
+
+**Proof.**
+
+Compute using distributivity and commutativity of natural number arithmetic:
+n^2 + n = (2k)^2 + 2k = 4k^2 + 2k = 2(2k^2) + 2(k) = 2(2k^2 + k).
+Since natural numbers are closed under multiplication and addition, 2k^2 + k is a natural number.
+
+## Main theorem · fact 944c01fafffbe05d
+
+**Uses:** Lemma L1 (fact 95f39a5498b2ebea), Lemma L2 (fact 941ea68438409973), Lemma L3 (fact 5b5cf4f3d4ade698).
+
+**Statement.**
+
+Prove that for every natural number n, n^2 + n is even.
+"""
+
+
+class WriteupDerivedViewsTests(unittest.TestCase):
+    """Lean and the DAGs of a signed-in CGM run wait for its written-proof
+    round, which runs on the same account (or sponsored pool), to end."""
+
+    SWITCHES = {"AGENT_MONITOR_CGM_WRITEUP": "1", "AGENT_MONITOR_CGM_WRITEUP_GUESTS": "1"}
+
+    def _workspace(self) -> Path:
+        workspace = Path(self.enterContext(tempfile.TemporaryDirectory()))
+        (workspace / "proof.md").write_text(LIVE_PROOF, encoding="utf-8")
+        return workspace
+
+    def _wait(
+        self, statuses: list[str], *, service: dict[str, str] | None = None, timeout: float = 30, **record
+    ) -> tuple[str, dict, list[str]]:
+        """_wait_for_source on the published proof while the run's record
+        reads ``statuses`` in turn (the last one stays): the signature and
+        record it returns, and the statuses it read."""
+        from agent_monitor import auto_pipeline
+
+        workspace = self._workspace()
+        read: list[str] = []
+
+        def run_record(_run_id: str) -> dict:
+            read.append(statuses[min(len(read), len(statuses) - 1)])
+            return {"run_id": "cgm-run", "engine": "math_harness", "status": read[-1], **record}
+
+        with (
+            patch.dict(os.environ, {**self.SWITCHES, **(service or {})}, clear=True),
+            patch.object(auto_pipeline, "_run_record", side_effect=run_record),
+        ):
+            sig, final = auto_pipeline._wait_for_source("cgm-run", workspace, timeout=timeout, stable_for=0)
+        return sig, final, read
+
+    def test_derived_views_start_once_the_run_has_ended(self) -> None:
+        sig, final, read = self._wait(["running", "running", "finished"])
+        self.assertTrue(sig.startswith("proof.md:"))
+        self.assertEqual((final["status"], read), ("finished", ["running", "running", "finished"]))
+
+    def test_the_round_is_awaited_on_every_route_that_gets_it(self) -> None:
+        cases = (
+            ({}, {"engine": "kimi"}),
+            ({}, {"credential_source": "sponsored_kimi"}),
+            # The console's sponsored service switch is no signed-in run's
+            # route: an administrator's run still gets the round.
+            ({"AGENT_MONITOR_SPONSORED_KIMI": "1", "AGENT_MONITOR_CGM_WRITEUP_GUESTS": "0"}, {}),
+        )
+        for service, record in cases:
+            with self.subTest(service=service, record=record):
+                _sig, final, read = self._wait(["running", "finished"], service=service, **record)
+                self.assertEqual((final["status"], read), ("finished", ["running", "finished"]))
+
+    def test_without_the_round_they_start_from_the_stable_proof_as_before(self) -> None:
+        cases = (
+            ({"AGENT_MONITOR_CGM_WRITEUP": "0"}, {}),
+            ({"AGENT_MONITOR_CGM_WRITEUP_GUESTS": "0"}, {"credential_source": "sponsored_kimi"}),
+            ({}, {"engine": "codex"}),
+        )
+        for service, record in cases:
+            with self.subTest(service=service, record=record):
+                sig, final, read = self._wait(["running", "finished"], service=service, **record)
+                self.assertTrue(sig.startswith("proof.md:"))
+                self.assertEqual((final["status"], read), ("running", ["running"]))
+
+    def test_the_wait_ends_with_its_budget_and_the_proof_is_still_derived(self) -> None:
+        started = time.monotonic()
+        sig, final, _read = self._wait(["running"], timeout=1)
+        self.assertTrue(sig.startswith("proof.md:"))
+        self.assertEqual(final["status"], "running")
+        self.assertLess(time.monotonic() - started, 10)
+        # A guest's run is derived only once it has ended, as before.
+        sig, _final, _read = self._wait(["running"], timeout=1, guest=True)
+        self.assertEqual(sig, "")
+
+    def test_the_pipeline_derives_nothing_while_the_round_runs(self) -> None:
+        from agent_monitor import auto_pipeline
+
+        workspace = self._workspace()
+        auto_pipeline._write_state(workspace, {"status": "running", "stages": {
+            "informal_dag": {"status": "waiting", "detail": "Waiting for a proof draft"},
+            "lean": {"status": "waiting", "detail": "Waiting for a proof draft"},
+            "formal_dag": {"status": "waiting", "detail": "Waiting for Proof.lean"},
+        }})
+        ends = time.monotonic() + 2
+        batches: list[tuple[str, dict]] = []
+
+        def run_record(_run_id: str) -> dict:
+            status = "running" if time.monotonic() < ends else "finished"
+            return {"run_id": "cgm-run", "engine": "math_harness", "status": status,
+                    "auth_route": "claude_subscription"}
+
+        def run_batch(workspace: Path, record: dict, *_args, **_kwargs) -> None:
+            stages = auto_pipeline.load_state(workspace)["stages"]
+            batches.append((record["status"], {name: stage["detail"] for name, stage in stages.items()}))
+
+        with (
+            patch.dict(os.environ, self.SWITCHES, clear=True),
+            patch.object(auto_pipeline, "_run_record", side_effect=run_record),
+            patch.object(auto_pipeline, "_run_user", return_value={"id": 1}),
+            patch.object(auto_pipeline, "_run_batch", side_effect=run_batch),
+        ):
+            auto_pipeline._run("cgm-run", workspace, 1, "opus", "math_harness")
+        # Lean and the DAGs started once the run had ended; meanwhile the
+        # stages that read the proof said what they waited for.
+        waiting = "Waiting for the run's written-proof round to end"
+        self.assertEqual(batches, [("finished", {
+            "informal_dag": waiting, "lean": waiting, "formal_dag": "Waiting for Proof.lean",
+        })])
+        state = auto_pipeline.load_state(workspace)
+        self.assertTrue(state["source_signature"].startswith("proof.md:"))
+        self.assertIn("finished_at", state)
+
+    def test_the_wait_covers_the_round_whatever_the_sponsored_service_switch(self) -> None:
+        from agent_monitor import auto_pipeline, cgm_max
+
+        # The console turns the sponsored service on with this variable
+        # (deploy/ansatze/agent-monitor.service); a signed-in run's runner
+        # never inherits it, so its watchdog includes the full round.
+        service = {"AGENT_MONITOR_SPONSORED_KIMI": "1"}
+        with patch.dict(os.environ, service, clear=True):
+            for engine in ("math_harness", "kimi"):
+                with self.subTest(engine=engine):
+                    watchdog = jobs._cli_timeout_seconds(engine, {"AGENT_MONITOR_CGM_WRITEUP": "1"})
+                    self.assertEqual(watchdog, 5_400 + 300 + 300 + 1_860)
+                    self.assertEqual(auto_pipeline.cgm_run_wait_seconds(engine), watchdog + 300)
+        with patch.dict(os.environ, {**service, "AGENT_MONITOR_CGM_WRITEUP_GUESTS": "0"}, clear=True):
+            self.assertEqual(auto_pipeline.max_run_wait_seconds(), cgm_max.RUN_SECONDS + 3_660 + 600)
+
+
 # A CGM runner double.  "publish": it writes proof.md and then its receipt (a
 # new file, last, as the runner does), holds its written-proof round until
 # SIGTERM, then reports and exits 0.  "hold": it is stopped before publishing
