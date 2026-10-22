@@ -7,7 +7,10 @@ never compiled or executed):
   inlined where each file is pulled in (``latex_structure.resolve_includes``:
   confined to the bundle, bounded in depth, files and bytes), comments and
   ``\\iffalse`` blocks removed, and only the body between ``\\begin{document}``
-  and ``\\end{document}`` kept (the author's macros come from the segmenter);
+  and ``\\end{document}`` kept (the author's macros come from the segmenter).
+  An included file that is a document of its own (a ``\\subfile``, a
+  standalone figure) contributes its body only, as LaTeX reads it; text after
+  an ``\\end{document}``, which LaTeX ignores, is left out with a warning;
 * Markdown and text: the main file, normalized as the segmenter read it;
 * PDF: the text pypdf extracted (formulas may be garbled).
 
@@ -18,9 +21,11 @@ statement.  The text is ``readability/original.txt``.
 Parts follow the manuscript's top-level sections (TeX ``\\part``,
 ``\\chapter``, ``\\section``; Markdown ``#`` and ``##``; PDF pages).  A section
 longer than the part size is split at its subsections, then at paragraphs,
-then at lines; small neighbours are merged.  A ``thebibliography``
-environment (or a Markdown "References" section) is a part of its own that is
-never rewritten.  A short manuscript is one part.
+then at lines; small neighbours are merged, and the pages of a PDF (whose
+breaks carry no structure) fill each part in turn.  Blank lines never make a
+part of their own.  A ``thebibliography`` environment (or a Markdown
+"References" section) is a part of its own that is never rewritten.  A short
+manuscript is one part.
 """
 from __future__ import annotations
 
@@ -109,7 +114,8 @@ class Part:
         return "\n".join(document.lines[self.start:self.end]).strip("\n")
 
     def chars(self, document: Document) -> int:
-        return document.size(self.start, self.end)
+        """Characters of the part's text, as a rewrite is sent it."""
+        return len(self.text(document))
 
 
 # ---------------------------------------------------------------------------
@@ -186,6 +192,8 @@ def tex_document(project: Path, root_file: str | None = None) -> Document:
             children[parent].append((row, column, child))
     lines: list[str] = []
     origins: list[tuple[str, int]] = []
+    # Files with text after an \end{document} (LaTeX ignores it).
+    ignored: set[str] = set()
 
     def emit(text: str, starts: list[int], name: str, begin: int, end: int) -> None:
         if begin >= end:
@@ -199,30 +207,48 @@ def tex_document(project: Path, root_file: str | None = None) -> Document:
         text = texts[path]
         name = path.relative_to(project).as_posix()
         starts = [0] + [index + 1 for index, char in enumerate(text) if char == "\n"]
-        cursor = 0
+        low, high = 0, len(text)
+        # An included file that is a document of its own (a \subfile, a
+        # standalone figure) contributes its body only: its preamble, its
+        # \end{document} and what follows are not read.
+        begin = _BEGIN_DOCUMENT_RE.search(text) if depth else None
+        end = _END_DOCUMENT_RE.search(text, begin.end()) if begin else None
+        if end:
+            low, high = begin.end(), end.start()
+            if text[end.end():].strip():
+                ignored.add(name)
+        cursor = low
         for row, column, child in sorted(children.get(path, ())):
             offset = starts[row] + column if row < len(starts) else len(text)
-            # An include inside a blanked \iffalse block pulls nothing in.
-            if offset < cursor or offset >= len(text) or text[offset] != "\\":
+            # An include inside a blanked \iffalse block, or outside the body
+            # of a document of its own, pulls nothing in.
+            if offset < cursor or offset >= high or text[offset] != "\\":
                 continue
             emit(text, starts, name, cursor, offset)
             if depth < latex_structure.MAX_INCLUDE_DEPTH:
                 expand(child, depth + 1)
             cursor = max(offset, _command_end(text, offset))
-        emit(text, starts, name, cursor, len(text))
+        emit(text, starts, name, cursor, high)
 
     expand(root, 0)
+    # The main document's \begin and \end{document}: the only ones left (they
+    # may sit in an included header or footer file).
     begin = next((index for index, line in enumerate(lines) if _BEGIN_DOCUMENT_RE.search(line)), None)
     if begin is not None:
         lines[begin] = lines[begin][_BEGIN_DOCUMENT_RE.search(lines[begin]).end():]
         end = next((index for index in range(begin, len(lines)) if _END_DOCUMENT_RE.search(lines[index])), None)
         if end is not None:
-            lines[end] = lines[end][:_END_DOCUMENT_RE.search(lines[end]).start()]
+            match = _END_DOCUMENT_RE.search(lines[end])
+            lines[end], tail = lines[end][:match.start()], lines[end][match.end():]
+            ignored.update(name for (name, _row), text in zip(origins[end:], [tail, *lines[end + 1:]]) if text.strip())
             lines, origins = lines[:end + 1], origins[:end + 1]
         lines, origins = lines[begin:], origins[begin:]
     warnings = []
     if missing:
         warnings.append("Some included files were not found or were refused: " + ", ".join(sorted(set(missing))[:12]))
+    if ignored:
+        warnings.append("Text after \\end{document}, which LaTeX ignores, was not read: "
+                        + ", ".join(sorted(ignored)[:12]))
     return _capped(Document("tex", lines, origins, warnings))
 
 
@@ -342,18 +368,30 @@ def split_parts(document: Document, nodes: list[Mapping[str, Any]], *, target: i
         cuts = [] if kind == "references" else _cuts(document, low, high, target)
         pieces.extend((piece_low, piece_high, kind) for piece_low, piece_high in zip([low] + cuts, cuts + [high]))
     small = target // SMALL_PART_SHARE
+    # PDF page breaks carry no structure: pages fill a part in turn.
+    greedy = document.format == "pdf"
     merged: list[list[Any]] = []
+    lead: int | None = None
     for low, high, kind in pieces:
-        if merged and kind == "text" and not any(line.strip() for line in document.lines[low:high]):
-            merged[-1][1] = high  # blank lines are not a part of their own
+        if kind == "text" and not any(line.strip() for line in document.lines[low:high]):
+            # Blank lines are not a part of their own: they end the part
+            # before them, or open the first one.
+            if merged:
+                merged[-1][1] = high
+            elif lead is None:
+                lead = low
             continue
+        if lead is not None:
+            low, lead = lead, None
         if merged and kind == "text" and merged[-1][2] == "text":
             last_low, last_high, _kind = merged[-1]
             size, last = document.size(low, high), document.size(last_low, last_high)
-            if size + last <= target and (size < small or last < small):
+            if size + last <= target and (greedy or size < small or last < small):
                 merged[-1][1] = high
                 continue
         merged.append([low, high, kind])
+    if lead is not None:
+        merged.append([lead, count, "text"])  # a manuscript of blank lines
     parts = [Part(index, _title(document, low, high, kind, index), low, high, kind)
              for index, (low, high, kind) in enumerate(merged, 1)]
     located = sorted((position, node["id"]) for node in nodes

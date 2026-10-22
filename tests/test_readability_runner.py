@@ -11,10 +11,12 @@ import base64
 import io
 import json
 import os
+import random
 import re
 import subprocess
 import sys
 import threading
+import time
 import zipfile
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -182,8 +184,9 @@ def test_a_tex_paper_is_rewritten_checked_and_published(tmp_path, model):
     assert receipt["schema"] == "ansatze-readability-receipt-v1" and receipt["certificate"] is False
     assert receipt["prompt_pack_sha256"] == prompts.PROMPT_PACK_SHA256 and receipt["guide"] == "model"
     assert receipt["route"] == "api_key" and receipt["audience"] == "graduate" and receipt["stopped"] is False
-    assert receipt["parts"] == {"total": 2, "rewritten": 1, "faithful": 1, "issues": 0, "unchecked": 0,
-                                "not_rewritten": 1}
+    # The bibliography is kept as in the original: counted apart, never "not rewritten".
+    assert receipt["parts"] == {"total": 1, "rewritten": 1, "faithful": 1, "issues": 0, "unchecked": 0,
+                                "not_rewritten": 0, "kept": 1}
     assert receipt["source_bundle_sha256"] == load(tmp_path, "manuscript.json")["bundle_sha256"]
     # One guide, one rewrite and one check: the bibliography is never sent.
     assert fake.kinds() == ["guide", "rewrite", "check"] and receipt["calls"] == 3
@@ -197,7 +200,7 @@ def test_a_tex_paper_is_rewritten_checked_and_published(tmp_path, model):
     assert manuscript["macros"] == {"\\Z": "\\mathbb{Z}"} and manuscript["bytes"] == len(original.encode())
     text = (folder / "readable.md").read_text()
     assert text.startswith("# Sums of evens — Readable version\n\n> **Readable version** for graduate students")
-    assert "1 of 2 parts faithful, 0 with issues (marked), 0 unchecked, 1 not rewritten (marked)" in text
+    assert "1 of 1 parts faithful, 0 with issues (marked), 0 unchecked. This is not a certificate" in text
     assert "## At a glance" in text and "**Key idea.** Write each even number as twice an integer." in text
     for node in ("thm:main", "lem:rep", "lem:sum"):
         assert f"\n\n[result:{node}]: #\n\n" in text and f"[[result:{node}]]" not in text
@@ -220,7 +223,7 @@ def test_a_tex_paper_is_rewritten_checked_and_published(tmp_path, model):
         "readability/guide.json", "readability/check.json", "readability/receipt.json"]
     assert items[0]["text"].startswith("Ansatz Readability · kimi-k3 via api_key · up to 120 parts")
     assert items[-1]["type"] == "agent_message" and items[-1]["text"].startswith(
-        "Ansatz Readability completed · 1 of 2 parts rewritten · 1 faithful")
+        "Ansatz Readability completed · 1 of 1 parts rewritten · 1 faithful")
     notes = [item.get("text", "") for item in items if item["type"] == "reasoning"]
     assert "Readability · Check · part 1 (Introduction) · faithful" in notes
     assert "sk-kimi-test-key" not in json.dumps(events)
@@ -271,6 +274,80 @@ def test_markdown_paste_and_upload_bundles_are_read_in_order(tmp_path, model):
     assert load(workspace, "check.json")["parts"][0]["nodes"] == ["thm:main", "lem:rep", "lem:sum"]
 
 
+SUBFILE = r"""\documentclass[main.tex]{subfiles}
+\begin{document}
+\section{Chapter %(name)s}
+%(body)s
+\end{document}
+Leftover notes of chapter %(name)s.
+"""
+BOOK = r"""\documentclass{book}
+\usepackage{subfiles}
+\usepackage{standalone}
+\newtheorem{theorem}{Theorem}
+\newtheorem{lemma}[theorem]{Lemma}
+\begin{document}
+\subfile{chap1}
+\subfile{chap2}
+\section{Closing}
+FINAL WORDS OF THE BOOK.
+\end{document}
+"""
+
+
+def test_included_documents_of_their_own_add_their_body_and_cut_nothing_off(tmp_path, model):
+    fake = model()
+    archive = io.BytesIO()
+    with zipfile.ZipFile(archive, "w") as bundle:
+        bundle.writestr("main.tex", BOOK)
+        bundle.writestr("chap1.tex", SUBFILE % {"name": "one", "body": (
+            "\\begin{lemma}\\label{lem:one} FIRST LEMMA. \\end{lemma}\n"
+            "\\begin{figure}\\input{fig}\\end{figure}\nAFTER THE FIGURE.")})
+        bundle.writestr("chap2.tex", SUBFILE % {"name": "two", "body": (
+            "\\begin{theorem}\\label{thm:two} CHAPTER TWO THEOREM, by Lemma~\\ref{lem:one}. \\end{theorem}")})
+        bundle.writestr("fig.tex", "\\documentclass{standalone}\n\\usepackage{tikz}\n\\begin{document}\n"
+                                   "\\begin{tikzpicture}\\draw (0,0) -- (1,1);\\end{tikzpicture}\n\\end{document}\n")
+    batch = attachments.validate([{"name": "book.zip", "data": base64.b64encode(archive.getvalue()).decode()}],
+                                 analyze=True)
+    saved = attachments.save(tmp_path, batch)
+    req = write_request(tmp_path, source={"kind": "upload", "attachments": [item["id"] for item in saved]})
+    outcome = run(tmp_path, req, kimi_env())
+    original = (tmp_path / "readability" / "original.txt").read_text()
+    # Each included document gives its body, and the book reads on after it.
+    for text in ("FIRST LEMMA", "\\draw (0,0)", "AFTER THE FIGURE", "CHAPTER TWO THEOREM", "FINAL WORDS OF THE BOOK"):
+        assert text in original, text
+    assert "\\documentclass" not in original and "\\begin{document}" not in original
+    assert "\\end{document}" not in original and "Leftover notes" not in original
+    assert {node["id"]: node["part"] for node in load(tmp_path, "paper_map.json")["nodes"]} == {
+        "lem:one": 1, "thm:two": 1}
+    rewrite = next(call["user"] for call in fake.calls if call["kind"] == "rewrite")
+    assert listed(rewrite) == ["lem:one", "thm:two"] and "FINAL WORDS OF THE BOOK" in rewrite
+    assert outcome["counts"]["faithful"] == 1
+    warnings = load(tmp_path, "manuscript.json")["warnings"]
+    assert "Text after \\end{document}, which LaTeX ignores, was not read: chap1.tex, chap2.tex" in warnings
+
+
+def test_the_main_document_may_open_and_close_in_included_files(tmp_path):
+    root = tmp_path / "src"
+    root.mkdir()
+    (root / "main.tex").write_text("\\input{header}\n\\section{S}\nBODY\n\\input{footer}\n")
+    (root / "header.tex").write_text("\\documentclass{article}\n\\newcommand{\\x}{y}\n\\begin{document}\nHEADER\n")
+    (root / "footer.tex").write_text("FOOTER\n\\end{document}\nIGNORED TAIL\n")
+    doc = document.tex_document(root, "main.tex")
+    assert [line for line in doc.lines if line.strip()] == ["HEADER", "\\section{S}", "BODY", "FOOTER"]
+    assert doc.warnings == ["Text after \\end{document}, which LaTeX ignores, was not read: footer.tex"]
+
+
+def test_results_outside_the_text_that_was_read_are_named(tmp_path, model):
+    model()
+    text = PAPER.replace("\\end{document}\n", "\\end{document}\n\\begin{theorem}\\label{thm:late} Late. \\end{theorem}\n")
+    run(tmp_path, write_request(tmp_path, text=text), kimi_env())
+    warnings = load(tmp_path, "manuscript.json")["warnings"]
+    assert "Results outside the text that was read, so not rewritten: Theorem 2.3" in warnings
+    assert "Text after \\end{document}, which LaTeX ignores, was not read: pasted.tex" in warnings
+    assert {node["id"]: node["part"] for node in load(tmp_path, "paper_map.json")["nodes"]}["thm:late"] is None
+
+
 def test_a_link_is_fetched_through_the_injected_fetcher(tmp_path, model):
     model()
     sha = "e" * 40
@@ -295,7 +372,7 @@ def test_a_manuscript_without_numbered_results_is_still_rewritten(tmp_path, mode
     fake = model()
     outcome = run(tmp_path, write_request(tmp_path, text="We show that 4 is even.\n\nIndeed 4 = 2 * 2."), kimi_env())
     assert outcome["counts"] == {"total": 1, "rewritten": 1, "faithful": 1, "issues": 0, "unchecked": 0,
-                                 "not_rewritten": 0}
+                                 "not_rewritten": 0, "kept": 0}
     assert "none: this part has no numbered results" in fake.calls[1]["user"]
     assert load(tmp_path, "paper_map.json")["nodes"] == []
 
@@ -349,6 +426,48 @@ def test_a_reply_cut_off_before_its_end_line_is_not_accepted(tmp_path, model):
     assert parser("=== READABLE ===\n[[result:a]]\n[result:a]: #\n=== END ===")["markdown"].endswith("\\[result:a]: #")
 
 
+@pytest.mark.parametrize("html", [
+    "<img/src=x onerror=alert(1)>", "<img src=x\nonerror=alert(1)>", "<svg/onload=alert(1)>",
+    "<image src=x onerror=alert(1)>", "<math><mi>x</mi></math>", "<xmp>x</xmp>", "<a href=//example.org/x>y</a>",
+    "<details open ontoggle=alert(1)>", "<custom-tag data-x=1>", "<sup>2</sup>", "</div>", "<br/>", "<!-- hidden -->",
+    "<?php x ?>", "<img alt=\"<\" src=x onerror=alert(1)>", "<x:y onclick=alert(1)>",
+    # Setting math aside never lets an active element or a handler through.
+    "$<img src=x onerror=alert(1)>$", "$x <a onmouseover=alert(1)>y</a>$", "$$<script>x</script>$$",
+    # A line that opens an HTML block, in a quote or a list item too.
+    "\n<div\nonmouseover=alert(1)\n", "\n> <div class=x\n", "\n- <p\n",
+])
+def test_raw_html_is_refused_in_rewrites_and_answers(html):
+    with pytest.raises(parse.ParseError, match=r"raw HTML is not allowed in the readable part \(use Markdown"):
+        parse.RewriteParser([])(f"=== READABLE ===\n## A part\n\nText {html} more.\n=== END ===")
+    with pytest.raises(parse.ParseError, match="raw HTML is not allowed in the answer"):
+        parse.parse_answer(f"Text {html} more.", node_ids=[])
+
+
+@pytest.mark.parametrize("text", [
+    "The cyclic group $G = <a>$ has order $n$.", "Let $H = <p>$ in $\\mathbb{Z}$.", "The group $<a | a^n = 1>$.",
+    "Take $x<b>c$.", "$$G = <a, b \\mid ab = ba>$$", "\\(<a>\\) and \\[<b>\\]", "\\begin{align} G &= <a> \\end{align}",
+    "$a<b$ and $x <y$", "For 0<x<1 and n<m.", "a < b and c > d", "See <https://arxiv.org/abs/2101.00001>.",
+    "Note that a<b holds.\n> **Reader's note:** the step uses $a<b$.",
+])
+def test_math_and_plain_comparisons_are_not_html(text):
+    body = f"## A part\n\n{text}"
+    assert parse.RewriteParser([])(f"=== READABLE ===\n{body}\n=== END ===")["markdown"] == body
+    assert parse.parse_answer(text, node_ids=[])["answer"] == text
+
+
+def test_the_html_check_stays_linear_on_hostile_replies():
+    hostile = ["<a b=" + "x/" * 40_000, "\\[" * 40_000, "\\begin{align}" * 8_000, ("$" + "\\" * 60 + "\n") * 500,
+               "<a " + "b/" * 40_000, "<a " + "x " * 40_000, "$" * 80_000]
+    started = time.monotonic()
+    for text in hostile:
+        try:
+            parse.parse_answer(text[:prompts.MAX_ANSWER_CHARS], node_ids=[])
+            parse.RewriteParser([])(f"=== READABLE ===\n{text}\n=== END ===")
+        except parse.ParseError:
+            pass
+    assert time.monotonic() - started < 5
+
+
 def test_major_issues_are_repaired_once_and_checked_again(tmp_path, model):
     verdicts = iter([check_json("unfaithful", [MAJOR]), check_json("faithful")])
     fake = model(check=lambda _user: next(verdicts))
@@ -372,7 +491,7 @@ def test_a_part_that_stays_unfaithful_is_marked_in_the_readable_version(tmp_path
     text = (tmp_path / "readability" / "readable.md").read_text()
     assert "> ⚠ **Check:** the independent check found problems that change the meaning here" in text
     assert "> - **Lemma 2.2:** the hypothesis a, b integers was lost" in text
-    assert "0 of 2 parts faithful, 1 with issues (marked)" in text
+    assert "0 of 1 parts faithful, 1 with issues (marked)" in text
     assert fake.kinds().count("check") == 2
 
 
@@ -505,6 +624,41 @@ def test_a_stop_publishes_what_settled(tmp_path, model):
     assert outcome["stopped"] is True and load(tmp_path, "receipt.json")["stopped"] is True
     statuses = [part["status"] for part in load(tmp_path, "check.json")["parts"]]
     assert statuses[0] == "unchecked" and "not-rewritten" in statuses
+
+
+def test_a_stop_keeps_the_rewrites_that_had_finished_in_its_wave(tmp_path, model, monkeypatch):
+    holder: dict = {}
+    first_done = threading.Event()
+    original_init = runner.ReadabilityRun.__init__
+
+    def remember(self, *args, **kwargs):
+        original_init(self, *args, **kwargs)
+        holder["run"] = self
+
+    monkeypatch.setattr(runner.ReadabilityRun, "__init__", remember)
+
+    def rewrite(user):
+        if "part 1 of" in user:
+            first_done.set()
+            return readable(user)
+        # The other rewrite of the wave is still out when the stop comes,
+        # after the first one has settled.
+        first_done.wait(10)
+        time.sleep(0.6)
+        holder["run"].cancel.set()
+        time.sleep(1.5)
+        return readable(user)
+
+    fake = model(rewrite=rewrite)
+    outcome = run(tmp_path, write_request(tmp_path, text=sections(2, 400)),
+                  kimi_env(AGENT_MONITOR_READABILITY_CONCURRENCY="2"))
+    assert outcome["stopped"] is True and fake.kinds() == ["guide", "rewrite", "rewrite"]
+    parts = [part for part in load(tmp_path, "check.json")["parts"] if part["kind"] == "text"]
+    assert [(part["status"], part["reason"]) for part in parts] == [
+        ("unchecked", "the readability run was stopped"), ("not-rewritten", "the readability run was stopped")]
+    assert outcome["counts"]["rewritten"] == 1 and outcome["counts"]["not_rewritten"] == 1
+    text = (tmp_path / "readability" / "readable.md").read_text()
+    assert "> **Not checked** (the readability run was stopped)" in text and "This part explains the argument." in text
 
 
 def test_a_stop_before_any_rewrite_publishes_nothing(tmp_path, model, monkeypatch):
@@ -774,6 +928,60 @@ def test_parts_follow_sections_and_never_split_a_statement_from_its_anchor(tmp_p
     assert all(part.chars(doc) <= 200 for part in small if part.kind == "text")
     whole = document.split_parts(doc, segments["nodes"], target=30_000)
     assert [(part.title, part.kind) for part in whole] == [("Introduction", "text"), ("References", "references")]
+
+
+def _plain_document(fmt: str, lines: list[str], page_starts=()) -> document.Document:
+    origins = [("doc", index + 1) for index in range(len(lines))]
+    return document._capped(document.Document(fmt, list(lines), origins, page_starts=list(page_starts)))
+
+
+def test_pdf_pages_fill_each_part_in_turn():
+    # Ten pages of 3,600 characters: a bounded run reads three pages a part.
+    lines, starts = [], []
+    for _page in range(10):
+        starts.append(len(lines))
+        lines.extend([("word " * 15).strip()] * 48)
+    doc = _plain_document("pdf", lines, starts)
+    bounded = document.split_parts(doc, [], target=prompts.BOUNDED_PART_CHARS)
+    assert [part.title for part in bounded] == ["Pages 1–3", "Pages 4–6", "Pages 7–9", "Page 10"]
+    assert max(part.chars(doc) for part in bounded) <= prompts.BOUNDED_PART_CHARS
+    assert [part.title for part in document.split_parts(doc, [], target=prompts.PART_CHARS)] == [
+        "Pages 1–8", "Pages 9–10"]
+
+
+def test_blank_lines_never_make_a_part_of_their_own():
+    # Blank lines open the manuscript, and its first section fills a part.
+    lines = ["", "", "\\section{A}"] + ["x" * 1999] * 5 + ["y" * 1987, "\\section{B}", "tail"]
+    parts = document.split_parts(_plain_document("tex", lines), [], target=12_000)
+    assert [(part.title, part.start, part.end) for part in parts] == [("A", 0, 9), ("B", 9, 11)]
+
+
+def test_parts_cover_the_manuscript_in_order_and_fit():
+    rng = random.Random(7)
+    headings = {"tex": ["\\section{S}", "\\subsection{T}", "\\begin{thebibliography}{9}", "\\end{thebibliography}"],
+                "md": ["## Section", "### Subsection", "## References"], "pdf": []}
+    for fmt, marks in headings.items():
+        for _round in range(40):
+            lines = []
+            for _line in range(rng.randint(1, 300)):
+                roll = rng.random()
+                if roll < 0.1:
+                    lines.append("")
+                elif roll < 0.15 and marks:
+                    lines.append(rng.choice(marks))
+                else:
+                    lines.append(" ".join("w" * rng.randint(1, 9) for _ in range(rng.randint(1, 300))))
+            starts = sorted({0, *(rng.randrange(len(lines)) for _ in range(rng.randint(0, 20)))})
+            doc = _plain_document(fmt, lines, starts if fmt == "pdf" else ())
+            if not doc.text.strip():
+                continue
+            for target in (prompts.BOUNDED_PART_CHARS, prompts.PART_CHARS):
+                parts = document.split_parts(doc, [], target=target)
+                assert [part.start for part in parts] == [0] + [part.end for part in parts[:-1]]
+                assert parts[-1].end == len(doc.lines)
+                for part in parts:
+                    if part.kind == "text":
+                        assert part.text(doc).strip() and part.chars(doc) <= target, (fmt, part)
 
 
 def test_readable_markdown_keeps_marks_on_their_own_lines_and_shares_drop_originals():

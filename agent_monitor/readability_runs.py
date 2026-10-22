@@ -17,8 +17,9 @@ told:
   refused.
 * Sponsored capacity is Analyze's pool (``analyze_runs.GATE``): one pool for
   manuscript work, with refusals worded for Readability
-  (:data:`GATE_MESSAGES`); a run holds the key ``<run id>``, a question
-  ``<run id>#ask``.
+  (:data:`GATE_MESSAGES`); a run holds the key ``<run id>`` and counts as a
+  sponsored start, a question holds ``<run id>#ask`` and counts against the
+  day's sponsored questions instead (:data:`ASK_GATE_MESSAGES`).
 * :func:`viewer_policy` is the per-viewer ``readability`` object of the
   engine listing, so the browser offers exactly what the server accepts.
 
@@ -76,6 +77,22 @@ GATE_MESSAGES = GateMessages(
     guest_share_daily=("Sponsored Readability for guests is at today's limit — try tomorrow, or sign in and use "
                        "your own Kimi API key"),
     held="This run already holds a sponsored slot",
+)
+# A question holds a slot of the same pool while it is answered, but counts
+# against the sponsored questions of the day (``analyze_runs.GATE`` with
+# ``daily="asks"``), never against the manuscript runs.
+ASK_DAILY = "asks"
+ASK_GATE_MESSAGES = GateMessages(
+    off="Sponsored questions are turned off on this site",
+    guest_off="Sponsored questions are turned off for guests on this site — sign in to ask",
+    busy="Sponsored Readability is busy ({active} manuscript runs are using it) — ask again in a few minutes",
+    guest_busy="Sponsored Readability is busy ({active} manuscript runs are using it) — ask again in a few minutes",
+    guest_share_busy=("Sponsored Readability for guests is busy ({active} running) — ask again in a few minutes, "
+                      "or sign in"),
+    daily="Sponsored questions are at today's limit — ask again tomorrow",
+    guest_daily="Sponsored questions are at today's limit — ask again tomorrow",
+    guest_share_daily="Sponsored questions for guests are at today's limit — ask again tomorrow, or sign in",
+    held="A question about this run is already being answered",
 )
 
 

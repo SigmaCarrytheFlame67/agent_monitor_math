@@ -203,6 +203,11 @@ class ReadabilityRun(runner.ManuscriptRun):
             raise AnalyzeError(f"The manuscript could not be read: {message}") from None
         if not document.text.strip():
             raise AnalyzeError("The manuscript has no text to make readable")
+        # A result outside the text that was read is never rewritten: say so.
+        unread = [prompts.printed(node) for node in segments.get("nodes") or [] if document.locate(node) is None]
+        if unread:
+            document.warnings.append("Results outside the text that was read, so not rewritten: "
+                                     + ", ".join(dict.fromkeys(unread[:12])))
         runner._write_bytes(self.folder / "original.txt", document.text.encode("utf-8"))
         manuscript.update({
             "schema": MANUSCRIPT_SCHEMA,
@@ -297,7 +302,8 @@ class ReadabilityRun(runner.ManuscriptRun):
         Every call keeps ``follow_up`` calls for what must follow it (a
         rewrite its check) and one for each call still waiting; when retries
         have used too much, the last calls wait for good.  A call that cannot
-        be sent gets the reason."""
+        be sent gets the reason.  On a stop, the calls of the wave that had
+        already finished keep their results (they are published)."""
         pending = list(calls)
         reserve = follow_up * len(calls)
         reason = ""
@@ -316,6 +322,9 @@ class ReadabilityRun(runner.ManuscriptRun):
             for call, limit in zip(wave, harness._turn_limits(len(wave), spare)):
                 try:
                     turn = self.ctx.open_turn(call.stage, limit)
+                except harness.RunCancelled:
+                    self.stopped = True
+                    break
                 except harness._BudgetExhausted:
                     break
                 call.job = harness._TurnJob(turn, partial(
@@ -330,15 +339,15 @@ class ReadabilityRun(runner.ManuscriptRun):
             try:
                 harness._run_turns(self.ctx, [call.job for call in started])
             except harness.RunCancelled:
+                # The unfinished calls were abandoned; the finished ones settle.
                 self.stopped = True
                 reason = self._stop_reason()
-                for call in started:
-                    call.error = reason
-                break
             for call in started:
                 self._settle(call)
                 if call.result is None:
                     reserve -= follow_up  # nothing to follow up
+            if reason:
+                break
         for call in pending:
             call.error = call.error or reason or self._stop_reason()
 
@@ -484,14 +493,17 @@ class ReadabilityRun(runner.ManuscriptRun):
     # -- 5 Publish ---------------------------------------------------------------
 
     def counts(self, outcomes: list[_Outcome]) -> dict[str, int]:
-        statuses = [outcome.status for outcome in outcomes]
+        """The parts meant to be rewritten, by status; the references, kept
+        as in the original by design, are counted apart."""
+        statuses = [outcome.status for outcome in outcomes if outcome.part.kind == "text"]
         return {
-            "total": len(outcomes),
+            "total": len(statuses),
             "rewritten": sum(1 for status in statuses if status != "not-rewritten"),
             "faithful": statuses.count("faithful"),
             "issues": statuses.count("issues"),
             "unchecked": statuses.count("unchecked"),
             "not_rewritten": statuses.count("not-rewritten"),
+            "kept": len(outcomes) - len(statuses),
         }
 
     def receipt(self, segments: Mapping[str, Any], manuscript: Mapping[str, Any],

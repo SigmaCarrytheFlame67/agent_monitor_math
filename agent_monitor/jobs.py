@@ -7255,9 +7255,11 @@ def start_readability_ask(
             )
         if sponsored:
             gate_key = readability_runs.ask_key(run_id)
-            # The guests' share of the sponsored pool follows who asks.
+            # A slot of the sponsored pool, counted among the day's questions
+            # (not its manuscript runs); the guests' share follows who asks.
             analyze_runs.GATE.reserve(gate_key, run_id=run_id, guest=requester_guest,
-                                      messages=readability_runs.GATE_MESSAGES)
+                                      messages=readability_runs.ASK_GATE_MESSAGES,
+                                      daily=readability_runs.ASK_DAILY)
         configured, _route = _continuation_auth_environment(
             run_data=record,
             engine=_READABILITY_ENGINE,

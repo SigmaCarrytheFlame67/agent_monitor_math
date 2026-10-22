@@ -276,8 +276,11 @@ GUEST_READABILITY_RUNS_PER_HOUR = 1
 GUEST_READABILITY_RUNS_PER_CLIENT_PER_HOUR = 3
 _GUEST_READABILITY_WINDOWS: dict[int, deque[float]] = {}
 _GUEST_READABILITY_CLIENT_WINDOWS: dict[str, deque[float]] = {}
-# Questions about readability runs per account and hour (readability_runs.ASKS_PER_HOUR).
+# Questions about readability runs per account and hour (readability_runs.ASKS_PER_HOUR),
+# and guests' questions per client network and hour.
+GUEST_READABILITY_ASKS_PER_CLIENT_PER_HOUR = 12
 _READABILITY_ASK_WINDOWS: dict[int, deque[float]] = {}
+_READABILITY_ASK_CLIENT_WINDOWS: dict[str, deque[float]] = {}
 # Link previews (POST /api/analyze/resolve) fetch metadata from arXiv/GitHub.
 ANALYZE_RESOLVES_PER_HOUR = {"guest": 10, "member": 30, "admin": 120}
 GUEST_ANALYZE_RESOLVES_PER_CLIENT_PER_HOUR = 20
@@ -639,8 +642,9 @@ def _release_guest_readability(user_id: int, client: str | None) -> None:
     _release_guest_mode(_GUEST_READABILITY_WINDOWS, _GUEST_READABILITY_CLIENT_WINDOWS, user_id, client)
 
 
-def _reserve_readability_ask(user: dict[str, Any]) -> tuple[str | None, int]:
-    """Questions about readability runs per account and hour, by role."""
+def _reserve_readability_ask(user: dict[str, Any], client: str | None = None) -> tuple[str | None, int]:
+    """Questions about readability runs per account and hour, by role, and a
+    guest's per client network (``client``) and hour."""
     from agent_monitor import analyze_runs, readability_runs
 
     role = analyze_runs.role_of(user)
@@ -649,19 +653,31 @@ def _reserve_readability_ask(user: dict[str, Any]) -> tuple[str | None, int]:
     user_id = int(user.get("id") or 0)
     with _ANALYZE_LOCK:
         _prune_windows(_READABILITY_ASK_WINDOWS, now - 3600.0)
+        _prune_windows(_READABILITY_ASK_CLIENT_WINDOWS, now - 3600.0)
         retry = _window_full(_READABILITY_ASK_WINDOWS.get(user_id), limit, now, 3600.0)
         if retry:
             return f"You can ask {limit} questions per hour; please try again later", retry
+        if client is not None:
+            retry = _window_full(_READABILITY_ASK_CLIENT_WINDOWS.get(client),
+                                 GUEST_READABILITY_ASKS_PER_CLIENT_PER_HOUR, now, 3600.0)
+            if retry:
+                return "Too many guest questions from your network this hour; please try again later", retry
         _READABILITY_ASK_WINDOWS.setdefault(user_id, deque()).append(now)
+        if client is not None:
+            _READABILITY_ASK_CLIENT_WINDOWS.setdefault(client, deque()).append(now)
     return None, 0
 
 
-def _release_readability_ask(user: dict[str, Any]) -> None:
+def _release_readability_ask(user: dict[str, Any], client: str | None = None) -> None:
     """Return the newest question when the request sent nothing."""
     with _ANALYZE_LOCK:
         window = _READABILITY_ASK_WINDOWS.get(int(user.get("id") or 0))
         if window:
             window.pop()
+        if client is not None:
+            client_window = _READABILITY_ASK_CLIENT_WINDOWS.get(client)
+            if client_window:
+                client_window.pop()
 
 
 def _reserve_guest_recheck(user_id: int, client: str | None) -> tuple[str | None, int]:
@@ -1841,7 +1857,7 @@ def _readability_preview(run_id: str, data: dict) -> dict:
         "audience": str(block.get("audience") or ""),
         "math_fidelity": source.get("math_fidelity"),
         "parts": {key: int(summary.get(key) or 0)
-                  for key in ("parts", "rewritten", "faithful", "issues", "unchecked", "not_rewritten")},
+                  for key in ("parts", "rewritten", "faithful", "issues", "unchecked", "not_rewritten", "kept")},
         "check": parts,
         "notation": notation or {"rows": [], "terms": [], "macros_used": []},
         "macros": macros,
@@ -2665,26 +2681,27 @@ class Handler(RunSharingMixin, ProjectsMixin, ResearchMixin, BaseHTTPRequestHand
                 "login_required": True,
             }))
             return
-        error, retry_after = _reserve_readability_ask(user)
+        client = self._guest_client_key() if user.get("guest") else None
+        error, retry_after = _reserve_readability_ask(user, client)
         if error:
             self._send(429, json.dumps({"error": error}), headers={"Retry-After": str(retry_after)})
             return
         try:
             result = job_manager.start_readability_ask(rid, body if isinstance(body, dict) else {}, user=user)
         except AnalyzeRequestError as exc:
-            _release_readability_ask(user)
+            _release_readability_ask(user, client)
             self._send_analyze_error(exc)
             return
         except FileNotFoundError:
-            _release_readability_ask(user)
+            _release_readability_ask(user, client)
             self._send(404, json.dumps({"error": "run not found"}))
             return
         except ValueError as exc:
-            _release_readability_ask(user)
+            _release_readability_ask(user, client)
             self._send(400, json.dumps({"error": str(exc)}, ensure_ascii=False))
             return
         except Exception as exc:  # noqa: BLE001
-            _release_readability_ask(user)
+            _release_readability_ask(user, client)
             self._send(500, json.dumps({"error": f"The question could not be sent: {exc}"}, ensure_ascii=False))
             return
         self._send(202, json.dumps(result, ensure_ascii=False))

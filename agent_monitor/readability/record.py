@@ -9,7 +9,7 @@ artifacts itself::
                 license, format, warnings, bundle_sha256, math_fidelity},
      "caps": {max_parts, max_calls}, "audience": "graduate", "focus": "...",
      "summary": {parts, rewritten, faithful, issues, unchecked, not_rewritten,
-                 calls, model, route},
+                 kept, calls, model, route},
      "stopped": false,
      "ask": {...the question in flight...}, "asks": [...the last 50...]}
 """
@@ -22,7 +22,9 @@ from agent_monitor.analyze.record import _load
 from agent_monitor.readability import request as readability_request
 
 SCHEMA = "ansatze-readability-v1"
-COUNT_KEYS = ("total", "rewritten", "faithful", "issues", "unchecked", "not_rewritten")
+# ``parts`` (the receipt's ``total``) counts the parts meant to be rewritten;
+# ``kept`` the references, which are kept as in the original.
+COUNT_KEYS = ("total", "rewritten", "faithful", "issues", "unchecked", "not_rewritten", "kept")
 
 
 def summary(receipt: dict[str, Any]) -> dict[str, Any]:

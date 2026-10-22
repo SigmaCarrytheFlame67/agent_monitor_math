@@ -568,18 +568,27 @@ the listing, with a per-viewer `readability` policy).
   members count against the member run limits (2 at once, 12 per hour).
 - **Sponsored capacity.** Readability shares Analyze's sponsored pool
   (`AGENT_MONITOR_ANALYZE_SPONSORED_*`, the same daily count file): a run
-  holds the key `<run id>`, a question `<run id>#ask`. Refusals name
-  Readability ("Sponsored Readability is busy …", "… at today's limit …").
-  Credentials are issued under the broker's `math_harness` scope.
+  holds the key `<run id>` and counts as one sponsored start. A question
+  holds `<run id>#ask` while it is answered but never uses up the
+  manuscript starts: it counts against the day's sponsored questions
+  (`asks` in the same file, guests at most half of them). Refusals name
+  Readability ("Sponsored Readability is busy …", "… at today's limit …",
+  "Sponsored questions are at today's limit …"). Credentials are issued
+  under the broker's `math_harness` scope.
 - **Stages.** 1 Ingest (`readability/source/`, `manuscript.json`,
   `segments.json` as Analyze segments, and `original.txt`: the manuscript in
-  reading order; for TeX the root file with its `\input`/`\include` closure
-  inlined, comments and `\iffalse` blocks removed, the body only), 2 Guide
+  reading order; for TeX the root file with its `\input`/`\include`/`\subfile`
+  closure inlined, comments and `\iffalse` blocks removed, the body only; an
+  included file that is a document of its own, such as a subfile or a
+  standalone figure, gives its body only, and text after an
+  `\end{document}` is left out with a warning in `manuscript.json`, as is
+  any result the parser found outside the text that was read), 2 Guide
   (one call: what the manuscript shows, its key idea, roadmap, notation and
   terms, the role and importance of each result; a guide that fails becomes a
   deterministic outline), 3 Rewrite (one call per part, in waves; parts
-  follow top-level sections, at most 30,000 characters of source, 12,000 on
-  guest and sponsored runs; the bibliography is never rewritten), 4 Check
+  follow top-level sections, and the pages of a PDF fill each part in turn,
+  at most 30,000 characters of source, 12,000 on guest and sponsored runs;
+  the bibliography is never rewritten), 4 Check
   (one independent call per rewritten part; outside guest and sponsored
   runs, a part with major problems is rewritten once more and checked
   again), 5 Publish (`readable.md`, `paper_map.json`, `notation.json`,
@@ -592,10 +601,14 @@ the listing, with a per-viewer `readability` policy).
   marked as a coverage issue.
 - **Statuses.** Each part is `faithful`, `issues` (the check found problems
   that change the meaning; `readable.md` opens the part with a
-  "⚠ Check" blockquote), `unchecked` or `not-rewritten`. The checks are a
-  model's judgement: the receipt says `certificate: false`, and
-  `readable.md` opens with a provenance note (which also says when the text
-  was extracted from a PDF, so formulas may be garbled).
+  "⚠ Check" blockquote), `unchecked` or `not-rewritten`. The counts
+  (receipt `parts`, the run record's summary, the provenance note) cover the
+  parts meant to be rewritten; the bibliography, kept as in the original, is
+  counted apart as `kept`. A stop publishes the parts whose rewrite had
+  already come back, unchecked. The checks are a model's judgement: the
+  receipt says `certificate: false`, and `readable.md` opens with a
+  provenance note (which also says when the text was extracted from a PDF,
+  so formulas may be garbled).
 - **Run record.** `run_kind: "readability"` and `run["readability"]`
   (`agent_monitor.readability.record.run_block`: source card, caps,
   audience, focus, summary), plus `ask` (a question in flight), `asks` (the
@@ -625,7 +638,9 @@ the listing, with a per-viewer `readability` policy).
   reads `readability/asks/<id>.json` and writes `<id>.reply.json`. The
   context is the part holding the selected passage (else the selected
   result's part, else the guide alone). One question at a time per run;
-  guests 3 per run and 6 per hour, members 30 per hour, administrators 120.
+  guests 3 per run and 6 per hour (12 per client network), members 30 per
+  hour, administrators 120. Answers, like rewrites, are refused when they
+  carry raw HTML outside math.
   Project members read the answers but may not ask. Each call is booked in
   the usage ledger as stage `ask`; a question a restart left running becomes
   `interrupted`, and an in-flight question defers an automatic deploy.
@@ -642,6 +657,8 @@ the listing, with a per-viewer `readability` policy).
 | `AGENT_MONITOR_READABILITY_CONCURRENCY` | 3 (sponsored and guest at most 2, subscriptions 1) |
 | `AGENT_MONITOR_READABILITY_API_TIMEOUT` | 300 s (630 s on sponsored Kimi) |
 | `AGENT_MONITOR_READABILITY_WATCHDOG_SECONDS` | set per run: its deadline + one call + 300 s |
+| `AGENT_MONITOR_READABILITY_SPONSORED_ASKS_PER_DAY` | 200 sponsored questions per UTC day (0 turns them off) |
+| `AGENT_MONITOR_READABILITY_GUEST_SPONSORED_ASKS_PER_DAY` | half of the above |
 
 ## Research atlas and shared memory
 

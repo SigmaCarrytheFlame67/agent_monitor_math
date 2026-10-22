@@ -54,7 +54,7 @@ REFERENCE_MARKER = "A. Author, Even numbers."
 _ENV = ("AGENT_MONITOR_READABILITY_ENABLED", "AGENT_MONITOR_READABILITY_GUESTS", "READABILITY_CMD",
         "AGENT_MONITOR_ANALYZE_ENABLED", "AGENT_MONITOR_ANALYZE_GUESTS", "ANALYZE_CMD", "AGENT_MONITOR_CLI_TIMEOUT",
         analyze_runs.DAILY_CAP_ENV, analyze_runs.CONCURRENCY_ENV, analyze_runs.GUEST_DAILY_CAP_ENV,
-        analyze_runs.GUEST_CONCURRENCY_ENV)
+        analyze_runs.GUEST_CONCURRENCY_ENV, analyze_runs.ASK_DAILY_CAP_ENV, analyze_runs.GUEST_ASK_DAILY_CAP_ENV)
 
 
 @pytest.fixture()
@@ -71,7 +71,8 @@ def gate(tmp_path, monkeypatch):
 def readability_console(member_console, gate, monkeypatch):
     monkeypatch.setattr(analyze_runs, "_RESOLVED_TITLES", OrderedDict())
     windows = (console._GUEST_READABILITY_WINDOWS, console._GUEST_READABILITY_CLIENT_WINDOWS,
-               console._READABILITY_ASK_WINDOWS, console._GUEST_ANALYZE_WINDOWS,
+               console._READABILITY_ASK_WINDOWS, console._READABILITY_ASK_CLIENT_WINDOWS,
+               console._GUEST_ANALYZE_WINDOWS,
                console._GUEST_ANALYZE_CLIENT_WINDOWS, console._ANALYZE_RESOLVE_WINDOWS,
                console._ANALYZE_RESOLVE_CLIENT_WINDOWS)
     for window in windows:
@@ -394,15 +395,17 @@ def test_the_run_view_shows_the_readable_version_and_its_companions(readability_
         _s, run = _get(port, "/api/run/readability_view_1", cookie)
         _s, original = _get(port, "/api/workspace/readability_view_1/file?path=readability/original.txt", cookie)
     assert run["run_kind"] == "readability" and run["readability"]["schema"] == "ansatze-readability-v1"
-    assert run["readability"]["summary"] == {"parts": 2, "rewritten": 1, "faithful": 1, "issues": 0, "unchecked": 0,
-                                             "not_rewritten": 1, "calls": 3, "model": "kimi-k3", "route": "api_key"}
+    assert run["readability"]["summary"] == {"parts": 1, "rewritten": 1, "faithful": 1, "issues": 0, "unchecked": 0,
+                                             "not_rewritten": 0, "kept": 1, "calls": 3, "model": "kimi-k3",
+                                             "route": "api_key"}
     preview = run["sandbox_preview"]
     assert preview["kind"] == "readability" and preview["source"] == "readability/readable.md"
     assert preview["text"].startswith("# Sums of evens — Readable version") and preview["has_readable"] is True
     assert preview["editable"] is False and preview["has_proof_md"] is False
     assert preview["original_available"] is True and preview["original_path"] == "readability/original.txt"
     assert preview["source_file"] == "readability/source/pasted.tex" and preview["audience"] == "graduate"
-    assert preview["parts"]["faithful"] == 1 and preview["parts"]["not_rewritten"] == 1
+    assert preview["parts"]["faithful"] == 1 and preview["parts"]["not_rewritten"] == 0
+    assert preview["parts"]["kept"] == 1
     assert [part["status"] for part in preview["check"]] == ["faithful", "not-rewritten"]
     assert preview["check"][1]["kind"] == "references"
     assert preview["notation"]["rows"][0]["symbol"] == "\\Z" and preview["macros"] == {"\\Z": "\\mathbb{Z}"}
@@ -582,6 +585,9 @@ def _fake_ask(monkeypatch, answers: list):
                  "finished_at": jobs._now()}
         jobs._set_ask_state(kwargs["run_id"], final)
         jobs._update_job(kwargs["job_id"], status="finished")
+        # As _execute_ask does, the sponsored slot is given back.
+        if kwargs["gate_key"]:
+            analyze_runs.GATE.release(kwargs["gate_key"])
         if kwargs["on_exit"]:
             kwargs["on_exit"]()
 
@@ -639,6 +645,69 @@ def test_guest_asks_are_limited_per_run(readability_console, monkeypatch):
     assert codes[3][0] == 403 and codes[3][2]["login_required"] is True
     assert "Guests can ask 3 questions" in codes[3][2]["error"]
     assert len(answers) == 3
+
+
+def test_guest_questions_are_limited_per_network(readability_console, monkeypatch):
+    answers: list = []
+    _fake_ask(monkeypatch, answers)
+    monkeypatch.setattr(console, "GUEST_READABILITY_ASKS_PER_CLIENT_PER_HOUR", 2)
+    network = {"X-Forwarded-For": "203.0.113.40"}
+    with running_server() as port:
+        cookies = []
+        for index in range(2):
+            guest, cookie, _ = _issue_guest(port)
+            _finished_run(f"readability_ask_net_{index}", guest["id"], monkeypatch, guest=True,
+                          credential_source="user")
+            cookies.append(cookie)
+        codes = []
+        for index in (0, 0, 1):
+            codes.append(_post(port, f"/api/run/readability_ask_net_{index}/readability/ask", cookies[index],
+                               {"question": "Why?"}, headers=network))
+            assert _answered(f"readability_ask_net_{index}")
+        elsewhere = _post(port, "/api/run/readability_ask_net_1/readability/ask", cookies[1], {"question": "Why?"},
+                          headers={"X-Forwarded-For": "198.51.100.41"})
+    # A second guest session on the same network finds the network's hourly allowance spent.
+    assert [code[0] for code in codes] == [202, 202, 429]
+    assert "Too many guest questions from your network" in codes[2][2]["error"]
+    assert elsewhere[0] == 202 and len(answers) == 3
+
+
+def test_sponsored_questions_count_apart_from_the_manuscript_runs(readability_console, gate, monkeypatch):
+    answers: list = []
+    _fake_ask(monkeypatch, answers)
+    monkeypatch.setenv(analyze_runs.ASK_DAILY_CAP_ENV, "2")
+    with running_server() as port:
+        owner, cookie = _member(port)
+        _finished_run("readability_ask_sponsored", owner["id"], monkeypatch, credential_source="sponsored_kimi")
+        codes = []
+        for number in range(3):
+            codes.append(_post(port, "/api/run/readability_ask_sponsored/readability/ask", cookie,
+                               {"question": f"Q{number}?"}))
+            assert _answered("readability_ask_sponsored")
+    assert [code[0] for code in codes] == [202, 202, 429]
+    assert codes[2][2]["error"] == readability_runs.ASK_GATE_MESSAGES.daily
+    assert [answer["gate_key"] for answer in answers] == ["readability_ask_sponsored#ask"] * 2
+    # The day's manuscript runs are untouched: a sponsored run may still start.
+    usage = json.loads(gate.usage_path.read_text())
+    assert (usage["runs"], usage["asks"]) == (0, 2) and gate.capacity_error() is None
+
+
+def test_the_gate_keeps_the_guests_share_of_questions_and_refunds_them(gate, monkeypatch):
+    monkeypatch.setenv(analyze_runs.ASK_DAILY_CAP_ENV, "4")
+    ask = {"messages": readability_runs.ASK_GATE_MESSAGES, "daily": readability_runs.ASK_DAILY}
+    for run_id in ("a", "b"):
+        gate.reserve(f"{run_id}#ask", run_id=run_id, guest=True, **ask)
+        gate.release(f"{run_id}#ask")
+    # Guests asked their half of the day's questions; an account may still ask.
+    with pytest.raises(analyze_runs.AnalyzeCapacityError) as refused:
+        gate.reserve("c#ask", run_id="c", guest=True, **ask)
+    assert str(refused.value) == readability_runs.ASK_GATE_MESSAGES.guest_share_daily
+    gate.reserve("d#ask", run_id="d", **ask)
+    assert gate.holds("d#ask") and gate.capacity_error(guest=True) is None
+    # A question that never started gives its count back; the runs were never touched.
+    gate.release("d#ask", refund=True)
+    usage = json.loads(gate.usage_path.read_text())
+    assert (usage["asks"], usage["guest_asks"], usage["runs"], usage["guest_runs"]) == (2, 2, 0, 0)
 
 
 def test_asks_per_hour_and_one_in_flight(readability_console, monkeypatch):
@@ -765,7 +834,7 @@ def test_a_sponsored_run_and_a_question_through_jobs(gate, monkeypatch):
         assert not (workspace / "proof.md").exists() and not (workspace / "proof.tex").exists()
         assert not (workspace / "auto_pipeline.json").exists()
         assert server.seen == ["guide", "rewrite", "check"]
-        assert "Readable version published: 1 of 2 parts rewritten" in "\n".join(
+        assert "Readable version published: 1 of 1 parts rewritten (1 faithful)." in "\n".join(
             message["content"] for message in jobs.list_chat(job["run_id"]))
 
         result = jobs.start_readability_ask(job["run_id"], {"question": "Why is it even?", "node_id": "lem:sum"},
@@ -779,8 +848,9 @@ def test_a_sponsored_run_and_a_question_through_jobs(gate, monkeypatch):
         assert entry["part"] == 1 and entry["usage"]["calls"] == 1 and block["ask_usage"]["calls"] == 1
         assert server.seen[-1] == "ask"
         assert _wait(lambda: not gate.holds(readability_runs.ask_key(job["run_id"])))
-        # Two sponsored starts today: the run and its question.
-        assert gate.usage_today() == 2
+        # One sponsored start today (the run); its question counts among the day's questions.
+        usage = json.loads(gate.usage_path.read_text())
+        assert (usage["runs"], usage["asks"]) == (1, 1) and gate.usage_today() == 1
     finally:
         server.shutdown()
         server.server_close()

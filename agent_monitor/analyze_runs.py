@@ -17,7 +17,10 @@ keeps the sponsored budget bounded:
   the console data directory (``AGENT_MONITOR_ANALYZE_SPONSORED_RUNS_PER_DAY``,
   default 40, ``0`` turns sponsored Analyze off).  Each sponsored analysis and
   each sponsored re-check counts once.  Readability shares the pool
-  (``readability_runs``), with refusals worded for it (:class:`GateMessages`).
+  (``readability_runs``), with refusals worded for it (:class:`GateMessages`);
+  a question about a readability run (one model call) takes a slot while it
+  is answered but counts against a daily budget of its own
+  (:func:`sponsored_asks_per_day`), never against the manuscript starts.
 * :func:`normalize_source` validates a manuscript source for either mode, and
   :func:`is_manuscript_record` tells the security gates that a run reads
   someone's manuscript (an analysis or a readability run).
@@ -81,6 +84,11 @@ GUEST_DAILY_CAP_ENV = "AGENT_MONITOR_ANALYZE_GUEST_SPONSORED_RUNS_PER_DAY"
 GUEST_CONCURRENCY_ENV = "AGENT_MONITOR_ANALYZE_GUEST_SPONSORED_CONCURRENCY"
 DEFAULT_DAILY_CAP = 40
 DEFAULT_CONCURRENCY = 2
+# Sponsored questions about readability runs, per UTC day (guests' share:
+# half by default).  Kept in the same usage file as ``asks``/``guest_asks``.
+ASK_DAILY_CAP_ENV = "AGENT_MONITOR_READABILITY_SPONSORED_ASKS_PER_DAY"
+GUEST_ASK_DAILY_CAP_ENV = "AGENT_MONITOR_READABILITY_GUEST_SPONSORED_ASKS_PER_DAY"
+DEFAULT_DAILY_ASK_CAP = 200
 USAGE_FILENAME = "analyze_sponsored_usage.json"
 # A guest re-checks at most this many results of one analysis (each re-check
 # is up to eight sponsored calls); the console also bounds guest re-checks
@@ -660,6 +668,24 @@ def guest_sponsored_concurrency() -> int:
     return _bounded_env(GUEST_CONCURRENCY_ENV, max(1, total // 2), 1, total)
 
 
+def sponsored_asks_per_day() -> int:
+    """Site-wide daily cap on sponsored questions about readability runs (0 = off)."""
+    return _bounded_env(ASK_DAILY_CAP_ENV, DEFAULT_DAILY_ASK_CAP, 0, 100_000)
+
+
+def guest_sponsored_asks_per_day() -> int:
+    """The guests' share of the daily questions (default half of them, rounded down)."""
+    cap = sponsored_asks_per_day()
+    return _bounded_env(GUEST_ASK_DAILY_CAP_ENV, cap // 2, 0, cap)
+
+
+# The daily counts a sponsored start can use: its cap and the guests' share.
+DAILY_COUNTS = {
+    "runs": (sponsored_runs_per_day, guest_sponsored_runs_per_day),
+    "asks": (sponsored_asks_per_day, guest_sponsored_asks_per_day),
+}
+
+
 def _utc_day(now: float | None = None) -> str:
     return datetime.fromtimestamp(time.time() if now is None else now, timezone.utc).date().isoformat()
 
@@ -679,9 +705,10 @@ class SponsoredGate:
     Slots live in memory and are keyed (run id, ``<run id>#recheck`` or
     ``<run id>#ask``) so a release is idempotent; the daily counts (``runs``,
     and ``guest_runs`` for the guests' share) are a small JSON file in the
-    console data directory, updated under a file lock.  A slot whose process
-    never started can be refunded.  Refusals are worded by the caller's
-    :class:`GateMessages`.
+    console data directory, updated under a file lock.  A question counts in
+    ``asks`` and ``guest_asks`` instead (``daily="asks"``, its own cap).  A
+    slot whose process never started can be refunded.  Refusals are worded by
+    the caller's :class:`GateMessages`.
     """
 
     STALE_SECONDS = 120.0
@@ -744,8 +771,8 @@ class SponsoredGate:
     def _today(self) -> dict[str, int]:
         usage = self._read(self._path())
         if usage.get("day") != _utc_day():
-            return {"runs": 0, "guest_runs": 0}
-        return {"runs": _count(usage.get("runs")), "guest_runs": _count(usage.get("guest_runs"))}
+            usage = {}
+        return {key: _count(usage.get(key)) for daily in DAILY_COUNTS for key in (daily, f"guest_{daily}")}
 
     def usage_today(self) -> int:
         return self._today()["runs"]
@@ -777,9 +804,8 @@ class SponsoredGate:
             self._prune()
             return len(self._active)
 
-    def _refusal(self, *, guest: bool, messages: GateMessages) -> AnalyzeCapacityError | None:
-        cap = sponsored_runs_per_day()
-        guest_cap = guest_sponsored_runs_per_day()
+    def _refusal(self, *, guest: bool, messages: GateMessages, daily: str = "runs") -> AnalyzeCapacityError | None:
+        cap, guest_cap = (limit() for limit in DAILY_COUNTS[daily])
         if cap <= 0 or (guest and guest_cap <= 0):
             return AnalyzeCapacityError(messages.guest_off if guest else messages.off, status=403)
         if len(self._active) >= sponsored_concurrency():
@@ -789,54 +815,56 @@ class SponsoredGate:
             return AnalyzeCapacityError(messages.guest_share_busy.format(active=self._guest_slots()),
                                         retry_after=60)
         today = self._today()
-        if today["runs"] >= cap:
+        if today[daily] >= cap:
             return AnalyzeCapacityError(messages.guest_daily if guest else messages.daily,
                                         retry_after=_seconds_to_midnight())
-        if guest and today["guest_runs"] >= guest_cap:
+        if guest and today[f"guest_{daily}"] >= guest_cap:
             return AnalyzeCapacityError(messages.guest_share_daily, retry_after=_seconds_to_midnight())
         return None
 
-    def capacity_error(self, *, guest: bool = False,
-                       messages: GateMessages = ANALYZE_GATE) -> AnalyzeCapacityError | None:
+    def capacity_error(self, *, guest: bool = False, messages: GateMessages = ANALYZE_GATE,
+                       daily: str = "runs") -> AnalyzeCapacityError | None:
         """The refusal a sponsored start would get now (reserves nothing)."""
         with self._lock:
             self._prune()
-            return self._refusal(guest=guest, messages=messages)
+            return self._refusal(guest=guest, messages=messages, daily=daily)
 
-    def reserve(self, key: str, *, run_id: str, guest: bool = False, messages: GateMessages = ANALYZE_GATE) -> None:
-        """Take a slot and count one sponsored start (and one of the guests'
-        share for a guest); raises :class:`AnalyzeCapacityError` when busy or
-        at a daily cap."""
+    def reserve(self, key: str, *, run_id: str, guest: bool = False, messages: GateMessages = ANALYZE_GATE,
+                daily: str = "runs") -> None:
+        """Take a slot and count one sponsored start in ``daily`` (``runs``,
+        or ``asks`` for a question), and one of the guests' share for a
+        guest; raises :class:`AnalyzeCapacityError` when busy or at a daily
+        cap."""
         with self._lock:
             self._prune()
             if key in self._active:
                 raise AnalyzeCapacityError(messages.held, status=409)
-            refusal = self._refusal(guest=guest, messages=messages)
+            refusal = self._refusal(guest=guest, messages=messages, daily=daily)
             if refusal is not None:
                 raise refusal
-            cap = sponsored_runs_per_day()
-            guest_cap = guest_sponsored_runs_per_day()
+            cap, guest_cap = (limit() for limit in DAILY_COUNTS[daily])
+            guest_key = f"guest_{daily}"
             refused: list[AnalyzeCapacityError] = []
 
             def count(usage: dict[str, Any]) -> bool:
-                if _count(usage.get("runs")) >= cap:
+                if _count(usage.get(daily)) >= cap:
                     refused.append(AnalyzeCapacityError(
                         messages.guest_daily if guest else messages.daily,
                         retry_after=_seconds_to_midnight()))
                     return False
-                if guest and _count(usage.get("guest_runs")) >= guest_cap:
+                if guest and _count(usage.get(guest_key)) >= guest_cap:
                     refused.append(AnalyzeCapacityError(messages.guest_share_daily,
                                                         retry_after=_seconds_to_midnight()))
                     return False
-                usage["runs"] = _count(usage.get("runs")) + 1
-                usage["guest_runs"] = _count(usage.get("guest_runs")) + (1 if guest else 0)
+                usage[daily] = _count(usage.get(daily)) + 1
+                usage[guest_key] = _count(usage.get(guest_key)) + (1 if guest else 0)
                 return True
 
             self._locked_update(count)
             if refused:
                 raise refused[0]
             self._active[key] = {"run_id": run_id, "since": time.monotonic(), "day": _utc_day(),
-                                 "guest": bool(guest)}
+                                 "guest": bool(guest), "daily": daily}
 
     def release(self, key: str, *, refund: bool = False) -> bool:
         """Free ``key``'s slot (idempotent); ``refund`` gives back today's
@@ -846,12 +874,14 @@ class SponsoredGate:
         if slot is None:
             return False
         if refund and slot.get("day") == _utc_day():
+            daily = slot.get("daily") or "runs"
+
             def uncount(usage: dict[str, Any]) -> bool:
-                if _count(usage.get("runs")) <= 0:
+                if _count(usage.get(daily)) <= 0:
                     return False
-                usage["runs"] = _count(usage.get("runs")) - 1
+                usage[daily] = _count(usage.get(daily)) - 1
                 if slot.get("guest"):
-                    usage["guest_runs"] = max(0, _count(usage.get("guest_runs")) - 1)
+                    usage[f"guest_{daily}"] = max(0, _count(usage.get(f"guest_{daily}")) - 1)
                 return True
 
             try:

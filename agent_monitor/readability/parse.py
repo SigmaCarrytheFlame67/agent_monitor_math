@@ -43,14 +43,46 @@ _DECOR = r"[\s#>*_`]*"
 _START_RE = re.compile(rf"(?im)^{_DECOR}={{3,}}\s*READABLE\s*={{3,}}{_DECOR}$")
 _END_RE = re.compile(rf"(?im)^{_DECOR}={{3,}}\s*END\s*={{3,}}{_DECOR}$")
 _FENCE_RE = re.compile(r"(?m)^ {0,3}(?:```|~~~)")
-# Raw HTML: a tag of an HTML element (never ``a<b`` in math) or a comment.
+# Math, set aside before the Markdown is read as the console and the shared
+# viewer do (display environments, $$...$$, \[...\], \(...\), then $...$
+# within a line, in that order): ``<a>`` there is a group, not a tag.  Each
+# pattern is linear in the reply (a body ends at the next opener; escapes are
+# unrolled), so a hostile reply cannot stall the parser.
+_MATH_ENV = r"\\begin\{(?:equation|align|alignat|gather)\*?\}"
+_MATH_RES = (
+    re.compile(rf"\\begin\{{((?:equation|align|alignat|gather)\*?)\}}(?:(?!{_MATH_ENV}|\\end\{{\1\}})[\s\S])*"
+               r"\\end\{\1\}"),
+    re.compile(r"\$\$[\s\S]+?\$\$"),
+    re.compile(r"\\\[(?:[^\\]|\\(?![\[\]]))+\\\]"),
+    re.compile(r"\\\((?:[^\\]|\\(?![()]))+\\\)"),
+    re.compile(r"(?<![\\$])\$(?!\$)(?:[^$\n\\]|\\.)+\$"),
+)
+_NOT_NEWLINE_RE = re.compile(r"[^\n]")
+# Space inside a tag: never a blank line or a line opening a quote, which
+# end the paragraph in Markdown.
+_TAG_SPACE = r"(?:[ \t/]|\n(?![ \t]*[>\n]))"
+# Raw HTML outside math, as a Markdown reader passes it through: a comment, a
+# processing instruction or declaration, a tag of any element (attributes
+# after spaces, line breaks or "/"; an unquoted value is matched possessively),
+# or a line (in a quote or a list item, say) that opens an HTML block.
+# ``a<b``, ``0<x<1`` and ``<https://...>`` are not tags.
 _HTML_RE = re.compile(
-    r"<!--|</?(?:a|abbr|address|article|aside|audio|b|base|blockquote|body|br|button|canvas|center|code|col|del|"
-    r"details|dialog|div|em|embed|font|footer|form|frame|frameset|h[1-6]|head|header|hr|html|i|iframe|img|input|"
-    r"ins|kbd|label|li|link|main|mark|marquee|meta|nav|noscript|object|ol|option|p|picture|pre|q|s|script|"
-    r"section|select|small|source|span|strong|style|sub|summary|sup|svg|table|tbody|td|template|textarea|tfoot|"
-    r"th|thead|title|tr|u|ul|video)(?:\s[^<>\n]*)?/?>",
-    re.I,
+    r"<!--|<[?!][A-Za-z\[]"
+    rf"|</?[A-Za-z][A-Za-z0-9-]*(?:{_TAG_SPACE}+[A-Za-z_:][\w.:-]*"
+    rf"(?:\s*=\s*(?:\"[^\"]*\"|'[^']*'|[^\s\"'=<>`]++))?)*{_TAG_SPACE}*>"
+    r"|^[ \t]*(?:(?:>|[-*+]|\d{1,9}[.)])[ \t]*)*</?[A-Za-z][A-Za-z0-9-]*(?=[\s/>]|$)",
+    re.M,
+)
+# Refused anywhere, math included (so that setting math aside never lets
+# them through): an element that runs code, loads content or changes how the
+# page is read, a tag (of any name a browser reads) with an event handler, or
+# a comment.
+_ACTIVE_HTML_RE = re.compile(
+    r"<!--|</?(?:applet|audio|base|body|button|canvas|details|dialog|embed|form|frame|frameset|head|html|iframe|"
+    r"image|img|input|isindex|link|listing|marquee|math|meta|noembed|noframes|noscript|object|param|picture|"
+    r"plaintext|portal|script|select|source|style|svg|template|textarea|title|track|video|xmp)(?=[\s/>]|$)"
+    r"|<[A-Za-z][^\s/<>]*(?:[\s/][^<>]*)?[\s/]on[a-z]{3,}\s*=",
+    re.I | re.M,
 )
 # A link reference definition the model wrote: neutralized, so that no line
 # of model text becomes an anchor (``[result:<id>]: #`` lines are ours).
@@ -172,11 +204,18 @@ def parse_guide(text: str, *, node_ids: Iterable[str]) -> dict[str, Any]:
 # ---------------------------------------------------------------------------
 
 
+def _without_math(text: str) -> str:
+    """``text`` with its math blanked out (line breaks kept)."""
+    for pattern in _MATH_RES:
+        text = pattern.sub(lambda match: _NOT_NEWLINE_RE.sub(" ", match.group(0)), text)
+    return text
+
+
 def _plain_markdown(body: str, what: str) -> None:
     if _FENCE_RE.search(body):
         raise ParseError(f"code fences are not allowed in {what}")
-    if _HTML_RE.search(body):
-        raise ParseError(f"raw HTML is not allowed in {what}")
+    if _ACTIVE_HTML_RE.search(body) or _HTML_RE.search(_without_math(body)):
+        raise ParseError(f"raw HTML is not allowed in {what} (use Markdown, and write < and > only inside $...$)")
 
 
 def readable_body(text: str) -> str:
