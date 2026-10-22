@@ -5022,6 +5022,19 @@ function runWriteup(run){
   const fresh=writeup.fresh===true&&String(box.revision||'missing')===sandboxRevision;
   return {text:writeup.text,status,fresh};
 }
+// writeup.md as shown: without its "# Written proof" heading and the status
+// note under it, which the banner above it says already. Download saves the
+// file as written.
+function writeupBody(text){
+  const lines=String(text||'').split('\n');
+  if(!/^# Written proof[ \t\r]*$/.test(lines[0]))return String(text||'');
+  let at=1;
+  const skipBlank=()=>{ while(at<lines.length&&!lines[at].trim())at++; };
+  skipBlank();
+  if(at<lines.length&&/^ {0,3}>/.test(lines[at]))while(at<lines.length&&lines[at].trim())at++;
+  skipBlank();
+  return lines.slice(at).join('\n');
+}
 function proofDocShown(run){
   const writeup=runWriteup(run);
   if(!writeup)return 'facts';
@@ -5092,7 +5105,7 @@ function renderMarkdownIntoView(text, live, run){
   // The written proof takes proof.md's place on screen only: sandboxText stays proof.md for Edit.
   const writeup=proofDocShown(run)==='writeup'?runWriteup(run):null;
   if(writeup)live=false;
-  const displayText=writeup?writeup.text:closureCitedLemmas(normalizeProofMarkdown(sandboxText));
+  const displayText=writeup?writeupBody(writeup.text):closureCitedLemmas(normalizeProofMarkdown(sandboxText));
   const proofs=writeup?[displayText]:splitProofs(displayText);
   if(!problems.length&&!proofs.length)return;
   setProofEmpty(false); $('pdf-pages').style.display='none';

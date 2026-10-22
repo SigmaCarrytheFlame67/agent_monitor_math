@@ -48,6 +48,18 @@
     unchecked: 'Not checked — the verified facts remain the proof.',
   };
   const writeupStaleNote = 'This write-up was made for an earlier version of proof.md.';
+  // writeup.md without its "# Written proof" heading and the status note
+  // under it: the banner says the same (as in the console).
+  function writeupBody(value) {
+    const lines = text(value).split('\n');
+    if (!/^# Written proof[ \t\r]*$/.test(lines[0])) return text(value);
+    let at = 1;
+    const skipBlank = () => { while (at < lines.length && !lines[at].trim()) at += 1; };
+    skipBlank();
+    if (at < lines.length && /^ {0,3}>/.test(lines[at])) while (at < lines.length && lines[at].trim()) at += 1;
+    skipBlank();
+    return lines.slice(at).join('\n');
+  }
   let writeup = null, proofDoc = 'facts';
   function showProofDocument() {
     const written = !!writeup && proofDoc === 'writeup';
@@ -62,7 +74,7 @@
       banner.dataset.status = writeup.status;
       banner.replaceChildren(node('p', '', writeupBanner[writeup.status]));
       if (!writeup.fresh) banner.append(node('p', 'rv-writeup-stale', writeupStaleNote));
-      renderText($('rv-proof-text'), writeup.text);
+      renderText($('rv-proof-text'), writeupBody(writeup.text));
     } else if (data.proof) renderText($('rv-proof-text'), data.proof);
     else empty($('rv-proof-text'), analysis ? 'No saved analysis report' : 'No saved proof', analysis ? 'The report was not included in this snapshot.' : 'The proof document was not included in this snapshot.', '∎');
   }

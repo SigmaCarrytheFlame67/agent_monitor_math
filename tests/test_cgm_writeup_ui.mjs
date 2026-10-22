@@ -215,7 +215,7 @@ const CONSOLE_FUNCTIONS = [
   'escapeHtml', 'stashMath', 'stashInlineMath', 'inlineMathEnd', 'mathNextIndex', 'mathBetween', 'mathSpans', 'holdMath', 'safeMarkdownHref', 'sanitizeRenderedHtml', 'mdToHtml', 'unwrapProofMarkdownFence',
   'normalizeProofMarkdown', 'splitProofs', 'problemItems', 'problemCardHtml', 'liveSandboxText', 'isAnalysisRun',
   'isReadabilityRun', 'syncSandboxEditor', 'beginSandboxEdit', 'saveSandboxProof', 'finishSandboxEdit', 'applySandboxPreview', 'runWriteup',
-  'proofDocShown', 'showProofDocFile', 'syncProofDocSwitch', 'chooseProofDoc', 'writeupBannerHtml', 'closureCitedLemmas',
+  'writeupBody', 'proofDocShown', 'showProofDocFile', 'syncProofDocSwitch', 'chooseProofDoc', 'writeupBannerHtml', 'closureCitedLemmas',
   'renderMarkdownIntoView', 'showProofMd', 'refreshProofPreview',
 ]
 // The proof toolbar and the Sandbox body (with its proof.md editor) exactly as the page has them.
@@ -586,6 +586,76 @@ test('a closure rendered before v2 names the lemma behind each cited label, on s
   context.applySandboxPreview(cgmRun(undefined))
   assert.match(page.$('md-view').textContent, /Cited facts: L1 = Lemma 2 \(fact c868b47bd56b2884\); L2 = Lemma 1 \(fact 72f15db5ead2748a\)\./)
   assert.equal(page.run('sandboxText').trim(), CLOSURE.trim())
+})
+
+// ── the write-up's own header ──
+// writeup.md of a live run (Codex, n^2+n even), byte for byte, and the other
+// two headers as cgm/writeup.render_writeup writes them (a body may quote).
+const LIVE_WRITEUP = [
+  '# Written proof', '',
+  '> Written from the verifier-accepted facts (proof.md) and then checked as a whole by an independent, response-only model verifier that saw only the problem and this text. Model-verifier acceptance is not a Lean or other formal certificate.', '',
+  '**Theorem.** For every natural number $n$, the integer $n^2+n$ is even.', '',
+  '**Conventions.** Let $\\mathbb N=\\{0,1,2,\\ldots\\}$. An integer $m$ is even if $m=2k$ for some integer $k$.', '',
+  '**Proof.** We show that one of $n$ and $n+1$ is even, and then use the factorization $n^2+n=n(n+1)$.', '',
+  'Let $n\\in\\mathbb N$ be arbitrary. The division-with-remainder theorem states that for every integer $x$ and every positive integer $d$, there exist unique integers $a$ and $r$ such that $x=da+r$ and $0\\le r<d$. Applying it with $x=n$ and $d=2$ gives',
+  '$$', 'n=2a+r,\\qquad 0\\le r<2.', '$$',
+  'Since $r$ is an integer, either $r=0$ or $r=1$. Also, $a\\ge0$: otherwise $a\\le-1$, and thus', '$$', 'n=2a+r\\le-2+1=-1,', '$$', 'contrary to $n\\ge0$.', '',
+  'If $r=0$, set $q=a$. Then $n=2q$. The integer $k=q(n+1)$ satisfies', '$$', 'n^2+n=n(n+1)=(2q)(n+1)=2k.', '$$', '',
+  'If $r=1$, set $q=a+1$. Then', '$$', 'n+1=2a+2=2q.', '$$', 'The integer $k=nq$ therefore satisfies', '$$', 'n^2+n=n(n+1)=n(2q)=2k.', '$$', '',
+  'In either case, $n^2+n$ is even. Since $n$ was arbitrary, this holds for every $n\\in\\mathbb N$, and hence also under the convention that natural numbers begin at $1$. $\\blacksquare$', '',
+].join('\n')
+const QUOTING_BODY = '**Theorem.** For every natural number $n$, the integer $n^2+n$ is even.\n\n> A quoted remark inside the body stays.\n\n**Proof.** By cases. $\\blacksquare$'
+const REJECTED_WRITEUP = '# Written proof\n\n> Written from the verifier-accepted facts (proof.md). An independent model check of this text found problems, listed at the end, so this write-up is NOT accepted; the verified facts remain the proof.\n\n'
+  + QUOTING_BODY + '\n\n**Problems found by the check.**\n\n- Case 2: The step \\$n+1=2a+2\\$ uses \\$r=1\\$ but the case split never shows \\$r\\\\in\\\\{0,1\\\\}\\$.\n'
+const UNCHECKED_WRITEUP = '# Written proof\n\n> Written from the verifier-accepted facts (proof.md). This text has not been checked; the verified facts remain the proof.\n\n' + QUOTING_BODY + '\n'
+
+test('the write-up is shown without its own heading and status note: the banner says that already', () => {
+  const { context } = consolePage()
+  const body = context.writeupBody
+  assert.ok(body(LIVE_WRITEUP).startsWith('**Theorem.** For every natural number $n$'))
+  assert.equal(body(LIVE_WRITEUP), LIVE_WRITEUP.slice(LIVE_WRITEUP.indexOf('**Theorem.**')))
+  for (const file of [REJECTED_WRITEUP, UNCHECKED_WRITEUP]) {
+    const shown = body(file)
+    // The body's own quotation and the check's findings stay.
+    assert.ok(shown.startsWith(QUOTING_BODY), shown)
+    assert.doesNotMatch(shown, /Written proof|Written from the verifier-accepted facts/)
+  }
+  assert.match(body(REJECTED_WRITEUP), /\*\*Problems found by the check\.\*\*\n\n- Case 2:/)
+  // Only that header: another heading, no heading, or a heading without a note.
+  for (const other of ['# Proof\n\n> Note.\n\nBody', '**Theorem.** x\n\n> Note.', '', ' # Written proof\n\n> Note.\n\nBody'])
+    assert.equal(body(other), other)
+  assert.equal(body('# Written proof\n\n**Theorem.** x\n\n> kept'), '**Theorem.** x\n\n> kept')
+  assert.equal(body('# Written proof\r\n\r\n> Note.\r\n\r\n**Theorem.** x'), '**Theorem.** x')
+
+  // In the Sandbox: the banner, then the proof itself (the download is the file as written).
+  for (const [status, file, quotes] of [['accepted', LIVE_WRITEUP, 0], ['rejected', REJECTED_WRITEUP, 1], ['unchecked', UNCHECKED_WRITEUP, 1]]) {
+    const page = consolePage()
+    page.context.applySandboxPreview(cgmRun(writeupBlock(status, true, file)))
+    page.context.chooseProofDoc('writeup')
+    const doc = page.$('md-view').querySelector('.md-doc')
+    assert.equal(doc.querySelectorAll('h1').length, 0, status)
+    assert.equal(doc.querySelectorAll('blockquote').length, quotes, status)
+    assert.match(doc.textContent, /^\s*Theorem\. For every natural number/, status)
+    assert.deepEqual(page.$('md-view').querySelectorAll('.problem-message, .writeup-banner, .md-doc').map(el => el.className), ['problem-message', 'writeup-banner', 'md-doc'])
+    assert.equal(page.state().download, 'writeup.md')
+  }
+})
+
+test('the shared page shows the write-up without its own heading and status note', async () => {
+  for (const [status, file, quotes] of [['accepted', LIVE_WRITEUP, 0], ['rejected', REJECTED_WRITEUP, 1]]) {
+    const page = await sharedPage({ ...SNAPSHOT, writeup: file, writeup_status: status, writeup_fresh: true })
+    page.radio('writeup').dispatch('click')
+    const proof = page.$('rv-proof-text')
+    assert.equal(proof.querySelectorAll('h1').length, 0, status)
+    assert.equal(proof.querySelectorAll('blockquote').length, quotes, status)
+    assert.match(proof.textContent, /^\s*Theorem\. For every natural number/, status)
+    assert.doesNotMatch(proof.textContent, /Written from the verifier-accepted facts/)
+    assert.equal(page.state().bannerHidden, false)
+  }
+  // The verified facts are shown as saved.
+  const page = await sharedPage({ ...SNAPSHOT, writeup: LIVE_WRITEUP, writeup_status: 'accepted', writeup_fresh: true })
+  page.radio('facts').dispatch('click')
+  assert.equal(page.$('rv-proof-text').querySelectorAll('h1')[0].textContent, 'Proof')
 })
 
 // ── the shared page ──
