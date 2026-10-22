@@ -48,6 +48,7 @@ what exists is still published).
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 import re
@@ -140,11 +141,13 @@ class _Outcome:
 
 class _Logged:
     """A reply parser that keeps, per stage, why the first reply it refused
-    could not be read (the parser's own message, bounded), so the receipt
-    says why a format reminder was sent.  A rewrite's ``lenient`` result
-    stays reachable."""
+    could not be read (the parser's own message, bounded) and which reply
+    that was (its sha256, as the call log has it), so the receipt says why a
+    format reminder was sent.  A rewrite's ``lenient`` result stays
+    reachable."""
 
-    def __init__(self, parse_reply: Callable[[str], Any], stage: str, errors: dict[str, str]) -> None:
+    def __init__(self, parse_reply: Callable[[str], Any], stage: str,
+                 errors: dict[str, tuple[str, str]]) -> None:
         self.parse_reply = parse_reply
         self.stage = stage
         self.errors = errors
@@ -154,7 +157,8 @@ class _Logged:
             return self.parse_reply(text)
         except ParseError as exc:
             message = "".join(char for char in " ".join(str(exc).split()) if char.isprintable())
-            self.errors.setdefault(self.stage, message if len(message) <= 120 else message[:119] + "…")
+            self.errors.setdefault(self.stage, (hashlib.sha256(text.encode("utf-8")).hexdigest(),
+                                                message if len(message) <= 120 else message[:119] + "…"))
             raise
 
     @property
@@ -214,8 +218,8 @@ class ReadabilityRun(runner.ManuscriptRun):
         self.focus = str(self.req.get("focus") or "")
         self.guide: dict[str, Any] = {}
         self.guide_source = "outline"
-        # Why the first reply of a stage could not be read (receipt notes).
-        self.format_errors: dict[str, str] = {}
+        # Per stage, the first reply its parser refused and why (receipt notes).
+        self.format_errors: dict[str, tuple[str, str]] = {}
 
     # -- 1 Ingest -------------------------------------------------------------
 
@@ -564,17 +568,26 @@ class ReadabilityRun(runner.ManuscriptRun):
 
     def notes(self) -> list[str]:
         """Why the first reply of a stage could not be read, in the order of
-        the calls: the parser's message, or for a reply refused before it
-        was parsed (too long, or tool-call markup), that it was."""
-        notes = []
+        the calls: the parser's message when its parser refused that reply,
+        or, when a format reminder followed a reply refused before it was
+        parsed (too long, or tool-call markup), that it was."""
+        first: dict[str, str | None] = {}  # the reply each stage read first
+        reminded: set[str] = set()
         for record in self.ctx.calls:
             stage = str(record.get("stage") or "")
             base = _RETRY_SUFFIX_RE.sub("", stage)
-            error = self.format_errors.get(base)
-            if error is None and base != stage and "-retry" in stage:
-                error = "the reply was refused before it was read (too long, or tool-call markup)"
-            if error is not None and f"{base}: {error}" not in notes:
-                notes.append(f"{base}: {error}")
+            if "-retry" in stage[len(base):]:
+                reminded.add(base)
+            else:
+                # After an empty reply, its low-effort retry's is the one read.
+                first[base] = record.get("response_sha256")
+        notes = []
+        for base, reply in first.items():
+            logged = self.format_errors.get(base)
+            if logged is not None and logged[0] == reply:
+                notes.append(f"{base}: {logged[1]}")
+            elif base in reminded:
+                notes.append(f"{base}: the reply was refused before it was read (too long, or tool-call markup)")
         return notes[:MAX_NOTES]
 
     def receipt(self, segments: Mapping[str, Any], manuscript: Mapping[str, Any],

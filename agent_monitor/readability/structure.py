@@ -14,8 +14,9 @@ in its resource-limited child like Analyze's (:func:`segment_sandboxed`):
   <id>)" or "L1, L2") gives its dependencies.  A closure copied from the
   console reads the same (headings without "#", markers without "**").
   Only a text whose every block keeps that shape, with no result of its own
-  before the first block, is read as a closure; anything else is not
-  guessed at.
+  before the first block and nothing of its own after the last block's
+  proof begins (a heading, or a result other than that proof's steps and
+  claims), is read as a closure; anything else is not guessed at.
 * Otherwise a Markdown heading that names a result ("## Theorem 2.1",
   "### Lemma L2 (Name)", "## Main theorem") opens that result
   (``text_structure.segment_text(heading_results=True)``).
@@ -43,6 +44,10 @@ _RESULT_HEADING_RE = re.compile(
 # What ends the last block of a candidate's rendering: its findings, or the
 # main theorem it could not prove.
 _END_HEADING_RE = re.compile(r"^(?:#{1,6}[ \t]+)?(?:Findings \(unverified\)|Main theorem)$")
+_MARKDOWN_HEADING_RE = re.compile(r"#{1,6}[ \t]")
+# The results a proof is written in ("Step 1: ...", "Claim 2. ..."); any
+# other result after the last block's proof begins is text of its own.
+_PROOF_STEPS = frozenset({"step", "claim"})
 _USES_RE = re.compile(r"^(?:\*\*)?Uses:(?:\*\*)?[ \t]*(?P<uses>.*)$")
 _STATEMENT_RE = re.compile(r"^(?:\*\*)?Statement\.(?:\*\*)?$")
 _PROOF_RE = re.compile(r"^(?:\*\*)?Proof\.(?:\*\*)?$")
@@ -62,10 +67,24 @@ def _heading(line: str) -> dict[str, Any] | None:
             "status": match.group("status")}
 
 
+def _own(line: str) -> bool:
+    """Whether a line in or after a block's proof is text of its own: a
+    heading (other than a candidate's closing ones) or a result that no
+    proof is written in."""
+    if not line or _END_HEADING_RE.match(line):
+        return False
+    header = text_structure._header(line)
+    return bool(_MARKDOWN_HEADING_RE.match(line)) or (
+        header is not None and text_structure._KIND_WORDS[header.group("kind").lower()] not in _PROOF_STEPS)
+
+
 def _blocks(lines: list[str]) -> list[dict[str, Any]]:
     """The closure's result blocks, in order (raises :class:`_NotClosure`)."""
     blocks: list[dict[str, Any]] = []
     current: dict[str, Any] | None = None
+    # The first line of text of its own since the last block's proof began
+    # (in a proof that another block follows, it belongs to that proof).
+    own: int | None = None
 
     def close(end: int) -> None:
         if current is None:
@@ -79,15 +98,21 @@ def _blocks(lines: list[str]) -> list[dict[str, Any]]:
         line = raw.strip()
         head = _heading(line)
         if head is not None:
+            if current is not None:
+                own = None
             close(index - 1)
             current = dict(head, start=index, uses=None, statement_at=None, proof_at=None)
             continue
         if current is None:
+            if blocks and own is None and _own(line):
+                own = index  # after a candidate's closing sections
             continue  # the title, the closure's note, or text before it
         if current["proof_at"] is not None:
             if _END_HEADING_RE.match(line):
                 close(index - 1)
                 current = None
+            elif own is None and _own(line):
+                own = index
             continue
         if current["statement_at"] is not None:
             if _PROOF_RE.match(line):
@@ -101,6 +126,10 @@ def _blocks(lines: list[str]) -> list[dict[str, Any]]:
         elif line:
             raise _NotClosure("text between a heading and its statement")
     close(len(lines) - 1)
+    if own is not None:
+        # A heading or a result after the closure: the text goes on, and the
+        # main theorem's proof cannot be told from what follows it.
+        raise _NotClosure("text after the closure")
     return blocks
 
 

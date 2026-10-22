@@ -12,6 +12,7 @@ them), else the part of the selected result, else the guide alone.
 """
 from __future__ import annotations
 
+import bisect
 import json
 import os
 import re
@@ -21,6 +22,7 @@ from typing import Any, Mapping
 
 from agent_monitor.analyze.graph import NODE_ID_RE
 from agent_monitor.analyze.prompts import clip
+from agent_monitor.readability import parse
 
 ASKS = ("readability", "asks")
 ASK_ID_RE = re.compile(r"^[0-9a-f]{12}$")
@@ -33,8 +35,8 @@ _LOOKUP_CHARS = 300
 # What a passage selected in the readable version no longer shows
 # (``comparable``): the invisible mark lines of readable.md and the fences
 # around an original part, the quote, heading and list markers that open a
-# line, result links, math delimiters, backslash escapes, and emphasis, code
-# and table marks.
+# line outside math, result links, math delimiters, backslash escapes, and
+# emphasis, code and table marks.
 _MARK_LINE_RE = re.compile(r"(?m)^(?:\[(?:part|result|original|original-end):[^\]\n]*\]: #"
                            r"|[ \t]{0,3}(?:~{3,}|`{3,})[^\n]*)[ \t]*$")
 _LINE_MARKS_RE = re.compile(r"(?m)^[ \t]*+(?:>[ \t]*+)*+(?:#{1,6}[ \t]++|(?:[-*+]|\d{1,9}[.)])[ \t]++)?")
@@ -143,6 +145,20 @@ def readable_parts(readable: str) -> dict[int, str]:
             for position, mark in enumerate(marks)}
 
 
+def _outside_math(pattern: "re.Pattern[str]", text: str) -> str:
+    """``text`` without the matches of ``pattern`` that begin outside its
+    math: a line of a display that starts "+ c" or "- d" is math, never a
+    list item (the console sets math aside before it reads Markdown)."""
+    spans = parse.math_spans(text)
+    starts = [start for start, _end in spans]
+
+    def drop(match: "re.Match[str]") -> str:
+        index = bisect.bisect_right(starts, match.start()) - 1
+        return match.group(0) if index >= 0 and match.start() < spans[index][1] else ""
+
+    return pattern.sub(drop, text)
+
+
 def comparable(text: str, *, markdown: bool = True) -> str:
     """``text`` as a selected passage compares with it, the same on both
     sides.  The console sends a passage on one line, without the marks the
@@ -153,8 +169,8 @@ def comparable(text: str, *, markdown: bool = True) -> str:
     dropped (the Original view shows plain lines as they are); case
     counts."""
     if markdown:
-        text = _MARK_LINE_RE.sub("", text)
-        text = _LINE_MARKS_RE.sub("", text)
+        text = _outside_math(_MARK_LINE_RE, text)
+        text = _outside_math(_LINE_MARKS_RE, text)
         text = _RESULT_LINK_RE.sub("", text)
         text = _MATH_DELIMITER_RE.sub("", text)
         text = _ESCAPE_RE.sub("", text)

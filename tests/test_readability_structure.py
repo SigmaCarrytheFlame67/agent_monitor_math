@@ -194,6 +194,36 @@ def test_anything_short_of_a_closure_falls_back_to_the_generic_reading(change):
     assert "lemma-3" in {node["id"] for node in document["nodes"]}
 
 
+FURTHER = ("\n## Further results\n\n**Theorem 5.** Every odd square is $1 \\bmod 8$.\n\n"
+           "**Proof.** Write it as $(2k + 1)^2$. QED\n\n**Corollary 6.** No square is $3 \\bmod 4$.\n")
+
+
+@pytest.mark.parametrize(("closure", "tail"), [
+    pytest.param(V1_EVEN, FURTHER, id="heading"),
+    pytest.param(V1_EVEN, "\n**Theorem 5.** Every odd square is $1 \\bmod 8$.\n", id="no-heading"),
+    # After a candidate's closing sections.
+    pytest.param(_candidate(theorem=True), FURTHER, id="after-findings"),
+    pytest.param(_candidate(theorem=False), "\n**Remark 7.** The findings are open.\n", id="after-no-proof"),
+])
+def test_results_after_a_closure_are_not_swallowed_by_its_last_proof(closure, tail):
+    document = segment(closure + tail)
+    assert document["parser"] == "text-1"
+    nodes = document["nodes"]
+    assert {node["id"] for node in nodes} & {"theorem-5", "remark-7"}
+    assert not any(text in node["proof"] for node in nodes for text in ("Every odd square", "findings are open"))
+    # The closure's lemmas are still read, with their statements.
+    lemmas = [node["statement"] for node in segment(closure)["nodes"] if node["kind"] == "lemma"]
+    assert lemmas and set(lemmas) <= {node["statement"] for node in nodes}
+
+
+def test_steps_and_claims_in_the_last_proof_keep_the_closure():
+    text = V1_EVEN.replace("In either case n^2 + n is even.",
+                           "Step 1: n is even or odd.\n**Claim 2.** Both cases work.\nIn either case n^2 + n is even.")
+    document = segment(text)
+    assert document["parser"] == "text-1+cgm-closure"
+    assert "Step 1: n is even or odd.\n**Claim 2.** Both cases work." in document["nodes"][-1]["proof"]
+
+
 def test_the_sandboxed_segmenter_reads_a_closure(tmp_path):
     path = tmp_path / "pasted.md"
     path.write_text(V2_EVEN, encoding="utf-8")
@@ -273,10 +303,82 @@ def test_a_header_under_a_result_heading_is_the_same_result():
     assert found == [
         # The heading's result, numbered as its header numbers it.
         ("Theorem 1.1", "Main theorem", "Every even number is even.", True),
-        # Another kind is another result.
-        ("Lemma 3", None, "", False),
+        # Another kind is another result; the heading, with nothing under it,
+        # is a section only.
         ("Theorem 3", None, "A different result.", False),
     ]
+    assert [section["title"] for section in document["sections"]] == ["Main theorem", "Lemma 3"]
+
+
+@pytest.mark.parametrize("title", [
+    # A dot followed by a digit belongs to the number, which is never cut
+    # short to make the rest a title ("Lemma 4", titled "1 bounds ...").
+    "Lemma 4.1 bounds the error", "Theorem 2.1.3 is the main result", "Proposition A.1 implies B",
+    "Theorem 1.2a holds", "Lemma 2.1 (Name) extra", "Example 3.1 — rotations", "Claim 1.1 and why",
+    "Lemma L2.1 more", "Lemma 4 bounds the error",
+])
+def test_a_heading_whose_number_runs_into_words_names_no_result(title):
+    assert text_structure._heading_result(title) is None
+
+
+@pytest.mark.parametrize(("title", "number", "name"), [
+    ("Lemma 4.1.", "4.1", None), ("Theorem 1.2a. Bounds", "1.2a", "Bounds"), ("Proposition A.1: Bound", "A.1", "Bound"),
+    ("Lemma L2.1 · the key step", "L2.1", "the key step"), ("Theorem 2.1.3 (Main)", "2.1.3", "Main"),
+    ("Lemma A. Title", "A", "Title"),
+])
+def test_a_heading_keeps_its_whole_number(title, number, name):
+    result = text_structure._heading_result(title)
+    assert (result["number"], result["title"]) == (number, name)
+
+
+def test_results_named_with_dotted_numbers_keep_them():
+    # A section heading that is a sentence about a result names none.
+    text = ("## Lemma 4.1 bounds the error\n\n**Lemma 4.1.** The error is small.\n\n"
+            "## Theorem 4.2 and its consequences\n\n**Theorem 4.2.** All is well.\n\nProof. By Lemma 4.1. QED\n\n"
+            "## Lemma 4\n\nA different lemma.\n")
+    document = text_structure.segment_text(text, file="notes.md", fmt="md", heading_results=True)
+    assert [(node["id"], prompts.printed(node)) for node in document["nodes"]] == [
+        ("lemma-4-1", "Lemma 4.1"), ("theorem-4-2", "Theorem 4.2"), ("lemma-4", "Lemma 4")]
+    assert edges(document) == {("lemma-4-1", "theorem-4-2")}
+
+
+def test_a_header_after_a_paragraph_under_its_heading_states_the_result():
+    # The paragraph introduces the result; the header states it.
+    text = ("# Paper\n\n## Main theorem\n\nWe now state our main result, which answers the question of Smith.\n\n"
+            "**Theorem 1.1.** Every even number is even.\n\n**Proof.** Trivial. QED\n")
+    found = [(prompts.printed(node), node["title"], node["statement"], node["main_result"], node["has_proof"])
+             for node in text_structure.segment_text(text, file="n.md", fmt="md", heading_results=True)["nodes"]]
+    assert found == [("Theorem 1.1", "Main theorem", "Every even number is even.", True, True)]
+    # A proof in between makes the paragraph the heading's statement.
+    proved = text.replace("Smith.\n\n", "Smith.\n\n**Proof.** Clear. QED\n\n")
+    found = [(prompts.printed(node), node["statement"][:12])
+             for node in text_structure.segment_text(proved, file="n.md", fmt="md", heading_results=True)["nodes"]]
+    assert found == [("Main theorem", "We now state"), ("Theorem 1.1", "Every even n")]
+
+
+def test_a_result_heading_with_nothing_under_it_is_a_section_only():
+    text = ("## Theorem 2.1 (Fermat)\n\n### Statement\n\nFor all $n > 2$ there are no solutions.\n\n"
+            "### Proof\n\nWiles.\n\n## Lemma 5\n")
+    document = text_structure.segment_text(text, file="n.md", fmt="md", heading_results=True)
+    assert document["nodes"] == []
+    assert [section["title"] for section in document["sections"]] == [
+        "Theorem 2.1 (Fermat)", "Statement", "Proof", "Lemma 5"]
+    # A heading right above a proof still names the result it proves.
+    proved = text_structure.segment_text("## Theorem 2 (Primes)\n\n**Proof.** Euclid. QED\n", file="n.md", fmt="md",
+                                         heading_results=True)
+    assert [(prompts.printed(node), node["title"], node["has_proof"]) for node in proved["nodes"]] == [
+        ("Theorem 2", "Primes", True)]
+
+
+def test_a_closure_read_generically_takes_each_statement_after_its_marker():
+    # Not clearly a closure (an aside under a heading): the generic reading
+    # passes over the Uses lines and starts each statement at its marker.
+    text = V1_EVEN.replace("**Uses:** none.", "**Uses:** none.\n\nAn aside.", 1)
+    document = segment(text)
+    assert document["parser"] == "text-1"
+    closure = segment(V1_EVEN)["nodes"]
+    assert [(node["statement"], node["proof"], node["main_result"]) for node in document["nodes"]] == [
+        (node["statement"], node["proof"], node["main_result"]) for node in closure]
 
 
 def test_analyze_reads_markdown_headings_as_sections_only():

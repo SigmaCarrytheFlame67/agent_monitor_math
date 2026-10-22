@@ -655,8 +655,9 @@ the listing, with a per-viewer `readability` policy).
   renderings, also as copied from the console: one result per lemma and the
   main theorem, dependencies from its **Uses:** lines, parser
   `text-1+cgm-closure`) and Markdown headings that name a result
-  ("## Theorem 2.1", "### Lemma L2"); a text that is not clearly a closure
-  is never read as one), 2 Guide (one call: what the manuscript shows, its
+  ("## Theorem 2.1", "### Lemma L2"); a text that is not clearly a closure,
+  such as one with a heading or a result of its own after it, is never read
+  as one), 2 Guide (one call: what the manuscript shows, its
   key idea, roadmap, notation and terms, the role and importance of each
   result, with its mathematics in `$...$`; on guest and sponsored runs it
   runs at low effort and is asked to stay short; a guide that fails becomes
@@ -671,11 +672,15 @@ the listing, with a per-viewer `readability` policy).
   `guide.json`, `check.json`, and `receipt.json` written last). In
   `readable.md` (and in answers) leftover LaTeX is written out: `\ref`,
   `\eqref`, `\cref`, `\Cref`, `\autoref` and `\pageref` become the printed
-  name ("Section 3", or the label in brackets when the manuscript does not
-  number it), `\cite[x]{a,b}` becomes "[a, b, x]" and `\label` is dropped;
-  each part's headings are shifted so that its top one is `##`. The
-  receipt's `notes` say why the first reply of a stage could not be read
-  (the parser's message), which is what its format reminder answered.
+  name ("Section 3"; "Lemmas 3.4 and 3.5" in a list), or the label in
+  brackets when the parser does not know it. Equation labels are known only
+  where the same part tags the display (`\tag{2.1}\label{x}`: `\eqref{x}`
+  reads "(2.1)"); the parser numbers no equations. `\cite[x]{a,b}` becomes
+  "[a, b, x]" and `\label` is dropped; each part's headings are shifted so
+  that its top one is `##`. The receipt's `notes` say why the first reply
+  of a stage could not be read (the parser's message, or that the reply was
+  refused unread for its size or tool-call markup), which is what its format
+  reminder answered.
 - **Budget.** The plan keeps a check for every part it rewrites: parts past
   the part cap or the call budget are not rewritten, and `readable.md` shows
   them in their original form, marked; nothing is dropped silently. A

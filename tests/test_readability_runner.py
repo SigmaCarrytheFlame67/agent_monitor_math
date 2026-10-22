@@ -8,6 +8,7 @@ touches the network.
 from __future__ import annotations
 
 import base64
+import hashlib
 import io
 import json
 import os
@@ -1129,6 +1130,10 @@ def test_a_bounded_route_asks_for_a_short_guide_at_low_effort(tmp_path, model):
     # Case counts; and a passage that is nowhere.
     ("reader's NOTE: the step uses", "readable", None),
     ("Nowhere in this manuscript", "readable", None),
+    # A line of a display that opens with "+ " or "- " is math, not a list
+    # item: the console sends it as written.
+    ("We get $$a = b + c - d$$ so the claim holds.", "readable", 3),
+    ("$$a = b + c - d$$ so the claim holds. An item", "readable", 3),
 ])
 def test_a_selected_passage_is_found_across_markdown_marks(selection, view, part):
     readable = {
@@ -1137,6 +1142,7 @@ def test_a_selected_passage_is_found_across_markdown_marks(selection, view, part
             "> **Reader's note:** the step uses $a<b$.\n\n*Plan.* We show $$\n2a + 2b = 2(a + b)\n$$ and "
             "\\(k \\in \\Z\\) holds.\n\n- First item with **bold**.\n- Second item.\n\n[result:lem:sum]: #\n\n"
             "**Lemma 2.2.** Every sum"),
+        3: "We get\n\n$$\na = b\n+ c\n- d\n$$\n\nso the claim holds.\n\n- An item",
     }
     original = {1: "\\section{Intro}\nResult text.", 2: "1. Let $x$ be even.\n> 2. Then\n*Plan.* We show"}
     assert ask.part_of(selection, readable=readable, original=original, view=view) == part
@@ -1176,14 +1182,34 @@ def test_the_receipt_says_why_a_format_reminder_was_sent(tmp_path, model):
     assert load(tmp_path / "clean", "receipt.json")["notes"] == []
 
 
+def test_a_reminder_after_a_reply_refused_unread_says_so_whatever_the_retry_did(tmp_path, model):
+    # The first reply never reached the parser (tool-call markup): the
+    # retry's own parse error is not why the reminder was sent.
+    guides = iter(['{"tool_calls": []}', "Here is a guide, no JSON."])
+    model(guide=lambda _user: next(guides))
+    run(tmp_path, write_request(tmp_path), kimi_env())
+    receipt = load(tmp_path, "receipt.json")
+    assert [entry["stage"] for entry in receipt["call_log"]] == ["guide", "guide-retry", "rewrite-1", "check-1"]
+    assert receipt["notes"] == ["guide: the reply was refused before it was read (too long, or tool-call markup)"]
+    # After an empty reply, the reply read first is its low-effort retry's.
+    guides = iter(["", "Here is a guide, no JSON.", guide_json()])
+    model(guide=lambda _user: next(guides))
+    run(tmp_path / "low", write_request(tmp_path / "low"), kimi_env())
+    receipt = load(tmp_path / "low", "receipt.json")
+    assert [entry["stage"] for entry in receipt["call_log"]][:3] == ["guide", "guide-low", "guide-retry"]
+    assert receipt["notes"] == ["guide: no JSON object with 'one_line'"]
+
+
 def test_a_long_parse_error_is_cut_in_the_notes():
-    errors: dict[str, str] = {}
+    errors: dict[str, tuple[str, str]] = {}
 
     def refuse(_text):
         raise parse.ParseError("x" * 300 + "\x00\x1b tail")
 
     logged = runner._Logged(refuse, "rewrite-3", errors)
-    for _attempt in range(2):
+    for reply in ("reply", "another reply"):
         with pytest.raises(parse.ParseError):
-            logged("reply")
-    assert errors == {"rewrite-3": "x" * 119 + "…"} and logged.lenient is None
+            logged(reply)
+    # The first refusal, with the reply it refused (as the call log hashes it).
+    assert errors == {"rewrite-3": (hashlib.sha256(b"reply").hexdigest(), "x" * 119 + "…")}
+    assert logged.lenient is None

@@ -18,8 +18,11 @@ only items whose quotes occur verbatim in the text.
 Readability passes ``heading_results=True`` (Analyze never does): a Markdown
 heading that names a result ("## Theorem 2.1", "### Lemma L2 (Name)",
 "## Main theorem · ...") then also opens that result, whose statement is the
-paragraph after the heading, and references may cite letter labels ("by
-Lemma L2").
+paragraph after the heading (after a fact closure's "**Uses:**" line, or
+after a "**Statement.**" line), unless a header of the same result follows
+that paragraph and states it; a heading with no paragraph or proof under it
+(another heading, another result or the end comes first) stays a section
+only; and references may cite letter labels ("by Lemma L2").
 """
 from __future__ import annotations
 
@@ -83,16 +86,22 @@ _SPLIT_NUMBERS_RE = re.compile(r"[ \t]*(?:,|and|&|or)[ \t]*")
 # fact closure names its lemmas); the longer form is tried first.
 _LABEL = r"[A-Z]{1,3}\d+(?:\.\d+)*[a-z]?|" + _NUMBER
 # The title of a result heading: "Theorem 2.1", "Lemma L2 (Name)", "Lemma 3:
-# ...", "Lemma 1 · ...", or "Main theorem" (numbered or not).
+# ...", "Lemma 1 · ...", or "Main theorem" (numbered or not).  As in
+# HEADER_RE, a dot followed by a digit is part of the number: "Lemma 4.1
+# bounds the error" names no result (not Lemma 4, titled "1 bounds ...").
 HEADING_RESULT_RE = re.compile(
     r"^[*_]*+(?:(?P<main>Main[ \t]++(?i:theorem))|(?P<kind>" + _KIND_ALTERNATION + r"))(?![A-Za-z])"
     r"(?:[ \t]++(?P<number>" + _LABEL + r"))?[*_]*+[ \t]*+"
-    r"(?:·[ \t]*+(?P<rest>.*)|\((?P<title>[^()\n]{1,160})\)[ \t*_.:]*+|[.:][*_ \t]*+(?P<after>.*))?$"
+    r"(?:·[ \t]*+(?P<rest>.*)|\((?P<title>[^()\n]{1,160})\)[ \t*_.:]*+|(?:\.(?!\d)|:)[*_ \t]*+(?P<after>.*))?$"
 )
 LABEL_REFERENCE_RE = re.compile(
     r"\b(?P<kind>" + _KIND_ALTERNATION + r")(?P<plural>s)?[ \t~]++"
     r"(?P<numbers>(?:" + _LABEL + r")(?:[ \t]*+(?:,|and|&|or)[ \t]*+(?:" + _LABEL + r"))*+)"
 )
+# A fact closure's block, under its heading: "**Uses:** Lemma 1 (fact ...)."
+# and "**Statement.**", which the statement follows.
+_USES_LINE_RE = re.compile(r"[*_]*+Uses:.*")
+_STATEMENT_LINE_RE = re.compile(r"[*_]*+Statement\.[*_]*+")
 
 
 class TextStructureError(ValueError):
@@ -170,13 +179,19 @@ def segment_text(text: str, *, file: str, fmt: str, page_starts: list[int] | Non
     current_section: list[dict[str, Any]] = []
     index = 0
     open_block: dict[str, Any] | None = None
+    # The result a heading opened, while a header right under it may still
+    # state it instead ("## Main theorem", a sentence, "**Theorem 1.1.**").
+    named: dict[str, Any] | None = None
     seen_numbers: set[tuple[str, str]] = set()
 
     def close(end_line: int) -> None:
         nonlocal open_block
         if open_block is not None:
-            open_block["end"] = max(open_block["start"], end_line)
-            blocks.append(open_block)
+            # A result heading with nothing under it (a sub-heading, another
+            # result or the end comes first) stays a section only.
+            if not open_block.get("waiting"):
+                open_block["end"] = max(open_block["start"], end_line)
+                blocks.append(open_block)
             open_block = None
 
     while index < len(lines):
@@ -190,11 +205,21 @@ def segment_text(text: str, *, file: str, fmt: str, page_starts: list[int] | Non
             current_section.append(entry)
             sections.append(dict(entry, file=file, number=None))
             result = _heading_result(title) if heading_results else None
+            named = None
             if result is not None:
                 # The heading names a result: it is a section and opens the
                 # statement, which waits for the paragraph after it.
-                open_block = dict(result, type="statement", start=index, body_start=index, first_line="",
-                                  section=[dict(item) for item in current_section[:-1]], waiting=True)
+                open_block = named = dict(result, type="statement", start=index, body_start=index, first_line="",
+                                          section=[dict(item) for item in current_section[:-1]], waiting=True)
+            index += 1
+            continue
+        if named is not None and _STATEMENT_LINE_RE.fullmatch(line.strip()):
+            # "**Statement.**" under a result heading: the statement follows
+            # it, whatever came between.
+            if open_block is None:
+                blocks.pop()  # the heading's block, closed after a paragraph
+            open_block = named
+            named.update(body_start=index, waiting=True)
             index += 1
             continue
         header = _header(line)
@@ -206,10 +231,14 @@ def segment_text(text: str, *, file: str, fmt: str, page_starts: list[int] | Non
                 header = None
             else:
                 seen_numbers.add(key)
-        if header is not None and open_block is not None and open_block.get("waiting") and _repeats(header, open_block):
-            # "## Theorem 2.1" (or "## Main theorem") and then "**Theorem
-            # 2.1.** ...": one result, whose statement starts at the header and
-            # which is numbered as the header numbers it.
+        if header is not None and named is not None and _repeats(header, named):
+            # "## Theorem 2.1" (or "## Main theorem"), perhaps a paragraph
+            # that introduces it, and then "**Theorem 2.1.** ...": one result,
+            # whose statement starts at the header and which is numbered as
+            # the header numbers it.
+            if open_block is None:
+                blocks.pop()  # the heading's block, closed after that paragraph
+            open_block, named = named, None
             if open_block["number"] is None and header.group("number"):
                 open_block.update(display=header.group("kind"), number=header.group("number"),
                                   title=(header.group("title") or "").strip() or open_block["title"]
@@ -219,6 +248,7 @@ def segment_text(text: str, *, file: str, fmt: str, page_starts: list[int] | Non
             index += 1
             continue
         if header is not None:
+            named = None
             close(index - 1)
             open_block = {
                 "type": "statement",
@@ -235,6 +265,9 @@ def segment_text(text: str, *, file: str, fmt: str, page_starts: list[int] | Non
             continue
         proof = PROOF_RE.match(line)
         if proof is not None:
+            if open_block is not None and open_block.get("waiting"):
+                open_block["waiting"] = False  # a result heading right above its proof states it
+            named = None
             close(index - 1)
             open_block = {
                 "type": "proof",
@@ -253,7 +286,9 @@ def segment_text(text: str, *, file: str, fmt: str, page_starts: list[int] | Non
                 close(index)
                 index += 1
                 continue
-            if open_block.get("waiting"):
+            if open_block.get("waiting") and _USES_LINE_RE.fullmatch(line.strip()):
+                open_block["body_start"] = index  # the statement comes after it
+            elif open_block.get("waiting"):
                 # The blank lines between a result heading and its statement.
                 open_block["waiting"] = not line.strip()
             elif open_block["type"] == "statement" and not line.strip():
@@ -277,7 +312,7 @@ def segment_text(text: str, *, file: str, fmt: str, page_starts: list[int] | Non
         statements = statements[: _latex.MAX_NODES]
     nodes: list[dict[str, Any]] = []
     for block in statements:
-        body = "\n".join([block["first_line"], *lines[block["start"] + 1: block["end"] + 1]]).strip()
+        body = "\n".join([block["first_line"], *lines[block["body_start"] + 1: block["end"] + 1]]).strip()
         nodes.append({
             "kind": block["kind"],
             "env": block["kind"],
