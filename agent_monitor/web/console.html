@@ -354,6 +354,22 @@ html.read-only-run .run-access-note { display: flex; }
 }
 .proof-toolbar button:disabled { opacity: .4; cursor: not-allowed; }
 .proof-toolbar button.primary { border-color: color-mix(in srgb, var(--accent) 50%, var(--border)); color: var(--accent); }
+/* The written proof of a CGM run: a two-way switch beside the file name and a
+   status banner above the write-up. Colours follow the model verifier's
+   verdicts (blue accepted, amber problems); green stays reserved for Lean. */
+.proof-doc-switch { display: inline-flex; flex-shrink: 0; gap: 2px; padding: 2px; border: 1px solid var(--border); border-radius: 9px; background: var(--panel2); }
+.proof-doc-switch[hidden] { display: none; }
+.proof-toolbar .proof-doc-switch button { border: 0; border-radius: 7px; background: transparent; color: var(--dim); padding: 4px 10px; font-weight: 500; white-space: nowrap; }
+.proof-toolbar .proof-doc-switch button:hover:not(:disabled) { color: var(--fg); }
+.proof-toolbar .proof-doc-switch button[aria-checked="true"] { background: var(--panel); color: var(--fg); font-weight: 600; box-shadow: 0 1px 2px rgb(0 0 0 / .12); }
+.proof-toolbar .proof-doc-switch button:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.writeup-chip[data-status="accepted"] { color: var(--verdict-checked); }
+.writeup-chip[data-status="rejected"] { color: var(--verdict-gap); }
+.md-view .writeup-banner { margin: 0 0 14px; padding: 9px 14px; border: 1px solid var(--border); border-left: 3px solid var(--verdict-none); border-radius: 8px; background: var(--panel2); color: var(--muted); font-size: 12.5px; line-height: 1.55; }
+.md-view .writeup-banner[data-status="accepted"] { border-left-color: var(--verdict-checked); }
+.md-view .writeup-banner[data-status="rejected"] { border-left-color: var(--verdict-gap); }
+.md-view .writeup-banner p { margin: 0; }
+.md-view .writeup-banner .writeup-stale { margin-top: 4px; color: var(--fg); font-weight: 600; }
 .auto-pipeline-status { display: flex; align-items: center; gap: 5px; flex-wrap: wrap; justify-content: flex-end; }
 .pipeline-chip {
   display: inline-flex; align-items: center; gap: 5px; max-width: 155px; padding: 4px 8px;
@@ -1968,6 +1984,10 @@ body { background:var(--bg); }
                 <span class="editor-save-status" id="editor-save-status"></span>
                 <a class="analysis-source-link" id="analysis-source-link" hidden target="_blank" rel="noopener noreferrer">Source ↗</a>
                 <button type="button" id="analysis-source-toggle" hidden aria-pressed="false" title="Show the stored copy of the manuscript (read-only)">Source</button>
+                <div class="proof-doc-switch" id="proof-doc-switch" role="radiogroup" aria-label="Proof document" hidden>
+                  <button type="button" role="radio" data-proof-doc="writeup" aria-checked="false" tabindex="-1">Written proof<span class="writeup-chip" id="writeup-chip"></span></button>
+                  <button type="button" role="radio" data-proof-doc="facts" aria-checked="true" title="proof.md: the verifier-accepted facts, which are the proof">Verified facts</button>
+                </div>
                 <button id="proof-edit-btn" class="primary" disabled>✎ Edit</button>
                 <button id="proof-save-btn" class="primary" hidden>Save</button>
                 <button id="proof-done-btn" hidden>Done</button>
@@ -4442,9 +4462,12 @@ function resizeSandboxEditor(){
 }
 function syncSandboxEditor(){
   const edit=$('proof-edit-btn'), save=$('proof-save-btn'), done=$('proof-done-btn');
-  if(edit){edit.hidden=sandboxEditing;edit.disabled=!runId||!sandboxText.trim();}
+  // Edit changes proof.md only, so it is not offered while the written proof is shown.
+  const writeupShown=proofDocShown(lastSandboxRun?.run_id===runId?lastSandboxRun:null)==='writeup';
+  if(edit){edit.hidden=sandboxEditing||writeupShown;edit.disabled=!runId||!sandboxText.trim();}
   if(save){save.hidden=!sandboxEditing;save.disabled=sandboxSaving||(!sandboxDirty&&!sandboxConflict);save.textContent=sandboxConflict?'Overwrite':'Save';}
   if(done){done.hidden=!sandboxEditing;done.disabled=sandboxSaving;}
+  syncProofDocSwitch();
 }
 function resetSandboxEditor(){
   if(sandboxSaveTimer){clearTimeout(sandboxSaveTimer);sandboxSaveTimer=null;}
@@ -4592,7 +4615,7 @@ function applySandboxPreview(run){
   const box=run?.sandbox_preview||{};
   const text=String(box.text||liveSandboxText(run)||'').trim();
   const incomingRevision=String(box.revision||'missing');
-  if(box.has_proof_md) $('proof-label').textContent='proof.md'+(live?' · live':'');
+  if(box.has_proof_md){ $('proof-label').textContent=proofDocLabel(run,live); setProofDocDownload(run); }
   else if(text) $('proof-label').textContent=live?'streaming…':'draft';
   else $('proof-label').textContent=live?'writing…':'waiting for proof.md…';
   if(sandboxEditing&&incomingRevision!==sandboxRevision){
@@ -4754,6 +4777,73 @@ function dagCoverageForNode(node,isLean){
     )
   )||null;
 }
+/* ── written proof ──
+   An accepted CGM run may also publish writeup.md: one readable proof written
+   from the verifier-accepted facts, then checked as a whole by a model
+   verifier. proof.md, the attested fact closure, stays the proof. The Sandbox
+   shows one of the two; a reader's choice is kept per run for this page only,
+   so polls never switch it back. */
+const WRITEUP_BANNER={
+  accepted:'✓ Written from the verified facts and checked as a whole by an independent model verifier — not a formal certificate.',
+  rejected:'⚠ Not accepted — the independent check found problems (listed below). The verified facts remain the proof.',
+  unchecked:'Not checked — the verified facts remain the proof.',
+};
+const WRITEUP_STALE_NOTE='This write-up was made for an earlier version of proof.md.';
+const proofDocChoice=new Map();
+function runWriteup(run){
+  const writeup=run?.sandbox_preview?.writeup;
+  if(!writeup||typeof writeup!=='object'||typeof writeup.text!=='string'||!writeup.text.trim())return null;
+  // Only the server's exact status counts; anything else reads as not checked.
+  const status=['accepted','rejected','unchecked'].includes(writeup.status)?writeup.status:'unchecked';
+  return {text:writeup.text,status,fresh:writeup.fresh===true};
+}
+function proofDocShown(run){
+  const writeup=runWriteup(run);
+  if(!writeup)return 'facts';
+  const chosen=proofDocChoice.get(String(run.run_id||''));
+  if(chosen)return chosen;
+  return writeup.status==='accepted'&&writeup.fresh?'writeup':'facts';
+}
+function proofDocLabel(run,live){ return proofDocShown(run)==='writeup'?'writeup.md':'proof.md'+(live?' · live':''); }
+// Download follows the document on screen (only proof.md can be edited).
+function setProofDocDownload(run){
+  const file=proofDocShown(run)==='writeup'?'writeup.md':'proof.md';
+  setDownloadUrl('/api/workspace/'+encodeURIComponent(runId)+'/file?path='+encodeURIComponent(file)+'&download=1',file);
+}
+function syncProofDocSwitch(){
+  const group=$('proof-doc-switch'); if(!group)return;
+  const run=lastSandboxRun?.run_id===runId?lastSandboxRun:null, writeup=runWriteup(run), doc=proofDocShown(run);
+  group.hidden=!writeup;
+  group.querySelectorAll('[role="radio"]').forEach(button=>{
+    const checked=button.dataset.proofDoc===doc;
+    button.setAttribute('aria-checked',String(checked)); button.tabIndex=checked?0:-1; button.disabled=sandboxEditing;
+    if(button.dataset.proofDoc==='writeup')button.title=writeup?WRITEUP_BANNER[writeup.status]+(writeup.fresh?'':' '+WRITEUP_STALE_NOTE):'';
+  });
+  const chip=$('writeup-chip'); if(!chip)return;
+  chip.dataset.status=writeup?.status||'';
+  chip.textContent=writeup?.status==='accepted'?' ✓':writeup?.status==='rejected'?' ⚠':'';
+}
+function chooseProofDoc(doc){
+  const run=lastSandboxRun;
+  if(!run||run.run_id!==runId||sandboxEditing||!runWriteup(run))return;
+  proofDocChoice.set(String(run.run_id),doc==='writeup'?'writeup':'facts');
+  applySandboxPreview(run);
+  $('proof-body').scrollTop=0;
+}
+document.querySelectorAll('#proof-doc-switch [role="radio"]').forEach(button=>{
+  button.onclick=()=>chooseProofDoc(button.dataset.proofDoc);
+  // Arrow keys switch between the two documents; Home and End pick one.
+  button.onkeydown=event=>{
+    if(!['ArrowLeft','ArrowRight','ArrowUp','ArrowDown','Home','End'].includes(event.key))return;
+    event.preventDefault();
+    chooseProofDoc(event.key==='Home'?'writeup':event.key==='End'?'facts':button.dataset.proofDoc==='writeup'?'facts':'writeup');
+    document.querySelector('#proof-doc-switch [aria-checked="true"]')?.focus();
+  };
+});
+function writeupBannerHtml(writeup){
+  const stale=writeup.fresh?'':`<p class="writeup-stale">${escapeHtml(WRITEUP_STALE_NOTE)}</p>`;
+  return `<div class="writeup-banner" data-status="${escapeHtml(writeup.status)}" role="note"><p>${escapeHtml(WRITEUP_BANNER[writeup.status])}</p>${stale}</div>`;
+}
 /* proof.md of a CGM run published before closure rendering v2 numbers its
    lemmas in topological order, while each proof cites the worker's labels
    ("Cited facts: L1 = fact …"). On screen only, name the lemma each label
@@ -4772,14 +4862,17 @@ function renderMarkdownIntoView(text, live, run){
   sandboxText=String(text||''); syncSandboxEditor();
   run=run||lastSandboxRun;
   const problems=problemItems(run);
-  const displayText=closureCitedLemmas(normalizeProofMarkdown(sandboxText));
-  const proofs=splitProofs(displayText);
+  // The written proof takes proof.md's place on screen only: sandboxText stays proof.md for Edit.
+  const writeup=proofDocShown(run)==='writeup'?runWriteup(run):null;
+  if(writeup)live=false;
+  const displayText=writeup?writeup.text:closureCitedLemmas(normalizeProofMarkdown(sandboxText));
+  const proofs=writeup?[displayText]:splitProofs(displayText);
   if(!problems.length&&!proofs.length)return;
   setProofEmpty(false); $('pdf-pages').style.display='none';
   const view=$('md-view'); view.style.display='block';
   const coverageKey=String(run?.proof_coverage?.source_revision||'');
   // Compare the complete source so equal-length edits in the middle redraw.
-  const key=JSON.stringify([!!live,problems,sandboxText,coverageKey]);
+  const key=JSON.stringify([!!live,problems,sandboxText,coverageKey,writeup]);
   if(view._proofRenderKey===key)return;
   view._proofRenderKey=key;
   const body=$('proof-body');
@@ -4791,13 +4884,15 @@ function renderMarkdownIntoView(text, live, run){
   for(let i=0;i<n;i++){
     let block='<div class="sandbox-turn">';
     if(problems[i]) block+=problemCardHtml(problems[i], i+1, problems.length);
+    if(writeup&&i===0) block+=writeupBannerHtml(writeup);
     if(proofs[i]) block+=`<div class="md-doc${live&&i===n-1?' live':''}">`+mdToHtml(proofs[i])+(live&&i===n-1?'<span class="md-caret"></span>':'')+'</div>';
     block+='</div>';
     parts.push(block);
   }
   view.innerHTML=parts.join('');
   renderMathIn(view);
-  applyFormalCoverage(view,run?.proof_coverage);
+  // Lean marks match fact statements in proof.md, never the write-up's prose.
+  if(!writeup)applyFormalCoverage(view,run?.proof_coverage);
   if(stick)body.scrollTop=body.scrollHeight;
   else body.scrollTop=previousTop;
 }
@@ -4883,9 +4978,9 @@ async function refreshProofPreview(force, run){
   const viewEmpty=!($('md-view')&&$('md-view').innerHTML);
   if(md){
     if(!force&&!viewEmpty&&stamp(md)===String(lastProofMtime))return true; lastProofMtime=stamp(md);
-    $('proof-label').textContent=md.path+(live?' · live':'');
+    $('proof-label').textContent=proofDocLabel(current,live);
     const u='/api/workspace/'+encodeURIComponent(runId)+'/file?path='+encodeURIComponent(md.path)+'&t='+Date.now();
-    await showProofMd(u, live); setDownloadUrl(u+'&download=1',md.path.split('/').pop()); return true;
+    await showProofMd(u, live); setProofDocDownload(current); return true;
   }
   if(live) return false;
   if(tex){
