@@ -154,8 +154,9 @@ Reply with exactly this JSON object and nothing else (no Markdown fence):
 {"verdict": "faithful" or "unfaithful", "summary": "string", "issues":
 [{"severity": "major" or "minor", "location": "string", "problem": "string",
 "fix": "string"}]}
-The verdict is "faithful" if and only if no issue is major. Escape every
-backslash inside JSON strings.
+The verdict is "faithful" if and only if no issue is major. Write all
+mathematics in LaTeX between $...$ inside the strings (the reader sees them
+typeset) and escape every backslash inside JSON strings.
 """
 
 READABLE_ASK_SYSTEM = """# Reading Companion

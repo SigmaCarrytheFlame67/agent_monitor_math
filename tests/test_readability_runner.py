@@ -819,6 +819,12 @@ def test_a_manuscript_without_a_title_is_named_by_its_reading_guide(tmp_path, mo
     run(titled, write_request(titled), kimi_env())
     assert load(titled, "receipt.json")["title"] == "Sums of evens"
     assert record.run_block(titled)["source"]["title"] == "Sums of evens"
+    # A written proof pasted by "Make readable" is titled by its guide, not "Written proof".
+    pasted = tmp_path / "pasted-writeup"
+    writeup = "# Written proof\n\n> Written from the verifier-accepted facts.\n\n**Theorem.** $n^2+n$ is even.\n\n**Proof.** Clear.\n"
+    run(pasted, write_request(pasted, source={"kind": "paste", "text": writeup, "format": "md"}), kimi_env())
+    assert load(pasted, "receipt.json")["title"] == "Even sums, two lemmas"
+    assert record.run_block(pasted)["source"]["title"] == "Even sums, two lemmas"
     # Without a model guide the placeholder stays.
     outline = tmp_path / "outline"
     model(guide=lambda _user: "no JSON here")

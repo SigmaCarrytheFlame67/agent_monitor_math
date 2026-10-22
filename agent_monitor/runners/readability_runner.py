@@ -70,7 +70,7 @@ if not __package__:
 from agent_monitor import safe_fetch
 from agent_monitor.analyze import latex_structure, sources, text_structure
 from agent_monitor.analyze.prompts import utf8_len
-from agent_monitor.analyze.titles import PLACEHOLDER_TITLES
+from agent_monitor.analyze.titles import uninformative_title
 from agent_monitor.cgm.parsing import ParseError
 from agent_monitor.readability import ask as readability_ask
 from agent_monitor.readability import document as readability_document
@@ -639,8 +639,8 @@ class ReadabilityRun(runner.ManuscriptRun):
         labels = {node["id"]: prompts.printed_name(node) for node in nodes}
         refs = references.label_map(segments)
         title = str(manuscript.get("title") or "")
-        if title in PLACEHOLDER_TITLES.values() and self.guide_source == "model":
-            # "Pasted manuscript" names no manuscript; the reading guide's title does.
+        if uninformative_title(title) and self.guide_source == "model":
+            # "Pasted manuscript" or "Written proof" names no manuscript; the reading guide's title does.
             title = " ".join(str(self.guide.get("title") or "").split()) or title
         title = title or str(self.guide.get("title") or "")
         counts = self.counts(outcomes)
