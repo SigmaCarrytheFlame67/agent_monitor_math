@@ -3712,6 +3712,8 @@ function engineView(e){
   return {label:CGM_FAMILY.label,vendor:CGM_FAMILY.vendor,mark:CGM_FAMILY.mark,tone:CGM_FAMILY.tone,auth,issue,available:own.length>0||!!e.available,usable:own.length>0,copy};
 }
 function renderEngines(){
+  // The proof toolbar's Make readable follows the Readability policy and settings this draws from.
+  syncMakeReadable();
   // Analyze and Readability run on their own engines only, and Prove never offers those.
   syncEngineForRunKind();
   renderFormalizeSwitch();
@@ -5132,13 +5134,15 @@ document.querySelectorAll('#proof-doc-switch [role="radio"]').forEach(button=>{
    when it is on screen, else proof.md) becomes the pasted source of a new
    readable version in the composer; nothing runs until that is started. It is
    offered as the server's Readability policy allows this viewer, while the
-   viewer's guest runs and today's sponsored runs leave room for one. */
+   viewer's guest runs and, for a run that would go to sponsored Kimi K3 (as
+   the composer reckons it: a guest's, or a member's without a Kimi key of
+   their own), today's sponsored runs leave room for one. */
 function makeReadableSource(run){
   if(!run||run.run_id!==runId||!dagIsCgmEngine(run.engine)||run.status!=='finished'||!run.sandbox_preview?.has_proof_md||sandboxEditing)return null;
   const entry=readabilityEngineEntry(), daily=readabilityPolicy()?.sponsored;
   if(!readabilityOffered()||!entry.available||entry.requires_login||readabilityPolicy().enabled===false)return null;
   if(viewerIsGuest()&&Number(GUEST_POLICY?.runs_remaining)<=0)return null;
-  if(readabilitySponsoredOnly()&&daily&&(daily.available===false||Number(daily.remaining_today)<=0))return null;
+  if(readabilityRouteSponsored()&&daily&&(daily.available===false||Number(daily.remaining_today)<=0))return null;
   const writeup=proofDocShown(run)==='writeup'?runWriteup(run):null, text=writeup?writeup.text:sandboxText;
   return text.trim()?{text,name:writeup?'written proof':'proof.md'}:null;
 }
@@ -5150,15 +5154,19 @@ function syncMakeReadable(){
   if(button.dataset.shown!==shown){ button.dataset.shown=shown; note.textContent=''; }
 }
 function makeReadable(){
-  const source=makeReadableSource(lastSandboxRun); if(!source)return;
+  const source=makeReadableSource(lastSandboxRun);
+  // No longer offered (today's runs or the policy moved since it was shown): the button goes.
+  if(!source){ syncMakeReadable(); return; }
   const limit=Number(readabilityPolicy().sources?.paste_chars)||20000;
   if(source.text.length>limit){
     $('make-readable-note').textContent=`The ${source.name} has ${source.text.length.toLocaleString('en-US')} characters: too long to paste into Readability (at most ${limit.toLocaleString('en-US')}${viewerIsGuest()?' for guests':''}).`;
     return;
   }
-  // As New does: the run is left for the composer, now in Readability.
+  // As New does: the run is left for the composer, now in Readability, with
+  // this document its one source (files still attached would be a second).
   runId=null; jobId=null; stopPolling(); goLanding();
   chooseMode('readability');
+  if(initialAttachments.files.length)initialAttachments.clear();
   const input=$('problem-text');
   input.value=source.text;
   input.dispatchEvent(new Event('input',{bubbles:true}));
@@ -8712,6 +8720,7 @@ function applyGuestUi(){
   syncStartButton();
   if(runKindChoice()==='analyze')renderAnalyzeCaps();
   if(runKindChoice()==='readability')renderReadabilityCaps();
+  syncMakeReadable();  // it counts the guest runs left too
 }
 async function loadUser(){
   try{

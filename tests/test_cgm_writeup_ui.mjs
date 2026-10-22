@@ -220,7 +220,8 @@ const CONSOLE_FUNCTIONS = [
   'renderMarkdownIntoView', 'showProofMd', 'refreshProofPreview',
   // Make readable, and the Readability policy it follows.
   'makeReadableSource', 'syncMakeReadable', 'makeReadable', 'dagIsCgmEngine', 'readabilityEngineEntry', 'readabilityPolicy',
-  'readabilityOffered', 'viewerIsAdmin', 'viewerIsGuest', 'readabilitySponsoredOnly',
+  'readabilityOffered', 'viewerIsAdmin', 'viewerIsGuest', 'readabilitySponsoredOnly', 'readabilityRouteSponsored', 'engineModelMode',
+  'selectedAccountRuntime',
 ]
 // The proof toolbar and the Sandbox body (with its proof.md editor) exactly as the page has them.
 const TOOLBAR = consoleHtml.slice(consoleHtml.indexOf('<div class="proof-toolbar">'), consoleHtml.indexOf('<div class="prompt-strip'))
@@ -246,7 +247,9 @@ function consolePage() {
     'function editorStatus(message){ calls.status.push(message); }',
     'function setProofEmpty(){} function renderCitations(){} function resizeSandboxEditor(){} function showProofPdf(){}',
     // No Readability on this page until a test lists it; leaving the run is recorded.
-    "let ENGINES=[], CURRENT_USER={id:1}, GUEST_POLICY=null, jobId='j1';",
+    "let ENGINES=[], SETTINGS=null, CURRENT_USER={id:1}, GUEST_POLICY=null, jobId='j1';",
+    // The composer's attached files (none until a test attaches some).
+    "const initialAttachments={files:[],clear(){ calls.left.push('attachments cleared'); this.files=[]; }};",
     "function stopPolling(){ calls.left.push('stop polling'); } function goLanding(){ calls.left.push('composer'); } function chooseMode(mode){ calls.left.push('mode '+mode); }",
     'class Event{ constructor(type,init={}){ this.type=type; this.bubbles=!!init.bubbles; } }',
     `async function fetch(url,init){
@@ -753,15 +756,17 @@ test('the shared page shows no switch without a write-up, never for an analysis,
 })
 
 // ── Make readable ──
-// The Readability entry of /api/engines for a viewer, as the server sends it.
+// The Readability entry of /api/engines for a viewer, as the server sends it (a member's by default).
 const readabilityEngine = ({ entry = {}, policy = {} } = {}) => ({
-  id: 'readability', modes: ['readability'], available: true, ...entry,
+  id: 'readability', modes: ['readability'], available: true, auth_modes: ['api_key'], ...entry,
   readability: { enabled: true, routes: ['sponsored_kimi', 'api_key'], sources: { paste_chars: 400000 }, sponsored: { available: true, remaining_today: 12 }, ...policy },
 })
-function readablePage({ engine = readabilityEngine(), user = { id: 4 }, guestPolicy = null } = {}) {
+// /api/settings of a member on the API route without a Kimi key of their own: their Kimi K3 runs are sponsored.
+const KEYLESS = { account_runtime: 'api', sponsored_kimi_available: true, kimi_user_key_set: false }
+function readablePage({ engine = readabilityEngine(), user = { id: 4 }, guestPolicy = null, settings = KEYLESS } = {}) {
   const page = consolePage()
   page.context.ENGINE_FOR_TEST = [engine]
-  page.run(`ENGINES=ENGINE_FOR_TEST; CURRENT_USER=${JSON.stringify(user)}; GUEST_POLICY=${JSON.stringify(guestPolicy)};`)
+  page.run(`ENGINES=ENGINE_FOR_TEST; SETTINGS=${JSON.stringify(settings)}; CURRENT_USER=${JSON.stringify(user)}; GUEST_POLICY=${JSON.stringify(guestPolicy)};`)
   page.button = () => page.$('make-readable-btn')
   page.note = () => page.$('make-readable-note').textContent
   return page
@@ -796,6 +801,25 @@ test('Make readable pastes the document on screen into Readability, as written, 
   assert.equal(page.button().hidden, false)
   page.button().dispatch('click')
   assert.equal($('problem-text').value, CLOSURE.trim())
+  // The document becomes the composer's one source: files still attached there would be a second.
+  page = readablePage(); ({ context, $, calls } = page)
+  context.applySandboxPreview(cgmRun(writeupBlock('accepted')))
+  page.run("initialAttachments.files=[{file:{name:'notes.tex'}}];")
+  page.button().dispatch('click')
+  assert.deepEqual([calls.left, page.run('initialAttachments.files.length'), $('problem-text').value], [['stop polling', 'composer', 'mode readability', 'attachments cleared'], 0, WRITEUP])
+})
+
+test('Make readable pressed after it stopped applying pastes nothing, and the button goes', () => {
+  const page = readablePage(), { context, $, calls } = page
+  context.applySandboxPreview(cgmRun(writeupBlock('accepted')))
+  assert.equal(page.button().hidden, false)
+  // Today's last sponsored run went elsewhere since the button was drawn.
+  page.run('ENGINES[0].readability.sponsored.remaining_today=0;')
+  page.button().dispatch('click')
+  assert.deepEqual([page.button().hidden, calls.left, page.run('runId'), $('problem-text').value ?? ''], [true, [], 'r1', ''])
+  // The button follows the listing, the settings and the guest runs as they are drawn.
+  assert.match(fn('renderEngines'), /^function renderEngines\(\)\{\n\s*\/\/[^\n]*\n\s*syncMakeReadable\(\);/)
+  assert.match(fn('applyGuestUi'), /renderReadabilityCaps\(\);\n\s*syncMakeReadable\(\);/)
 })
 
 test('Make readable says when the document is longer than the viewer may paste, and pastes nothing', () => {
@@ -830,13 +854,21 @@ test('Make readable is offered only for a finished CGM run, as the Readability p
   assert.equal(shown({ engine: readabilityEngine({ policy: { enabled: false, reason: 'off' } }) }), false)
   assert.equal(shown({ engine: readabilityEngine({ entry: { available: false } }), user: { id: 1, is_admin: true } }), false)
   assert.equal(shown({ engine: { ...readabilityEngine(), readability: null } }), false)
-  // A guest with runs left; a viewer on sponsored Kimi K3 only while today's sponsored runs allow one.
-  assert.equal(shown({ user: { id: 0, guest: true }, guestPolicy: { runs_remaining: 2 } }), true)
-  assert.equal(shown({ user: { id: 0, guest: true }, guestPolicy: { runs_remaining: 0 } }), false)
-  assert.equal(shown({ user: { id: 0, guest: true }, engine: readabilityEngine({ policy: { sponsored: { available: true, remaining_today: 0 } } }) }), false)
+  // A guest with runs left; a run on sponsored Kimi K3 only while today's sponsored runs allow one.
+  const guest = { user: { id: 0, guest: true }, settings: null }
+  assert.equal(shown({ ...guest, guestPolicy: { runs_remaining: 2 } }), true)
+  assert.equal(shown({ ...guest, guestPolicy: { runs_remaining: 0 } }), false)
+  const atLimit = policy => readabilityEngine({ policy: { sponsored: { available: true, remaining_today: 0 }, ...policy } })
+  assert.equal(shown({ ...guest, engine: atLimit() }), false)
   assert.equal(shown({ engine: readabilityEngine({ policy: { routes: ['sponsored_kimi'], sponsored: { available: false } } }) }), false)
-  // A member with their own Kimi key is not held to the sponsored count.
-  assert.equal(shown({ engine: readabilityEngine({ policy: { sponsored: { available: true, remaining_today: 0 } } }) }), true)
+  // A member without a Kimi key of their own runs on sponsored Kimi K3 too (as the composer reckons it).
+  assert.equal(shown({ engine: atLimit() }), false)
+  assert.equal(shown({ engine: readabilityEngine({ policy: { sponsored: { available: false } } }) }), false)
+  // With their own key, or on an administrator's Codex account, the run is not a sponsored one.
+  assert.equal(shown({ engine: atLimit(), settings: { ...KEYLESS, kimi_user_key_set: true } }), true)
+  const routes = ['sponsored_kimi', 'api_key', 'codex_subscription', 'claude_subscription']
+  assert.equal(shown({ engine: { ...atLimit({ routes }), auth_modes: ['codex_subscription', 'claude_subscription', 'api_key'] },
+    user: { id: 1, is_admin: true }, settings: { account_runtime: 'codex', codex_connected: true } }), true)
   // Analyses and readable versions have no proof document to paste.
   const page = readablePage()
   for (const engine of ['analyze', 'readability']) assert.equal(page.context.makeReadableSource({ ...cgmRun(writeupBlock('accepted')), engine }), null)
