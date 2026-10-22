@@ -272,10 +272,12 @@ that text alone. A rejected text may be revised and checked again.
   published; after it, the runner records the write-up as far as it got,
   reports and exits 0, and the console records the run as finished (a
   receipt written during the run is the evidence) without starting queued
-  follow-ups. The watchdog firing during the round likewise leaves the run
-  finished. A server restart during the round marks the run interrupted, as
-  for any running run: its `proof.md` and receipt stay published and attest,
-  and the write-up may be missing or not checked.
+  follow-ups. Stop pressed again meanwhile sends nothing more; a runner that
+  has not exited 30 s after the first is killed. The watchdog firing during
+  the round likewise leaves the run finished. A server restart during the
+  round marks the run interrupted, as for any running run: its `proof.md`
+  and receipt stay published and attest, and the write-up may be missing or
+  not checked.
 - The console decides per run: `AGENT_MONITOR_CGM_WRITEUP` (default on; `0`
   turns the round off for every CGM run) and
   `AGENT_MONITOR_CGM_WRITEUP_GUESTS` (default on; `0` turns it off for guest

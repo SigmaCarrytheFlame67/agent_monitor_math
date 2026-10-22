@@ -7701,12 +7701,21 @@ def stop_run(run_id: str) -> dict[str, Any]:
     processes of its model calls, see _stop_cgm_runner): before its
     publication it publishes nothing and exits 143; after it, the stop ends
     only its written-proof round and the run is recorded as finished.  The
-    worker kills a group that does not exit within 30 s.
+    worker kills a group that does not exit within 30 s.  A Stop repeated
+    meanwhile (a double click, a second tab) signals nothing more: a second
+    signal could cut that wind-down short (a CGM runner's report, say).
     """
     active = _run_is_active(run_id)
-    _stop_event(run_id).set()
     with _LOCK:
+        stop = _stop_event(run_id)
+        # Every start of the run (or of a continuation) clears it.
+        repeated = stop.is_set()
+        stop.set()
         proc = _PROCS.get(run_id)
+    if repeated and proc is not None:
+        # The first Stop signalled this runner (or _register_proc killed it)
+        # and records the stop; its worker ends it.
+        return {"ok": True, "status": "stopped", "run_id": run_id}
     graceful = bool(active) and (
         active.get("engine") in {*_MANUSCRIPT_ENGINES, *_CGM_ENGINES}
         or active.get("kind") in ("recheck", "ask")

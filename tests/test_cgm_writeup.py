@@ -1653,7 +1653,7 @@ class WriteupStopTests(unittest.TestCase):
         """Run the runner double; Stop it once it holds (else its watchdog
         may).  ``while_stopping(run_id)`` runs right after the Stop; the
         seconds from the Stop to the worker's return are ``self.wind_down``."""
-        run_id = f"math_harness_writeup_{mode}_{on_stop}_{'stop' if stop else 'watchdog'}"
+        run_id = self.run_id = f"math_harness_writeup_{mode}_{on_stop}_{'stop' if stop else 'watchdog'}"
         workspace = self.workspace = self._workspace(run_id, f"job-{run_id}")
         command = [sys.executable, "-c", _RUNNER_DOUBLE, mode, on_stop]
         self.enterContext(patch("agent_monitor.engines_registry.build_cli_command", return_value=command))
@@ -1773,6 +1773,40 @@ class WriteupStopTests(unittest.TestCase):
                 self.assertEqual((self.workspace / "sigterms").read_text(), "1")
                 self.assertFalse((self.workspace / RECEIPT).exists())
                 _assert_gone(int((self.workspace / "call").read_text()))
+
+    def test_a_repeated_stop_signals_the_runner_no_more(self) -> None:
+        # A double click, or a second tab: Stop again while the first request
+        # signals the runner, and once more while the runner winds down (3 s).
+        # It takes one SIGTERM and is never killed, so a published run still
+        # reports.
+        signal_runner = jobs._stop_cgm_runner
+        for mode, status in (("publish", "finished"), ("hold", "stopped")):
+            with self.subTest(mode=mode):
+                answers: list[str] = []
+                nested: list[bool] = []
+
+                def stop_cgm_runner(proc) -> None:
+                    if not nested:
+                        nested.append(True)
+                        answers.append(jobs.stop_run(self.run_id)["status"])
+                    signal_runner(proc)
+
+                def while_stopping(run_id: str) -> None:
+                    time.sleep(1)
+                    answers.append(jobs.stop_run(run_id)["status"])
+
+                with patch.object(jobs, "_stop_cgm_runner", stop_cgm_runner):
+                    run = self._engine(mode, stop=True, on_stop="linger", while_stopping=while_stopping)
+                sigterms = self.workspace / "sigterms"
+                self.assertEqual(sigterms.read_text() if sigterms.exists() else "killed", "1")
+                self.assertEqual(run["status"], status)
+                self.assertEqual(jobs._published_before_stop(run), mode == "publish")
+                if mode == "publish":
+                    self.assertIn("Written proof: not written", json.dumps(run["agents"]))
+                # The first request records the stop, once.
+                self.assertEqual(answers, ["stopped", "stopped"])
+                stops = [m for m in jobs.list_chat(self.run_id) if m["content"] == "Run stopped by user."]
+                self.assertEqual(len(stops), 1)
 
     def _real_run(self, name: str, hold: str) -> dict:
         """The Kimi runner itself on a sponsored route to a scripted loopback
