@@ -45,8 +45,7 @@ VIEW_BYTES = 4 * VIEW_CHARS + 4
 # over the whole file; past it the reader is sent to the Original view.
 ORIGINAL_CHARS = 120_000
 _BLANK_RUN_RE = re.compile(r"\n{3,}")
-_ORIGINAL_BLOCK_RE = re.compile(r"(?ms)^\[original:(\d+)\]: #\n.*?^\[original-end:\1\]: #\n?")
-_ORIGINAL_START_RE = re.compile(r"(?m)^\[original:\d+\]: #$")
+_ORIGINAL_MARK_RE = re.compile(r"(?m)^\[original(?P<end>-end)?:(?P<index>\d+)\]: #$\n?")
 _NOT_SHARED = "*The original text of this part is not included in shared links.*\n"
 # A line of the manuscript that looks like one of these marks is indented,
 # so that it marks nothing (in a share, say).
@@ -102,11 +101,24 @@ def normalize_headings(markdown: str) -> str:
 
 def without_original(text: str) -> str:
     """``readable.md`` without the parts repeated in their original form (a
-    shared link carries the rewrite only)."""
-    text = _ORIGINAL_BLOCK_RE.sub(_NOT_SHARED, text)
-    # A block without its end (a file read in part) is left out to the end.
-    stray = _ORIGINAL_START_RE.search(text)
-    return text[: stray.start()] + _NOT_SHARED if stray else text
+    shared link carries the rewrite only), in one pass over the mark lines:
+    a block ends at the first end mark of its own number, and a block
+    without its end (a file read in part) is left out to the end."""
+    out: list[str] = []
+    cursor = 0
+    open_index: str | None = None
+    for match in _ORIGINAL_MARK_RE.finditer(text):
+        if open_index is None:
+            if not match.group("end"):
+                out.append(text[cursor:match.start()])
+                open_index = match.group("index")
+        elif match.group("end") and match.group("index") == open_index:
+            out.append(_NOT_SHARED)
+            cursor = match.end()
+            open_index = None
+    if open_index is not None:
+        return "".join(out) + _NOT_SHARED
+    return "".join(out) + text[cursor:]
 
 
 def clip(text: str, limit: int = VIEW_CHARS) -> str:
@@ -210,7 +222,7 @@ def render_part(part: Mapping[str, Any], *, labels: Mapping[str, str], original:
         if status == "unchecked":
             out.append(f"> **Not checked** ({_line(part.get('reason') or 'no check', 300)}): no model compared "
                        "this part with the original.")
-        markdown = texprose.convert(resolve(str(part.get("markdown") or ""), references or {}), labels)
+        markdown = parse.neutral(texprose.convert(resolve(str(part.get("markdown") or ""), references or {}), labels))
         out.append(anchors(normalize_headings(markdown)))
         return "\n\n".join(out)
     if part.get("kind") == "references":

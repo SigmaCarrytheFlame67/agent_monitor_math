@@ -51,6 +51,30 @@ def test_lists_become_markdown_lists():
     assert convert("\\begin{description}\n\\item[Term] meaning\n\\end{description}", {}) == "- **Term** meaning"
 
 
+def test_enumerate_labels_in_fonts_and_numbered_labels():
+    # Review: amsthm-style labels fell back to "1.", and "1." labels nested an ordered list.
+    for option in ("label=\\textup{(\\roman*)}", "label={\\rm (\\roman*)}", "label=\\upshape(\\roman*)",
+                   "label=\\textnormal{(\\roman*)}", "(i)"):
+        assert convert(f"\\begin{{enumerate}}[{option}]\n\\item a\n\\item b\n\\end{{enumerate}}", {}) == (
+            "- (i) a\n- (ii) b"), option
+    for option in ("1.", "1)", "label=\\arabic*."):
+        mark = ")" if option == "1)" else "."
+        assert convert(f"\\begin{{enumerate}}[{option}]\n\\item a\n\\item b\n\\end{{enumerate}}", {}) == (
+            f"- 1\\{mark} a\n- 2\\{mark} b"), option
+    assert convert("\\begin{itemize}\n\\item[3.] x\n\\end{itemize}", {}) == "- 3\\. x"
+
+
+def test_deep_lists_stop_indenting_and_stray_ends_cost_nothing():
+    # Review: d nested lists of d items made a part about 1.5·d² characters long.
+    depth = 300
+    text = "".join("\\begin{enumerate}\\item x " for _ in range(depth)) + "\\end{enumerate}" * depth
+    out = convert(text, {})
+    assert max(len(line) - len(line.lstrip(" ")) for line in out.splitlines()) <= 3 * 7
+    started = time.monotonic()
+    convert("\\begin{enumerate}" * 7_000 + "\\end{itemize}" * 7_000, {})
+    assert time.monotonic() - started < 1.5
+
+
 def test_nested_and_adjacent_lists_stay_apart():
     nested = convert("\\begin{enumerate}\n\\item one\n  \\begin{itemize}\n  \\item inner\n  \\end{itemize}\n"
                      "\\item two\n\\end{enumerate}", {})

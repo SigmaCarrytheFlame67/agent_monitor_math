@@ -636,12 +636,13 @@ class ReadabilityRun(runner.ManuscriptRun):
                 segments: Mapping[str, Any], manuscript: Mapping[str, Any]) -> dict[str, Any]:
         self.stage("finalize")
         nodes = segments.get("nodes") or []
-        labels = {node["id"]: prompts.printed_name(node) for node in nodes}
+        labels = {node["id"]: references.printed_name(node) for node in nodes}
         refs = references.label_map(segments)
         title = str(manuscript.get("title") or "")
-        if uninformative_title(title) and self.guide_source == "model":
+        guide_title = " ".join(str(self.guide.get("title") or "").split())
+        if uninformative_title(title) and self.guide_source == "model" and not uninformative_title(guide_title):
             # "Pasted manuscript" or "Written proof" names no manuscript; the reading guide's title does.
-            title = " ".join(str(self.guide.get("title") or "").split()) or title
+            title = guide_title
         title = title or str(self.guide.get("title") or "")
         counts = self.counts(outcomes)
         model_guide = self.guide if self.guide_source == "model" else None
@@ -876,10 +877,10 @@ def run_ask(
                         family=prompts.ASK_FAMILY))
                 parsed, reply = harness._job_result(job)
                 # Leftover LaTeX reads as in the readable version.
-                labels = {node["id"]: prompts.printed_name(node) for node in nodes
+                labels = {node["id"]: references.printed_name(node) for node in nodes
                           if isinstance(node, dict) and node.get("id")}
-                parsed["answer"] = texprose.convert(
-                    references.resolve(parsed["answer"], references.label_map(segments)), labels)
+                parsed["answer"] = parse.neutral(texprose.convert(
+                    references.resolve(parsed["answer"], references.label_map(segments)), labels))
                 answer.update(parsed, status="done", model=(reply.observed_model or reply.model or run.info.route.model))
             except harness.RunCancelled:
                 raise Stopped("The question was stopped; nothing was answered") from None

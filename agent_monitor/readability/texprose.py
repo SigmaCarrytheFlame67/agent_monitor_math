@@ -181,6 +181,18 @@ _COUNTERS = {
     "alph": _alph, "Alph": lambda number: _alph(number).upper(),
 }
 _ENUMITEM_LABEL_RE = re.compile(r"label\s*=\s*\{?([^,{}]{0,40}?)\}?\s*(?:,|$)")
+# Font commands and braces around a label's counter: "\\textup{(\\roman*)}",
+# "{\\rm (\\roman*)}", "\\upshape(\\alph*)".
+_LABEL_FONT_RE = re.compile(
+    r"\\(?:text(?:up|normal|rm|bf|it|sl|sf|sc)|mathrm|mbox)[ \t]*\{([^{}]*)\}"
+    r"|\\(?:upshape|rmfamily|rm|itshape|it|slshape|bfseries|bf|normalfont|sffamily|sf|scshape|em)(?![A-Za-z])[ \t]*"
+    r"|[{}]"
+)
+# A label that begins with a number and "." or ")" would open an ordered list
+# inside the bullet: the mark is escaped.
+_NUMBERED_LABEL_RE = re.compile(r"^(\d{1,9})([.)])")
+# Lists deeper than this are not indented further.
+_MAX_LIST_DEPTH = 8
 _ENUMITEM_COUNTER_RE = re.compile(r"\\(arabic|roman|Roman|alph|Alph)\*")
 _SHORT_COUNTER_RE = re.compile(r"(?<![A-Za-z])([1iIaA])(?![A-Za-z])")
 
@@ -189,7 +201,7 @@ def _item_label(option: str | None) -> "Callable[[int], str] | None":
     """How an ``enumerate`` with this option numbers its items: "(i)" and
     "a)" (enumerate's short form) or "label=(\\roman*)" (enumitem's), else
     ``None`` (plain numbers)."""
-    option = " ".join((option or "").split())
+    option = " ".join(_LABEL_FONT_RE.sub(lambda match: match.group(1) or "", option or "").split())
     if not option:
         return None
     keyed = _ENUMITEM_LABEL_RE.search(option)
@@ -232,12 +244,16 @@ class _List:
         if self.kind == "description":
             return f"{self.marker}**{label}** " if label else self.marker
         if self.kind != "enumerate" or label:
-            return f"{self.marker}{label} " if label else self.marker
+            return f"{self.marker}{_safe_label(label)} " if label else self.marker
         self.count += 1
         if not self.bullets:
             return self.marker
-        # An escaped dot ("1\\.") is no ordered list nested in the bullet.
-        return f"{self.marker}{self.number(self.count) if self.number else str(self.count) + chr(92) + '.'} "
+        return f"{self.marker}{_safe_label(self.number(self.count) if self.number else f'{self.count}.')} "
+
+
+def _safe_label(label: str) -> str:
+    """An item's label as text: "1\\." is no ordered list nested in the bullet."""
+    return _NUMBERED_LABEL_RE.sub(lambda match: f"{match.group(1)}\\{match.group(2)}", label)
 
 
 def _labelled_lists(work: str) -> set[int]:
@@ -245,13 +261,17 @@ def _labelled_lists(work: str) -> set[int]:
     (``\\item[(b)]``) begin."""
     labelled: set[int] = set()
     stack: list[tuple[str, int]] = []
+    open_kinds = {kind: 0 for kind in _LIST_MARKERS}  # an \\end with none open costs nothing
     for match in _STRUCTURE_RE.finditer(work):
         begin, end = match.group("begin"), match.group("end")
         if begin is not None and begin.lower() in _LIST_MARKERS:
             stack.append((begin.lower(), match.start()))
-        elif end is not None and end.lower() in _LIST_MARKERS:
+            open_kinds[begin.lower()] += 1
+        elif end is not None and end.lower() in _LIST_MARKERS and open_kinds[end.lower()]:
             for index in range(len(stack) - 1, -1, -1):
                 if stack[index][0] == end.lower():
+                    for kind, _start in stack[index:]:
+                        open_kinds[kind] -= 1
                     del stack[index:]
                     break
         elif begin is None and end is None and match.group("label") is not None and stack:
@@ -263,6 +283,7 @@ def _structure(work: str, labels: Mapping[str, str]) -> str:
     labelled = _labelled_lists(work)
     out: list[str] = []
     lists: list[_List] = []
+    open_kinds = {kind: 0 for kind in _LIST_MARKERS}
     top_lists = 0
     cursor = 0
     # After a header or an item marker, the space that ended its line goes.
@@ -304,6 +325,7 @@ def _structure(work: str, labels: Mapping[str, str]) -> str:
                     top_lists += 1
                 lists.append(_List(kind, match.group("option"), match.start() in labelled,
                                    "-" if len(lists) or top_lists % 2 else "+"))
+                open_kinds[kind] += 1
                 if len(lists) == 1:
                     out.append("\n\n")
                 else:
@@ -320,8 +342,10 @@ def _structure(work: str, labels: Mapping[str, str]) -> str:
                 out.append(" ∎\n\n")
             elif kind in _LIST_MARKERS:
                 drop_trailing_space()
-                for index in range(len(lists) - 1, -1, -1):
+                for index in range(len(lists) - 1, -1, -1) if open_kinds[kind] else ():
                     if lists[index].kind == kind:
+                        for closed in lists[index:]:
+                            open_kinds[closed.kind] -= 1
                         del lists[index:]
                         break
                 out.append("\n\n" if not lists else "\n")
@@ -330,7 +354,7 @@ def _structure(work: str, labels: Mapping[str, str]) -> str:
         else:
             label = " ".join((match.group("label") or "").split())
             current = lists[-1] if lists else _List("itemize", None, False)
-            indent = " " * sum(len(open_list.marker) for open_list in lists[:-1])
+            indent = " " * sum(len(open_list.marker) for open_list in lists[: min(len(lists) - 1, _MAX_LIST_DEPTH - 1)])
             if not just_opened:
                 drop_trailing_space()
             out.append(f"\n{indent}{current.item(label)}")

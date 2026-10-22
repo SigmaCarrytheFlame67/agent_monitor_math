@@ -39,9 +39,10 @@ ISSUE_KEYS = ("severity", "location", "problem", "fix")
 VERDICTS = ("faithful", "unfaithful")
 SEVERITIES = ("major", "minor")
 MAX_ISSUES = 12
-_DECOR = r"[\s#>*_`]*"
-_START_RE = re.compile(rf"(?im)^{_DECOR}={{3,}}\s*READABLE\s*={{3,}}{_DECOR}$")
-_END_RE = re.compile(rf"(?im)^{_DECOR}={{3,}}\s*END\s*={{3,}}{_DECOR}$")
+# On one line: across blank lines each line start would rescan the run.
+_DECOR = r"[ \t#>*_`]*"
+_START_RE = re.compile(rf"(?im)^{_DECOR}={{3,}}[ \t]*READABLE[ \t]*={{3,}}{_DECOR}$")
+_END_RE = re.compile(rf"(?im)^{_DECOR}={{3,}}[ \t]*END[ \t]*={{3,}}{_DECOR}$")
 _FENCE_RE = re.compile(r"(?m)^ {0,3}(?:```|~~~)")
 # Math, set aside before the Markdown is read as the console and the shared
 # viewer do (display environments, $$...$$, \[...\], \(...\), then $...$
@@ -84,9 +85,14 @@ _ACTIVE_HTML_RE = re.compile(
     r"|<[A-Za-z][^\s/<>]*(?:[\s/][^<>]*)?[\s/]on[a-z]{3,}\s*=",
     re.I | re.M,
 )
-# A link reference definition the model wrote: neutralized, so that no line
-# of model text becomes an anchor (``[result:<id>]: #`` lines are ours).
-_LINK_DEFINITION_RE = re.compile(r"(?m)^( {0,3})\[(?=[^\]\n]+\]:)")
+# A link reference definition the model wrote (indented by spaces or tabs,
+# as the console's mark lines may be): neutralized, so that no line of model
+# text becomes an anchor (``[result:<id>]: #`` lines are ours).  Its bracket
+# is written as an entity: "\\[" would open display math.
+_LINK_DEFINITION_RE = re.compile(r"(?m)^([ \t]*)\[(?=[^\]\n]*\]:)")
+_DEFINITION_BRACKET = r"\1&#91;"
+_FENCE_LINE_RE = re.compile(r"(?m)^([ \t]*)(`{3}|~{3})")
+_TAG_OPENER_RE = re.compile(r"<(?=[A-Za-z/!?])")
 
 
 def _single_object(text: str, *, required: str, allowed: frozenset[str]) -> dict[str, Any]:
@@ -246,7 +252,25 @@ def readable_body(text: str) -> str:
     if not body.strip():
         raise ParseError("the readable part is empty")
     _plain_markdown(body, "the readable part")
-    return _LINK_DEFINITION_RE.sub(r"\1\\[", body)
+    return _LINK_DEFINITION_RE.sub(_DEFINITION_BRACKET, body)
+
+
+def neutral(markdown: str) -> str:
+    """``markdown`` (a rewrite or an answer the parser accepted) after the
+    clean-up that follows it (``references.resolve`` and
+    ``texprose.convert`` delete TeX, which can bring what was behind it to
+    the start of a line or next to a ``<``), kept to the parser's contract:
+    no line opens a link definition (nor so one of the runner's marks) or a
+    code fence, and no raw HTML outside math.  It reads the same."""
+    markdown = _LINK_DEFINITION_RE.sub(_DEFINITION_BRACKET, markdown)
+    markdown = _FENCE_LINE_RE.sub(lambda match: f"{match.group(1)}\\{match.group(2)}", markdown)
+    if not (_HTML_RE.search(_without_math(markdown)) or _ACTIVE_HTML_RE.search(_without_math(markdown))):
+        return markdown
+    pieces, cursor = [], 0
+    for start, end in math_spans(markdown):
+        pieces += [_TAG_OPENER_RE.sub("&lt;", markdown[cursor:start]), markdown[start:end]]
+        cursor = end
+    return "".join(pieces) + _TAG_OPENER_RE.sub("&lt;", markdown[cursor:])
 
 
 class RewriteParser:
@@ -335,4 +359,4 @@ def parse_answer(text: str, *, node_ids: Iterable[str]) -> dict[str, Any]:
         return f"[[result:{identifier}]]"
 
     answer = MARKER_RE.sub(keep, answer)
-    return {"answer": _LINK_DEFINITION_RE.sub(r"\1\\[", answer), "refs": refs}
+    return {"answer": _LINK_DEFINITION_RE.sub(_DEFINITION_BRACKET, answer), "refs": refs}

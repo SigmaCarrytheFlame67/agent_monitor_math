@@ -237,3 +237,15 @@ def test_the_readable_version_resolves_references_and_heading_levels_per_part():
     assert [line for line in rewritten.split("\n") if line.startswith("# ")] == ["# T — Readable version"]
     # A part shown in its original form is kept exactly (in its fence).
     assert "~~~~text\n# Original heading\n\\ref{sec:aec} kept as written\n~~~~" in original
+
+
+def test_a_multi_word_name_before_a_reference_is_not_repeated():
+    # Review: "Main Theorem~\\ref{thm:main}" read "Main Theorem Main Theorem 1".
+    refs = {"thm:main": ("Main Theorem 1", "1"), "lem:key": ("Key Lemma 1", "1")}
+    assert references.resolve("By Main Theorem~\\ref{thm:main} and Key Lemma~\\ref{lem:key}.", refs) == (
+        "By Main Theorem 1 and Key Lemma 1.")
+    assert references.resolve("By Main Theorems~\\ref{thm:main} and~\\ref{thm:main}.", refs) == (
+        "By Main Theorems 1 and 1.")
+    # As LaTeX prints it: the author's word, then the number.
+    assert references.resolve("By Lemma~\\ref{lem:key}.", refs) == "By Lemma 1."
+    assert references.resolve("By \\ref{lem:key}.", refs) == "By Key Lemma 1."

@@ -406,8 +406,8 @@ _PAREN_MATH = re.compile(r"\\\((.{1,600}?)\\\)", re.S)
 PLACEHOLDER_TITLES = {"paste": "Pasted manuscript", "upload": "Uploaded manuscript"}
 # Headings that name no manuscript: a CGM proof's "# Proof", a written
 # proof's "# Written proof".
-_UNINFORMATIVE_TITLES = frozenset({"proof", "written proof", "untitled", "untitled manuscript",
-                                   *(title.lower() for title in PLACEHOLDER_TITLES.values())})
+_UNINFORMATIVE_TITLES = frozenset({"proof", "written proof", "proof candidate (not verifier-accepted)", "untitled",
+                                   "untitled manuscript", *(title.lower() for title in PLACEHOLDER_TITLES.values())})
 
 
 def uninformative_title(title: object) -> bool:

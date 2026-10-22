@@ -72,6 +72,17 @@ _TEX_TEXT = {"$": "\\$", "%": "\\%", "&": "\\&", "#": "\\#", "_": "\\_", "^": "\
 _TEX_SPECIAL_RE = re.compile(r"[$%&#_^~\\]")
 
 
+def printed_name(node: Mapping[str, Any]) -> str:
+    """A result's name for a reader: "Lemma 3.2", or "Lemma (Coding)" when
+    the manuscript does not number it but gives it a title (as plain text,
+    as :func:`label_map` writes it)."""
+    name = printed(node)
+    if str(node.get("number") or "").strip() or not node.get("title"):
+        return name
+    title = plain_title(latex_structure._plain(resolve(str(node["title"]), {}), 400), 100)
+    return f"{name} ({title})" if title else name
+
+
 def label_map(segments: Mapping[str, Any]) -> dict[str, tuple[str, str]]:
     """``{label: (printed name, number)}`` of the manuscript's labelled
     results ("Lemma 2.6", or "Lemma (Title)" without a number) and sections
@@ -191,8 +202,12 @@ def _reference(match: "re.Match[str]", refs: Mapping[str, tuple[str, str]], word
             out.append(f"[{escape(key)}]")
             continue
         name, number = refs[key]
-        head, _space, rest = name.partition(" ")
-        names = _names(word, head)
+        if number and name.endswith(" " + number):
+            # "Main Theorem 1": the words before the number name it.
+            display, rest = name[: -len(number)].rstrip(), number
+        else:
+            display, _space, rest = name.partition(" ")
+        names = _names(word, display.rsplit(" ", 1)[-1])
         if command == "eqref":
             text = f"({number})" if number else name
         elif position == 0 and rest and names:
