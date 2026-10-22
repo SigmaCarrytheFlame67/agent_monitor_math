@@ -1510,17 +1510,21 @@ class WriteupDerivedViewsTests(unittest.TestCase):
 # SIGTERM, then reports and exits 0.  "hold": it is stopped before publishing
 # anything and exits 143, as the runner does.  "call": it waits on a model
 # call, a process in a session of its own (as Claude Code and Codex calls
-# are); a call that ends before any stop request reads to it as a failed
-# curator call, so it publishes without it, and after one it exits 143.  The
+# are) on a daemon thread, looking for a stop first, every 0.2 s and once the
+# call has ended, as the runner's coordinator does; a call that ends before
+# any stop request reads to it as a failed curator call, so it publishes
+# without it, and after one it exits 143 without waiting for the call.  The
 # second argument is how it takes SIGTERM: at once ("report"), after winding
-# down for 3 s ("linger") or not at all ("deaf").
+# down for 3 s ("linger") or not at all ("deaf").  It writes how many SIGTERMs
+# it took to "sigterms" when it exits.
 _RUNNER_DOUBLE = r"""
-import json, os, signal, subprocess, sys, time
+import atexit, json, os, signal, subprocess, sys, threading, time
 from pathlib import Path
 
 mode, on_stop = sys.argv[1], sys.argv[2]
 stopped = []
 signal.signal(signal.SIGTERM, signal.SIG_IGN if on_stop == "deaf" else lambda *_: stopped.append(True))
+atexit.register(lambda: Path("sigterms").write_text(str(len(stopped))))
 Path("pid").write_text(str(os.getpid()))
 
 
@@ -1548,8 +1552,11 @@ if mode == "call":
         start_new_session=True,
     )
     Path("call").write_text(str(call.pid))
+    ended = threading.Event()
+    threading.Thread(target=lambda: (call.wait(), ended.set()), daemon=True).start()
     Path("held").write_text("")
-    call.wait()
+    while not stopped and not ended.wait(0.2):
+        pass
     if stopped:
         stopped_before_publication()
     publish()
@@ -1744,6 +1751,28 @@ class WriteupStopTests(unittest.TestCase):
         self.assertIn("timed out after 2s", run["error"])
         self.assertFalse((self.workspace / RECEIPT).exists())
         _assert_gone(int((self.workspace / "call").read_text()))
+
+    def test_no_model_call_outlives_a_runner_that_exits_at_once(self) -> None:
+        # Signalled, the runner exits within a poll without waiting for its
+        # call, which then belongs to no runner.  However long the console
+        # takes to list the call (busy elsewhere), it is listed before the
+        # runner is signalled, and ended.
+        import psutil
+
+        listing = psutil.Process.children
+
+        def slow_listing(process, *args, **kwargs):
+            time.sleep(0.5)
+            return listing(process, *args, **kwargs)
+
+        self.enterContext(patch.object(psutil.Process, "children", slow_listing))
+        for stop, status in ((True, "stopped"), (False, "failed")):
+            with self.subTest(stop=stop):
+                run = self._engine("call", stop=stop, timeout=None if stop else 2)
+                self.assertEqual(run["status"], status)
+                self.assertEqual((self.workspace / "sigterms").read_text(), "1")
+                self.assertFalse((self.workspace / RECEIPT).exists())
+                _assert_gone(int((self.workspace / "call").read_text()))
 
     def _real_run(self, name: str, hold: str) -> dict:
         """The Kimi runner itself on a sponsored route to a scripted loopback

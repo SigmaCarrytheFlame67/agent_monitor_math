@@ -591,23 +591,30 @@ def _stop_cgm_runner(proc: Any) -> None:
     The runner takes the request first (its handler only sets an event), so
     a call the stop cuts short never reads to it as a provider failure to
     carry on from (publishing without its curator, say).  Those processes
-    (Claude Code, Codex) run in sessions of their own and are found through
-    the runner, which lives on until its coordinator next looks, so they are
-    signalled at once.  The runner gets this one SIGTERM: a second one after
-    its publication could end it before its report.
+    (Claude Code, Codex) run in sessions of their own, and the runner exits
+    as soon as its coordinator next looks, without waiting for them: they
+    are listed through it before it is signalled.  The runner gets this one
+    SIGTERM: a second one after its publication could end it before its
+    report (see stop_run).
     """
     from agent_monitor.process_control import terminate_descendants
 
     try:
         pid = int(proc.pid)
-        # As _terminate_registered_proc: only a runner's own group.
-        if os.getpgid(pid) == pid:
-            os.killpg(pid, signal.SIGTERM)
-        else:
-            proc.terminate()
-    except (AttributeError, OSError, ProcessLookupError, TypeError, ValueError):
+    except (AttributeError, TypeError, ValueError):
         return
-    terminate_descendants(pid, force=False)
+
+    def signal_runner() -> None:
+        try:
+            # As _terminate_registered_proc: only a runner's own group.
+            if os.getpgid(pid) == pid:
+                os.killpg(pid, signal.SIGTERM)
+            else:
+                proc.terminate()
+        except OSError:
+            pass
+
+    terminate_descendants(pid, force=False, signal_wrapper=signal_runner)
 
 
 def _register_proc(run_id: str, proc: Any) -> None:

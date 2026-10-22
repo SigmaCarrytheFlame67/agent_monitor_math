@@ -140,9 +140,10 @@ ceilings, so an environment value can only lower them.
 - A problem statement may be at most 44,000 bytes of UTF-8 text; larger ones
   are refused before a run slot or a sponsored credential is used.
 - Calls still in flight 15 s after `AGENT_MONITOR_CGM_MAX_SECONDS` are
-  abandoned. Stop sends SIGTERM: the runner abandons its in-flight calls,
-  publishes nothing and exits 143 (`kimi` and `math_harness` alike); any
-  other failure exits 1.
+  abandoned. Stop sends SIGTERM: the runner abandons its in-flight calls
+  (the console then ends their Claude Code or Codex processes), publishes
+  nothing and exits 143 (`kimi` and `math_harness` alike); any other
+  failure exits 1.
 - A run writes `proof.md` only when it publishes, so the derived-views
   pipeline (Lean and the DAGs) waits at least the run's outer watchdog, which
   follows `AGENT_MONITOR_CGM_MAX_SECONDS`, plus 300 s
