@@ -39,6 +39,38 @@
     formal: 'No structural Lean graph was included in this saved snapshot.',
     manuscript: 'No manuscript graph was included in this saved snapshot.',
   };
+  // A CGM run may carry a written proof besides proof.md (the verified facts):
+  // the same two-way switch and status banner as the console.
+  const writeupBanner = {
+    accepted: '✓ Written from the verified facts and checked as a whole by an independent model verifier — not a formal certificate.',
+    rejected: '⚠ Not accepted — the independent check found problems (listed below). The verified facts remain the proof.',
+    unchecked: 'Not checked — the verified facts remain the proof.',
+  };
+  const writeupStaleNote = 'This write-up was made for an earlier version of proof.md.';
+  let writeup = null, proofDoc = 'facts';
+  function showProofDocument() {
+    const written = !!writeup && proofDoc === 'writeup';
+    all('[data-proof-doc]').forEach(button => {
+      const checked = button.dataset.proofDoc === (written ? 'writeup' : 'facts');
+      button.setAttribute('aria-checked', String(checked));
+      button.tabIndex = checked ? 0 : -1;
+    });
+    const banner = $('rv-writeup-banner');
+    banner.hidden = !written;
+    if (written) {
+      banner.dataset.status = writeup.status;
+      banner.replaceChildren(node('p', '', writeupBanner[writeup.status]));
+      if (!writeup.fresh) banner.append(node('p', 'rv-writeup-stale', writeupStaleNote));
+      renderText($('rv-proof-text'), writeup.text);
+    } else if (data.proof) renderText($('rv-proof-text'), data.proof);
+    else empty($('rv-proof-text'), analysis ? 'No saved analysis report' : 'No saved proof', analysis ? 'The report was not included in this snapshot.' : 'The proof document was not included in this snapshot.', '∎');
+  }
+  function chooseProofDocument(doc, focus = false) {
+    if (!writeup) return;
+    proofDoc = doc === 'writeup' ? 'writeup' : 'facts';
+    showProofDocument();
+    if (focus) all('[data-proof-doc]').find(button => button.dataset.proofDoc === proofDoc)?.focus();
+  }
   function graphFor(mode) {
     if (data?.graphs && Object.prototype.hasOwnProperty.call(data.graphs, mode)) return data.graphs[mode];
     const old = mode === 'formal' ? data?.formal_graph : ((analysis && mode === 'manuscript') || (!analysis && mode === 'outline')) ? data?.informal_graph : null;
@@ -104,6 +136,15 @@
   all('[data-engine-mode]').forEach(button => button.addEventListener('click', () => { engineMode = button.dataset.engineMode; showGraph(); }));
   all('[data-open-tab]').forEach(button => button.addEventListener('click', () => tab(button.dataset.openTab)));
   all('[data-open-graph]').forEach(button => button.addEventListener('click', () => openGraph(button.dataset.openGraph)));
+  all('[data-proof-doc]').forEach(button => {
+    button.addEventListener('click', () => chooseProofDocument(button.dataset.proofDoc));
+    // Arrow keys switch between the two documents; Home and End pick one.
+    button.addEventListener('keydown', event => {
+      if (!['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown', 'Home', 'End'].includes(event.key)) return;
+      event.preventDefault();
+      chooseProofDocument(event.key === 'Home' ? 'writeup' : event.key === 'End' ? 'facts' : button.dataset.proofDoc === 'writeup' ? 'facts' : 'writeup', true);
+    });
+  });
   $('rv-theme').addEventListener('click', () => {
     const dark = document.documentElement.dataset.theme !== 'dark';
     document.documentElement.dataset.theme = dark ? 'dark' : 'light';
@@ -157,8 +198,18 @@
     graphMode = 'manuscript';
   }
   renderText($('rv-problem'), data.problem || 'The original task was not included in this snapshot.');
-  if (data.proof) renderText($('rv-proof-text'), data.proof);
-  else empty($('rv-proof-text'), analysis ? 'No saved analysis report' : 'No saved proof', analysis ? 'The report was not included in this snapshot.' : 'The proof document was not included in this snapshot.', '∎');
+  if (!analysis && typeof data.writeup === 'string' && data.writeup.trim()) {
+    // Only the exact saved status counts; the written proof opens first only when accepted for this proof.md.
+    const status = ['accepted', 'rejected', 'unchecked'].includes(data.writeup_status) ? data.writeup_status : 'unchecked';
+    writeup = { text: data.writeup, status, fresh: data.writeup_fresh === true };
+    proofDoc = status === 'accepted' && writeup.fresh ? 'writeup' : 'facts';
+    $('rv-proof-doc-switch').hidden = false;
+    const chip = $('rv-writeup-chip');
+    chip.dataset.status = status;
+    chip.textContent = status === 'accepted' ? ' ✓' : status === 'rejected' ? ' ⚠' : '';
+    chip.parentElement.title = writeupBanner[status] + (writeup.fresh ? '' : ' ' + writeupStaleNote);
+  }
+  showProofDocument();
   try {
     const source = new URL(data.source_url);
     if (source.protocol === 'https:' && !/\/shared\//i.test(source.pathname)) {
