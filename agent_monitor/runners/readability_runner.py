@@ -186,6 +186,11 @@ class _Call:
     job: Any = None
 
 
+# Repairs (a rewrite and its re-check) per run, by cap profile; the others
+# get one per part that needs it, within their call cap.
+REPAIRS_PER_RUN = {"guest": 0, "member_sponsored": 2}
+
+
 class ReadabilityRun(runner.ManuscriptRun):
     """One readability run (or one question) of a run workspace."""
 
@@ -520,10 +525,13 @@ class ReadabilityRun(runner.ManuscriptRun):
     def repair(self, outcomes: list[_Outcome], rewrite_calls: Mapping[int, _Call], *,
                document: readability_document.Document, total: int, math_fidelity: str | None) -> None:
         """One more rewrite of each part whose check found major problems,
-        checked again; the repair is kept only with a verdict of its own."""
-        if self.info.bounded or self.stopped:
+        checked again; the repair is kept only with a verdict of its own.
+        Guests get none and members on the sponsored pool at most
+        ``REPAIRS_PER_RUN``; every run stays within its call cap."""
+        if self.stopped:
             return
         wanted = [outcome for outcome in outcomes if outcome.verdict == "unfaithful"]
+        wanted = wanted[: REPAIRS_PER_RUN.get(self.caps.profile, len(wanted))]
         wanted = wanted[: max(0, self.ctx.remaining() // 2)]
         if not wanted:
             return

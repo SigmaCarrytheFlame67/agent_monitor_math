@@ -8,6 +8,7 @@ touches the network.
 from __future__ import annotations
 
 import base64
+import dataclasses
 import hashlib
 import io
 import json
@@ -496,7 +497,7 @@ def test_a_part_that_stays_unfaithful_is_marked_in_the_readable_version(tmp_path
     assert fake.kinds().count("check") == 2
 
 
-def test_guests_and_sponsored_runs_are_never_repaired(tmp_path, model):
+def test_guests_are_never_repaired(tmp_path, model):
     fake = model(check=lambda _user: check_json("unfaithful", [MAJOR]))
     req = write_request(tmp_path, role="guest", route="sponsored_kimi", sponsored=True)
     with pytest.raises(analyze_runner.ConfigError, match="sponsored Kimi route is not configured"):
@@ -510,6 +511,41 @@ def test_guests_and_sponsored_runs_are_never_repaired(tmp_path, model):
     run(tmp_path, write_request(tmp_path, role="member"), kimi_env(AGENT_MONITOR_MAX_OUTPUT_TOKENS="8192"))
     efforts = {call["kind"]: call["effort"] for call in fake.calls}
     assert efforts["rewrite"] == "low" and efforts["check"] == "high"
+
+
+def test_members_on_the_sponsored_pool_get_at_most_two_repairs(tmp_path, model):
+    # Live (Kimi K3, sponsored): a part whose rewrite changed a definition was published with
+    # its warning only, because no bounded route was ever repaired.
+    sections = "\n".join(
+        f"\\section{{Part {index}}}\n" + ("Filler sentence about even numbers. " * 400)
+        + f"\n\\begin{{lemma}}\\label{{lem:p{index}}} Statement {index}. \\end{{lemma}}\n\\begin{{proof}} Clear. \\end{{proof}}"
+        for index in range(1, 5))
+    paper = "\\documentclass{article}\n\\begin{document}\n" + sections + "\n\\end{document}\n"
+    fake = model(check=lambda _user: check_json("unfaithful", [MAJOR]))
+    env = kimi_env(AGENT_MONITOR_MAX_OUTPUT_TOKENS="8192")
+    run(tmp_path, write_request(tmp_path, text=paper, role="member"), env)
+    receipt = load(tmp_path, "receipt.json")
+    assert receipt["caps"]["profile"] == "member_own_key" and receipt["parts"]["rewritten"] == 4
+    assert sum(entry["stage"].startswith("repair-") for entry in receipt["call_log"]) == 4
+    assert runner.REPAIRS_PER_RUN == {"guest": 0, "member_sponsored": 2}
+    # The sponsored member's profile is capped at two, in document order.
+    fake.calls.clear()
+    sponsored = tmp_path / "sponsored"
+    req = write_request(sponsored, text=paper, role="member")
+    original = runner.ReadabilityRun.__init__
+
+    def as_sponsored(self, *args, **kwargs):
+        original(self, *args, **kwargs)
+        self.caps = dataclasses.replace(self.caps, profile="member_sponsored")
+
+    try:
+        runner.ReadabilityRun.__init__ = as_sponsored
+        run(sponsored, req, env)
+    finally:
+        runner.ReadabilityRun.__init__ = original
+    stages = [entry["stage"] for entry in load(sponsored, "receipt.json")["call_log"]]
+    assert [stage for stage in stages if stage.startswith("repair-")] == ["repair-1", "repair-2"]
+    assert [part["repaired"] for part in load(sponsored, "check.json")["parts"]] == [True, True, False, False]
 
 
 def test_a_check_that_cannot_be_read_leaves_the_part_unchecked(tmp_path, model):
