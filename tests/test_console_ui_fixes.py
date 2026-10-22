@@ -106,6 +106,7 @@ const STAGE_LABELS={{}}, ANALYZE_STAGES=[];
 const syncAnalyzeRunUi=()=>{{}}, updateLiveChips=()=>{{}}, updateSessionButtons=()=>{{}}, updateProcLog=()=>{{}}, renderAnalysisStages=()=>{{}};
 let lastProcText='';
 {_js_function("isAnalysisRun")}
+{_js_function("isReadabilityRun")}
 {_js_function("updateChatStatus")}
 const show=run=>{{ updateChatStatus(run); return {{stage:$('chat-stage').textContent,detail:$('chat-detail').textContent,title:$('chat-detail').title,box:$('chat-status').className}}; }};
 const limit={json.dumps(USAGE_LIMIT)};
