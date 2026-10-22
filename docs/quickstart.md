@@ -117,6 +117,21 @@ Guests can analyze arXiv, GitHub and openai/math links, pasted text of up to 20,
 
 On [Problems](/problems), **Analyze the claimed solution** opens a claimed proof's manuscript here with its link filled in. Nothing runs until you select **Analyze →**.
 
+## Make it readable {#readability}
+
+**Readability** rewrites an existing paper or proof so that you can follow it, keeping every statement and argument. It is the fourth choice under the problem box, after *Analyze*, and appears when the site offers it.
+
+1. **Choose Readability** and give the manuscript as for *Analyze*: a link, pasted text or attached files.
+2. **Pick the audience** (researchers, graduate students or undergraduates) and, optionally, say what to focus on.
+3. **Select Make readable.** The run goes through five stages: Ingest, Guide, Rewrite, Check and Publish.
+4. **Read the result.** The readable version opens with *At a glance*: what the manuscript shows, its main results, key idea and roadmap. Next to it are the *Original*, the *Notation* table and the *Map* of results; the paper map is also in the DAG. Select a passage and ask about it: answers link back to the results they use.
+
+::: warning Checked by a model — not a certificate
+An independent model call compares each rewritten part with the original. A part it found problems in is marked, and so is a part that was not checked or not rewritten. The rewrite can still be wrong; compare with the original before you rely on it.
+:::
+
+Guests can make one manuscript readable per hour and ask 3 questions about it. Accounts run on the included Kimi K3 or their own Kimi key. Like [Analyze](#analyze), Readability sends the manuscript to the model provider, so don't submit work you aren't allowed to share.
+
 ## Good to know {#good-to-know}
 
 ### Guests and accounts {#guests-and-accounts}
