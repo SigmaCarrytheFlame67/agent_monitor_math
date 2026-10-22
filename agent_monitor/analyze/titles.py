@@ -402,6 +402,19 @@ _DOLLAR_MATH = re.compile(r"(?<![\\$])\$(?=\S)([^$\n]{1,600}?)(?<=\S)\$(?!\d)")
 _PAREN_MATH = re.compile(r"\\\((.{1,600}?)\\\)", re.S)
 
 
+# A manuscript's title when it gives none, by where it came from.
+PLACEHOLDER_TITLES = {"paste": "Pasted manuscript", "upload": "Uploaded manuscript"}
+# Headings that name no manuscript: a CGM proof's "# Proof", a written
+# proof's "# Written proof".
+_UNINFORMATIVE_TITLES = frozenset({"proof", "written proof", "proof candidate (not verifier-accepted)", "untitled",
+                                   "untitled manuscript", *(title.lower() for title in PLACEHOLDER_TITLES.values())})
+
+
+def uninformative_title(title: object) -> bool:
+    """Whether ``title`` is empty, a placeholder or a fixed heading."""
+    return " ".join(str(title or "").split()).lower() in _UNINFORMATIVE_TITLES | {""}
+
+
 def plain_title(value: object, limit: int | None = None) -> str:
     """One line of readable text for a title that may hold inline TeX or HTML."""
     text = str(value or "")

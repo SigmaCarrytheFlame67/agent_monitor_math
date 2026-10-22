@@ -19,8 +19,9 @@ from typing import Any
 # Engines whose trusted runner announces CGM pipeline stages as
 # ``{"type": "pipeline.stage", "stage": <id>, "label": ...}`` events. The ids
 # match ``jobs._pipeline_for`` for these engines.  The Analyze runner reuses
-# the same five ids (Ingest, Segment, Check, Roll-up, Report).
-PIPELINE_STAGE_ENGINES = frozenset({"math_harness", "kimi", "analyze"})
+# the same five ids (Ingest, Segment, Check, Roll-up, Report), and so does the
+# Readability runner (Ingest, Guide, Rewrite, Check, Publish).
+PIPELINE_STAGE_ENGINES = frozenset({"math_harness", "kimi", "analyze", "readability"})
 PIPELINE_STAGE_IDS = frozenset({"scaffold", "work", "verify", "curate", "finalize"})
 
 

@@ -79,27 +79,34 @@ function constant(name) {
 }
 // Values cross the vm boundary as plain data (objects from another realm are never deep-equal).
 const plain = value => value === undefined ? undefined : JSON.parse(JSON.stringify(value))
+// The console's math scanners: the prose and report helpers find math with them.
+const MATH_SCANNERS = ['mathNextIndex', 'mathBetween', 'mathEnvironment', 'mathDollarLine', 'mathEscapedDollar', 'mathSpans', 'splitMath', 'holdMath']
+const MATH_KINDS = ['ANALYZE_MATH_KINDS', 'ANALYZE_STATEMENT_MATH_KINDS']
 function run(names, consts, prelude, body) {
-  const code = [prelude, ...consts.map(constant), ...names.map(fn), body].join('\n')
+  const code = [prelude, ...consts.map(constant), ...MATH_KINDS.filter(name => !consts.includes(name)).map(constant),
+    ...names.map(fn), ...MATH_SCANNERS.filter(name => !names.includes(name)).map(fn), body].join('\n')
   const context = vm.createContext({ console, URL, Date })
   const result = vm.runInContext(code, context)
   return typeof result === 'function' ? (...args) => plain(result(...args)) : plain(result)
 }
 const storage = `const store={};const localStorage={getItem:k=>k in store?store[k]:null,setItem:(k,v)=>{store[k]=String(v);},removeItem:k=>{delete store[k];}};`
+// The console's math stash and the scanners it runs.
+const STASH_MATH = ['stashMath', 'stashInlineMath', 'inlineMathEnd']
 
-test('the mode switch is three radios; Analyze appears only when the server offers it', () => {
+test('the mode switch is four radios; Analyze and Readability appear only when the server offers them', () => {
   const out = run(
     ['formalizeChoice', 'renderFormalizeSwitch', 'setFormalizeChoice', 'engineServesProve', 'analyzeEngineEntry', 'analyzePolicy',
-      'viewerIsAdmin', 'analyzeOffered', 'runKindChoice', 'modeRadios', 'radioMode', 'chooseMode', 'nextModeRadio'],
+      'viewerIsAdmin', 'analyzeOffered', 'readabilityEngineEntry', 'readabilityPolicy', 'readabilityOffered', 'runKindOffered',
+      'runKindChoice', 'modeRadios', 'radioMode', 'chooseMode', 'nextModeRadio'],
     ['FORMALIZE_KEY', 'RUN_KIND_KEY'],
     storage + `
 let ENGINES=[], CURRENT_USER={guest:false,is_admin:false}, changed=0;
 const runKindChanged=()=>{changed++;};
-const buttons=[{formalize:'0'},{formalize:'1'},{runKind:'analyze'}].map(dataset=>({dataset,hidden:dataset.runKind==='analyze',attrs:{},tabIndex:0,setAttribute(k,v){this.attrs[k]=v;}}));
+const buttons=[{formalize:'0'},{formalize:'1'},{runKind:'analyze'},{runKind:'readability'}].map(dataset=>({dataset,hidden:!!dataset.runKind,attrs:{},tabIndex:0,setAttribute(k,v){this.attrs[k]=v;}}));
 const document={querySelectorAll:()=>buttons};`,
     `(()=>{
   const state=()=>({checked:buttons.filter(b=>b.attrs['aria-checked']==='true').map(b=>b.dataset.formalize||b.dataset.runKind),
-    tab:buttons.map(b=>b.tabIndex),hidden:buttons[2].hidden,kind:runKindChoice()});
+    tab:buttons.map(b=>b.tabIndex),hidden:[buttons[2].hidden,buttons[3].hidden],kind:runKindChoice()});
   const out={};
   store[RUN_KIND_KEY]='analyze';                       // remembered, but nothing is advertised yet
   renderFormalizeSwitch(); out.none=state();
@@ -112,16 +119,27 @@ const document={querySelectorAll:()=>buttons};`,
   chooseMode('formal'); out.formal=[state(),changed];
   out.cycle=[]; let at=buttons[1];
   for(const key of ['ArrowRight','ArrowRight','ArrowRight','ArrowLeft','End','Home']){ at=nextModeRadio(at,key); out.cycle.push(radioMode(at)); }
+  // Readability: offered once listed with its policy, after Analyze.
+  ENGINES.push({id:'readability',modes:['readability'],available:true,readability:{enabled:true}});
+  renderFormalizeSwitch(); out.readable=state();
+  chooseMode('readability'); out.readability=[state(),changed];
+  out.cycle4=[]; at=buttons[1];
+  for(const key of ['ArrowRight','ArrowRight','ArrowRight','End','Home']){ at=nextModeRadio(at,key); out.cycle4.push(radioMode(at)); }
+  ENGINES[2].modes=['prove']; out.notReadabilityMode=[readabilityOffered(),runKindChoice()];  // modes must say "readability"
   ENGINES[1].modes=['prove']; out.notAnalyzeMode=analyzeOffered();  // modes must say "analyze"
   return out;
 })()`)
-  assert.deepEqual(out.none, { checked: ['1'], tab: [-1, 0, -1], hidden: true, kind: 'prove' })
-  assert.deepEqual(out.setup, { checked: ['1'], tab: [-1, 0, -1], hidden: true, kind: 'prove' })
-  assert.deepEqual(out.admin, { checked: ['analyze'], tab: [-1, -1, 0], hidden: false, kind: 'analyze' })
-  assert.deepEqual(out.guest, { checked: ['analyze'], tab: [-1, -1, 0], hidden: false, kind: 'analyze' })
+  assert.deepEqual(out.none, { checked: ['1'], tab: [-1, 0, -1, -1], hidden: [true, true], kind: 'prove' })
+  assert.deepEqual(out.setup, { checked: ['1'], tab: [-1, 0, -1, -1], hidden: [true, true], kind: 'prove' })
+  assert.deepEqual(out.admin, { checked: ['analyze'], tab: [-1, -1, 0, -1], hidden: [false, true], kind: 'analyze' })
+  assert.deepEqual(out.guest, { checked: ['analyze'], tab: [-1, -1, 0, -1], hidden: [false, true], kind: 'analyze' })
   // Exactly one radio is checked and focusable; leaving Analyze keeps the proof output choice.
-  assert.deepEqual(out.formal, [{ checked: ['1'], tab: [-1, 0, -1], hidden: false, kind: 'prove' }, 1])
+  assert.deepEqual(out.formal, [{ checked: ['1'], tab: [-1, 0, -1, -1], hidden: [false, true], kind: 'prove' }, 1])
   assert.deepEqual(out.cycle, ['analyze', 'informal', 'formal', 'informal', 'analyze', 'informal'])
+  assert.deepEqual(out.readable, { checked: ['1'], tab: [-1, 0, -1, -1], hidden: [false, false], kind: 'prove' })
+  assert.deepEqual(out.readability, [{ checked: ['readability'], tab: [-1, -1, -1, 0], hidden: [false, false], kind: 'readability' }, 2])
+  assert.deepEqual(out.cycle4, ['analyze', 'readability', 'informal', 'readability', 'informal'])
+  assert.deepEqual(out.notReadabilityMode, [false, 'prove'])
   assert.equal(out.notAnalyzeMode, false)
 })
 
@@ -131,11 +149,14 @@ test('the composer markup keeps the old selectors and adds the Analyze controls'
   assert.match(switchMarkup, /data-formalize="0"[^>]*>Informal only</)
   assert.match(switchMarkup, /data-formalize="1"[^>]*>Informal \+ formalization</)
   assert.match(switchMarkup, /role="radio" data-run-kind="analyze" aria-checked="false" tabindex="-1" hidden/)
+  // Readability is the fourth radio, after Analyze, in the same attribute order.
+  assert.match(switchMarkup, />Analyze<\/button>\s*<button type="button" role="radio" data-run-kind="readability" aria-checked="false" tabindex="-1" hidden[^>]*>Readability<\/button>/)
   assert.match(html, /What would you like to <span id="landing-verb">prove<\/span>\?/)
   assert.match(script, /verb:'analyze'/)
   assert.match(script, /'Paste a link \(arXiv, GitHub, openai\/math, PDF\/TeX URL\) or paste a manuscript…'/)
   assert.match(html, /<input type="checkbox" id="analyze-formalize"\/><span>Also formalize main statements in Lean \(statements only\)<\/span>/)
-  assert.match(html, /id="dag-mode">\s*<button type="button" data-mode="analysis" hidden[^>]*>Manuscript<\/button>/)
+  // The Manuscript mode stays first; the Paper map follows it.
+  assert.match(html, /id="dag-mode">\s*<button type="button" data-mode="analysis" hidden[^>]*>Manuscript<\/button>\s*<button type="button" data-mode="paper-map" hidden[^>]*>Paper map<\/button>/)
   assert.match(html, /id="dag-filters" role="group" aria-label="Show results by verdict" hidden/)
 })
 
@@ -222,7 +243,7 @@ test('Manuscript DAG: verdicts map to blue, amber, red, grey and hollow — neve
 })
 
 test('report and verdict text stay text: raw HTML escaped, math kept, links sanitized', () => {
-  const render = run(['stashMath', 'escapeHtml', 'analysisMarkdownHtml', 'analysisReportMath', 'analysisTextAccents', 'analysisResolveRefs', 'analysisUnresolvedLabel'], ['ANALYZE_ACCENT_MARKS', 'ANALYZE_BARE_ACCENTED', 'ANALYZE_TEXT_LETTERS', 'ANALYZE_REF_TIE', 'ANALYZE_LABEL_KINDS'],
+  const render = run([...STASH_MATH, 'escapeHtml', 'analysisMarkdownHtml', 'analysisReportMath', 'analysisTextAccents', 'analysisResolveRefs', 'analysisUnresolvedLabel'], ['ANALYZE_ACCENT_MARKS', 'ANALYZE_BARE_ACCENTED', 'ANALYZE_TEXT_LETTERS', 'ANALYZE_REF_TIE', 'ANALYZE_LABEL_KINDS'],
     `let analysisMarkdownParser=null; const sanitizeRenderedHtml=html=>html; const window={};`,
     `(text,marked)=>{ window.marked=marked; analysisMarkdownParser=null; return analysisMarkdownHtml(text); }`)
   // Without marked the report is preformatted, escaped text.
@@ -536,7 +557,7 @@ test('a live analysis shows its progress notes as stages and verdict rows, never
     'Check · main results: Theorem 1.1', 'Check · Theorem 1.1 · checked', 'Check · Lemma 3.7 · error — sign of the trace term: \\(x < y\\) and \\(S \\ge',
     'Check · Lemma 4.2 · not_checked — Not checked: the result-check limit for this run was reached', 'Check · now checking Lemma 2.3, Proposition 2.1'])
   const view = run(['analyzeEl', 'analysisClosedMath', 'analysisProgressView', 'analysisModelProse', 'analysisTextAccents', 'analysisResolveRefs', 'analysisUnresolvedLabel'],
-    ['ANALYZE_STAGE_LINE', 'ANALYZE_RESULT_LINE', 'ANALYZE_NOW_LINE', 'ANALYZE_SOURCE_WORDS', 'ANALYZE_VERDICT_SHORT', 'ANALYZE_MATH_SPLIT', ...ANALYZE_TEXT_CONSTS], miniDom,
+    ['ANALYZE_STAGE_LINE', 'ANALYZE_RESULT_LINE', 'ANALYZE_NOW_LINE', 'ANALYZE_SOURCE_WORDS', 'ANALYZE_VERDICT_SHORT', ...ANALYZE_TEXT_CONSTS], miniDom,
     `(lines,status)=>flat(analysisProgressView(lines,{status}))`)
   const live = view(lines, 'running')
   assert.equal(live.tag, 'ol')
@@ -575,7 +596,7 @@ test('report math keeps |x| and < y: the report\'s Markdown escapes are undone i
   assert.equal(math('$\\\\|v\\\\|$'), '$\\|v\\|$')
   // A stand-in for marked: the text passes through, as a paragraph.
   class Marked { use() {} parse(source) { return `<p>${source}</p>` } }
-  const render = run(['stashMath', 'escapeHtml', 'analysisMarkdownHtml', 'analysisReportMath', 'analysisTextAccents', 'analysisResolveRefs', 'analysisUnresolvedLabel'], ['ANALYZE_ACCENT_MARKS', 'ANALYZE_BARE_ACCENTED', 'ANALYZE_TEXT_LETTERS', 'ANALYZE_REF_TIE', 'ANALYZE_LABEL_KINDS'],
+  const render = run([...STASH_MATH, 'escapeHtml', 'analysisMarkdownHtml', 'analysisReportMath', 'analysisTextAccents', 'analysisResolveRefs', 'analysisUnresolvedLabel'], ['ANALYZE_ACCENT_MARKS', 'ANALYZE_BARE_ACCENTED', 'ANALYZE_TEXT_LETTERS', 'ANALYZE_REF_TIE', 'ANALYZE_LABEL_KINDS'],
     `let analysisMarkdownParser=null; const sanitizeRenderedHtml=html=>html; const window={};`,
     `(text,marked)=>{ window.marked=marked; analysisMarkdownParser=null; return analysisMarkdownHtml(text); }`)
   const html = render('| Finding |\n| --- |\n| bound \\(\\|H\\| \\le X/4\\) and \\(x &lt; y\\); 1&lt;=a |', { Marked })
@@ -587,16 +608,22 @@ test('report math keeps |x| and < y: the report\'s Markdown escapes are undone i
 })
 
 test('a link the preview refused never starts an analysis; a lookup that may work later does not block', () => {
-  const pick = run(['analyzeLinkFromText', 'guessManuscriptFormat', 'analyzeSourceFromComposer', 'viewerIsGuest'], [],
-    `const analyzeResolveCache=new Map(); let CURRENT_USER={guest:true}; const box={value:''}; const $=()=>box;
-const initialAttachments={files:[]}; const analyzePolicy=()=>({sources:{paste_chars:20000}});`,
-    `(text,cached)=>{ box.value=text; analyzeResolveCache.clear(); if(cached)analyzeResolveCache.set(text.trim(),cached); return analyzeSourceFromComposer(); }`)
+  const pick = run(['analyzeLinkFromText', 'guessManuscriptFormat', 'analyzeSourceFromComposer', 'viewerIsGuest', 'manuscriptSourceCopy', 'manuscriptPolicy'], ['MANUSCRIPT_SOURCE_COPY'],
+    `const analyzeResolveCache=new Map(); let CURRENT_USER={guest:true}, kind='analyze'; const box={value:''}; const $=()=>box;
+const initialAttachments={files:[]}; const analyzePolicy=()=>({sources:{paste_chars:20000}}), readabilityPolicy=()=>({sources:{paste_chars:30}});
+const runKindChoice=()=>kind;`,
+    `(text,cached,mode='analyze')=>{ kind=mode; box.value=text; analyzeResolveCache.clear(); if(cached)analyzeResolveCache.set(text.trim(),cached); return analyzeSourceFromComposer(); }`)
   const link = 'https://github.com/openai/math/blob/fd4aeeb/README.md'
   assert.deepEqual(pick(link, null), { kind: 'url', url: link })
   assert.deepEqual(pick(link, { ok: false, error: 'Link one manuscript folder of openai/math (preprints/<title>)' }),
     { error: 'Link one manuscript folder of openai/math (preprints/<title>) — change the link to analyze something else.' })
   assert.deepEqual(pick(link, { ok: false, transient: true, error: 'arXiv asks for a pause' }), { kind: 'url', url: link })
   assert.deepEqual(pick(link, { ok: true, title: 'x' }), { kind: 'url', url: link })
+  // Readability reads the same source box, in its own words and with its own paste limit.
+  assert.deepEqual(pick(link, { ok: false, error: 'Not a manuscript' }, 'readability'), { error: 'Not a manuscript — change the link to read something else.' })
+  assert.deepEqual(pick('', null, 'readability'), { error: 'Paste a link, a paper or a proof, or upload files to make readable' })
+  assert.deepEqual(pick('x'.repeat(31), null, 'readability'), { error: 'Pasted manuscripts are limited to 30 characters for guests' })
+  assert.deepEqual(pick('x'.repeat(31), null, 'analyze'), { kind: 'paste', text: 'x'.repeat(31) })
   // A refused lookup marked retryable is kept out of the cache, like a 429.
   assert.match(fn('resolveAnalyzeLink'), /body\.ok===false&&body\.retryable\?\{\.\.\.body,transient:true\}:body/)
   // Starting looks the link up first when no preview came back yet.
@@ -617,7 +644,7 @@ test('the shared viewer renders the report as Markdown and reads TeX references 
   const text = readFileSync(new URL('../agent_monitor/web/run-viewer-text.js', import.meta.url), 'utf8')
   // The report goes through the shared Markdown renderer (which drops the
   // report's \| and &lt; escapes) in manuscript mode, never as raw text.
-  assert.match(viewer, /AnsatzSharedText\.render\(target, text\(value\), \{ manuscript: analysis \}\)/)
+  assert.match(viewer, /AnsatzSharedText\.render\(target, text\(value\), \{ manuscript: analysis, macros: options\.macros \}\)/)
   const sandbox = { window: {}, document: {}, NodeFilter: {}, location: { href: 'https://example.test/' } }
   vm.runInNewContext(text, sandbox)
   const prose = sandbox.window.AnsatzSharedText.manuscriptProse
@@ -628,7 +655,7 @@ test('the shared viewer renders the report as Markdown and reads TeX references 
 })
 
 test('model prose reads TeX cross-references as the manuscript\'s results, or bare labels, never with their commands', () => {
-  const prose = run(['analysisTextAccents', 'analysisResolveRefs', 'analysisUnresolvedLabel', 'analysisModelProse', 'analysisRefLabels'], ['ANALYZE_MATH_SPLIT', ...ANALYZE_TEXT_CONSTS], '',
+  const prose = run(['analysisTextAccents', 'analysisResolveRefs', 'analysisUnresolvedLabel', 'analysisModelProse', 'analysisRefLabels'], [...ANALYZE_TEXT_CONSTS], '',
     `(text,graph)=>analysisModelProse(text,analysisRefLabels(graph))`)
   const graph = {
     nodes: [{ label: 'Corollary 1.2', meta: { number: '1.2', labels: ['cor:counting'] } },
@@ -663,7 +690,7 @@ test('model prose reads TeX cross-references as the manuscript\'s results, or ba
 test('a report\'s ties never strike text through, and its references read as results', () => {
   // A stand-in for marked that strikes "~text~" through, as GFM does.
   class Marked { use() {} parse(source) { return `<p>${source.replace(/~([^~\n]+)~/g, '<del>$1</del>')}</p>` } }
-  const render = run(['stashMath', 'escapeHtml', 'analysisMarkdownHtml', 'analysisReportMath', 'analysisTextAccents', 'analysisResolveRefs', 'analysisUnresolvedLabel', 'analysisRefLabels'], ANALYZE_TEXT_CONSTS,
+  const render = run([...STASH_MATH, 'escapeHtml', 'analysisMarkdownHtml', 'analysisReportMath', 'analysisTextAccents', 'analysisResolveRefs', 'analysisUnresolvedLabel', 'analysisRefLabels'], ANALYZE_TEXT_CONSTS,
     `let analysisMarkdownParser=null; const sanitizeRenderedHtml=html=>html; const window={};`,
     `(text,graph,marked)=>{ window.marked=marked; analysisMarkdownParser=null; return analysisMarkdownHtml(text,analysisRefLabels(graph)); }`)
   const graph = { nodes: [{ label: 'Corollary 1.2', meta: { number: '1.2', labels: ['cor:counting'] } }] }

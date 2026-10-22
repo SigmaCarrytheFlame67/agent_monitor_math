@@ -247,8 +247,8 @@ class ProjectsMixin:
                 for run in result['runs']:
                     data=record(run['run_id']);run['status']=data.get('status','pending') if data else 'deleted'
                     run['engine']=data.get('engine','') if data else ''
-                    # "prove" or "analyze" (records without run_kind are proofs).
-                    run['run_kind']=('analyze' if data and (data.get('run_kind')=='analyze' or data.get('engine')=='analyze') else 'prove')
+                    # "prove", "analyze" or "readability" (records without run_kind are proofs).
+                    run['run_kind']=next((kind for kind in ('analyze','readability') if data and (data.get('run_kind')==kind or data.get('engine')==kind)),'prove')
             elif len(parts)==5 and method=='POST' and action=='edit':result=edit(pid,user['id'],body.get('operations'))
             elif len(parts)==5 and method=='POST' and action=='invite':
                 token=invite(pid,user['id'],body.get('revoke') is True);result={'path':self._request_base_path()+'/invite/'+token if token else None}
@@ -271,14 +271,16 @@ def prepare_run(body, user):
     project=get(pid,user['id'])
     task=str(body.get('project_task') or '').strip()[:2000]
     body['problem_id']=None
-    if body.get('run_kind')=='analyze':
-        # An analysis checks the manuscript in body["source"] (or the uploads);
-        # the project's task, if any, becomes its focus.  The project's problem
-        # document is not a manuscript and is not sent.
-        options=body.get('analyze') if isinstance(body.get('analyze'),dict) else {}
+    if body.get('run_kind') in ('analyze','readability'):
+        # An analysis (or a readability run) reads the manuscript in
+        # body["source"] (or the uploads); the project's task, if any, becomes
+        # its focus.  The project's problem document is not a manuscript and
+        # is not sent.
+        key=body['run_kind']
+        options=body.get(key) if isinstance(body.get(key),dict) else {}
         if task and not str(options.get('focus') or '').strip():
             options={**options,'focus':task}
-        body['analyze']=options
+        body[key]=options
         body['problem_text']=None
         return
     body['problem_text']=project['problem']+ ('\n\nYOUR RESEARCH TASK\n'+task if task else '')

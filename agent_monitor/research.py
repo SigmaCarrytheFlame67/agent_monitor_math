@@ -171,6 +171,9 @@ def publish_memory(user, body):
         # An analysis checks someone else's manuscript; its statements and
         # verdicts are not this account's results and never become harness memory.
         raise ValueError("Analyze runs check an existing manuscript; they can't become shared DAG memory.")
+    if record.get("run_kind") == "readability" or record.get("engine") == "readability":
+        # Nor does a rewrite of someone else's manuscript.
+        raise ValueError("Readability runs rewrite an existing manuscript; they can't become shared DAG memory.")
     node = _text(body.get("node_id"), "DAG node", 160)
     if not ID.fullmatch(node):
         raise ValueError("Invalid DAG node.")

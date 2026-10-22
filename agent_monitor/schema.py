@@ -19,12 +19,27 @@ ANALYZE_ENGINE_IMPL = "ansatz-analyze"
 ANALYZE_ARTIFACT_SCHEMA = "ansatze-analyze-v1"
 ANALYZE_GRAPH_SCHEMA = "ansatze-analyze-graph-v1"
 
+READABILITY_ENGINE_ID = "readability"
+READABILITY_ENGINE_IMPL = "ansatz-readability"
+READABILITY_ARTIFACT_SCHEMA = "ansatze-readability-v1"
+READABILITY_GRAPH_SCHEMA = "ansatze-readability-map-v1"
+
 
 @lru_cache(maxsize=1)
 def _analyze_prompt_pack() -> str:
     """The Analyze prompt pack digest: the implementation version of a run."""
     try:
         from agent_monitor.analyze.prompts import PROMPT_PACK_SHA256
+    except Exception:  # noqa: BLE001 - provenance must never break a record
+        return "unknown"
+    return str(PROMPT_PACK_SHA256)
+
+
+@lru_cache(maxsize=1)
+def _readability_prompt_pack() -> str:
+    """The Readability prompt pack digest: the implementation version of a run."""
+    try:
+        from agent_monitor.readability.prompts import PROMPT_PACK_SHA256
     except Exception:  # noqa: BLE001 - provenance must never break a record
         return "unknown"
     return str(PROMPT_PACK_SHA256)
@@ -45,6 +60,13 @@ def engine_provenance(engine: EngineName) -> dict[str, str]:
             "engine_impl_version": _analyze_prompt_pack(),
             "artifact_schema": ANALYZE_ARTIFACT_SCHEMA,
             "graph_schema": ANALYZE_GRAPH_SCHEMA,
+        }
+    if engine == READABILITY_ENGINE_ID:
+        return {
+            "engine_impl": READABILITY_ENGINE_IMPL,
+            "engine_impl_version": _readability_prompt_pack(),
+            "artifact_schema": READABILITY_ARTIFACT_SCHEMA,
+            "graph_schema": READABILITY_GRAPH_SCHEMA,
         }
     return {}
 

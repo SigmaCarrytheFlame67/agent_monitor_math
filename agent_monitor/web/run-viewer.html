@@ -15,6 +15,7 @@
   <script defer src="__ASSET_BASE__/vendor/shared/auto-render.min.js"></script>
   <script defer src="__ASSET_BASE__/run-viewer-text.js"></script>
   <script defer src="__ASSET_BASE__/run-viewer-graph.js"></script>
+  <script defer src="__ASSET_BASE__/run-viewer-readability.js"></script>
   <script defer src="__ASSET_BASE__/run-viewer.js"></script>
 </head>
 <body data-snapshot-url="__DATA_URL__">
@@ -41,9 +42,10 @@
     <p id="rv-notice" class="rv-notice" role="status">Loading the saved run…</p>
     <section id="rv-sandbox" class="rv-view rv-sandbox" role="tabpanel" aria-labelledby="rv-tab-sandbox">
       <div class="rv-proof-panel">
-        <div class="rv-toolbar"><h2 id="rv-proof-title">Proof</h2><span class="rv-toolbar-meta">Saved document</span><a id="rv-source" class="rv-source" hidden target="_blank" rel="noopener noreferrer">Source ↗</a></div>
+        <div class="rv-toolbar"><h2 id="rv-proof-title">Proof</h2><span class="rv-toolbar-meta">Saved document</span><div id="rv-proof-doc-switch" class="rv-proof-doc-switch" role="radiogroup" aria-label="Proof document" hidden><button type="button" role="radio" data-proof-doc="writeup" aria-checked="false" tabindex="-1">Written proof<span id="rv-writeup-chip" class="rv-writeup-chip"></span></button><button type="button" role="radio" data-proof-doc="facts" aria-checked="true" title="proof.md: the verifier-accepted facts, which are the proof">Verified facts</button></div><a id="rv-source" class="rv-source" hidden target="_blank" rel="noopener noreferrer">Source ↗</a></div>
         <div class="rv-proof-scroll">
           <details id="rv-problem-disclosure" class="rv-problem" open><summary><span id="rv-problem-label">Problem</span><span class="rv-disclosure-hint">Original task</span></summary><div id="rv-problem" class="rv-markdown"></div></details>
+          <div id="rv-writeup-banner" class="rv-writeup-banner" role="note" hidden></div>
           <article id="rv-proof-text" class="rv-markdown rv-proof-document"><div class="rv-empty"><span class="rv-empty-icon" aria-hidden="true">∎</span><h3>Loading proof</h3><p>The saved document will appear here.</p></div></article>
         </div>
       </div>

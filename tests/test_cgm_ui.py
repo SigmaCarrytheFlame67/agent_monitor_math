@@ -19,6 +19,8 @@ HTML = (
     Path(__file__).parents[1] / "agent_monitor" / "web" / "console.html"
 ).read_text(encoding="utf-8")
 SCRIPT = HTML.rsplit("<script>", 1)[1].split("</script>", 1)[0]
+# What the Ansatz CGM descriptions say about the written-proof round.
+WRITEUP_COPY = "by default, accepted runs end with a written proof, checked as a whole"
 NODE = shutil.which("node")
 if not NODE and Path("/home/ubuntu/.local/node24/bin/node").is_file():
     NODE = "/home/ubuntu/.local/node24/bin/node"
@@ -442,9 +444,11 @@ class CgmCopyAndControlsTests(unittest.TestCase):
     def test_modes_keep_one_button_each_and_cgm_is_the_default(self) -> None:
         start = HTML.index('id="dag-mode"')
         modes = HTML[start : HTML.index("</div>", start)]
-        for mode in ("engine", "informal", "formal", "compiler"):
+        for mode in ("analysis", "paper-map", "engine", "informal", "formal", "compiler"):
             self.assertEqual(modes.count(f'data-mode="{mode}"'), 1)
         self.assertIn('class="on" data-mode="engine"', modes)
+        # The manuscript modes (an analysis, a readable version) are shown only for their runs.
+        self.assertIn('data-mode="paper-map" hidden', modes)
         self.assertIn(">Informal · CGM</button>", modes)
         self.assertIn(">Outline</button>", modes)
         self.assertIn('id="dag-detail"', HTML)
@@ -477,6 +481,16 @@ console.log(JSON.stringify({order,guest,loginOnlyKimi,kimi:CGM_ENGINE_COPY.kimi,
         self.assertIn("strategist → workers → independent verifier → curator", output["kimi"])
         self.assertIn("Kimi K3", output["kimi"])
         self.assertIn("own Codex, Claude Code or API route", output["mh"])
+        # Accepted runs also end with a written proof (unless the operator turned the round off),
+        # said early enough to be read: the menu shows three lines of an Ansatz CGM description
+        # (125 to 137 characters of these in Chromium, with the console's CSS and font).
+        for copy in (output["kimi"], output["mh"]):
+            self.assertLessEqual(copy.index(WRITEUP_COPY) + len(WRITEUP_COPY), 130)
+        self.assertIn(
+            ".choice-scroll .cgm-engine .opt-desc { white-space:normal; display:-webkit-box; "
+            "-webkit-box-orient:vertical; -webkit-line-clamp:3; line-clamp:3; }",
+            HTML,
+        )
         self.assertIn("engine='kimi';", SCRIPT)
         self.assertIn("if(u.guest)engine=GUEST_POLICY?.default_engine||'kimi';", SCRIPT)
 
@@ -543,6 +557,8 @@ console.log(JSON.stringify(out));
         self.assertEqual((out["member"]["forKimi"], out["member"]["forAstra"]), ("kimi", "math_harness"))
         self.assertEqual(out["member"]["auth"], "API")
         self.assertIn("Kimi K3 included or models from your own API keys", out["member"]["copy"])
+        for copy in (out["admin"]["copy"], out["member"]["copy"], out["narrowed"]["copy"]):
+            self.assertLessEqual(copy.index(WRITEUP_COPY) + len(WRITEUP_COPY), 130)
         self.assertNotIn("Codex", out["member"]["copy"])
         # Narrowed to kimi,plain, the one entry is Kimi K3 only.
         self.assertIn("Ansatz CGM on Kimi K3", out["narrowed"]["copy"])
@@ -824,6 +840,51 @@ async function fetch(url){
         self.assertIn("/api/lean/status", output["stale"]["urls"])
         self.assertNotIn("Lean toolchain not installed on server", output["stale"]["statuses"])
         self.assertTrue(all(fill == [] for fill in output["engineFills"]))
+
+
+class WrittenProofMarkupTests(unittest.TestCase):
+    """The written-proof switch that the console and the shared page script against.
+
+    Its behaviour (defaults, banner, sanitizing, polls) is pinned in
+    tests/test_cgm_writeup_ui.mjs.
+    """
+
+    def _switch(self, markup: str, switch_id: str) -> list[tuple[str, str, str]]:
+        match = re.search(rf'<div ([^>]*\bid="{switch_id}"[^>]*)>(.*?)</div>', markup, re.S)
+        self.assertIsNotNone(match, switch_id)
+        opening, body = match.groups()
+        self.assertIn('role="radiogroup"', opening)
+        self.assertIn('aria-label="Proof document"', opening)
+        # Hidden until the run has a write-up.
+        self.assertRegex(opening, r"\bhidden\b")
+        return re.findall(
+            r'<button type="button" role="radio" data-proof-doc="(\w+)" aria-checked="(\w+)"[^>]*>(.*?)</button>', body
+        )
+
+    def test_the_console_proof_toolbar_offers_both_documents(self) -> None:
+        toolbar = HTML.split('<div class="proof-toolbar">', 1)[1].split('<div class="prompt-strip', 1)[0]
+        self.assertEqual(
+            self._switch(toolbar, "proof-doc-switch"),
+            [
+                ("writeup", "false", 'Written proof<span class="writeup-chip" id="writeup-chip"></span>'),
+                ("facts", "true", "Verified facts"),
+            ],
+        )
+        self.assertLess(toolbar.index('id="proof-doc-switch"'), toolbar.index('id="proof-edit-btn"'))
+
+    def test_the_shared_page_offers_both_documents_without_inline_script(self) -> None:
+        viewer = (Path(__file__).parents[1] / "agent_monitor" / "web" / "run-viewer.html").read_text(encoding="utf-8")
+        self.assertEqual(
+            self._switch(viewer, "rv-proof-doc-switch"),
+            [
+                ("writeup", "false", 'Written proof<span id="rv-writeup-chip" class="rv-writeup-chip"></span>'),
+                ("facts", "true", "Verified facts"),
+            ],
+        )
+        self.assertIn('<div id="rv-writeup-banner" class="rv-writeup-banner" role="note" hidden></div>', viewer)
+        # The shared page's CSP runs only same-origin script files.
+        self.assertIsNone(re.search(r"<script(?![^>]*\bsrc=)", viewer))
+        self.assertIsNone(re.search(r"\son[a-z]+=", viewer))
 
 
 if __name__ == "__main__":

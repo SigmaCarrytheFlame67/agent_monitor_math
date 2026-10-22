@@ -632,10 +632,16 @@ class MaxJobTests(unittest.TestCase):
             {"AGENT_MONITOR_MATH_HARNESS_TIMEOUT": "3600"},
         ):
             self.assertGreaterEqual(watchdog(operator), cgm_max.RUN_SECONDS + 300, operator)
-        self.assertEqual(watchdog({"AGENT_MONITOR_CLI_TIMEOUT": "20000"}), 20_000)
-        # A single Claude-subscription CGM run keeps the operator's lower limit.
+        # An operator limit bounds the pipeline; the written-proof round after
+        # its publication adds its own allowance (Max: 3600 + 60 s).
+        self.assertEqual(extra["AGENT_MONITOR_CGM_WRITEUP"], "1")
+        self.assertEqual(watchdog({"AGENT_MONITOR_CLI_TIMEOUT": "20000"}), 20_000 + 3_660)
+        # A single Claude-subscription CGM run keeps the operator's lower limit
+        # for its pipeline, and its round gets 1800 + 60 s more.
         claude_only = {key: value for key, value in extra.items() if key != cgm_max.ROUTE_MODE_ENV}
-        self.assertEqual(watchdog({"AGENT_MONITOR_CLI_TIMEOUT": "3600"}, claude_only), 3_600)
+        self.assertEqual(watchdog({"AGENT_MONITOR_CLI_TIMEOUT": "3600"}, claude_only), 3_600 + 1_860)
+        without_round = {**claude_only, "AGENT_MONITOR_CGM_WRITEUP": "0"}
+        self.assertEqual(watchdog({"AGENT_MONITOR_CLI_TIMEOUT": "3600"}, without_round), 3_600)
 
     def test_worker_falls_back_to_the_best_codex_model_the_account_offers(self) -> None:
         with tempfile.TemporaryDirectory() as raw:

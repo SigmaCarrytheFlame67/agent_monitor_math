@@ -13,7 +13,8 @@ Two runner generations are recognized, both fail-closed:
   (strategist, workers, per-lemma independent verifier, repair, curator) with a
   multi-lemma fact DAG and a CGM exploring graph whose memory files are bound
   by hash in the receipt.  Attestation additionally requires ``proof.md`` to
-  equal ``agent_monitor.cgm.render_verified_closure`` of the target closure.
+  equal ``agent_monitor.cgm.render_verified_closure`` of the target closure,
+  in the rendering the receipt names (``verified-closure@1`` or ``@2``).
 
 Model-verifier acceptance is never a Lean certificate: every artifact carries
 ``certificate: false`` and ``lean_verified: false``.
@@ -959,7 +960,9 @@ def _cgm_receipt_is_valid(receipt: dict[str, Any]) -> bool:
             not isinstance(target, str)
             or _FACT_ID_RE.fullmatch(target) is None
             or not _is_sha256(receipt["target_sha256"])
-            or receipt["proof_rendering"] != _cgm_schema.PROOF_RENDERING_VERIFIED
+            or not isinstance(receipt["proof_rendering"], str)
+            or receipt["proof_rendering"]
+            not in _cgm_schema.ACCEPTED_PROOF_RENDERINGS[version]
         ):
             return False
     elif verdict == "unattested":
@@ -1188,20 +1191,12 @@ def _receipt_provenance_v2(
     if receipt is None:
         return invalid
     problem = _runner_problem_bytes(problem_artifact)
-    listed = {item["fact_id"]: item for item in receipt["facts"]}
     bound = (
         problem is not None
         and proof_payload is not None
         and hashlib.sha256(problem).hexdigest() == receipt["problem_sha256"]
         and hashlib.sha256(proof_payload).hexdigest() == receipt["proof_sha256"]
-        and set(listed) == set(facts)
-        and all(
-            len(fact_payloads[fact_id]) == listed[fact_id]["bytes"]
-            and hashlib.sha256(fact_payloads[fact_id]).hexdigest()
-            == listed[fact_id]["sha256"]
-            and facts[fact_id].problem_id == receipt["problem_id"]
-            for fact_id in facts
-        )
+        and _receipt_lists_facts(receipt, facts, fact_payloads)
     )
     if not bound:
         return invalid
@@ -1233,8 +1228,11 @@ def _receipt_provenance_v2(
             {fact_id: {"predecessors": fact.predecessors} for fact_id, fact in facts.items()},
             target_id,
         )
+        # The rendering the receipt names, re-rendered from the fact files.
         rendered = _cgm_closure.render_verified_closure(
-            [_fact_mapping(fact) for fact in facts.values()], target_id
+            [_fact_mapping(fact) for fact in facts.values()],
+            target_id,
+            labels=_proof_labels(receipt),
         )
     except _cgm_closure.ClosureError:
         return invalid
@@ -1246,6 +1244,33 @@ def _receipt_provenance_v2(
     ):
         return invalid
     return {"attestation": "harness-gate-receipt", "receipt_status": "verifier-correct", **common}
+
+
+def _receipt_lists_facts(
+    receipt: Mapping[str, Any],
+    facts: Mapping[str, _Fact],
+    fact_payloads: Mapping[str, bytes],
+) -> bool:
+    """Whether a CGM receipt lists exactly these fact files (ids, sizes,
+    hashes and problem id)."""
+    listed = {item["fact_id"]: item for item in receipt["facts"]}
+    return set(listed) == set(facts) and all(
+        len(fact_payloads[fact_id]) == listed[fact_id]["bytes"]
+        and hashlib.sha256(fact_payloads[fact_id]).hexdigest() == listed[fact_id]["sha256"]
+        and facts[fact_id].problem_id == receipt["problem_id"]
+        for fact_id in facts
+    )
+
+
+def _proof_labels(receipt: Mapping[str, Any]) -> dict[str, str] | None:
+    """The labels an accepted ``verified-closure@2`` proof.md names its lemmas
+    by (``{fact_id: label}`` from the receipt); ``None`` for @1, whose lemmas
+    are numbered."""
+    if receipt["proof_rendering"] != _cgm_schema.PROOF_RENDERING_VERIFIED_V2:
+        return None
+    return {
+        item["fact_id"]: item["label"] for item in receipt["facts"] if not item["is_target"]
+    }
 
 
 def _fact_mapping(fact: _Fact) -> dict[str, Any]:
@@ -1279,6 +1304,8 @@ class _FactProject:
     source_parts: list[tuple[str, bytes]]
     provenance: dict[str, object]
     receipt: dict[str, Any] | None
+    # The labels proof.md was published with (see ``load_proof_labels``).
+    proof_labels: dict[str, str] | None = None
 
 
 def _read_fact_project(workspace: Path) -> _FactProject | None:
@@ -1384,6 +1411,7 @@ def _read_fact_project(workspace: Path) -> _FactProject | None:
             raise EngineGraphError("fact graph mixes multiple problem ids")
 
         receipt: dict[str, Any] | None = None
+        proof_labels: dict[str, str] | None = None
         if _receipt_schema_version(receipt_payload) in _cgm_schema.CGM_RECEIPT_SCHEMA_VERSIONS:
             receipt = _cgm_receipt(receipt_payload)
             provenance = _receipt_provenance_v2(
@@ -1395,6 +1423,11 @@ def _read_fact_project(workspace: Path) -> _FactProject | None:
                 problem_artifact=problem_artifact,
                 proof_payload=proof_payload,
             )
+            if receipt is not None and _receipt_lists_facts(receipt, facts, fact_payloads):
+                # The names stay with the facts: a Sandbox edit of proof.md
+                # unbinds the receipt, not the lemma names proof.md was
+                # published with (its headings keep them).
+                proof_labels = _proof_labels(receipt)
             if provenance.get("receipt_status") == "invalid":
                 receipt = None
         else:
@@ -1417,6 +1450,7 @@ def _read_fact_project(workspace: Path) -> _FactProject | None:
             source_parts=source_parts,
             provenance=provenance,
             receipt=receipt,
+            proof_labels=proof_labels,
         )
     finally:
         for fd in reversed(opened):
@@ -1546,18 +1580,42 @@ def load_fact_dag(workspace: Path) -> list[dict[str, Any]] | None:
     ]
 
 
+def load_proof_labels(workspace: Path) -> dict[str, str] | None:
+    """The labels the run's ``proof.md`` names its lemmas by, if any.
+
+    ``{fact_id: label}`` for every lemma when the run's CGM receipt records
+    the ``verified-closure@2`` rendering ("Lemma L1") for exactly these fact
+    files, even after a Sandbox edit of ``proof.md`` has unbound the receipt
+    (the edited headings keep the published names); ``None`` when it records
+    @1 (lemmas numbered "Lemma 1", "Lemma 2", ... in topological order) or
+    the run has no such receipt.  Pass it to ``render_fact_closure`` to
+    reproduce the published rendering.  Never invokes a model and never
+    writes.
+    """
+    try:
+        project = _read_fact_project(Path(workspace))
+    except EngineGraphError:
+        return None
+    return None if project is None else project.proof_labels
+
+
 def render_fact_closure(
-    facts: Sequence[Mapping[str, Any]], target_id: str
+    facts: Sequence[Mapping[str, Any]],
+    target_id: str,
+    *,
+    labels: Mapping[str, str] | None = None,
 ) -> str:
     """Pure deterministic rendering of a target's verified closure.
 
     ``facts`` may be ``load_fact_dag`` items (or any mappings with
-    ``fact_id``, ``statement``, ``proof`` and ``predecessors``).  This is the
-    exact rendering the CGM runner publishes as ``proof.md`` and that
-    attestation recomputes.  Raises ``EngineGraphError`` for a malformed DAG.
+    ``fact_id``, ``statement``, ``proof`` and ``predecessors``).  With the
+    run's ``load_proof_labels`` this is the exact rendering the CGM runner
+    published as ``proof.md`` and that attestation recomputes (``None``:
+    ``verified-closure@1``; labels: ``verified-closure@2``).  Raises
+    ``EngineGraphError`` for a malformed DAG or unusable labels.
     """
     try:
-        return _cgm_closure.render_verified_closure(facts, target_id)
+        return _cgm_closure.render_verified_closure(facts, target_id, labels=labels)
     except _cgm_closure.ClosureError as exc:
         raise EngineGraphError(str(exc)) from exc
 

@@ -192,6 +192,9 @@ def test_kill_switches_hide_and_refuse_analyze(analyze_console, monkeypatch):
         monkeypatch.setenv("AGENT_MONITOR_ANALYZE_ENABLED", "0")
         member_refused = _post(port, "/api/runs", cookie, _analyze({"url": ARXIV}))
         _status, member_listing = _get(port, "/api/engines", cookie)
+        # The link preview serves the Readability source box too: it is
+        # refused once neither mode is on.
+        monkeypatch.setenv("AGENT_MONITOR_READABILITY_ENABLED", "0")
         preview = _post(port, "/api/analyze/resolve", cookie, {"url": ARXIV})
     assert refused[0] == 403 and refused[2]["error"] == analyze_runs.GUEST_DISABLED_MESSAGE
     analyze = next(engine for engine in listing["engines"] if engine["id"] == "analyze")

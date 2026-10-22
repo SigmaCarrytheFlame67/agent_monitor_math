@@ -142,13 +142,14 @@ def tex(text: str) -> str:
 
 
 def parse_proof(markdown: str) -> tuple[str, list[dict]]:
-    """Split proof.md into its preamble and its numbered facts."""
+    """Split proof.md into its preamble and its facts: "Lemma 1", "Lemma 2", ...
+    in a verified-closure@1 proof, "Lemma L1", ... (the prover's labels) in @2."""
     sections = re.split(r"^## ", markdown, flags=re.M)
     intro = re.sub(r"^# Proof\s*", "", sections[0]).strip()
     items = []
     for section in sections[1:]:
         head, _, body = section.partition("\n")
-        match = re.match(r"(Lemma \d+|Main theorem) · fact ([0-9a-f]{16})$", head.strip())
+        match = re.match(r"(Lemma \S+|Main theorem) · fact ([0-9a-f]{16})$", head.strip())
         assert match, head
         uses = re.search(r"\*\*Uses:\*\* (.+)", body).group(1).strip()
         statement = re.search(r"\*\*Statement\.\*\*\s*(.+?)\s*\*\*Proof\.\*\*", body, re.S).group(1).strip()
@@ -156,7 +157,7 @@ def parse_proof(markdown: str) -> tuple[str, list[dict]]:
         items.append({
             "label": match.group(1),
             "fact": match.group(2),
-            "uses": [] if uses == "none." else re.findall(r"(Lemma \d+)", uses),
+            "uses": [] if uses == "none." else re.findall(r"(Lemma \S+) \(fact [0-9a-f]{16}\)", uses),
             "statement": statement,
             "proof": proof,
         })

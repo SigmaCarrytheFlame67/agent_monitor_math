@@ -10,8 +10,9 @@
     if (value != null) element.textContent = text(value);
     return element;
   };
-  const renderText = (target, value) => {
-    if (window.AnsatzSharedText?.render) window.AnsatzSharedText.render(target, text(value), { manuscript: analysis });
+  // `options.macros`: the author's TeX macros (a readable version's).
+  const renderText = (target, value, options = {}) => {
+    if (window.AnsatzSharedText?.render) window.AnsatzSharedText.render(target, text(value), { manuscript: analysis, macros: options.macros });
     else { target.textContent = text(value); target.classList.add('rv-plain-text'); }
   };
   const statusLabel = value => text(value).replace(/_/g, ' ').replace(/^./, ch => ch.toUpperCase());
@@ -21,7 +22,7 @@
     box.append(icon, node('h3', '', title), node('p', '', message));
     target.replaceChildren(box);
   };
-  let data, analysis = false, activeTab = 'sandbox', graphMode = 'engine', engineMode = 'explore', graphInstance;
+  let data, analysis = false, readable = false, activeTab = 'sandbox', graphMode = 'engine', engineMode = 'explore', graphInstance;
   const graphLabels = { outline: 'Outline', explore: 'Explore', facts: 'Facts', formal: 'Formal · Lean', compiler: 'Compiler facts', manuscript: 'Manuscript' };
   const graphDescriptions = {
     outline: 'An informal outline of the saved proof and its dependencies.',
@@ -39,6 +40,50 @@
     formal: 'No structural Lean graph was included in this saved snapshot.',
     manuscript: 'No manuscript graph was included in this saved snapshot.',
   };
+  // A CGM run may carry a written proof besides proof.md (the verified facts):
+  // the same two-way switch and status banner as the console.
+  const writeupBanner = {
+    accepted: '✓ Written from the verified facts and checked as a whole by an independent model verifier — not a formal certificate.',
+    rejected: '⚠ Not accepted — the independent check found problems (listed below). The verified facts remain the proof.',
+    unchecked: 'Not checked — the verified facts remain the proof.',
+  };
+  const writeupStaleNote = 'This write-up was made for an earlier version of proof.md.';
+  // writeup.md without its "# Written proof" heading and the status note
+  // under it: the banner says the same (as in the console).
+  function writeupBody(value) {
+    const lines = text(value).split('\n');
+    if (!/^# Written proof[ \t\r]*$/.test(lines[0])) return text(value);
+    let at = 1;
+    const skipBlank = () => { while (at < lines.length && !lines[at].trim()) at += 1; };
+    skipBlank();
+    if (at < lines.length && /^ {0,3}>/.test(lines[at])) while (at < lines.length && lines[at].trim()) at += 1;
+    skipBlank();
+    return lines.slice(at).join('\n');
+  }
+  let writeup = null, proofDoc = 'facts';
+  function showProofDocument() {
+    const written = !!writeup && proofDoc === 'writeup';
+    all('[data-proof-doc]').forEach(button => {
+      const checked = button.dataset.proofDoc === (written ? 'writeup' : 'facts');
+      button.setAttribute('aria-checked', String(checked));
+      button.tabIndex = checked ? 0 : -1;
+    });
+    const banner = $('rv-writeup-banner');
+    banner.hidden = !written;
+    if (written) {
+      banner.dataset.status = writeup.status;
+      banner.replaceChildren(node('p', '', writeupBanner[writeup.status]));
+      if (!writeup.fresh) banner.append(node('p', 'rv-writeup-stale', writeupStaleNote));
+      renderText($('rv-proof-text'), writeupBody(writeup.text));
+    } else if (data.proof) renderText($('rv-proof-text'), data.proof);
+    else empty($('rv-proof-text'), analysis ? 'No saved analysis report' : 'No saved proof', analysis ? 'The report was not included in this snapshot.' : 'The proof document was not included in this snapshot.', '∎');
+  }
+  function chooseProofDocument(doc, focus = false) {
+    if (!writeup) return;
+    proofDoc = doc === 'writeup' ? 'writeup' : 'facts';
+    showProofDocument();
+    if (focus) all('[data-proof-doc]').find(button => button.dataset.proofDoc === proofDoc)?.focus();
+  }
   function graphFor(mode) {
     if (data?.graphs && Object.prototype.hasOwnProperty.call(data.graphs, mode)) return data.graphs[mode];
     const old = mode === 'formal' ? data?.formal_graph : ((analysis && mode === 'manuscript') || (!analysis && mode === 'outline')) ? data?.informal_graph : null;
@@ -72,6 +117,8 @@
   }
   function tab(name, focus = false) {
     if (!['sandbox', 'lean', 'monitor', 'dag'].includes(name)) return;
+    // A readable version has no Lean and no graph tabs: its paper map is in the Sandbox.
+    if (readable && (name === 'lean' || name === 'dag')) name = 'sandbox';
     activeTab = name;
     all('[data-tab]').forEach(button => {
       const selected = button.dataset.tab === name;
@@ -90,7 +137,8 @@
   all('[data-tab]').forEach(button => {
     button.addEventListener('click', () => tab(button.dataset.tab));
     button.addEventListener('keydown', event => {
-      const buttons = all('[data-tab]');
+      // Only the tabs on show (a readable version hides Lean and DAG).
+      const buttons = all('[data-tab]').filter(item => !item.hidden);
       const index = buttons.indexOf(button);
       let next;
       if (event.key === 'ArrowRight') next = (index + 1) % buttons.length;
@@ -104,6 +152,15 @@
   all('[data-engine-mode]').forEach(button => button.addEventListener('click', () => { engineMode = button.dataset.engineMode; showGraph(); }));
   all('[data-open-tab]').forEach(button => button.addEventListener('click', () => tab(button.dataset.openTab)));
   all('[data-open-graph]').forEach(button => button.addEventListener('click', () => openGraph(button.dataset.openGraph)));
+  all('[data-proof-doc]').forEach(button => {
+    button.addEventListener('click', () => chooseProofDocument(button.dataset.proofDoc));
+    // Arrow keys switch between the two documents; Home and End pick one.
+    button.addEventListener('keydown', event => {
+      if (!['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown', 'Home', 'End'].includes(event.key)) return;
+      event.preventDefault();
+      chooseProofDocument(event.key === 'Home' ? 'writeup' : event.key === 'End' ? 'facts' : button.dataset.proofDoc === 'writeup' ? 'facts' : 'writeup', true);
+    });
+  });
   $('rv-theme').addEventListener('click', () => {
     const dark = document.documentElement.dataset.theme !== 'dark';
     document.documentElement.dataset.theme = dark ? 'dark' : 'light';
@@ -142,7 +199,8 @@
     return;
   }
   analysis = data.kind === 'analysis';
-  const originalTitle = data.title || (analysis ? 'Manuscript analysis' : 'Shared research run');
+  readable = data.kind === 'readability';
+  const originalTitle = data.title || (analysis ? 'Manuscript analysis' : readable ? 'Readable version' : 'Shared research run');
   const title = analysis && window.AnsatzSharedText?.manuscriptProse ? window.AnsatzSharedText.manuscriptProse(originalTitle) : originalTitle;
   document.title = title + ' · Ansätze';
   $('rv-title').textContent = title; $('rv-title').title = title;
@@ -156,23 +214,52 @@
     all('[data-graph-mode="manuscript"]').forEach(button => { button.hidden = false; });
     graphMode = 'manuscript';
   }
+  if (readable) {
+    $('rv-proof-title').textContent = 'Readable version';
+    $('rv-problem-label').textContent = 'Manuscript';
+    $('rv-tab-lean').hidden = true; $('rv-tab-dag').hidden = true;
+  }
   renderText($('rv-problem'), data.problem || 'The original task was not included in this snapshot.');
-  if (data.proof) renderText($('rv-proof-text'), data.proof);
-  else empty($('rv-proof-text'), analysis ? 'No saved analysis report' : 'No saved proof', analysis ? 'The report was not included in this snapshot.' : 'The proof document was not included in this snapshot.', '∎');
+  // A readable version brings its notation and paper map after the text.
+  const readability = readable && window.AnsatzSharedReadability ? window.AnsatzSharedReadability.render(data, { target: $('rv-proof-text'), renderText }) : null;
+  if (readability) {
+    if (!readability.readable.trim()) empty($('rv-proof-text'), 'No saved readable version', 'The readable version was not included in this snapshot.', '∎');
+  } else {
+    if (!analysis && !readable && typeof data.writeup === 'string' && data.writeup.trim()) {
+      // Only the exact saved status counts; the written proof opens first only when accepted for this proof.md.
+      const status = ['accepted', 'rejected', 'unchecked'].includes(data.writeup_status) ? data.writeup_status : 'unchecked';
+      writeup = { text: data.writeup, status, fresh: data.writeup_fresh === true };
+      proofDoc = status === 'accepted' && writeup.fresh ? 'writeup' : 'facts';
+      $('rv-proof-doc-switch').hidden = false;
+      const chip = $('rv-writeup-chip');
+      chip.dataset.status = status;
+      chip.textContent = status === 'accepted' ? ' ✓' : status === 'rejected' ? ' ⚠' : '';
+      chip.parentElement.title = writeupBanner[status] + (writeup.fresh ? '' : ' ' + writeupStaleNote);
+    }
+    showProofDocument();
+  }
   try {
     const source = new URL(data.source_url);
     if (source.protocol === 'https:' && !/\/shared\//i.test(source.pathname)) {
       $('rv-source').href = source.href; $('rv-source').hidden = false;
-      $('rv-source').textContent = analysis ? 'Source manuscript ↗' : 'Source problem ↗';
+      $('rv-source').textContent = analysis || readable ? 'Source manuscript ↗' : 'Source problem ↗';
     }
   } catch { /* An absent or invalid source link is simply omitted. */ }
   const agents = Array.isArray(data.agents) ? data.agents.filter(agent => agent && typeof agent === 'object') : [];
   const fact = (label, value) => { $('rv-run-facts').append(node('dt', '', label), node('dd', '', value)); };
-  fact('Run type', analysis ? 'Analyze' : 'Prove');
+  fact('Run type', analysis ? 'Analyze' : readable ? 'Readability' : 'Prove');
   fact('Status', statusLabel(data.status) || 'Saved');
   fact('Research steps', String(agents.length));
-  fact('Graph views', `${Object.keys(graphLabels).filter(mode => graphNodes(mode).length).length} included`);
-  const shortcutModes = analysis ? ['manuscript', 'outline', 'formal', 'compiler'] : ['explore', 'facts', 'outline', 'formal', 'compiler'];
+  if (readability) fact('Paper map', `${readability.nodes.length} ${readability.nodes.length === 1 ? 'statement' : 'statements'}`);
+  else fact('Graph views', `${Object.keys(graphLabels).filter(mode => graphNodes(mode).length).length} included`);
+  // A readable version's views are sections of its Sandbox.
+  for (const [id, label] of readability ? [['rv-notation', 'Notation'], ['rv-paper-map', 'Paper map']] : []) {
+    const button = node('button', 'rv-view-shortcut'); button.type = 'button';
+    button.append(node('strong', '', label), node('small', '', 'Below the readable version'));
+    button.addEventListener('click', () => { tab('sandbox'); $(id)?.scrollIntoView({ block: 'start', behavior: 'smooth' }); });
+    $('rv-view-shortcuts').append(button);
+  }
+  const shortcutModes = readable ? [] : analysis ? ['manuscript', 'outline', 'formal', 'compiler'] : ['explore', 'facts', 'outline', 'formal', 'compiler'];
   for (const mode of shortcutModes) {
     const button = node('button', 'rv-view-shortcut'); button.type = 'button';
     const count = graphNodes(mode).length;
@@ -182,7 +269,7 @@
   }
   const leanShortcut = node('button', 'rv-view-shortcut'); leanShortcut.type = 'button';
   leanShortcut.append(node('strong', '', analysis ? 'Lean statements' : 'Lean source'), node('small', '', data.lean_source ? 'Saved source' : 'Not included'));
-  leanShortcut.addEventListener('click', () => tab('lean')); $('rv-view-shortcuts').append(leanShortcut);
+  leanShortcut.addEventListener('click', () => tab('lean')); if (!readable) $('rv-view-shortcuts').append(leanShortcut);
   for (const [index, agent] of agents.slice(0, 4).entries()) {
     const item = node('li'); const body = node('div');
     body.append(node('strong', '', agent.label || `Research step ${index + 1}`), node('small', '', statusLabel(agent.status) || 'Recorded'));

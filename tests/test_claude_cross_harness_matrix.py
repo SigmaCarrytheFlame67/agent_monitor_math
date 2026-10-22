@@ -22,8 +22,10 @@ COMPATIBLE_ENGINES = (
     "deepagents",
     "openclaw",
     # Ansatz Analyze checks manuscripts with math_harness's response-only
-    # Claude Code transport (administrators only).
+    # Claude Code transport (administrators only), and Ansatz Readability
+    # rewrites them with it.
     "analyze",
+    "readability",
 )
 UNSUPPORTED_ENGINES = (
     "hermes",
@@ -201,10 +203,10 @@ class ClaudeCompatibilityMatrixTests(unittest.TestCase):
                     patch.object(jobs, "_configure_auth_route") as configure,
                     patch.object(jobs.threading, "Thread") as thread,
                 ):
-                    # An analysis needs a manuscript, not a problem.
+                    # An analysis (or a readability run) needs a manuscript, not a problem.
                     kind = (
-                        {"run_kind": "analyze", "source": {"text": "\\section{One} One equals one."}}
-                        if engine == "analyze"
+                        {"run_kind": engine, "source": {"text": "\\section{One} One equals one."}}
+                        if engine in ("analyze", "readability")
                         else {}
                     )
                     with self.assertRaisesRegex(

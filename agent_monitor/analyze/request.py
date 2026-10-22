@@ -48,71 +48,90 @@ def _now() -> str:
     return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
-def validate(data: object) -> dict[str, Any]:
-    """A normalized copy of a request; raises :class:`RequestError`."""
-    if not isinstance(data, Mapping):
-        raise RequestError("The analysis request is not an object")
-    source = data.get("source")
+def clean_source(source: object, *, noun: str = "analysis") -> dict[str, Any]:
+    """A validated copy of a request's ``source`` (``noun`` names the
+    request in refusals); raises :class:`RequestError`."""
     if not isinstance(source, Mapping) or source.get("kind") not in SOURCE_KINDS:
-        raise RequestError("The analysis request has no valid source")
+        raise RequestError(f"The {noun} request has no valid source")
     kind = source["kind"]
-    clean_source: dict[str, Any] = {"kind": kind}
+    clean: dict[str, Any] = {"kind": kind}
     if kind == "url":
         url = source.get("url")
         if not isinstance(url, str) or not url.strip() or len(url) > 4096:
-            raise RequestError("The analysis request has no valid link")
-        clean_source["url"] = url.strip()
+            raise RequestError(f"The {noun} request has no valid link")
+        clean["url"] = url.strip()
     elif kind == "paste":
         text = source.get("text")
         if not isinstance(text, str) or not text.strip() or len(text) > MAX_TEXT_CHARS:
             raise RequestError("The pasted manuscript is empty or too long")
-        clean_source["text"] = text
+        clean["text"] = text
         if source.get("format") not in (None, ""):
             if source.get("format") not in FORMATS:
                 raise RequestError("The pasted manuscript format must be tex, md or txt")
-            clean_source["format"] = source["format"]
+            clean["format"] = source["format"]
     else:
         ids = source.get("attachments") or []
         if not isinstance(ids, list) or len(ids) > 80 or not all(
             isinstance(item, str) and _ATTACHMENT_ID_RE.fullmatch(item) for item in ids
         ):
-            raise RequestError("The analysis request lists invalid uploads")
-        clean_source["attachments"] = list(ids)
-    caps: dict[str, int] = {}
-    for key, value in (data.get("caps") or {}).items() if isinstance(data.get("caps"), Mapping) else []:
-        if key in ("max_nodes", "max_calls", "max_seconds") and isinstance(value, int) and not isinstance(value, bool) and value > 0:
-            caps[key] = value
+            raise RequestError(f"The {noun} request lists invalid uploads")
+        clean["attachments"] = list(ids)
+    return clean
+
+
+def clean_route(data: Mapping[str, Any], *, noun: str = "analysis") -> dict[str, Any]:
+    """The validated ``role``, ``route``, ``model``, ``reasoning_effort``,
+    ``sponsored`` and ``created_at`` of a request."""
     role = data.get("role")
     if role not in ROLES:
-        raise RequestError("The analysis request has no valid role")
+        raise RequestError(f"The {noun} request has no valid role")
     route = data.get("route")
     if route not in ROUTES:
-        raise RequestError("The analysis request has no valid route")
-    focus = data.get("focus") or ""
-    if not isinstance(focus, str) or len(focus) > MAX_FOCUS_CHARS:
-        raise RequestError("The analysis focus is too long")
+        raise RequestError(f"The {noun} request has no valid route")
     model = data.get("model") or ""
     if not isinstance(model, str) or len(model) > 120:
-        raise RequestError("The analysis request has an invalid model")
+        raise RequestError(f"The {noun} request has an invalid model")
     effort = data.get("reasoning_effort") or "default"
     if not isinstance(effort, str) or not re.fullmatch(r"[a-z]{1,20}", effort):
-        raise RequestError("The analysis request has an invalid reasoning effort")
+        raise RequestError(f"The {noun} request has an invalid reasoning effort")
     sponsored = data.get("sponsored") is True
     if sponsored != (route == "sponsored_kimi"):
-        raise RequestError("The analysis request's sponsored flag does not match its route")
-    created = data.get("created_at") or ""
+        raise RequestError(f"The {noun} request's sponsored flag does not match its route")
     return {
-        "schema": SCHEMA,
-        "source": clean_source,
-        "caps": caps,
-        "focus": focus.strip(),
-        "formalize": data.get("formalize") is True,
         "role": role,
         "route": route,
         "model": model.strip(),
         "reasoning_effort": effort,
         "sponsored": sponsored,
-        "created_at": str(created)[:40],
+        "created_at": str(data.get("created_at") or "")[:40],
+    }
+
+
+def validate(data: object) -> dict[str, Any]:
+    """A normalized copy of a request; raises :class:`RequestError`."""
+    if not isinstance(data, Mapping):
+        raise RequestError("The analysis request is not an object")
+    source = clean_source(data.get("source"))
+    caps: dict[str, int] = {}
+    for key, value in (data.get("caps") or {}).items() if isinstance(data.get("caps"), Mapping) else []:
+        if key in ("max_nodes", "max_calls", "max_seconds") and isinstance(value, int) and not isinstance(value, bool) and value > 0:
+            caps[key] = value
+    route = clean_route(data)
+    focus = data.get("focus") or ""
+    if not isinstance(focus, str) or len(focus) > MAX_FOCUS_CHARS:
+        raise RequestError("The analysis focus is too long")
+    return {
+        "schema": SCHEMA,
+        "source": source,
+        "caps": caps,
+        "focus": focus.strip(),
+        "formalize": data.get("formalize") is True,
+        "role": route["role"],
+        "route": route["route"],
+        "model": route["model"],
+        "reasoning_effort": route["reasoning_effort"],
+        "sponsored": route["sponsored"],
+        "created_at": route["created_at"],
     }
 
 

@@ -303,6 +303,94 @@ def is_analysis(data):
     return isinstance(data, dict) and (data.get('run_kind') == 'analyze' or data.get('engine') == 'analyze')
 
 
+READABILITY_NOTICE = (
+    'Read-only snapshot of a readable version of an existing manuscript, selected by the run owner. '
+    'Each part was checked against the original by a model — not a certificate, and the rewrite can be wrong. '
+    'The manuscript itself and its original text are not included: follow the source link.'
+)
+
+
+def is_readability(data):
+    return isinstance(data, dict) and (data.get('run_kind') == 'readability' or data.get('engine') == 'readability')
+
+
+def _readability_snapshot(data, read):
+    """A shared readability run: the readable version without the parts shown
+    in their original form, the paper map (statements and roles), the
+    notation and the check summary; never ``readability/source/**``, the
+    original text or agent transcripts."""
+    from agent_monitor.analyze.titles import plain_title
+    from agent_monitor.readability import paper_map
+    from agent_monitor.readability.report import clip, without_original
+
+    block = data.get('readability') if isinstance(data.get('readability'), dict) else {}
+    source = block.get('source') if isinstance(block.get('source'), dict) else {}
+    summary = block.get('summary') if isinstance(block.get('summary'), dict) else {}
+    link = next((str(source.get(key)) for key in ('resolved_url', 'input_url')
+                 if str(source.get(key) or '').startswith('https://')), '')
+    title = _text(plain_title(source.get('title')), 240) or 'manuscript'
+    try:
+        paper = paper_map.sanitize(_json_read(read, 'readability/paper_map.json'))
+    except ValueError:
+        paper = {'title': '', 'nodes': [], 'edges': [], 'macros': {}}
+    notation = paper_map.clean_notation(_json_read(read, 'readability/notation.json')) or {
+        'rows': [], 'terms': [], 'macros_used': []}
+    parts = []
+    for part in _items(_json_read(read, 'readability/check.json').get('parts'), 400):
+        if isinstance(part, dict) and isinstance(part.get('index'), int):
+            parts.append({'index': part['index'], 'title': _text(part.get('title'), 200),
+                          'status': _text(part.get('status'), 20),
+                          'issues': [{key: _text(issue.get(key), 600)
+                                      for key in ('severity', 'location', 'problem', 'fix')}
+                                     for issue in _items(part.get('issues'), 12) if isinstance(issue, dict)]})
+    counts = {key: summary.get(key) for key in ('parts', 'rewritten', 'faithful', 'issues', 'unchecked', 'not_rewritten')
+              if isinstance(summary.get(key), int)}
+    problem = f'Readable version of {title}' + (f' ({_text(source.get("version"), 80)})' if source.get('version') else '')
+    if source.get('license'):
+        problem += f'\nLicence: {_text(source.get("license"), 200)}'
+    if counts:
+        problem += (f"\nParts: {counts.get('faithful', 0)} of {counts.get('parts', 0)} faithful, "
+                    f"{counts.get('issues', 0)} with issues, {counts.get('unchecked', 0)} unchecked")
+    shared_graph = {
+        'title': _text(paper.get('title'), 240),
+        'nodes': [{'id': node['id'], 'kind': node['kind'], 'label': node['label'], 'statement': node['statement']}
+                  for node in paper['nodes'][:100]],
+    }
+    ids = {node['id'] for node in shared_graph['nodes']}
+    shared_graph['edges'] = [{'from': edge['from'], 'to': edge['to'], 'label': 'uses', 'kind': edge['kind'],
+                              'provenance': edge['provenance']}
+                             for edge in paper['edges'][:300] if edge['from'] in ids and edge['to'] in ids]
+    graphs = {mode: _graph_record(mode) for mode in GRAPH_MODES}
+    for mode in ('manuscript', 'outline'):
+        graphs[mode] = _graph_record(mode, {'status': 'recorded', 'counts': {
+            'nodes': len(paper['nodes']), 'edges': len(paper['edges'])}}, sanitized=shared_graph)
+    result = {
+        'version': 2, 'type': 'shared', 'kind': 'readability',
+        'title': _text(f'Readability · {title}', 240),
+        'status': _text(data.get('status'), 80), 'engine': 'readability',
+        'problem': problem,
+        'proof': clip(without_original(read('readability/readable.md'))),
+        'agents': [],
+        'informal_graph': shared_graph,
+        'formal_graph': {'title': '', 'nodes': [], 'edges': []}, 'lean_source': '',
+        'graphs': graphs,
+        'readability': {
+            'audience': _text(block.get('audience'), 40),
+            'summary': counts,
+            'paper_map': paper,
+            'notation': notation,
+            'check': parts,
+            'source': {key: _text(source.get(key), 300) for key in ('title', 'version', 'license', 'format', 'canonical_id')
+                       if source.get(key)},
+            'check_note': 'checked against the original by a model — not a certificate',
+        },
+        'notice': READABILITY_NOTICE,
+    }
+    if link:
+        result['source_url'] = link
+    return result
+
+
 def analysis_graph_snapshot(graph):
     """The shared Manuscript DAG: statements already in the graph, labels and
     verdicts; never proof excerpts, notes or anything from analysis/source."""
@@ -449,6 +537,28 @@ def _analysis_snapshot(run_id, data, read, graph):
     return result
 
 
+def _writeup_fields(data, read):
+    """The written proof of an Ansatz CGM run (writeup.md, at most 300 KB), its
+    status from the sidecar that describes it, and whether it was written for
+    the shared proof.md; nothing for other runs or a run without one."""
+    from agent_monitor.engine_graph import CGM_GRAPH_ENGINES
+
+    if str(data.get('engine') or '').strip().lower() not in CGM_GRAPH_ENGINES:
+        return {}
+    writeup = read('writeup.md')
+    if not writeup:
+        return {}
+    from agent_monitor.cgm import writeup as cgm_writeup
+
+    view = cgm_writeup.describe(
+        writeup.encode('utf-8'),
+        read('math_harness/project/writeup.json').encode('utf-8') or None,
+        proof=read('proof.md').encode('utf-8') or None,
+        receipt=read('math_harness/project/engine_receipt.json').encode('utf-8') or None,
+    )
+    return {'writeup': writeup, 'writeup_status': view['status'], 'writeup_fresh': view['fresh']}
+
+
 def snapshot(run_id, data):
     if not isinstance(run_id, str) or not RUN_ID.fullmatch(run_id) or '..' in run_id:
         raise ValueError('Invalid run identifier.')
@@ -459,13 +569,21 @@ def snapshot(run_id, data):
     def read(name):
         # Read bounded graph documents whole before applying the smaller share
         # limits; truncating JSON bytes would hide an otherwise usable graph.
-        limit = 3_000_000 if name in {'proof_graph.json', 'lean_proof_graph.json', 'analysis/analysis_graph.json'} else 300_000
+        limit = 3_000_000 if name in {'proof_graph.json', 'lean_proof_graph.json', 'analysis/analysis_graph.json',
+                                      'readability/paper_map.json', 'readability/readable.md'} else 300_000
         return _file(ws, name, limit) if safe_ws else ''
     def graph(name):
         try:
             return graph_snapshot(json.loads(read(name)))
         except (ValueError, TypeError):
             return graph_snapshot({})
+    if is_readability(data):
+        # Never readability/source/** or the original text; the readable
+        # version, the paper map's statements, notation and checks only.
+        result = _readability_snapshot(data, read)
+        if len(json.dumps(result).encode()) > 4_000_000:
+            raise ValueError('This snapshot is too large to share (4 MB maximum).')
+        return result
     if is_analysis(data):
         # Never analysis/source/** and no manuscript text beyond the node
         # statements already in the graph; no agent transcripts either.
@@ -495,6 +613,7 @@ def snapshot(run_id, data):
         'formal_graph': graph('lean_proof_graph.json'), 'lean_source': read('lean/Proof.lean'),
         'notice': 'Read-only snapshot selected by the run owner. It does not update as the run continues. Graphs describe dependencies; they are not, by themselves, proof certificates.',
     }
+    result.update(_writeup_fields(data, read))
     result['graphs'] = _graph_modes(ws, data, read, result, safe_workspace=safe_ws)
     result['informal_graph'] = result['graphs']['outline']['graph']
     result['formal_graph'] = result['graphs']['formal']['graph']

@@ -354,6 +354,28 @@ html.read-only-run .run-access-note { display: flex; }
 }
 .proof-toolbar button:disabled { opacity: .4; cursor: not-allowed; }
 .proof-toolbar button.primary { border-color: color-mix(in srgb, var(--accent) 50%, var(--border)); color: var(--accent); }
+/* The written proof of a CGM run: a two-way switch beside the file name and a
+   status banner above the write-up. Colours follow the model verifier's
+   verdicts (blue accepted, amber problems); green stays reserved for Lean. */
+.proof-toolbar:has(> .proof-doc-switch:not([hidden])), .proof-toolbar:has(> #make-readable-btn:not([hidden])) { flex-wrap: wrap; row-gap: 8px; }
+.proof-doc-switch { display: inline-flex; flex-shrink: 0; gap: 2px; padding: 2px; border: 1px solid var(--border); border-radius: 9px; background: var(--panel2); }
+.proof-doc-switch[hidden] { display: none; }
+.proof-toolbar .proof-doc-switch button { border: 0; border-radius: 7px; background: transparent; color: var(--dim); padding: 4px 10px; font-weight: 500; white-space: nowrap; }
+.proof-toolbar .proof-doc-switch button:hover:not(:disabled) { color: var(--fg); }
+.proof-toolbar .proof-doc-switch button[aria-checked="true"] { background: var(--panel); color: var(--fg); font-weight: 600; box-shadow: 0 1px 2px rgb(0 0 0 / .12); }
+.proof-toolbar .proof-doc-switch button:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+@media (forced-colors: active) { .proof-toolbar .proof-doc-switch button[aria-checked="true"] { outline: 2px solid Highlight; } }
+/* Make readable, and why it could not paste the document shown. */
+.proof-toolbar #make-readable-btn { white-space: nowrap; }
+.make-readable-note { max-width: 320px; color: var(--err); font-size: 10.5px; line-height: 1.35; }
+.make-readable-note:empty { display: none; }
+.writeup-chip[data-status="accepted"] { color: var(--verdict-checked); }
+.writeup-chip[data-status="rejected"] { color: var(--verdict-gap); }
+.md-view .writeup-banner { margin: 0 0 14px; padding: 9px 14px; border: 1px solid var(--border); border-left: 3px solid var(--verdict-none); border-radius: 8px; background: var(--panel2); color: var(--muted); font-size: 12.5px; line-height: 1.55; }
+.md-view .writeup-banner[data-status="accepted"] { border-left-color: var(--verdict-checked); }
+.md-view .writeup-banner[data-status="rejected"] { border-left-color: var(--verdict-gap); }
+.md-view .writeup-banner p { margin: 0; }
+.md-view .writeup-banner .writeup-stale { margin-top: 4px; color: var(--fg); font-weight: 600; }
 .auto-pipeline-status { display: flex; align-items: center; gap: 5px; flex-wrap: wrap; justify-content: flex-end; }
 .pipeline-chip {
   display: inline-flex; align-items: center; gap: 5px; max-width: 155px; padding: 4px 8px;
@@ -1569,6 +1591,8 @@ button.start { grid-column: auto; grid-row: auto; }
 .choice-scroll .opt-name b { display:block; font-size:12px; line-height:1.35; overflow-wrap:anywhere; white-space:normal; }
 .choice-scroll .opt-name span { display:none; }
 .choice-scroll .opt-desc { display:block; margin-top:3px; font-size:11px; line-height:1.35; color:var(--muted); }
+/* Ansatz CGM says what its runs end with: up to three lines of it show. */
+.choice-scroll .cgm-engine .opt-desc { white-space:normal; display:-webkit-box; -webkit-box-orient:vertical; -webkit-line-clamp:3; line-clamp:3; }
 .choice-scroll .opt-state { display:none; }
 .choice-check { width:17px; height:17px; border-radius:50%; display:grid; place-items:center; color:var(--accent); font-size:11px; background:color-mix(in srgb,var(--accent) 12%,transparent); opacity:0; }
 .choice-option.active .choice-check { opacity:1; }
@@ -1887,6 +1911,7 @@ body { background:var(--bg); }
             <button type="button" role="radio" data-formalize="0" aria-checked="false" title="Write the informal proof only. You can still formalize it later with ∎ Verify in the Lean tab.">Informal only</button>
             <button type="button" role="radio" data-formalize="1" aria-checked="true" title="Also translate the proof to Lean and verify it automatically.">Informal + formalization</button>
             <button type="button" role="radio" data-run-kind="analyze" aria-checked="false" tabindex="-1" hidden title="Analyze an existing manuscript result by result: paste a link (arXiv, GitHub, openai/math, PDF/TeX) or the text, or attach the files. Checked by a model verifier — not a certificate.">Analyze</button>
+            <button type="button" role="radio" data-run-kind="readability" aria-checked="false" tabindex="-1" hidden title="Rewrite a paper or proof so it is easier to follow: a readable version that keeps every statement and argument, a paper map, a notation table, and answers to your questions. Checked against the original by a model — not a certificate.">Readability</button>
           </div>
         </div>
         <div class="analyze-composer" id="analyze-composer" hidden>
@@ -1896,7 +1921,12 @@ body { background:var(--bg); }
             <label class="analyze-focus" for="analyze-focus"><span>Focus</span><input id="analyze-focus" type="text" maxlength="2000" autocomplete="off" spellcheck="false" placeholder="Optional — a result to check first, e.g. Lemma 3.7"/></label>
             <label class="analyze-formalize" title="Lean 4.14 / Mathlib on this server. Only the statements of the main results are formalized; proofs are not attempted."><input type="checkbox" id="analyze-formalize"/><span>Also formalize main statements in Lean (statements only)</span></label>
           </div>
+          <div class="readability-options" id="readability-options" hidden>
+            <label class="readability-audience" for="readability-audience"><span>Audience</span><select id="readability-audience"><option value="research">Researchers in the field</option><option value="graduate" selected>Graduate students</option><option value="undergraduate">Undergraduates</option></select></label>
+            <label class="analyze-focus" for="readability-focus"><span>Focus</span><input id="readability-focus" type="text" maxlength="2000" autocomplete="off" spellcheck="false" placeholder="Optional — what to explain most carefully, e.g. the proof of Theorem 2"/></label>
+          </div>
           <p class="analyze-provider" id="analyze-provider">Analyze sends the manuscript text to the selected model provider — sponsored Kimi K3 or your own provider. Don't submit work you aren't allowed to share.</p>
+          <p class="analyze-provider" id="readability-provider" hidden>Readability sends the manuscript text to the selected model provider. Don't submit work you aren't allowed to share.</p>
           <p class="analyze-caps" id="analyze-caps"></p>
         </div>
         <div class="choice-dock">
@@ -1968,10 +1998,25 @@ body { background:var(--bg); }
                 <span class="editor-save-status" id="editor-save-status"></span>
                 <a class="analysis-source-link" id="analysis-source-link" hidden target="_blank" rel="noopener noreferrer">Source ↗</a>
                 <button type="button" id="analysis-source-toggle" hidden aria-pressed="false" title="Show the stored copy of the manuscript (read-only)">Source</button>
+                <div class="proof-doc-switch" id="proof-doc-switch" role="radiogroup" aria-label="Proof document" hidden>
+                  <button type="button" role="radio" data-proof-doc="writeup" aria-checked="false" tabindex="-1">Written proof<span class="writeup-chip" id="writeup-chip"></span></button>
+                  <button type="button" role="radio" data-proof-doc="facts" aria-checked="true" title="proof.md: the verifier-accepted facts, which are the proof">Verified facts</button>
+                </div>
+                <span class="make-readable-note" id="make-readable-note" role="status" aria-live="polite"></span>
+                <button type="button" id="make-readable-btn" hidden title="Paste the document shown here into Readability, which rewrites it to be easier to follow and checks each part against it">¶ Make readable</button>
                 <button id="proof-edit-btn" class="primary" disabled>✎ Edit</button>
                 <button id="proof-save-btn" class="primary" hidden>Save</button>
                 <button id="proof-done-btn" hidden>Done</button>
                 <button id="pdf-dl-btn" disabled>⬇ Download</button>
+              </div>
+              <div class="readability-tabs" id="readability-tabs" hidden>
+                <div class="readability-tablist" role="tablist" aria-label="Readability views">
+                  <button type="button" role="tab" id="rd-tab-readable" data-rd-view="readable" aria-selected="true" aria-controls="md-view">Readable version</button>
+                  <button type="button" role="tab" id="rd-tab-original" data-rd-view="original" aria-selected="false" aria-controls="md-view" tabindex="-1">Original</button>
+                  <button type="button" role="tab" id="rd-tab-notation" data-rd-view="notation" aria-selected="false" aria-controls="md-view" tabindex="-1">Notation</button>
+                  <button type="button" role="tab" id="rd-tab-map" data-rd-view="map" aria-selected="false" aria-controls="md-view" tabindex="-1">Map</button>
+                </div>
+                <span class="readability-tab-status" id="readability-tab-status" role="status" aria-live="polite"></span>
               </div>
               <div class="prompt-strip collapsed" id="prompt-strip" style="display:none">
                 <div class="proc-hdr" id="prompt-toggle" title="The full text sent to the engine, including the operator persona/system instructions">
@@ -2015,6 +2060,7 @@ body { background:var(--bg); }
                 <div class="chat-live" id="chat-live"></div>
               </div>
               <div class="chat-msgs" id="chat-msgs"></div>
+              <ol class="ask-list" id="ask-list" aria-label="Questions and answers" hidden></ol>
               <div class="proc-log" id="proc-log">
                 <div class="proc-hdr" id="proc-toggle">
                   <span class="t">Process log</span>
@@ -2030,6 +2076,16 @@ body { background:var(--bg); }
                   <span class="hint">Enter to send · Shift+Enter newline</span>
                   <button id="chat-send" disabled>Send</button>
                 </div>
+              </div>
+              <div class="ask-compose run-change" id="ask-compose" hidden>
+                <div class="ask-context" id="ask-context" hidden></div>
+                <label class="sr-only" for="ask-input">Your question</label>
+                <textarea id="ask-input" maxlength="2000" placeholder="Ask about a step, a symbol or a result…"></textarea>
+                <div class="row">
+                  <span class="hint" id="ask-hint">Enter to ask · Shift+Enter newline</span>
+                  <button type="button" id="ask-send" disabled>Ask</button>
+                </div>
+                <p class="ask-status" id="ask-status" role="status" aria-live="polite"></p>
               </div>
             </div>
           </div>
@@ -2053,6 +2109,7 @@ body { background:var(--bg); }
             <button type="button" class="dag-rebuild" id="dag-rebuild" title="Reload this graph from the run's saved artifacts" hidden>↻ Refresh</button>
             <div class="dag-mode" id="dag-mode">
               <button type="button" data-mode="analysis" hidden title="The manuscript's own results and references, coloured by model-verifier verdicts (checked by a model verifier — not a certificate)">Manuscript</button>
+              <button type="button" data-mode="paper-map" hidden title="The manuscript's definitions and results and how they depend on each other; darker cards matter more to the main argument (not a verification)">Paper map</button>
               <button type="button" class="on" data-mode="engine" title="Ansatz CGM graphs: Explore (the search) and Facts (model-verifier-accepted dependencies); other harnesses show their execution trace">Informal · CGM</button>
               <button type="button" data-mode="informal" title="Informal outline of the final proof text; derived from the CGM fact graph for CGM runs">Outline</button>
               <button type="button" data-mode="formal">Formal · Lean</button>
@@ -2249,6 +2306,9 @@ const RUN_KIND_KEY='proving-console-run-kind-v1';
 const ANALYZE_FORMALIZE_KEY='proving-console-analyze-formalize-v1';
 const ANALYZE_CONTINUE_NOTE="Analyze runs can't be continued. Start a new analysis, or re-check a node in the DAG.";
 const ANALYZE_VERDICT_NOTE='checked by a model verifier — not a certificate';
+/* Readability (run_kind "readability"): the fourth mode, offered while the
+   server lists the `readability` engine; its run view is in /static/readability.js. */
+const READABILITY_AUDIENCE_KEY='proving-console-readability-audience-v1';
 let proveEngine='', analyzeResolveTimer=0, analyzeResolveSeq=0, analyzeSourceRunId='', dagAutoRunId='';
 const analyzeResolveCache=new Map(), RUN_KIND_BY_ID=new Map(), analysisGraphCache=new Map();
 const $=id=>document.getElementById(id);
@@ -2380,8 +2440,8 @@ function runTuningCapabilities(){
   if(isCgmMax())return {reasoning:[{id:'max',label:'Ultra'}],speed:[{id:'standard',label:'Standard'}],default_reasoning_effort:'max',default_speed_mode:'standard',max_mode:true};
   const runtime=selectedAccountRuntime(), model=currentModel();
   const configured=SETTINGS?.run_tuning_by_runtime?.[runtime]?.[model];
-  // Ansatz Analyze takes the CGM harness's tuning (the server aliases it).
-  const tuningEngine=engine==='analyze'?'math_harness':engine;
+  // Ansatz Analyze and Ansatz Readability take the CGM harness's tuning (the server aliases them).
+  const tuningEngine=engine==='analyze'||engine==='readability'?'math_harness':engine;
   if(configured&&Array.isArray(configured.supported_engines)&&configured.supported_engines.length&&!configured.supported_engines.includes(tuningEngine))return {reasoning:[{id:'default',label:'Default'}],speed:[{id:'standard',label:'Standard'}],default_reasoning_effort:'default',default_speed_mode:'standard',unsupported_engine:true};
   if(!configured)return {reasoning:[{id:'default',label:'Default'}],speed:[{id:'standard',label:'Standard'}],default_reasoning_effort:'default',default_speed_mode:'standard'};
   // Some options (for example Ultrafast) exist only for some harnesses.
@@ -2611,10 +2671,12 @@ function modelsForEngine(selected=ENGINES.find(x=>x.id===engine)){
   if(selected?.id==='kimi')return mode==='api_key'?[GUEST_POLICY?.default_model||'kimi-k3']:[];
   // Guests analyze on sponsored Kimi K3 only.
   if(selected?.id==='analyze'&&CURRENT_USER?.guest)return mode==='api_key'?[GUEST_POLICY?.default_model||'kimi-k3']:[];
+  // Readability on an API route runs Kimi K3 only (sponsored, or the account's own Kimi key).
+  if(selected?.id==='readability'&&mode==='api_key')return [GUEST_POLICY?.default_model||'kimi-k3'];
   if(mode==='codex_subscription')models=models.filter(model=>!/(?:^|[:/])chat-latest$/i.test(model));
   const sponsoredEngines=SETTINGS?.sponsored_kimi_engines||['kimi','plain'];
   // Ansatz Analyze reaches sponsored Kimi K3 through the CGM transport.
-  const sponsoredId=selected?.id==='analyze'?'math_harness':selected?.id;
+  const sponsoredId=selected?.id==='analyze'||selected?.id==='readability'?'math_harness':selected?.id;
   if(mode==='api_key'&&!sponsoredEngines.includes(sponsoredId)&&SETTINGS?.sponsored_kimi_available&&!SETTINGS?.kimi_user_key_set)models=models.filter(model=>!String(model).toLowerCase().includes('kimi'));
   // A member's CGM harness bills only its own keys; Kimi K3 runs on `kimi`.
   if(selected?.own_key_only)models=models.filter(model=>!/^kimi-/i.test(String(model)));
@@ -2629,7 +2691,7 @@ function renderModels(){
   const supported=selected?.supported_models||[], restricted=(mode==='codex_subscription'||mode==='claude_subscription')&&supported.length>0;
   // Ansatz CGM offers the models of both of its engines (see cgmEngineFor).
   const cgm=dagIsCgmEngine(engine), harness=cgm&&cgmEngineUsable('math_harness');
-  const models=cgm?cgmModels():modelsForEngine(), allowCustom=(cgm?harness&&engineModelMode(ENGINES.find(x=>x.id==='math_harness'))==='api_key':selected?.id!=='kimi'&&mode==='api_key')&&(SETTINGS?.configured_providers||[]).length>0;
+  const models=cgm?cgmModels():modelsForEngine(), allowCustom=(cgm?harness&&engineModelMode(ENGINES.find(x=>x.id==='math_harness'))==='api_key':selected?.id!=='kimi'&&selected?.id!=='readability'&&mode==='api_key')&&(SETTINGS?.configured_providers||[]).length>0;
   // Where Ansatz CGM can only use Kimi K3, models from the account's own keys
   // appear under another harness; say so instead of silently hiding them.
   const otherApiModels=selected?.id==='kimi'&&mode==='api_key'&&!harness?(SETTINGS?.api_models||[]).filter(model=>!String(model).toLowerCase().includes('kimi')):[];
@@ -2657,7 +2719,7 @@ function renderModels(){
     ?`<div class="model-custom-row"><span>${LIB_ESC(selected.model_note||'This Codex adapter has a restricted model list.')}</span></div>`
     :allowCustom
       ?`<div class="model-custom-row"><input id="model-custom-entry" value="${sel.value==='__custom__'?LIB_ESC($('model-custom').value):''}" placeholder="provider:model · or OpenRouter vendor/model"/><button type="button" id="model-custom-use">Use</button></div>`
-      :`<div class="model-custom-row"><span>${mode==='unavailable'?'This engine needs a compatible account connection.':otherApiModels.length?`On this account Ansatz CGM runs on Kimi K3 only. To use ${LIB_ESC(otherApiModels[0])} or another model from your API keys, switch the harness (for example to Plain).`:models.length?'Your selection applies to new runs.':'Configure an API provider in Settings to see its models.'}</span></div>`;
+      :`<div class="model-custom-row"><span>${mode==='unavailable'?'This engine needs a compatible account connection.':otherApiModels.length?`On this account Ansatz CGM runs on Kimi K3 only. To use ${LIB_ESC(otherApiModels[0])} or another model from your API keys, switch the harness (for example to Plain).`:selected?.id==='readability'&&mode==='api_key'?'On API routes Readability runs on Kimi K3: sponsored, or your own Kimi key.':models.length?'Your selection applies to new runs.':'Configure an API provider in Settings to see its models.'}</span></div>`;
   renderChoiceMenu('model-menu','Choose model',models.map(model=>{
     const v=modelVisual(model);
     const max=model===CGM_MAX_MODEL&&cgm;
@@ -2701,8 +2763,9 @@ function runRuntimeSummary(){
 function renderRunRuntime(){
   // The provider notice sits under this box and follows the same choice.
   renderEngineNotice(ENGINES.find(x=>x.id===engine),currentModel());
-  // The Analyze cap note depends on the route this model takes.
+  // The Analyze (and Readability) cap note depends on the route this model takes.
   if(engine==='analyze')renderAnalyzeCaps();
+  if(engine==='readability')renderReadabilityCaps();
   const box=$('run-runtime'), text=$('run-runtime-text'); if(!box||!text)return;
   const summary=runRuntimeSummary();
   box.hidden=!summary;
@@ -3602,10 +3665,10 @@ const ENGINE_TONE={kimi:'195 74% 48%',hermes:'154 72% 45%',improof:'221 89% 59%'
 /* The Ansatz CGM engines lead the launcher: Kimi K3 (guest default) and the
    same pipeline on an account's own Codex / Claude Code / API route. */
 const CGM_ENGINE_COPY={
-  kimi:'Ansatz CGM on Kimi K3: strategist → workers → independent verifier → curator · tool-free · Facts + Explore graphs',
-  math_harness:'Ansatz CGM on your own Codex, Claude Code or API route · same pipeline · Facts + Explore graphs',
+  kimi:'Ansatz CGM on Kimi K3 · by default, accepted runs end with a written proof, checked as a whole · strategist → workers → independent verifier → curator · tool-free · Facts + Explore graphs',
+  math_harness:'Ansatz CGM on your own Codex, Claude Code or API route · by default, accepted runs end with a written proof, checked as a whole · same pipeline · Facts + Explore graphs',
   // The harness as a member sees it (own_key_only): its own API keys only.
-  own_key:'Ansatz CGM on a model from your own API keys · same pipeline · Facts + Explore graphs',
+  own_key:'Ansatz CGM on a model from your own API keys · by default, accepted runs end with a written proof, checked as a whole · same pipeline · Facts + Explore graphs',
 };
 function engineMenuOrder(list){
   /* CGM engines first: one this session can use before a sign-in-only one,
@@ -3619,8 +3682,8 @@ function engineMenuOrder(list){
    model on `math_harness`, the same pipeline on the account's own route. Runs
    keep the real engine id. */
 const CGM_FAMILY={label:'Ansatz CGM',vendor:'Ansatz · CGM',mark:'CG',tone:'267 86% 64%',
-  copy:'Strategist → workers → independent verifier → curator · Kimi K3 included or your own Codex, Claude Code or API models · Facts + Explore graphs',
-  ownKeyCopy:'Strategist → workers → independent verifier → curator · Kimi K3 included or models from your own API keys · Facts + Explore graphs'};
+  copy:'Strategist → workers → independent verifier → curator · by default, accepted runs end with a written proof, checked as a whole · Kimi K3 included or your own Codex, Claude Code or API models · Facts + Explore graphs',
+  ownKeyCopy:'Strategist → workers → independent verifier → curator · by default, accepted runs end with a written proof, checked as a whole · Kimi K3 included or models from your own API keys · Facts + Explore graphs'};
 const ENGINE_AUTH_LABELS={codex_subscription:'Codex',claude_subscription:'Claude Code',api_key:'API'};
 function cgmEngineUsable(id){ const e=ENGINES.find(x=>x.id===id); return !!e&&!!e.available&&!e.requires_login&&!engineRuntimeIssue(e); }
 function cgmModels(){
@@ -3653,10 +3716,13 @@ function engineView(e){
   return {label:CGM_FAMILY.label,vendor:CGM_FAMILY.vendor,mark:CGM_FAMILY.mark,tone:CGM_FAMILY.tone,auth,issue,available:own.length>0||!!e.available,usable:own.length>0,copy};
 }
 function renderEngines(){
-  // Analyze runs on its own engine only, and Prove never offers that engine.
+  // The proof toolbar's Make readable follows the Readability policy and settings this draws from.
+  syncMakeReadable();
+  // Analyze and Readability run on their own engines only, and Prove never offers those.
   syncEngineForRunKind();
   renderFormalizeSwitch();
   if(engine==='analyze')return renderAnalyzeEngineChip();
+  if(engine==='readability')return renderReadabilityEngineChip();
   unlockEngineChip();
   // Keep the Ansatz CGM choice on whichever of its engines can run here.
   if(dagIsCgmEngine(engine)&&!cgmEngineUsable(engine)){ const other=engine==='kimi'?'math_harness':'kimi'; if(cgmEngineUsable(other))engine=other; }
@@ -3730,7 +3796,7 @@ function attachmentLimits(){
   let guest=null;
   try{ guest=CURRENT_USER?.guest?GUEST_POLICY?.attachments:null; }catch(e){ guest=null; }
   let analyze=null;
-  try{ analyze=runKindChoice()==='analyze'?analyzePolicy()?.sources:null; }catch(e){ analyze=null; }
+  try{ analyze=manuscriptMode()?manuscriptPolicy()?.sources:null; }catch(e){ analyze=null; }
   const analyzeExtensions=Array.isArray(analyze?.upload_extensions)?analyze.upload_extensions.map(x=>String(x).toLowerCase()):null;
   if(guest&&Array.isArray(guest.extensions)){
     const files=Math.max(1,Number(guest.max_files)||2), total=Math.max(1024,Number(guest.max_total_bytes)||65536);
@@ -3779,7 +3845,7 @@ function attachmentComposer(id, inputId){
     const errors=[], limits=attachmentLimits();
     for(const file of files){
       const ext=attachmentExtension(file.name);
-      if(!limits.extensions.includes(ext)){errors.push(file.name+(limits.analyze?(limits.guest?': guests can attach TeX, Markdown or text manuscripts (sign in for PDFs and archives).':': Analyze reads TeX, Markdown, text and PDF files and zip or tar.gz bundles.'):ATTACHMENT_EXTENSIONS.includes(ext)?': not available for guest runs (text files only).':': unsupported file type.'));continue;}
+      if(!limits.extensions.includes(ext)){errors.push(file.name+(limits.analyze?(limits.guest?': guests can attach TeX, Markdown or text manuscripts (sign in for PDFs and archives).':': manuscripts are read from TeX, Markdown, text and PDF files and zip or tar.gz bundles.'):ATTACHMENT_EXTENSIONS.includes(ext)?': not available for guest runs (text files only).':': unsupported file type.'));continue;}
       if(!file.size||file.size>limits.maxFileBytes){errors.push(file.name+': files must be nonempty and at most '+attachmentSize(limits.maxFileBytes)+'.');continue;}
       if(state.files.length>=limits.maxFiles||state.files.reduce((n,x)=>n+x.file.size,0)+file.size>limits.maxTotalBytes){errors.push('Limit: '+limits.maxFiles+' files and '+attachmentSize(limits.maxTotalBytes)+' per message.');break;}
       state.files.push({file,preview:['png','jpg','jpeg','webp','gif'].includes(ext)?URL.createObjectURL(file):null});
@@ -3810,8 +3876,8 @@ function attachmentComposer(id, inputId){
 }
 const initialAttachments=attachmentComposer('problem-attachments','problem-text');
 const chatAttachments=attachmentComposer('chat-attachments','chat-input');
-// In Analyze mode the attached files are the manuscript: keep the source note current.
-initialAttachments.onChange=()=>{ if(runKindChoice()==='analyze')refreshAnalyzeSource(); };
+// In Analyze and Readability the attached files are the manuscript: keep the source note current.
+initialAttachments.onChange=()=>{ if(manuscriptMode())refreshAnalyzeSource(); };
 function attachmentLinks(items,rid){
   if(!items?.length)return '';
   return '<div class="attachment-links">'+(items||[]).map(item=>{
@@ -3823,6 +3889,7 @@ function attachmentLinks(items,rid){
 async function startRun(){
   if(CURRENT_USER?.guest&&GUEST_POLICY?.login_required){location.href=pcUrl('/login');return;}
   if(runKindChoice()==='analyze')return startAnalyzeRun();
+  if(runKindChoice()==='readability')return startReadabilityRun();
   const text=$('problem-text').value.trim(); const eb=$('form-error'); eb.style.display='none';
   if(initialAttachments.busy)return;
   if(!text&&!initialAttachments.files.length){eb.style.display='block';eb.textContent='Please enter a problem or attach research files.';return;}
@@ -3871,32 +3938,37 @@ async function loadRuns(){
   let jobs=((await(await fetch('/api/jobs')).json()).jobs||[]).slice().reverse();
   const seen=new Set();
   // A re-check of one node of an analysis is a job of its own: it marks its
-  // analysis as running ("re-checking …") without replacing its entry.
-  const rechecks=new Map();
+  // analysis as running ("re-checking …") without replacing its entry. A
+  // question about a readable version is one too ("answering a question").
+  const rechecks=new Map(), asks=new Map();
   jobs=jobs.filter(j=>{
     if(j.kind==='recheck'){ if(j.status==='running'&&!rechecks.has(j.run_id))rechecks.set(j.run_id,j); return false; }
+    if(j.kind==='ask'){ if(j.status==='running')asks.set(j.run_id,j); return false; }
     if(seen.has(j.run_id))return false; seen.add(j.run_id); return true;
   });
   const manifestAll=((await(await fetch('/api/runs')).json()).runs||[]);
   const manifest=manifestAll.filter(r=>!seen.has(r.run_id));
-  // A finished analysis is relabelled with its manuscript's title (its job keeps the link).
+  // A finished analysis (or readable version) is relabelled with its manuscript's title (its job keeps the link).
   const recordPreview=new Map(manifestAll.map(r=>[String(r.run_id),r.problem_preview]));
   syncIdlePill(runningRunCount([...jobs,...rechecks.values()],manifest));
   const item=(rid,jid,en,pid,st,preview,kind)=>{
-    const analysis=kind==='analyze'||en==='analyze', recheck=rechecks.get(rid);
-    RUN_KIND_BY_ID.set(String(rid),analysis?'analyze':'prove');
+    const analysis=kind==='analyze'||en==='analyze', readability=kind==='readability'||en==='readability', recheck=rechecks.get(rid);
+    RUN_KIND_BY_ID.set(String(rid),analysis?'analyze':readability?'readability':'prove');
     if(recheck)st='running';
-    // Analyze runs are never continued: a new analysis or a node re-check replaces that.
+    // Analyze and Readability runs are never continued: a new run, a node
+    // re-check or a question replaces that.
     const act=st==='running'
       ?`<button class="run-act stop" data-run="${rid}" title="${recheck?'Stop the re-check':'Stop'}">■</button>`
-      :(CURRENT_USER?.guest||analysis?'':`<button class="run-act cont" data-run="${rid}" title="Continue">▶</button>`);
+      :(CURRENT_USER?.guest||analysis||readability?'':`<button class="run-act cont" data-run="${rid}" title="Continue">▶</button>`);
     const title=(preview||'').trim()||pid;
     const sub=analysis
       ?`<span class="run-kind">Analyze</span>${escapeHtml(recheck?String(recheck.problem_preview||'Re-check').replace(/^Re-check · /,'re-checking '):'Ansatz Analyze')}`
+      :readability?`<span class="run-kind">Readable</span>${escapeHtml(asks.has(rid)?'answering a question':'Ansatz Readability')}`
       :escapeHtml(en||'?');
-    return `<div class="run-item ${rid===runId?'active':''}${analysis?' analysis':''}" data-run="${rid}" ${jid?`data-job="${jid}"`:''} title="${escapeHtml(title)}"><div class="run-top"><div class="en"><span class="sdot ${st||'archived'}"></span><span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${escapeHtml(title)}</span></div>${act}<button class="run-del" data-run="${rid}">×</button></div><div class="st">${sub}</div></div>`;
+    return `<div class="run-item ${rid===runId?'active':''}${analysis?' analysis':''}${readability?' readability':''}" data-run="${rid}" ${jid?`data-job="${jid}"`:''} title="${escapeHtml(title)}"><div class="run-top"><div class="en"><span class="sdot ${st||'archived'}"></span><span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${escapeHtml(title)}</span></div>${act}<button class="run-del" data-run="${rid}">×</button></div><div class="st">${sub}</div></div>`;
   };
-  $('runs').innerHTML=jobs.map(j=>item(j.run_id,j.job_id,j.engine,j.problem_id,j.status,(j.run_kind==='analyze'||j.engine==='analyze')&&recordPreview.get(String(j.run_id))||j.problem_preview,j.run_kind)).join('')+manifest.map(r=>item(r.run_id,null,r.engine||'?',r.problem_id||r.run_id,r.status,r.problem_preview,r.run_kind)).join('')||'<div style="color:var(--dim);font-size:11px;padding:8px">No runs yet</div>';
+  const manuscriptJob=j=>['analyze','readability'].includes(j.run_kind)||['analyze','readability'].includes(j.engine);
+  $('runs').innerHTML=jobs.map(j=>item(j.run_id,j.job_id,j.engine,j.problem_id,j.status,manuscriptJob(j)&&recordPreview.get(String(j.run_id))||j.problem_preview,j.run_kind)).join('')+manifest.map(r=>item(r.run_id,null,r.engine||'?',r.problem_id||r.run_id,r.status,r.problem_preview,r.run_kind)).join('')||'<div style="color:var(--dim);font-size:11px;padding:8px">No runs yet</div>';
   $('runs').querySelectorAll('.run-item').forEach(el=>el.onclick=()=>{ selectRun(el.dataset.run,el.dataset.job||null); goSession(workspaceView||'sandbox'); });
   $('runs').querySelectorAll('.run-del').forEach(b=>b.onclick=e=>{e.stopPropagation();deleteRun(b.dataset.run);});
   $('runs').querySelectorAll('.run-act.stop').forEach(b=>b.onclick=e=>{e.stopPropagation();stopRun(b.dataset.run);});
@@ -3916,8 +3988,8 @@ function selectRun(rid,jid){
   syncRunToMonitor(rid); loadChat(); $('chat-send').disabled=!rid;
   updateChatStatus(null);
   // The run list knows each run's kind: an analysis opens on its report and
-  // its Manuscript DAG before its record arrives.
-  if(rid&&RUN_KIND_BY_ID.has(String(rid)))applyRunKindView(RUN_KIND_BY_ID.get(String(rid))==='analyze',String(rid));
+  // its Manuscript DAG (a readable version on its tabs) before its record arrives.
+  if(rid&&RUN_KIND_BY_ID.has(String(rid)))applyRunKindView(RUN_KIND_BY_ID.get(String(rid)),String(rid));
   if(workspaceView==='monitor')refreshConversation(true);
   syncDagRebuild();
   if(workspaceView==='dag')refreshDagView();
@@ -3980,6 +4052,7 @@ function consoleRunSignature(run){
     String(last.output||'').length,t.cost_usd,t.input_tokens,t.output_tokens,
     run.sandbox_preview?.revision,ap.status,ap.updated_at,stages,lean.status,lean.attempt_count,
     run.analyze?.recheck?.status,run.analyze?.recheck?.node_id,
+    run.readability?.ask?.status,run.readability?.ask?.ask_id,Array.isArray(run.readability?.asks)?run.readability.asks.length:0,
   ]);
 }
 function nextPollDelay(current,changed){
@@ -4030,8 +4103,9 @@ async function tick(){
       updatePromptStrip(run);
       if(workspaceView==='monitor')renderConversation(run);
       const running=run.status==='running';
-      // A node re-check runs after its analysis finished: keep polling for it.
-      const pipelineRunning=run.auto_pipeline?.status==='running'||run.analyze?.recheck?.status==='running';
+      // A node re-check runs after its analysis finished, a question after its
+      // readable version was published: keep polling for them.
+      const pipelineRunning=run.auto_pipeline?.status==='running'||run.analyze?.recheck?.status==='running'||run.readability?.ask?.status==='running';
       renderAutoPipeline(run.auto_pipeline);
       applySandboxPreview(run);
       if(refreshSide){
@@ -4157,19 +4231,23 @@ function updateChatStatus(run){
   const agents=run.agents||[]; const last=agents[agents.length-1];
   const stageKey=last?.pipeline_stage||last?.stage_name||'';
   // An analysis names the stage its strip shows as running (the placeholder
-  // node before the runner's first line is Ingest, not Segment).
-  const analysisStage=isAnalysisRun(run)?(analysisStageStates(run).find(item=>item.state==='running')?.label||ANALYZE_STAGES.find(([id])=>id===stageKey)?.[1]):null;
+  // node before the runner's first line is Ingest, not Segment); so does a
+  // readable version, with its own stage names.
+  const readability=isReadabilityRun(run), stages=readability?READABILITY_STAGES:ANALYZE_STAGES;
+  const analysisStage=isAnalysisRun(run)||readability?(analysisStageStates(run,stages).find(item=>item.state==='running')?.label||stages.find(([id])=>id===stageKey)?.[1]):null;
   const label=analysisStage||(STAGE_LABELS[stageKey]||STAGE_LABELS[last?.stage_name]||stageKey||'Working');
   let detail='';
   const out=(last?.output||'').trim();
   if(isAnalysisRun(run)){
     // The latest progress note, never the tail of a verifier's JSON reply.
     detail=analysisProgressDetail(analysisRunProgress(run)).slice(0,160);
+  }else if(readability){
+    detail=readabilityUiReady()?readabilityProgressDetail(readabilityRunProgress(run)).slice(0,160):'';
   }else if(out){
     const lines=out.split('\n').map(s=>s.trim()).filter(Boolean);
     detail=(lines[lines.length-1]||'').slice(0,80);
   }
-  $('chat-detail').title=isAnalysisRun(run)?detail:'';
+  $('chat-detail').title=isAnalysisRun(run)||readability?detail:'';
   if(run.status==='finished'){ box.className='chat-status on done'; $('chat-stage').textContent='Finished'; $('chat-detail').textContent=''; }
   else if(run.status==='stopped'){ box.className='chat-status on'; $('chat-stage').textContent='Stopped'; $('chat-detail').textContent=''; }
   else if(run.status==='interrupted'){ box.className='chat-status on interrupted'; $('chat-stage').textContent='Interrupted'; $('chat-detail').textContent=run.interruption?.reason||'Worker is no longer active'; }
@@ -4177,8 +4255,9 @@ function updateChatStatus(run){
   // limit, a reconnect request) rather than the log's last line.
   else if(run.status==='failed'){ const why=String(run.error||'').trim()||detail; box.className='chat-status on err'; $('chat-stage').textContent='Failed'; $('chat-detail').textContent=why.length>240?why.slice(0,239)+'…':why; $('chat-detail').title=why; }
   else { box.className='chat-status on'; $('chat-stage').textContent=label+'…'; $('chat-detail').textContent=detail; }
-  const recheck=run.analyze?.recheck;
+  const recheck=run.analyze?.recheck, ask=run.readability?.ask;
   if(recheck?.status==='running'){ box.className='chat-status on'; $('chat-stage').textContent='Re-checking…'; $('chat-detail').textContent=String(recheck.label||recheck.node_id||''); }
+  if(ask?.status==='running'){ box.className='chat-status on'; $('chat-stage').textContent='Answering…'; $('chat-detail').textContent=String(ask.question||'').slice(0,160); }
   updateLiveChips(run);
   updateSessionButtons(recheck?.status==='running'?'running':run.status);
   updateProcLog(run);
@@ -4192,12 +4271,13 @@ function updateLiveChips(run){
   const model=live.model||(last&&last.model!=='—'?last.model:null);
   const running=run?.status==='running';
   const chips=[];
-  if(isAnalysisRun(run)){
-    // Analyze is tool-free: say which model checked it and how many calls it used.
-    const summary=run.analyze?.summary||{}, route=String(summary.route||run.credential_source||'');
-    if(model)chips.push(`<span class="lv model" title="Model verifier for this analysis">◆ ${escapeHtml(model)}</span>`);
-    if(route)chips.push(`<span class="lv sub" title="Route of this analysis">${escapeHtml(route==='sponsored_kimi'?'sponsored Kimi K3':route.replace(/_/g,' '))}</span>`);
+  if(isAnalysisRun(run)||isReadabilityRun(run)){
+    // Analyze and Readability are tool-free: say which model did the work and how many calls it used.
+    const readability=isReadabilityRun(run), summary=(readability?run.readability?.summary:run.analyze?.summary)||{}, route=String(summary.route||run.credential_source||'');
+    if(model)chips.push(`<span class="lv model" title="${readability?'Model that rewrote and checked this paper':'Model verifier for this analysis'}">◆ ${escapeHtml(model)}</span>`);
+    if(route)chips.push(`<span class="lv sub" title="Route of this ${readability?'readable version':'analysis'}">${escapeHtml(route==='sponsored_kimi'?'sponsored Kimi K3':route.replace(/_/g,' '))}</span>`);
     if(Number(summary.calls))chips.push(`<span class="lv count" title="Model calls so far">${Number(summary.calls)} model call${Number(summary.calls)===1?'':'s'}</span>`);
+    if(readability&&Number(summary.parts))chips.push(`<span class="lv count" title="Parts the independent check found faithful">${Number(summary.faithful)||0} of ${Number(summary.parts)} parts faithful</span>`);
     box.innerHTML=chips.join('');
     box.classList.toggle('on',chips.length>0);
     return;
@@ -4318,7 +4398,9 @@ function updateProcLog(run){
   // last 300 non-empty lines (fuller live record for human-in-the-loop)
   // An analysis's last agent is one model call while it runs: its log shows
   // the progress notes then, and the session's own log once it has ended.
+  // A readable version's log reads the same way.
   const lines=isAnalysisRun(run)?(/session summary$/.test(String(last?.stage_name||''))?analysisLogLines(raw):analysisRunProgress(run))
+    :isReadabilityRun(run)?(/session summary$/.test(String(last?.stage_name||''))?analysisLogLines(raw):readabilityUiReady()?readabilityRunProgress(run):[])
     :raw.split('\n').map(s=>s.replace(/\s+$/,'')).filter(s=>s.trim());
   const tail=lines.slice(-300);
   const text=tail.join('\n');
@@ -4442,9 +4524,13 @@ function resizeSandboxEditor(){
 }
 function syncSandboxEditor(){
   const edit=$('proof-edit-btn'), save=$('proof-save-btn'), done=$('proof-done-btn');
-  if(edit){edit.hidden=sandboxEditing;edit.disabled=!runId||!sandboxText.trim();}
+  // Edit changes proof.md only, so it is not offered while the written proof is shown.
+  const writeupShown=proofDocShown(lastSandboxRun?.run_id===runId?lastSandboxRun:null)==='writeup';
+  if(edit){edit.hidden=sandboxEditing||writeupShown;edit.disabled=!runId||!sandboxText.trim();}
   if(save){save.hidden=!sandboxEditing;save.disabled=sandboxSaving||(!sandboxDirty&&!sandboxConflict);save.textContent=sandboxConflict?'Overwrite':'Save';}
   if(done){done.hidden=!sandboxEditing;done.disabled=sandboxSaving;}
+  syncProofDocSwitch();
+  syncMakeReadable();
 }
 function resetSandboxEditor(){
   if(sandboxSaveTimer){clearTimeout(sandboxSaveTimer);sandboxSaveTimer=null;}
@@ -4457,6 +4543,8 @@ function resetSandboxEditor(){
 }
 function beginSandboxEdit(){
   if(!runId||!sandboxText.trim())return;
+  // Edit opens proof.md, so the facts stay on screen afterwards, even when a write-up lands meanwhile.
+  proofDocChoice.set(String(runId),'facts');
   sandboxEditing=true; sandboxDirty=false; sandboxConflict=false; sandboxServerRevision='';
   const editor=$('notion-editor'), wrap=$('notion-editor-wrap');
   editor.value=sandboxText; wrap.hidden=false;
@@ -4510,7 +4598,67 @@ async function finishSandboxEdit(){
 }
 // Display environments written without $$ (manuscripts: \begin{align} ... \end{align}) render too.
 function mathEnvDelimiters(){ return ['equation','equation*','align','align*','alignat','alignat*','gather','gather*'].map(env=>({left:'\\begin{'+env+'}',right:'\\end{'+env+'}',display:true})); }
-function renderMathIn(el,macros){ if(window.renderMathInElement){ try{ renderMathInElement(el,{delimiters:[...mathEnvDelimiters(),{left:'$$',right:'$$',display:true},{left:'\\[',right:'\\]',display:true},{left:'$',right:'$',display:false},{left:'\\(',right:'\\)',display:false}],ignoredTags:['script','noscript','style','textarea','pre','code','option'],throwOnError:false,...(macros&&typeof macros==='object'?{macros:{...macros},maxExpand:200}:{})}); }catch(e){} } }
+function renderMathIn(el,macros){ if(window.renderMathInElement){ try{ renderMathInElement(el,{delimiters:[...mathEnvDelimiters(),{left:'$$',right:'$$',display:true},{left:'\\[',right:'\\]',display:true},{left:'$',right:'$',display:false},{left:'\\(',right:'\\)',display:false}],ignoredTags:['script','noscript','style','textarea','pre','code','option'],throwOnError:false,preProcess:katexReferenceText,macros:withKatexFallbacks(macros,untypesetText(el)),...(macros&&typeof macros==='object'?{maxExpand:200}:{})}); }catch(e){} } }
+// The text of el that KaTeX has yet to typeset: formulas it typeset before are left out.
+function untypesetText(el){
+  if(typeof el?.querySelector!=='function'||!el.querySelector('.katex'))return String(el?.textContent||'');
+  const walker=document.createTreeWalker(el,NodeFilter.SHOW_TEXT); let text='';
+  for(let node=walker.nextNode();node;node=walker.nextNode())if(!node.parentElement?.closest('.katex'))text+=node.data;
+  return text;
+}
+/* Commands KaTeX 0.16.11 does not know, as the nearest it does, so that a
+   write-up's $\qed$ or a manuscript's \abs{x} is typeset instead of shown as
+   a red error. Every KaTeX call takes them, under the author's own macros
+   (theirs win). */
+const KATEX_FALLBACK_MACROS=Object.freeze({
+  '\\qed':'\\square','\\qedhere':'','\\mathbbm':'\\mathbb','\\mathds':'\\mathbb','\\symbb':'\\mathbb','\\divides':'\\mid','\\textsc':'\\text',
+  '\\abs':'\\left\\lvert #1\\right\\rvert','\\norm':'\\left\\lVert #1\\right\\rVert','\\ceil':'\\left\\lceil #1\\right\\rceil','\\floor':'\\left\\lfloor #1\\right\\rfloor',
+  '\\ref':'\\text{#1}','\\cref':'\\text{#1}','\\Cref':'\\text{#1}','\\autoref':'\\text{#1}','\\eqref':'(\\text{#1})','\\cite':'[\\text{#1}]',
+  // A label is dropped: its argument is taken and nothing is written.
+  '\\label':'\\@firstoftwo{}{#1}',
+});
+// The key of \ref, \eqref, \cref, \Cref, \autoref or \cite as those stand-ins
+// print it, in text: its _ # & % ^ $ escaped (a key written with a backslash
+// is left as it is), and \cite[note]{key} as \cite{key, note}. Every KaTeX
+// call passes its TeX through this first.
+function katexReferenceText(tex){
+  const text=key=>key.includes('\\')?key:key.replace(/[_#&%$]/g,'\\$&').replace(/\^/g,'\\textasciicircum{}');
+  return String(tex).replace(/\\(ref|eqref|cref|Cref|autoref|cite)(?:\[([^[\]{}]*)\])?\{([^{}]*)\}/g,
+    (whole,name,note,key)=>note===undefined?'\\'+name+'{'+text(key)+'}':name==='cite'?'\\cite{'+text(key)+', '+text(note)+'}':whole);
+}
+// The macros for typesetting `text`: the fallbacks, then the author's. KaTeX
+// refuses \newcommand for a name it knows, so a fallback is left out where
+// the text defines that name itself.
+function withKatexFallbacks(author,text){
+  const macros={...KATEX_FALLBACK_MACROS};
+  for(const match of String(text||'').matchAll(/\\newcommand\*?\s*(?:\{\s*)?(\\[A-Za-z]+)/g))delete macros[match[1]];
+  return Object.assign(macros,countedAuthorMacros(author,text));
+}
+/* KaTeX's maxExpand counts expansions, not what they write: three preamble
+   macros of a few hundred characters can make one short formula typeset
+   hundreds of thousands of symbols and hold the page for minutes. So what an
+   author's macros write is counted as KaTeX expands them: in one call at most
+   400 characters plus 2 for each character of `text` (what is to be
+   typeset), and 8,000 in one formula (each formula has an expander of its
+   own); past that KaTeX shows the formula as written. A macro that writes one
+   of its arguments more than once is left out: KaTeX copies the argument
+   after this count. */
+function countedAuthorMacros(author,text){
+  const counted={};
+  if(!author||typeof author!=='object')return counted;
+  let room=400+2*String(text||'').length, formula=null, written=0;
+  for(const [name,body] of Object.entries(author)){
+    const uses=typeof body==='string'?body.replace(/##/g,'').match(/#[1-9]/g)||[]:null;
+    if(!uses||new Set(uses).size<uses.length)continue;
+    counted[name]=expander=>{
+      if(expander!==formula){ formula=expander; written=0; }
+      room-=body.length; written+=body.length;
+      if(room<0||written>8000)throw new window.katex.ParseError('the author\u2019s macros write too much here');
+      return body;
+    };
+  }
+  return counted;
+}
 function liveSandboxText(run){
   const agents=run?.agents||[];
   const writes=[];
@@ -4528,15 +4676,163 @@ function liveSandboxText(run){
   if(writes.length) return writes.join('\n\n---\n\n');
   return longest;
 }
+/* Math is found by scanners that resume where they stopped, so a text costs
+   linear time. The regular expressions they stand for (quoted below) took
+   quadratic time on unclosed \[ or \( and exponential time on a "$" before a
+   long run of backslashes, so hostile text could hang the page; on any text
+   the scanners find the same math. */
+// The first `needle` at or after a position, for positions that only grow.
+function mathNextIndex(s,needle){
+  let found=-2;
+  return from=>{ if(found!==-1&&found<from)found=s.indexOf(needle,from); return found; };
+}
+// `open`…`close` with at least `inside` characters between, closed as early
+// as possible: /\\\[[\s\S]+?\\\]/ has `inside` 1, /\\\[[\s\S]*?\\\]/ 0.
+function mathBetween(s,open,close,inside){
+  const opener=mathNextIndex(s,open), closer=mathNextIndex(s,close);
+  return from=>{
+    const start=opener(from); if(start<0)return null;
+    const end=closer(start+open.length+inside);
+    return end<0?null:[start,end+close.length];
+  };
+}
+// /\\begin\{equation\*?\}[\s\S]*?\\end\{equation\*?\}/ for one environment `name`.
+function mathEnvironment(s,name){
+  const opener=new RegExp('\\\\begin\\{'+name+'\\*?\\}','g'), plain='\\end{'+name+'}', starred='\\end{'+name+'*}';
+  const plainAt=mathNextIndex(s,plain), starredAt=mathNextIndex(s,starred);
+  return from=>{
+    opener.lastIndex=from;
+    const match=opener.exec(s); if(!match)return null;
+    const a=plainAt(opener.lastIndex), b=starredAt(opener.lastIndex);
+    if(a<0&&b<0)return null;
+    return a>=0&&(b<0||a<b)?[match.index,a+plain.length]:[match.index,b+starred.length];
+  };
+}
+// /\$[^$\n]+?\$/: within a line, the next "$" closes it.
+function mathDollarLine(s){
+  return from=>{
+    for(let start=s.indexOf('$',from);start>=0;){
+      const first=s[start+1];
+      if(first===undefined)return null;
+      if(first==='$'||first==='\n'){ start=s.indexOf('$',start+1); continue; }
+      let end=start+2;
+      while(end<s.length&&s[end]!=='$'&&s[end]!=='\n')end++;
+      if(s[end]==='$')return [start,end+1];
+      start=s.indexOf('$',end);
+    }
+    return null;
+  };
+}
+// /\$(?:\\.|[^$\\])+\$/: a "$" closes it unless a backslash escapes it; a
+// backslash takes the next character with it (never a line break). There is
+// one reading only, so where each position leads is kept for every later "$"
+// (an escaped one inside a formula) that reaches it.
+function mathEscapedDollar(s){
+  const closing=new Int32Array(s.length+1).fill(-2);
+  // The closing "$" reached from `from`, after the first character; -1 if none.
+  const close=from=>{
+    const path=[];
+    let at=from, end=-1;
+    for(;;){
+      if(closing[at]!==-2){ end=closing[at]; break; }
+      path.push(at);
+      if(s[at]==='$'){ end=at; break; }
+      if(s[at]==='\\'){ if(at+1<s.length&&!'\n\r\u2028\u2029'.includes(s[at+1])){ at+=2; continue; } break; }
+      if(at>=s.length)break;
+      at++;
+    }
+    path.forEach(position=>{ closing[position]=end; });
+    return end;
+  };
+  return from=>{
+    for(let start=s.indexOf('$',from);start>=0;start=s.indexOf('$',start+1)){
+      const first=s[start+1];
+      if(first===undefined||first==='$')continue;
+      if(first==='\\'&&(start+2>=s.length||'\n\r\u2028\u2029'.includes(s[start+2])))continue;
+      const end=close(start+(first==='\\'?3:2));
+      if(end>=0)return [start,end+1];
+    }
+    return null;
+  };
+}
+// The math the `kinds` find in `s`, as one regular expression with those
+// alternatives finds it: from each position on, the match that starts first
+// (the earlier kind on a tie), then on from its end.
+function mathSpans(s,kinds){
+  const spans=[], found=kinds.map(()=>null);
+  for(let at=0;;){
+    let best=-1;
+    kinds.forEach((kind,index)=>{
+      if(found[index]&&found[index][0]<at)found[index]=null;
+      if(found[index]===null)found[index]=kind(at)||false;
+      if(found[index]&&(best<0||found[index][0]<found[best][0]))best=index;
+    });
+    if(best<0)return spans;
+    spans.push(found[best]); at=found[best][1];
+  }
+}
+// `s` split as s.split(/(…)/) splits it on those alternatives: prose and math
+// in turn, the math at odd places. `kinds(s)` lists the scanners.
+function splitMath(s,kinds){
+  const parts=[]; let at=0;
+  for(const [start,end] of mathSpans(s,kinds(s))){ parts.push(s.slice(at,start),s.slice(start,end)); at=end; }
+  parts.push(s.slice(at));
+  return parts;
+}
+// `s` with what one `kind` finds set aside by `hold`.
+function holdMath(s,kind,hold){
+  let out='', at=0;
+  for(const [start,end] of mathSpans(s,[kind])){ out+=s.slice(at,start)+hold(s.slice(start,end)); at=end; }
+  return out+s.slice(at);
+}
+// Math is set aside as @@MATHn@@ before Markdown is read (and put back
+// after): $$…$$, then \[…\], then \(…\), then $…$ within a line, each pass
+// over the last: /\$\$[\s\S]+?\$\$/g, /\\\[[\s\S]+?\\\]/g, /\\\([\s\S]+?\\\)/g,
+// then /(^|[^\\$])(\$(?!\$)(?:\\.|[^$\n])+\$)/g.
 function stashMath(src){
   const slots=[];
   const hold=m=>{ slots.push(m); return '@@MATH'+ (slots.length-1) +'@@'; };
   let s=String(src||'');
-  s=s.replace(/\$\$[\s\S]+?\$\$/g,hold);
-  s=s.replace(/\\\[[\s\S]+?\\\]/g,hold);
-  s=s.replace(/\\\([\s\S]+?\\\)/g,hold);
-  s=s.replace(/(^|[^\\$])(\$(?!\$)(?:\\.|[^$\n])+\$)/g,(m,pre,eq)=>pre+hold(eq));
+  s=holdMath(s,mathBetween(s,'$$','$$',1),hold);
+  s=holdMath(s,mathBetween(s,'\\[','\\]',1),hold);
+  s=holdMath(s,mathBetween(s,'\\(','\\)',1),hold);
+  s=stashInlineMath(s,hold);
   return {s,slots};
+}
+// $…$ opened by a "$" that starts the text or follows a character other than
+// \ and $ (that character stays text), and is not followed by another "$".
+function stashInlineMath(s,hold){
+  let out='', at=0, dead=null;
+  for(let open=s.indexOf('$');open>=0;open=s.indexOf('$',open+1)){
+    if(open>0&&(open-1<at||s[open-1]==='\\'||s[open-1]==='$'))continue;
+    dead=dead||new Uint8Array(s.length+1);
+    const end=inlineMathEnd(s,open,dead);
+    if(end<0)continue;
+    out+=s.slice(at,open)+hold(s.slice(open,end+1));
+    at=end+1; open=end;
+  }
+  return out+s.slice(at);
+}
+// The "$" that closes the formula opened at `open`, as (?:\\.|[^$\n])+\$
+// finds it: a backslash either takes the next character with it (never a
+// line break) or stands alone, and the pattern backtracks through both
+// readings, escape first. This walks the same choices depth first but
+// remembers each position from which no "$" can be reached (`dead`, shared by
+// the whole text), so no position is explored twice. -1 when there is none.
+function inlineMathEnd(s,open,dead){
+  const first=open+1;
+  if(first>=s.length||s[first]==='$'||s[first]==='\n')return -1;
+  const stack=[first], tried=[0];
+  while(stack.length){
+    const top=stack.length-1, at=stack[top];
+    if(s[at]==='$')return at;
+    let next=-1;
+    if(tried[top]===0){ tried[top]=1; if(s[at]==='\\'&&at+1<s.length&&!'\n\r\u2028\u2029'.includes(s[at+1]))next=at+2; }
+    if(next<0&&tried[top]===1){ tried[top]=2; if(at<s.length&&s[at]!=='\n')next=at+1; }
+    if(next<0){ dead[at]=1; stack.pop(); tried.pop(); }
+    else if(!dead[next]){ stack.push(next); tried.push(0); }
+  }
+  return -1;
 }
 const SAFE_MARKDOWN_TAGS=new Set([
   'A','BLOCKQUOTE','BR','CODE','DEL','EM','H1','H2','H3','H4','H5','H6','HR',
@@ -4586,15 +4882,14 @@ function mdToHtml(text){
 }
 function applySandboxPreview(run){
   lastSandboxRun=run;
-  // An analysis previews its generated report (read-only), never a proof.
+  // An analysis previews its generated report (read-only), never a proof;
+  // a readable version shows its tabs (readability.js).
   if(run?.sandbox_preview?.kind==='analysis'||isAnalysisRun(run))return applyAnalysisPreview(run);
+  if(isReadabilityRun(run))return readabilityUiReady()?applyReadabilityPreview(run):showReadabilityPending();
   const live=run?.status==='running';
   const box=run?.sandbox_preview||{};
   const text=String(box.text||liveSandboxText(run)||'').trim();
   const incomingRevision=String(box.revision||'missing');
-  if(box.has_proof_md) $('proof-label').textContent='proof.md'+(live?' · live':'');
-  else if(text) $('proof-label').textContent=live?'streaming…':'draft';
-  else $('proof-label').textContent=live?'writing…':'waiting for proof.md…';
   if(sandboxEditing&&incomingRevision!==sandboxRevision){
     if(sandboxDirty){
       sandboxConflict=true; sandboxServerRevision=incomingRevision;
@@ -4606,6 +4901,10 @@ function applySandboxPreview(run){
   }else if(!sandboxEditing){
     sandboxText=text; sandboxRevision=incomingRevision;
   }
+  // Named once the page's proof.md is current: the write-up's freshness follows it.
+  if(box.has_proof_md) showProofDocFile(run,live);
+  else if(text) $('proof-label').textContent=live?'streaming…':'draft';
+  else $('proof-label').textContent=live?'writing…':'waiting for proof.md…';
   syncSandboxEditor();
   if(!sandboxEditing&&(text||problemItems(run).length))renderMarkdownIntoView(text,live&&!box.has_proof_md,run);
   return !!(text||problemItems(run).length);
@@ -4754,23 +5053,169 @@ function dagCoverageForNode(node,isLean){
     )
   )||null;
 }
+/* ── written proof ──
+   An accepted CGM run may also publish writeup.md: one readable proof written
+   from the verifier-accepted facts, then checked as a whole by a model
+   verifier. proof.md, the attested fact closure, stays the proof. The Sandbox
+   shows one of the two; a reader's choice is kept per run for this page only,
+   so polls never switch it back, and editing proof.md chooses the facts. */
+const WRITEUP_BANNER={
+  accepted:'✓ Written from the verified facts and checked as a whole by an independent model verifier — not a formal certificate.',
+  rejected:'⚠ Not accepted — the independent check found problems (listed below). The verified facts remain the proof.',
+  unchecked:'Not checked — the verified facts remain the proof.',
+};
+const WRITEUP_STALE_NOTE='This write-up was made for an earlier version of proof.md.';
+const proofDocChoice=new Map();
+function runWriteup(run){
+  const box=run?.sandbox_preview, writeup=box?.writeup;
+  if(!writeup||typeof writeup!=='object'||typeof writeup.text!=='string'||!writeup.text.trim())return null;
+  // Only the server's exact status counts; anything else reads as not checked.
+  const status=['accepted','rejected','unchecked'].includes(writeup.status)?writeup.status:'unchecked';
+  // The server judged freshness for the proof.md in this record. Once the page
+  // holds another one (an edit saved here, or a newer file read since), it is stale.
+  const fresh=writeup.fresh===true&&String(box.revision||'missing')===sandboxRevision;
+  return {text:writeup.text,status,fresh};
+}
+// writeup.md as shown: without its "# Written proof" heading and the status
+// note under it, which the banner above it says already. Download saves the
+// file as written.
+function writeupBody(text){
+  const lines=String(text||'').split('\n');
+  if(!/^# Written proof[ \t\r]*$/.test(lines[0]))return String(text||'');
+  let at=1;
+  const skipBlank=()=>{ while(at<lines.length&&!lines[at].trim())at++; };
+  skipBlank();
+  if(at<lines.length&&/^ {0,3}>/.test(lines[at]))while(at<lines.length&&lines[at].trim())at++;
+  skipBlank();
+  return lines.slice(at).join('\n');
+}
+function proofDocShown(run){
+  const writeup=runWriteup(run);
+  if(!writeup)return 'facts';
+  const chosen=proofDocChoice.get(String(run.run_id||''));
+  if(chosen)return chosen;
+  return writeup.status==='accepted'&&writeup.fresh?'writeup':'facts';
+}
+// The toolbar names the document on screen, and Download saves that file.
+function showProofDocFile(run,live){
+  const file=proofDocShown(run)==='writeup'?'writeup.md':'proof.md';
+  $('proof-label').textContent=file==='proof.md'&&live?'proof.md · live':file;
+  setDownloadUrl('/api/workspace/'+encodeURIComponent(runId)+'/file?path='+encodeURIComponent(file)+'&download=1',file);
+}
+function syncProofDocSwitch(){
+  const group=$('proof-doc-switch'); if(!group)return;
+  const run=lastSandboxRun?.run_id===runId?lastSandboxRun:null, writeup=runWriteup(run), doc=proofDocShown(run);
+  group.hidden=!writeup;
+  group.querySelectorAll('[role="radio"]').forEach(button=>{
+    const checked=button.dataset.proofDoc===doc;
+    button.setAttribute('aria-checked',String(checked)); button.tabIndex=checked?0:-1; button.disabled=sandboxEditing;
+    if(button.dataset.proofDoc==='writeup')button.title=writeup?WRITEUP_BANNER[writeup.status]+(writeup.fresh?'':' '+WRITEUP_STALE_NOTE):'';
+  });
+  const chip=$('writeup-chip'); if(!chip)return;
+  chip.dataset.status=writeup?.status||'';
+  chip.textContent=writeup?.status==='accepted'?' ✓':writeup?.status==='rejected'?' ⚠':'';
+}
+function chooseProofDoc(doc){
+  const run=lastSandboxRun;
+  if(!run||run.run_id!==runId||sandboxEditing||!runWriteup(run))return;
+  proofDocChoice.set(String(run.run_id),doc==='writeup'?'writeup':'facts');
+  // Redraw from the page's own proof.md, never by applying this record again:
+  // a finished run is no longer polled, so an edit saved since is newer than its copy.
+  if(run.sandbox_preview?.has_proof_md)showProofDocFile(run,run.status==='running');
+  renderMarkdownIntoView(sandboxText,false,run);
+}
+document.querySelectorAll('#proof-doc-switch [role="radio"]').forEach(button=>{
+  button.onclick=()=>chooseProofDoc(button.dataset.proofDoc);
+  // Arrow keys switch between the two documents; Home and End pick one.
+  button.onkeydown=event=>{
+    if(!['ArrowLeft','ArrowRight','ArrowUp','ArrowDown','Home','End'].includes(event.key))return;
+    event.preventDefault();
+    chooseProofDoc(event.key==='Home'?'writeup':event.key==='End'?'facts':button.dataset.proofDoc==='writeup'?'facts':'writeup');
+    document.querySelector('#proof-doc-switch [aria-checked="true"]')?.focus();
+  };
+});
+/* Make readable: the document a finished CGM run shows (the written proof
+   when it is on screen, else proof.md) becomes the pasted source of a new
+   readable version in the composer; nothing runs until that is started. It is
+   offered as the server's Readability policy allows this viewer, while the
+   viewer's guest runs and, for a run that would go to sponsored Kimi K3 (as
+   the composer reckons it: a guest's, or a member's without a Kimi key of
+   their own), today's sponsored runs leave room for one. */
+function makeReadableSource(run){
+  if(!run||run.run_id!==runId||!dagIsCgmEngine(run.engine)||run.status!=='finished'||!run.sandbox_preview?.has_proof_md||sandboxEditing)return null;
+  const entry=readabilityEngineEntry(), daily=readabilityPolicy()?.sponsored;
+  if(!readabilityOffered()||!entry.available||entry.requires_login||readabilityPolicy().enabled===false)return null;
+  if(viewerIsGuest()&&Number(GUEST_POLICY?.runs_remaining)<=0)return null;
+  if(readabilityRouteSponsored()&&daily&&(daily.available===false||Number(daily.remaining_today)<=0))return null;
+  const writeup=proofDocShown(run)==='writeup'?runWriteup(run):null, text=writeup?writeup.text:sandboxText;
+  return text.trim()?{text,name:writeup?'written proof':'proof.md'}:null;
+}
+function syncMakeReadable(){
+  const button=$('make-readable-btn'), note=$('make-readable-note'); if(!button||!note)return;
+  const source=makeReadableSource(lastSandboxRun), shown=source?runId+' '+source.name:'';
+  button.hidden=!source;
+  // A note about one document goes when another is shown.
+  if(button.dataset.shown!==shown){ button.dataset.shown=shown; note.textContent=''; }
+}
+function makeReadable(){
+  const source=makeReadableSource(lastSandboxRun);
+  // No longer offered (today's runs or the policy moved since it was shown): the button goes.
+  if(!source){ syncMakeReadable(); return; }
+  const limit=Number(readabilityPolicy().sources?.paste_chars)||20000;
+  if(source.text.length>limit){
+    $('make-readable-note').textContent=`The ${source.name} has ${source.text.length.toLocaleString('en-US')} characters: too long to paste into Readability (at most ${limit.toLocaleString('en-US')}${viewerIsGuest()?' for guests':''}).`;
+    return;
+  }
+  // As New does: the run is left for the composer, now in Readability, with
+  // this document its one source (files still attached would be a second).
+  runId=null; jobId=null; stopPolling(); goLanding();
+  chooseMode('readability');
+  if(initialAttachments.files.length)initialAttachments.clear();
+  const input=$('problem-text');
+  input.value=source.text;
+  input.dispatchEvent(new Event('input',{bubbles:true}));
+  input.focus(); input.setSelectionRange(0,0); input.scrollTop=0;
+}
+$('make-readable-btn').onclick=makeReadable;
+function writeupBannerHtml(writeup){
+  const stale=writeup.fresh?'':`<p class="writeup-stale">${escapeHtml(WRITEUP_STALE_NOTE)}</p>`;
+  return `<div class="writeup-banner" data-status="${escapeHtml(writeup.status)}" role="note"><p>${escapeHtml(WRITEUP_BANNER[writeup.status])}</p>${stale}</div>`;
+}
+/* proof.md of a CGM run published before closure rendering v2 numbers its
+   lemmas in topological order, while each proof cites the worker's labels
+   ("Cited facts: L1 = fact …"). On screen only, name the lemma each label
+   stands for; the file and its download keep their attested bytes. */
+function closureCitedLemmas(text){
+  if(!text.startsWith('# Proof\n\nThis proof is the verified fact closure'))return text;
+  const numbers=new Map([...text.matchAll(/^## Lemma (\d+) · fact ([0-9a-f]{16})$/gm)].map(match=>[match[2],match[1]]));
+  if(!numbers.size)return text;
+  return text.replace(/^Cited facts: (.+)\.$/gm,(line,list)=>'Cited facts: '+list.split('; ').map(item=>{
+    const cite=/^(\S+) = fact ([0-9a-f]{16})$/.exec(item);
+    return cite&&numbers.has(cite[2])?`${cite[1]} = Lemma ${numbers.get(cite[2])} (fact ${cite[2]})`:item;
+  }).join('; ')+'.');
+}
 function renderMarkdownIntoView(text, live, run){
   if(sandboxEditing)return;
   sandboxText=String(text||''); syncSandboxEditor();
   run=run||lastSandboxRun;
   const problems=problemItems(run);
-  const displayText=normalizeProofMarkdown(sandboxText);
-  const proofs=splitProofs(displayText);
+  // The written proof takes proof.md's place on screen only: sandboxText stays proof.md for Edit.
+  const writeup=proofDocShown(run)==='writeup'?runWriteup(run):null;
+  if(writeup)live=false;
+  const displayText=writeup?writeupBody(writeup.text):closureCitedLemmas(normalizeProofMarkdown(sandboxText));
+  const proofs=writeup?[displayText]:splitProofs(displayText);
   if(!problems.length&&!proofs.length)return;
   setProofEmpty(false); $('pdf-pages').style.display='none';
   const view=$('md-view'); view.style.display='block';
   const coverageKey=String(run?.proof_coverage?.source_revision||'');
   // Compare the complete source so equal-length edits in the middle redraw.
-  const key=JSON.stringify([!!live,problems,sandboxText,coverageKey]);
+  const key=JSON.stringify([!!live,problems,sandboxText,coverageKey,writeup]);
   if(view._proofRenderKey===key)return;
   view._proofRenderKey=key;
   const body=$('proof-body');
-  const previousTop=body.scrollTop;
+  // A document newly on screen (the facts or the write-up) opens at its top.
+  const shown=writeup?'writeup':'facts', previousTop=view._proofDoc===shown?body.scrollTop:0;
+  view._proofDoc=shown;
   const stick=live&&body.scrollHeight-body.scrollTop-body.clientHeight<80;
   try{ renderCitations(displayText); }catch(e){}
   const n=Math.max(problems.length, proofs.length, 1);
@@ -4778,13 +5223,15 @@ function renderMarkdownIntoView(text, live, run){
   for(let i=0;i<n;i++){
     let block='<div class="sandbox-turn">';
     if(problems[i]) block+=problemCardHtml(problems[i], i+1, problems.length);
+    if(writeup&&i===0) block+=writeupBannerHtml(writeup);
     if(proofs[i]) block+=`<div class="md-doc${live&&i===n-1?' live':''}">`+mdToHtml(proofs[i])+(live&&i===n-1?'<span class="md-caret"></span>':'')+'</div>';
     block+='</div>';
     parts.push(block);
   }
   view.innerHTML=parts.join('');
   renderMathIn(view);
-  applyFormalCoverage(view,run?.proof_coverage);
+  // Lean marks match fact statements in proof.md, never the write-up's prose.
+  if(!writeup)applyFormalCoverage(view,run?.proof_coverage);
   if(stick)body.scrollTop=body.scrollHeight;
   else body.scrollTop=previousTop;
 }
@@ -4857,9 +5304,10 @@ async function downloadWorkspaceFile(url,name,button){
 async function refreshProofPreview(force, run){
   if(!runId)return false;
   if(sandboxEditing)return true;
-  // An analysis has no proof files; its report arrives with the run record.
+  // An analysis has no proof files; its report arrives with the run record
+  // (so does a readable version).
   const current=run||(lastSandboxRun?.run_id===runId?lastSandboxRun:null);
-  if(isAnalysisRun(current))return true;
+  if(isAnalysisRun(current)||isReadabilityRun(current))return true;
   let files=[];
   try{ files=((await(await fetch('/api/workspace/'+encodeURIComponent(runId)+'/files')).json()).files||[]); }catch(e){ files=[]; }
   const md=files.find(f=>f.path==='proof.md');
@@ -4870,9 +5318,9 @@ async function refreshProofPreview(force, run){
   const viewEmpty=!($('md-view')&&$('md-view').innerHTML);
   if(md){
     if(!force&&!viewEmpty&&stamp(md)===String(lastProofMtime))return true; lastProofMtime=stamp(md);
-    $('proof-label').textContent=md.path+(live?' · live':'');
     const u='/api/workspace/'+encodeURIComponent(runId)+'/file?path='+encodeURIComponent(md.path)+'&t='+Date.now();
-    await showProofMd(u, live); setDownloadUrl(u+'&download=1',md.path.split('/').pop()); return true;
+    // Named after the read: a proof.md newer than the run record leaves the write-up stale.
+    await showProofMd(u, live); showProofDocFile(current,live); return true;
   }
   if(live) return false;
   if(tex){
@@ -5208,6 +5656,7 @@ function dagKindColor(kind,fallback){ return dagLookup(DAG_KIND_COLOR,kind)||dag
 function dagIsCgmEngine(engineId){ return ['kimi','math_harness'].includes(String(engineId||'').trim().toLowerCase()); }
 function dagObservationText(mode,view){
   if(mode==='analysis')return 'Verdicts of a model verifier · not a certificate';
+  if(mode==='paper-map')return 'The manuscript’s structure, ranked by a model-written reading guide · not a verification';
   if(mode==='engine')return view==='facts'
     ?'Model-verifier-accepted facts · not a Lean certificate'
     :'CGM search record · not proof logic · not a Lean certificate';
@@ -5219,13 +5668,13 @@ function formatLeanStm(s){
     .replace(/\b(theorem|lemma|def|abbrev|axiom|opaque|variable|have|obtain|show|suffices|refine|exact|apply|rw|simp|intro|cases|by|fun|forall|exists|where|structure|inductive|instance|example|namespace|section|end|open|import|noncomputable|private|protected|sorry)\b/g,'<span class="lean-kw">$1</span>');
 }
 function setDagMode(mode,{refresh=true}={}){
-  dagMode=['engine','informal','formal','compiler','analysis'].includes(mode)?mode:'engine';
+  dagMode=['engine','informal','formal','compiler','analysis','paper-map'].includes(mode)?mode:'engine';
   document.querySelectorAll('#dag-mode button').forEach(b=>{ b.classList.toggle('on', b.dataset.mode===dagMode); b.setAttribute('aria-pressed',String(b.dataset.mode===dagMode)); });
   const engineView=$('dag-engine-view');
   if(engineView)engineView.hidden=dagMode!=='engine';
   const title=$('dag-title');
-  if(title)title.textContent={engine:'Informal · CGM',informal:'Informal outline',formal:'Formal · Lean graph',compiler:'Compiler facts',analysis:'Manuscript'}[dagMode];
-  setDagObservation(['engine','compiler','analysis'].includes(dagMode),dagObservationText(dagMode,dagEngineView));
+  if(title)title.textContent={engine:'Informal · CGM',informal:'Informal outline',formal:'Formal · Lean graph',compiler:'Compiler facts',analysis:'Manuscript','paper-map':'Paper map'}[dagMode];
+  setDagObservation(['engine','compiler','analysis','paper-map'].includes(dagMode),dagObservationText(dagMode,dagEngineView));
   const filters=$('dag-filters'); if(filters&&dagMode!=='analysis')filters.hidden=true;
   closeDagDetail();
   syncDagRebuild();
@@ -5259,9 +5708,11 @@ function compilerFactsPayload(payload){
   return {...payload,kind:'compiler',model:'lean-compiler',graph};
 }
 function dagPayloadForMode(payload,mode,view){
-  /* The Manuscript graph (an analysis) is shown only in its own mode. */
+  /* The Manuscript graph (an analysis) and the Paper map (a readable
+     version) are shown only in their own modes. */
   if(mode==='analysis')return payload?.kind==='analysis'&&payload?.status==='ready'?payload:null;
-  if(payload?.kind==='analysis')return null;
+  if(mode==='paper-map')return payload?.kind==='paper-map'&&payload?.status==='ready'?payload:null;
+  if(payload?.kind==='analysis'||payload?.kind==='paper-map')return null;
   if(mode==='engine'){
     if(payload?.kind!=='engine')return null;
     /* An execution trace or an empty graph is never presented as Facts. */
@@ -5276,6 +5727,13 @@ function dagPayloadForMode(payload,mode,view){
   return payload;
 }
 function dagUnavailableState(mode,payload,view,runEngine){
+  if(mode==='paper-map')return payload?.status==='ready'?{
+    status:'nothing to map',
+    html:'<div style="font-size:28px;opacity:.4">◇</div><div><strong>This manuscript has no numbered definitions or results to map.</strong><br/>The readable version is published; read it in the Sandbox.</div>',
+  }:{
+    status:payload?.status==='none'?'no paper map yet':'paper map unavailable',
+    html:'<div style="font-size:28px;opacity:.4">◇</div><div><strong>The Paper map appears when the readable version is published.</strong><br/>It shows the manuscript’s definitions and results and how they depend on each other; darker cards matter more to the main argument.<br/>Built from the manuscript and a reading guide written by a model — not a verification.</div>',
+  };
   if(mode==='analysis')return {
     status:payload?.status==='none'?'no manuscript DAG yet':'manuscript DAG unavailable',
     html:'<div style="font-size:28px;opacity:.4">◇</div><div><strong>The Manuscript DAG appears when the analysis publishes its report.</strong><br/>It shows the manuscript’s own results and references, coloured by the verdicts of a model verifier.<br/>Checked by a model verifier — not a certificate.</div>',
@@ -5326,21 +5784,27 @@ function showDagUnavailable(state){
 }
 async function refreshDagView(){
   const requestedRunId=runId, requestedMode=dagMode, requestedEngineView=dagEngineView, refreshToken=++dagRefreshSeq;
-  setDagObservation(['engine','compiler','analysis'].includes(requestedMode),dagObservationText(requestedMode,requestedEngineView));
+  setDagObservation(['engine','compiler','analysis','paper-map'].includes(requestedMode),dagObservationText(requestedMode,requestedEngineView));
   if(!requestedRunId){ dagDisplayedRunId=''; dagDisplayedMode=''; dagDisplayedEngineView=''; $('dag-empty').style.display='block'; $('dag-stage').style.display='none'; dagStatus('select a run'); return; }
   if(dagDisplayedRunId!==requestedRunId||dagDisplayedMode!==requestedMode||(requestedMode==='engine'&&dagDisplayedEngineView!==requestedEngineView)){
     $('dag-empty').style.display='block'; $('dag-stage').style.display='none';
     $('dag-empty').innerHTML='<div style="font-size:28px;opacity:.4">◇</div><div>Loading the selected proof graph…</div>';
-    dagStatus(requestedMode==='engine'?'loading CGM '+(requestedEngineView==='facts'?'Facts':'Explore')+' graph':requestedMode==='compiler'?'loading compiler facts':requestedMode==='analysis'?'loading the Manuscript DAG':'loading '+(requestedMode==='formal'?'Formal · Lean DAG':'informal outline'));
+    dagStatus(requestedMode==='engine'?'loading CGM '+(requestedEngineView==='facts'?'Facts':'Explore')+' graph':requestedMode==='compiler'?'loading compiler facts':requestedMode==='analysis'?'loading the Manuscript DAG':requestedMode==='paper-map'?'loading the Paper map':'loading '+(requestedMode==='formal'?'Formal · Lean DAG':'informal outline'));
+  }
+  // readability.js draws the Paper map, and refreshes this view once it has loaded.
+  if(requestedMode==='paper-map'&&!readabilityUiReady()){
+    if(readabilityUiMissing){ $('dag-empty').innerHTML='<div style="font-size:28px;opacity:.4">◇</div><div>The Paper map could not be loaded. Reload the page to try again.</div>'; dagStatus('paper map unavailable'); }
+    return;
   }
   const runEngine=lastSandboxRun?.run_id===requestedRunId?String(lastSandboxRun?.engine||''):'';
   let d=null;
   try{
-    const requestKind=requestedMode==='engine'?'engine':requestedMode==='informal'?'informal':requestedMode==='analysis'?'analysis':'formal';
+    const requestKind=requestedMode==='engine'?'engine':requestedMode==='informal'?'informal':requestedMode==='analysis'?'analysis':requestedMode==='paper-map'?'paper-map':'formal';
     const engineViewQuery=requestedMode==='engine'?'&view='+encodeURIComponent(requestedEngineView):'';
     const r=await fetch('/api/run/'+encodeURIComponent(requestedRunId)+'/proof_graph?kind='+encodeURIComponent(requestKind)+engineViewQuery);
     d=r.ok?await r.json():null;
     if(requestedMode==='analysis'&&d?.kind==='analysis'&&d?.status==='ready')rememberAnalysisGraph(requestedRunId,d);
+    if(requestedMode==='paper-map'&&d?.kind==='paper-map'&&d?.status==='ready')rememberPaperMap(requestedRunId,d);
     if(requestedRunId!==runId||requestedMode!==dagMode||requestedEngineView!==dagEngineView||refreshToken!==dagRefreshSeq)return;
     const selected=dagPayloadForMode(d,requestedMode,requestedEngineView);
     if(selected&&selected.graph&&(selected.graph.nodes||[]).length){ renderDag(selected); return; }
@@ -5514,8 +5978,10 @@ function dagEdgeSvg(edgeRoutes,posXY,options){
        proposal (dotted); weak document-order links are faint. */
     const provenance=opts.analysis?(['ref','inferred','model'].includes(String(e.provenance))?String(e.provenance):'ref'):'';
     const analysisClass=provenance?' e-'+provenance+(e.weak?' e-weak':'')+(e.context==='statement'?' e-statement':''):'';
-    const cls='dag-edge'+(analysisClass||(cgmClass?' '+cgmClass:edgeLabel.includes('contradict')?' contradicts':edgeLabel==='proof uses'?' proof-uses':edgeLabel==='type mentions'?' type-mentions':''))+(geometry.skipLayer?' skip-layer':'');
-    const edgeTitle=provenance?({ref:'Reference in the manuscript',inferred:'Inferred from the text',model:'Proposed by the model verifier'}[provenance]+(e.weak?' · weak (document order; never changes a verdict)':'')+' · used in the '+(e.context==='statement'?'statement':'proof')):'';
+    /* Paper map edges: a use in a proof is solid, in a statement dashed. */
+    const paperMap=opts.paperMap?paperMapEdge(e):null;
+    const cls='dag-edge'+(analysisClass||(paperMap?' '+paperMap.cls:'')||(cgmClass?' '+cgmClass:edgeLabel.includes('contradict')?' contradicts':edgeLabel==='proof uses'?' proof-uses':edgeLabel==='type mentions'?' type-mentions':''))+(geometry.skipLayer?' skip-layer':'');
+    const edgeTitle=provenance?({ref:'Reference in the manuscript',inferred:'Inferred from the text',model:'Proposed by the model verifier'}[provenance]+(e.weak?' · weak (document order; never changes a verdict)':'')+' · used in the '+(e.context==='statement'?'statement':'proof')):paperMap?paperMap.title:'';
     html+=edgeTitle?`<path class="${cls}" d="${geometry.d}" marker-end="url(#dag-arrow)"><title>${escapeHtml(edgeTitle)}</title></path>`:`<path class="${cls}" d="${geometry.d}" marker-end="url(#dag-arrow)"/>`;
     drawn.push(e);
     if(e.label&&opts.labels!==false)html+=`<text class="dag-edge-label" x="${geometry.lx}" y="${geometry.ly}">${escapeHtml(e.label)}</text>`;
@@ -5608,6 +6074,7 @@ function dagNodeVisual(n,view){
   const meta=n&&n.meta&&typeof n.meta==='object'&&!Array.isArray(n.meta)?n.meta:{};
   const out={badge:String(n?.kind||'node'),color:dagKindColor(n?.kind),classes:[],status:null,chips:[],score:null};
   if(view.role==='analysis')return analysisNodeVisual(n,meta,out);
+  if(view.role==='paper-map')return paperMapNodeVisual(n,out);
   if(view.isLean){
     const leanBadge={assumption:'variable',definition:'def',lemma:'lemma',claim:'theorem',case:'case',step:'have',contradiction:'False',conclusion:'theorem'};
     out.badge=String(n?.lean_kind||dagLookup(leanBadge,n?.kind)||n?.kind||'node');
@@ -5677,6 +6144,8 @@ function renderDagLegend(view,graph){
     html=item('var(--verdict-checked)','checked by a model verifier')+item('var(--verdict-gap)','gap')+item('var(--verdict-error)','error')+item('var(--verdict-unclear)','unclear')+item('var(--verdict-none)','not checked','sw dashed')
       +sep+item('var(--muted)','reference','ln')+item('var(--muted)','inferred','ln dash')+item('var(--edge-model)','model-proposed','ln dot')+item('var(--muted)','weak (document order)','ln faint')
       +sep+'<span class="lg note">Arrows point from a result to the results that use it · checked by a model verifier — not a certificate</span>';
+  }else if(view.role==='paper-map'){
+    html=paperMapLegendHtml();
   }else if(view.role==='workflow'){
     const present=new Set((graph.nodes||[]).map(n=>String(n?.meta?.workflow_kind||'')));
     html=Object.keys(CGM_KIND_LABEL).filter(kind=>present.has(kind)).map(kind=>item(dagKindColor(kind),CGM_KIND_LABEL[kind])).join('')
@@ -5697,20 +6166,23 @@ function renderDagLegend(view,graph){
 function renderDag(d){
   const graph=d.graph||{};
   const coverageRevision=String(lastSandboxRun?.proof_coverage?.source_revision||'');
-  const isAnalysis=d.kind==='analysis';
+  const isAnalysis=d.kind==='analysis', isPaperMap=d.kind==='paper-map';
   // A re-check changes verdicts without changing the graph's shape.
   const verdictKey=isAnalysis?(graph.nodes||[]).map(n=>String(n?.meta?.verdict||'')+String(n?.meta?.closure||'')).join(','):'';
   const key=runId+':'+dagMode+':'+dagEngineView+':'+String(d.source_sha256||d.generated_at||d.model||'')+':'+String(d.status||'')+':'+(graph.nodes||[]).length+':'+(graph.edges||[]).length+':'+coverageRevision+verdictKey;
   if(key===dagRunKey)return; dagRunKey=key;
-  const isCompiler=!isAnalysis&&(dagMode==='compiler'||d.kind==='compiler'||isCompilerFactsGraph(graph));
+  const isCompiler=!isAnalysis&&!isPaperMap&&(dagMode==='compiler'||d.kind==='compiler'||isCompilerFactsGraph(graph));
   const isEngine=dagMode==='engine'||d.kind==='engine';
-  const isLean=!isEngine&&!isAnalysis&&(isCompiler||dagMode==='formal'||d.kind==='formal'||d.model==='lean-parse');
-  const role=isEngine?String(d.graph_role||d?.provenance?.semantics||'execution'):isAnalysis?'analysis':'';
+  const isLean=!isEngine&&!isAnalysis&&!isPaperMap&&(isCompiler||dagMode==='formal'||d.kind==='formal'||d.model==='lean-parse');
+  const role=isEngine?String(d.graph_role||d?.provenance?.semantics||'execution'):isAnalysis?'analysis':isPaperMap?'paper-map':'';
   const isWorkflow=isEngine&&role==='workflow';
-  const kindLbl=isEngine?(role==='execution'?'Engine trace':role==='workflow'?'Explore':'Facts'):isAnalysis?'Manuscript':isCompiler?'Compiler facts':isLean?'Formal · Lean':'Informal outline';
+  const kindLbl=isEngine?(role==='execution'?'Engine trace':role==='workflow'?'Explore':'Facts'):isAnalysis?'Manuscript':isPaperMap?'Paper map':isCompiler?'Compiler facts':isLean?'Formal · Lean':'Informal outline';
   if(isAnalysis){
     setDagObservation(true,'Verdicts of a model verifier · not a certificate');
     dagStatus(analysisDagStatusText(d));
+  }else if(isPaperMap){
+    setDagObservation(true,dagObservationText('paper-map'));
+    dagStatus(paperMapStatusText(d));
   }else if(isCompiler){
     setDagObservation(true);
     const proofEdges=(graph.edges||[]).filter(edge=>edge.label==='proof uses').length;
@@ -5731,7 +6203,7 @@ function renderDag(d){
   }
   dagDisplayedRunId=runId; dagDisplayedMode=dagMode; dagDisplayedEngineView=dagEngineView;
   $('dag-empty').style.display='none';
-  const stage=$('dag-stage'); stage.style.display='block'; stage.classList.toggle('lean',isLean); stage.classList.toggle('compiler-facts',isCompiler); stage.classList.toggle('engine-graph',isEngine); stage.classList.toggle('cgm-workflow',isWorkflow); stage.classList.toggle('analysis-graph',isAnalysis);
+  const stage=$('dag-stage'); stage.style.display='block'; stage.classList.toggle('lean',isLean); stage.classList.toggle('compiler-facts',isCompiler); stage.classList.toggle('engine-graph',isEngine); stage.classList.toggle('cgm-workflow',isWorkflow); stage.classList.toggle('analysis-graph',isAnalysis); stage.classList.toggle('paper-map-graph',isPaperMap);
   const holder=$('dag-nodes'); const svg=$('dag-svg');
   const previous=dagView;
   const keep=previous&&previous.runId===runId&&previous.mode===dagMode&&previous.engineView===dagEngineView?dagSelectedNodeId:null;
@@ -5739,6 +6211,7 @@ function renderDag(d){
   view.rootClosed=(graph.nodes||[]).some(n=>view.roots.has(String(n?.id))&&n?.meta?.status==='closed');
   if(role==='fact-dependency')view.sharedPrefix=dagSharedPrefixLengths(graph.nodes||[]);
   if(isAnalysis){ view.refLabels=analysisRefLabels(graph); view.macros=analysisKatexMacros(graph); view.dependencyBasis=String(graph.dependency_basis||''); }
+  if(isPaperMap){ view.refLabels=paperMapRefLabels(graph); view.macros=analysisKatexMacros({macros:graph.macros||d.macros}); }
   const W=isLean?260:isWorkflow?214:230,GX=isWorkflow?22:30,GY=isWorkflow?54:64,PAD=30,LANE=isWorkflow?118:0;
   const available=Math.max(0,($('dag-scroll')?.clientWidth||0)-LANE-2*PAD+GX);
   const perRow=isWorkflow?Math.max(3,Math.min(8,available?Math.floor(available/(W+GX)):5)):0;
@@ -5755,12 +6228,12 @@ function renderDag(d){
     const visual=dagNodeVisual(n,view);
     const cites=isEngine?'':(n.citations||[]).slice(0,5).map(x=>`<span title="Lean dependency / cite">${escapeHtml(x)}</span>`).join('');
     const chips=visual.chips.slice(0,4).map(chip=>`<span class="chip" style="--cc:${chip.color}" title="${escapeHtml(chip.title||'')}">${escapeHtml(chip.text)}</span>`).join('');
-    const stm=n.statement?(isLean?formatLeanStm(n.statement):escapeHtml(isAnalysis?analysisProse(n.statement,view.refLabels):n.statement)):'';
-    const formalLink=(isCompiler||isEngine)?null:isAnalysis?null:dagCoverageForNode(n,isLean);
+    const stm=n.statement?(isLean?formatLeanStm(n.statement):escapeHtml(isAnalysis||isPaperMap?analysisProse(n.statement,view.refLabels):n.statement)):'';
+    const formalLink=(isCompiler||isEngine)?null:isAnalysis||isPaperMap?null:dagCoverageForNode(n,isLean);
     const verified=!!formalLink;
     const auditedLink=verified&&coverageStatementAudited(formalLink,lastSandboxRun?.proof_coverage);
-    const label=isAnalysis?analysisTextAccents(dagCardTitle(n,view)):dagCardTitle(n,view);
-    const aria=visual.badge+': '+label.slice(0,160)+(isAnalysis&&visual.status?' — '+visual.status.label:'');
+    const label=isAnalysis?analysisTextAccents(dagCardTitle(n,view)):isPaperMap?paperMapCardTitle(n):dagCardTitle(n,view);
+    const aria=visual.badge+': '+label.slice(0,160)+((isAnalysis||isPaperMap)&&visual.status?' — '+visual.status.label:'');
     return `<div class="dag-node${isLean?' lean':''}${auditedLink?' formally-verified':verified?' lean-compiled-only':''}${visual.classes.map(cls=>' '+cls).join('')}" id="${domId}" role="button" tabindex="0" aria-label="${escapeHtml(aria)}" style="--kc:${visual.color};${visual.verdictColor?'--vc:'+visual.verdictColor+';':''}--dag-delay:${Math.min(nodeIndex*28,280)}ms;width:${W}px">
       <div class="kd-row"><span class="kd">${escapeHtml(visual.badge)}</span>${visual.status?`<span class="st ${visual.status.tone}">${escapeHtml(visual.status.label)}</span>`:''}</div>
       ${dagFormalCheckHtml(formalLink,lastSandboxRun?.proof_coverage)}
@@ -5771,7 +6244,7 @@ function renderDag(d){
       ${visual.score!==null?`<div class="score" title="Curator score ${visual.score.toFixed(2)}"><i style="width:${Math.round(visual.score*100)}%"></i></div>`:''}
     </div>`;
   }).join('');
-  if(!isLean) renderMathIn(holder,isAnalysis?view.macros:undefined);
+  if(!isLean) renderMathIn(holder,isAnalysis||isPaperMap?view.macros:undefined);
   stage.style.width=stageW+'px';
   /* measure + position row by row; Explore rows carry a lane label */
   const posXY=new Map(), laneMarks=[];
@@ -5798,7 +6271,7 @@ function renderDag(d){
     +`<div class="dag-lane-label" style="top:${Math.round(mark.y+2)}px">${escapeHtml(mark.lane.label)}<small>${escapeHtml(mark.lane.sub)}</small></div>`).join(''));
   /* edges */
   svg.setAttribute('viewBox',`0 0 ${stageW} ${stageH}`);
-  const edges=dagEdgeSvg(edgeRoutes,posXY,{cgm:isEngine,labels:(!isEngine||role==='execution')&&!isAnalysis,routeAround:role==='fact-dependency'||isAnalysis,analysis:isAnalysis});
+  const edges=dagEdgeSvg(edgeRoutes,posXY,{cgm:isEngine,labels:(!isEngine||role==='execution')&&!isAnalysis&&!isPaperMap,routeAround:role==='fact-dependency'||isAnalysis||isPaperMap,analysis:isAnalysis,paperMap:isPaperMap});
   svg.innerHTML=edges.html;
   dagView={runId,mode:dagMode,engineView:dagEngineView,payload:d,graph,view,domIdByNodeId,nodeByDomId,drawn:edges.drawn,edgeEls:[...svg.querySelectorAll('path.dag-edge')]};
   renderDagLegend(view,graph);
@@ -5850,6 +6323,7 @@ function dagDetailText(value,limit=20000){
 function renderDagDetail(node,context){
   const panel=$('dag-detail'); if(!panel)return;
   if(context?.view?.role==='analysis')return renderAnalysisDetail(node,context);
+  if(context?.view?.role==='paper-map')return renderPaperMapDetail(node,context);
   const view=context.view, meta=node.meta&&typeof node.meta==='object'&&!Array.isArray(node.meta)?node.meta:{};
   const visual=dagNodeVisual(node,view);
   const make=(tag,cls,text)=>{ const el=document.createElement(tag); if(cls)el.className=cls; if(text!==undefined)el.textContent=text; return el; };
@@ -5937,8 +6411,8 @@ function dagRebuildReloadsOnly(){
   /* Engine graphs, and the Outline derived from CGM facts, are rebuilt from
      the run's saved artifacts on every GET; a POST would only spend a guest
      Formal/DAG action on the same result, so these modes just reload. The
-     Manuscript DAG and an analysis's Outline are deterministic as well. */
-  if(dagMode==='engine'||dagMode==='analysis')return true;
+     Manuscript DAG, an analysis's Outline and the Paper map are deterministic as well. */
+  if(dagMode==='engine'||dagMode==='analysis'||dagMode==='paper-map')return true;
   if(dagMode==='informal'&&dagView?.runId===runId&&dagView?.mode==='informal'&&dagView?.payload?.model==='analyze-graph')return true;
   return dagMode==='informal'&&dagView?.runId===runId&&dagView?.mode==='informal'&&dagView?.payload?.model==='cgm-fact-graph';
 }
@@ -5954,6 +6428,7 @@ function syncDagRebuild(){
   const spends=guest?' · uses one guest Formal/DAG action':'';
   btn.title=guestWait?'Available when the automatic Formal and DAG pipeline finishes'
     :dagMode==='analysis'?'Reload the Manuscript DAG from the saved analysis (no model call, no action used)'
+    :dagMode==='paper-map'?'Reload the Paper map from the saved readable version (no model call, no action used)'
     :dagMode==='engine'?'Reload the CGM graph · it is rebuilt from the run’s saved artifacts on every load (no model call, no Formal/DAG action used)'
     :reload&&dagView?.payload?.model==='analyze-graph'?'Reload the outline · it is the deterministic projection of the analysis (no model call, no action used)'
     :reload?'Reload the outline · it is derived from the CGM fact graph on every load (no model call, no Formal/DAG action used)'
@@ -6678,8 +7153,11 @@ document.addEventListener('mouseup',e=>{
     const sel=window.getSelection();
     const text=(sel?.toString()||'').trim();
     const inPdf=sel&&sel.rangeCount&&($('pdf-pages').contains(sel.anchorNode)||$('md-view').contains(sel.anchorNode));
-    if(text&&inPdf){
-      selText=text;
+    // A readable version asks about passages of its Readable and Original tabs.
+    const readable=document.body.classList.contains('readability-run');
+    const askable=!readable||readabilityUiReady()&&!!readabilitySelectionView();
+    if(text&&inPdf&&askable){
+      selText=readable?readabilitySelectionText(sel)||text:text;
       const rect=sel.getRangeAt(0).getBoundingClientRect();
       selPop.style.display='flex';
       const scale=parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--console-scale'))||1;
@@ -6695,6 +7173,7 @@ $('pdf-pages')?.addEventListener('scroll',()=>{ selPop.style.display='none'; });
 $('md-view')?.addEventListener('scroll',()=>{ selPop.style.display='none'; });
 selPop.onclick=()=>{
   if(!selText)return;
+  if(document.body.classList.contains('readability-run')){ selPop.style.display='none'; askAboutSelection(selText); return; }
   const input=$('chat-input');
   const quoted=selText.split('\n').map(l=>'> '+l).join('\n');
   input.value=(input.value?input.value+'\n\n':'')+quoted+'\n';
@@ -6763,19 +7242,20 @@ $('run-thinking-slider').oninput=()=>{
   if(selected)saveRunTuning({reasoning_effort:selected.id});
 };
 /* Mode for new runs: informal only, informal + automatic Lean formalization
-   (both prove), or Analyze (check an existing manuscript). Remembered in this
-   browser; each run keeps its own choice. formalizeChoice() keeps its meaning
-   (the proof output); the run kind has its own key. */
+   (both prove), Analyze (check an existing manuscript) or Readability (rewrite
+   one so it is easier to follow). Remembered in this browser; each run keeps
+   its own choice. formalizeChoice() keeps its meaning (the proof output); the
+   run kind has its own key. A radio with data-run-kind is its own run kind. */
 const FORMALIZE_KEY='proving-console-formalize-v1';
 function formalizeChoice(){
   try{ return localStorage.getItem(FORMALIZE_KEY)!=='0'; }catch(e){ return true; }
 }
 function renderFormalizeSwitch(){
-  const on=formalizeChoice(), offered=analyzeOffered(), analyze=offered&&runKindChoice()==='analyze';
+  const on=formalizeChoice(), kind=runKindChoice();
   document.querySelectorAll('#formalize-switch [role="radio"]').forEach(button=>{
-    const isAnalyze=button.dataset.runKind==='analyze';
-    if(isAnalyze)button.hidden=!offered;
-    const checked=isAnalyze?analyze:!analyze&&(button.dataset.formalize==='1')===on;
+    const own=button.dataset.runKind;
+    if(own)button.hidden=!runKindOffered(own);
+    const checked=own?kind===own:kind==='prove'&&(button.dataset.formalize==='1')===on;
     button.setAttribute('aria-checked',String(checked)); button.tabIndex=checked?0:-1;
   });
 }
@@ -6783,9 +7263,10 @@ function setFormalizeChoice(on){
   try{ localStorage.setItem(FORMALIZE_KEY,on?'1':'0'); }catch(e){}
   renderFormalizeSwitch();
 }
-/* Analyze is offered only while the server lists its engine for this mode,
-   so a page served before the server learned Analyze never shows a broken
-   choice; a runner that still needs setup is shown to the administrator only. */
+/* Analyze and Readability are offered only while the server lists their
+   engine for that mode, so a page served before the server learned one never
+   shows a broken choice; a runner that still needs setup is shown to the
+   administrator only. */
 function engineServesProve(e){ return !!e&&(!Array.isArray(e.modes)||!e.modes.length||e.modes.includes('prove')); }
 function analyzeEngineEntry(){ return ENGINES.find(e=>e&&e.id==='analyze'&&Array.isArray(e.modes)&&e.modes.includes('analyze'))||null; }
 function analyzePolicy(){ const e=analyzeEngineEntry(); return e&&e.analyze&&typeof e.analyze==='object'?e.analyze:null; }
@@ -6796,20 +7277,32 @@ function analyzeOffered(){
   if(!e||!analyzePolicy())return false;
   return !!e.available||viewerIsAdmin();
 }
+function readabilityEngineEntry(){ return ENGINES.find(e=>e&&e.id==='readability'&&Array.isArray(e.modes)&&e.modes.includes('readability'))||null; }
+function readabilityPolicy(){ const e=readabilityEngineEntry(); return e&&e.readability&&typeof e.readability==='object'?e.readability:null; }
+function readabilityOffered(){
+  const e=readabilityEngineEntry();
+  if(!e||!readabilityPolicy())return false;
+  return !!e.available||viewerIsAdmin();
+}
+function runKindOffered(kind){ return kind==='analyze'?analyzeOffered():kind==='readability'?readabilityOffered():false; }
 function runKindChoice(){
   let saved='';
   try{ saved=localStorage.getItem(RUN_KIND_KEY)||''; }catch(e){ saved=''; }
-  return saved==='analyze'&&analyzeOffered()?'analyze':'prove';
+  return runKindOffered(saved)?saved:'prove';
 }
 function modeRadios(){ return [...document.querySelectorAll('#formalize-switch [role="radio"]')].filter(button=>!button.hidden); }
-function radioMode(button){ return button?.dataset?.runKind==='analyze'?'analyze':button?.dataset?.formalize==='1'?'formal':'informal'; }
+function radioMode(button){ return button?.dataset?.runKind||(button?.dataset?.formalize==='1'?'formal':'informal'); }
 function chooseMode(mode){
-  const before=runKindChoice();
-  try{ localStorage.setItem(RUN_KIND_KEY,mode==='analyze'?'analyze':'prove'); }catch(e){}
-  if(mode==='analyze')renderFormalizeSwitch();
+  const before=runKindChoice(), kind=['analyze','readability'].includes(mode)?mode:'prove';
+  try{ localStorage.setItem(RUN_KIND_KEY,kind); }catch(e){}
+  if(kind!=='prove')renderFormalizeSwitch();
   else setFormalizeChoice(mode==='formal');
   if(runKindChoice()!==before)runKindChanged();
 }
+// Analyze and Readability read one existing manuscript through the same
+// source box (a link with its preview, pasted text or uploaded files).
+function manuscriptMode(){ const kind=runKindChoice(); return kind==='analyze'||kind==='readability'; }
+function manuscriptPolicy(){ return runKindChoice()==='readability'?readabilityPolicy():analyzePolicy(); }
 function runKindChanged(){
   closeChoiceMenus(null,false);
   $('form-error').style.display='none';
@@ -6834,11 +7327,12 @@ document.querySelectorAll('#formalize-switch [role="radio"]').forEach(button=>{
 renderFormalizeSwitch();
 
 /* ── Analyze: composer ── */
-// The engine chip follows the mode: Analyze locks it to Ansatz Analyze and
-// Prove returns to the engine chosen before.
+// The engine chip follows the mode: Analyze and Readability lock it to their
+// own engine and Prove returns to the engine chosen before.
 function syncEngineForRunKind(){
-  if(runKindChoice()==='analyze'){
-    if(engine!=='analyze'){ if(engine)proveEngine=engine; engine='analyze'; }
+  const kind=runKindChoice();
+  if(kind!=='prove'){
+    if(engine!==kind){ if(engineServesProve(ENGINES.find(e=>e.id===engine)))proveEngine=engine; engine=kind; }
     return;
   }
   if(engine==='analyze'||!engineServesProve(ENGINES.find(e=>e.id===engine))){
@@ -6852,54 +7346,79 @@ function unlockEngineChip(){
   trigger.removeAttribute('aria-disabled');
   if(trigger.dataset.locked){ trigger.title=''; delete trigger.dataset.locked; }
 }
-function renderAnalyzeEngineChip(){
-  const entry=analyzeEngineEntry(), policy=analyzePolicy()||{};
+// Analyze and Readability each run on their own engine: the chip is locked to it.
+function renderLockedEngineChip(id,entry,policy,chip){
   const trigger=$('engine-trigger');
-  trigger.style.setProperty('--tone','213 84% 58%');
+  trigger.style.setProperty('--tone',chip.tone);
   trigger.setAttribute('aria-disabled','true'); trigger.dataset.locked='1';
-  trigger.title='Analyze always runs on Ansatz Analyze: tool-free, one model-verifier check per result.';
-  $('engine-current-mark').textContent='AZ';
-  $('engine-current-name').textContent=entry?.label||'Ansatz Analyze';
-  const state=!entry?'Unavailable':entry.requires_login?'Sign in to use':policy.enabled===false?'Turned off':!entry.available?'Setup needed':'Ready';
-  $('engine-current-meta').textContent=state+' · locked for Analyze';
+  trigger.title=chip.title;
+  $('engine-current-mark').textContent=chip.mark;
+  $('engine-current-name').textContent=entry?.label||chip.label;
+  const state=!entry?'Unavailable':entry.requires_login?'Sign in to use':policy?.enabled===false?'Turned off':!entry.available?'Setup needed':'Ready';
+  $('engine-current-meta').textContent=state+' · locked for '+chip.mode;
   const native=$('engine-select');
-  native.innerHTML='<option value="analyze">Ansatz Analyze</option>'; native.value='analyze';
+  native.replaceChildren(new Option(chip.label,id)); native.value=id;
   closeChoiceMenus(null,false);
   renderEngineNotice(entry,currentModel());
   if(SETTINGS)renderModels();
   applyRunKindComposer();
+}
+function renderAnalyzeEngineChip(){
+  renderLockedEngineChip('analyze',analyzeEngineEntry(),analyzePolicy(),{tone:'213 84% 58%',mark:'AZ',label:'Ansatz Analyze',mode:'Analyze',
+    title:'Analyze always runs on Ansatz Analyze: tool-free, one model-verifier check per result.'});
+}
+function renderReadabilityEngineChip(){
+  renderLockedEngineChip('readability',readabilityEngineEntry(),readabilityPolicy(),{tone:'174 72% 40%',mark:'RD',label:'Ansatz Readability',mode:'Readability',
+    title:'Readability always runs on Ansatz Readability: tool-free; each part is rewritten, then compared with the original by an independent model call.'});
 }
 function syncStartButton(){
   const button=$('start-btn'); if(!button)return;
   let signIn=false;
   try{ signIn=!!(CURRENT_USER?.guest&&GUEST_POLICY?.login_required); }catch(e){ signIn=false; }
   const label=document.createElement('span'); label.id='start-label';
-  label.textContent=signIn?'Sign in to continue':runKindChoice()==='analyze'?'Analyze':'Prove';
+  const kind=runKindChoice();
+  label.textContent=signIn?'Sign in to continue':kind==='analyze'?'Analyze':kind==='readability'?'Make readable':'Prove';
   const nodes=[label];
   if(!signIn){ const arrow=document.createElement('span'); arrow.setAttribute('aria-hidden','true'); arrow.textContent='→'; nodes.push(' ',arrow); }
   button.replaceChildren(...nodes);
 }
 const PROVE_COMPOSER={verb:'prove',sub:'Choose a proving system, watch every step, and keep the useful context.',placeholder:'Describe a math problem — e.g. Prove that √2 is irrational…',label:'Problem'};
 const ANALYZE_COMPOSER={verb:'analyze',sub:'Check an existing manuscript result by result into a report and a dependency graph — checked by a model verifier, not a certificate.',placeholder:'Paste a link (arXiv, GitHub, openai/math, PDF/TeX URL) or paste a manuscript…',label:'Manuscript link or text'};
+const READABILITY_COMPOSER={verb:'read',sub:'Paste or link a paper or proof — get a readable version that keeps every statement, a paper map, a notation table, and answers to your questions.',placeholder:'Paste a proof or paper, or a link (arXiv, GitHub, openai/math, PDF/TeX)…',label:'Paper or proof, link or text'};
 function applyRunKindComposer(){
-  const analyze=runKindChoice()==='analyze', copy=analyze?ANALYZE_COMPOSER:PROVE_COMPOSER;
+  const kind=runKindChoice(), analyze=kind==='analyze', readability=kind==='readability';
+  const copy=analyze?ANALYZE_COMPOSER:readability?READABILITY_COMPOSER:PROVE_COMPOSER;
   document.body.classList.toggle('analyze-mode',analyze);
+  document.body.classList.toggle('readability-mode',readability);
   $('landing-verb').textContent=copy.verb;
   $('landing-sub').textContent=copy.sub;
   const input=$('problem-text');
   input.placeholder=copy.placeholder; input.setAttribute('aria-label',copy.label);
-  $('analyze-composer').hidden=!analyze;
+  // One source box for both: its options and provider note follow the mode.
+  $('analyze-composer').hidden=!analyze&&!readability;
+  $('analyze-composer').querySelector('.analyze-options').hidden=readability;
+  $('analyze-provider').hidden=readability;
+  $('readability-options').hidden=!readability;
+  $('readability-provider').hidden=!readability;
+  if(readability)$('readability-provider').textContent=readabilityProviderText();
   syncStartButton();
   initialAttachments.refreshLimits();
-  if(analyze){ renderAnalyzeCaps(); refreshAnalyzeSource(); }
+  if(analyze)renderAnalyzeCaps();
+  if(readability)renderReadabilityCaps();
+  if(analyze||readability)refreshAnalyzeSource();
 }
 (()=>{
   const box=$('analyze-formalize');
   try{ box.checked=localStorage.getItem(ANALYZE_FORMALIZE_KEY)==='1'; }catch(e){ box.checked=false; }
   box.onchange=()=>{ try{ localStorage.setItem(ANALYZE_FORMALIZE_KEY,box.checked?'1':'0'); }catch(e){} };
 })();
-$('problem-text').addEventListener('input',()=>{ if(runKindChoice()==='analyze')refreshAnalyzeSource(); });
-$('analyze-focus').addEventListener('keydown',event=>{ if(event.key==='Enter'){ event.preventDefault(); startRun(); } });
+(()=>{
+  const select=$('readability-audience');
+  try{ const saved=localStorage.getItem(READABILITY_AUDIENCE_KEY); if([...select.options].some(option=>option.value===saved))select.value=saved; }catch(e){}
+  select.onchange=()=>{ try{ localStorage.setItem(READABILITY_AUDIENCE_KEY,select.value); }catch(e){} };
+})();
+$('problem-text').addEventListener('input',()=>{ if(manuscriptMode())refreshAnalyzeSource(); });
+for(const id of ['analyze-focus','readability-focus'])$(id).addEventListener('keydown',event=>{ if(event.key==='Enter'){ event.preventDefault(); startRun(); } });
 
 /* A link is one line: an http(s) URL, an arXiv identifier, or a bare
    arxiv.org / github.com address (https is added). Anything else is text. */
@@ -6915,22 +7434,32 @@ function analyzeLinkFromText(text){
 function guessManuscriptFormat(text){
   return /\\(?:documentclass|begin\{(?:document|theorem|lemma|proposition|proof)\}|section\*?\{|newtheorem)/.test(String(text||''))?'tex':'';
 }
-// The one source of the next analysis, or the plain refusal the server would give.
+// The source box speaks of the mode it serves.
+const MANUSCRIPT_SOURCE_COPY={
+  analyze:{empty:'Paste a link or a manuscript, or upload files to analyze',one:'Analyze one source at a time: a link, pasted text or uploaded files',
+    guest:'Guests can analyze arXiv and GitHub links; this file needs a member account.',refused:'That link can’t be analyzed',change:' — change the link to analyze something else.',
+    online:'Paste a single link instead to analyze a manuscript online.',transient:'You can still start the analysis; the link is checked again when it runs.',pick:'pick one manuscript to analyze'},
+  readability:{empty:'Paste a link, a paper or a proof, or upload files to make readable',one:'Make one source readable at a time: a link, pasted text or uploaded files',
+    guest:'Guests can read arXiv and GitHub links; this file needs a member account.',refused:'That link can’t be read',change:' — change the link to read something else.',
+    online:'Paste a single link instead to read a manuscript online.',transient:'You can still start; the link is checked again when the run reads it.',pick:'pick one manuscript to read'},
+};
+function manuscriptSourceCopy(){ return MANUSCRIPT_SOURCE_COPY[runKindChoice()==='readability'?'readability':'analyze']; }
+// The one source of the next analysis (or readable version), or the plain refusal the server would give.
 function analyzeSourceFromComposer(){
-  const text=$('problem-text').value, link=analyzeLinkFromText(text), files=initialAttachments.files.length;
+  const text=$('problem-text').value, link=analyzeLinkFromText(text), files=initialAttachments.files.length, copy=manuscriptSourceCopy();
   const kinds=[link?'link':'',!link&&text.trim()?'text':'',files?'uploads':''].filter(Boolean);
-  if(!kinds.length)return {error:'Paste a link or a manuscript, or upload files to analyze'};
-  if(kinds.length>1)return {error:'Analyze one source at a time: a link, pasted text or uploaded files'};
+  if(!kinds.length)return {error:copy.empty};
+  if(kinds.length>1)return {error:copy.one};
   if(link){
     const known=analyzeResolveCache.get(link);
-    if(known?.member_only&&viewerIsGuest())return {error:String(known.error||'Guests can analyze arXiv and GitHub links; this file needs a member account.')};
+    if(known?.member_only&&viewerIsGuest())return {error:String(known.error||copy.guest)};
     // The preview already found that this link can't be analyzed: starting
     // would only fail at Ingest (and use up a guest's analysis for the hour).
-    if(known&&known.ok===false&&!known.transient)return {error:String(known.error||'That link can’t be analyzed')+' — change the link to analyze something else.'};
+    if(known&&known.ok===false&&!known.transient)return {error:String(known.error||copy.refused)+copy.change};
     return {kind:'url',url:link};
   }
   if(files)return {kind:'upload'};
-  const limit=Number(analyzePolicy()?.sources?.paste_chars)||20000;
+  const limit=Number(manuscriptPolicy()?.sources?.paste_chars)||20000;
   if(text.length>limit)return {error:`Pasted manuscripts are limited to ${limit.toLocaleString('en-US')} characters${viewerIsGuest()?' for guests':''}`};
   const format=guessManuscriptFormat(text);
   return format?{kind:'paste',text,format}:{kind:'paste',text};
@@ -6949,13 +7478,13 @@ function announceAnalyzeSource(text){
   if(value===analyzeSourceSaid)return;
   analyzeSourceSaid=value; live.textContent=value;
 }
-// Shows what the composer will analyze: a link preview, the pasted text, or the files.
+// Shows what the composer will analyze (or make readable): a link preview, the pasted text, or the files.
 function refreshAnalyzeSource({immediate=false}={}){
-  const box=$('analyze-source'); if(!box||runKindChoice()!=='analyze')return;
+  const box=$('analyze-source'); if(!box||!manuscriptMode())return;
   clearTimeout(analyzeResolveTimer);
-  const text=$('problem-text').value, link=analyzeLinkFromText(text), files=initialAttachments.files;
+  const text=$('problem-text').value, link=analyzeLinkFromText(text), files=initialAttachments.files, copy=manuscriptSourceCopy();
   if(link){
-    if(files.length)return renderAnalyzeNote('warn','Analyze one source at a time: a link, pasted text or uploaded files');
+    if(files.length)return renderAnalyzeNote('warn',copy.one);
     const known=analyzeResolveCache.get(link);
     if(known)return renderAnalyzeChip(link,known);
     renderAnalyzeChip(link,{pending:true});
@@ -6965,13 +7494,13 @@ function refreshAnalyzeSource({immediate=false}={}){
   }
   analyzeResolveSeq++;  // a preview still in flight is for older text
   box.removeAttribute('aria-busy');
-  if(files.length&&text.trim())return renderAnalyzeNote('warn','Analyze one source at a time: a link, pasted text or uploaded files');
+  if(files.length&&text.trim())return renderAnalyzeNote('warn',copy.one);
   if(files.length)return renderAnalyzeNote('','Uploaded files: '+files.map(entry=>entry.file.name).join(', ')+' — the manuscript is read from these files.');
   if(text.trim()){
-    const limit=Number(analyzePolicy()?.sources?.paste_chars)||20000, format=guessManuscriptFormat(text);
+    const limit=Number(manuscriptPolicy()?.sources?.paste_chars)||20000, format=guessManuscriptFormat(text);
     if(text.length>limit)return renderAnalyzeNote('warn',`Pasted manuscripts are limited to ${limit.toLocaleString('en-US')} characters${viewerIsGuest()?' for guests':''} (this text has ${text.length.toLocaleString('en-US')}).`,
       `Pasted manuscripts are limited to ${limit.toLocaleString('en-US')} characters${viewerIsGuest()?' for guests':''}; this text is longer.`);
-    return renderAnalyzeNote('',`Pasted manuscript · ${text.length.toLocaleString('en-US')} characters${format?' · TeX':''}. Paste a single link instead to analyze a manuscript online.`,
+    return renderAnalyzeNote('',`Pasted manuscript · ${text.length.toLocaleString('en-US')} characters${format?' · TeX':''}. ${copy.online}`,
       'Source: pasted manuscript'+(format?' (TeX)':'')+'.');
   }
   box.replaceChildren();
@@ -7000,7 +7529,7 @@ async function resolveAnalyzeLink(link){
     analyzeResolveCache.set(link,result);
     if(analyzeResolveCache.size>60)analyzeResolveCache.delete(analyzeResolveCache.keys().next().value);
   }
-  if(seq!==analyzeResolveSeq||runKindChoice()!=='analyze'||analyzeLinkFromText($('problem-text').value)!==link)return;
+  if(seq!==analyzeResolveSeq||!manuscriptMode()||analyzeLinkFromText($('problem-text').value)!==link)return;
   renderAnalyzeChip(link,result);
 }
 function renderAnalyzeChip(link,result){
@@ -7018,12 +7547,12 @@ function renderAnalyzeChip(link,result){
   const body=analyzeEl('div','body');
   chip.append(analyzeEl('span','badge',ANALYZE_CONNECTOR_LABEL[connector]||'Link'),body);
   if(!result?.ok){
-    const message=analyzeEl('div','title',String(result?.error||'That link can’t be analyzed'));
+    const copy=manuscriptSourceCopy(), message=analyzeEl('div','title',String(result?.error||copy.refused));
     body.append(message);
     if(result?.member_only&&viewerIsGuest()){
       const signIn=analyzeEl('a','analyze-signin','Sign in →'); signIn.href=pcUrl('/login');
       body.append(signIn);
-    }else if(result?.transient)body.append(analyzeEl('div','meta','You can still start the analysis; the link is checked again when it runs.'));
+    }else if(result?.transient)body.append(analyzeEl('div','meta',copy.transient));
     announceAnalyzeSource(message.textContent);
     return box.replaceChildren(chip);
   }
@@ -7100,7 +7629,7 @@ function renderAnalyzePicker(container,choices){
     const terms=input.value.trim().toLowerCase().split(/\s+/).filter(Boolean);
     let shown=0;
     families.forEach(({row,text})=>{ const match=terms.every(term=>text.includes(term)); row.hidden=!match; if(match)shown++; });
-    count.textContent=terms.length?`${shown} of ${families.length} manuscript families match`:`${families.length} manuscript families · pick one manuscript to analyze`;
+    count.textContent=terms.length?`${shown} of ${families.length} manuscript families match`:`${families.length} manuscript families · ${manuscriptSourceCopy().pick}`;
     if(!current||current.closest('[hidden]'))rove(options()[0]||null);
   };
   input.oninput=filter;
@@ -7228,21 +7757,170 @@ async function startAnalyzeRun(){
   finally{initialAttachments.lock(false);$('start-btn').disabled=false;}
 }
 
+/* ── Readability: composer ──
+   A readable version reads its manuscript through the Analyze source box and
+   runs on Kimi K3 (sponsored or the account's own key) or, for the operator,
+   on a connected Codex or Claude Code account. */
+function readabilitySponsoredOnly(){
+  const routes=readabilityPolicy()?.routes;
+  return viewerIsGuest()||(Array.isArray(routes)&&routes.length===1&&routes[0]==='sponsored_kimi');
+}
+// Where the manuscript goes: the routes the server lists for this viewer
+// (guests reach sponsored Kimi K3 only; subscriptions are the operator's).
+function readabilityProviderText(){
+  const routes=readabilityPolicy()?.routes, listed=Array.isArray(routes)?routes:[];
+  const accounts=[['codex_subscription','Codex'],['claude_subscription','Claude Code']].filter(([route])=>listed.includes(route)).map(([,name])=>name);
+  const places=[listed.includes('sponsored_kimi')?'sponsored Kimi K3':'',listed.includes('api_key')?'your own Kimi key':'',accounts.length?'a connected '+accounts.join(' or ')+' account':''].filter(Boolean);
+  const where=places.length>2?places.slice(0,-1).join(', ')+', or '+places.at(-1):places.join(' or ');
+  return 'Readability sends the manuscript text to the selected model provider'+(where?' — '+where:'')+". Don't submit work you aren't allowed to share.";
+}
+function readabilityRouteSponsored(){
+  if(readabilitySponsoredOnly())return true;
+  return engineModelMode(readabilityEngineEntry())==='api_key'&&!!SETTINGS?.sponsored_kimi_available&&!SETTINGS?.kimi_user_key_set;
+}
+function readabilityAudience(){
+  const value=$('readability-audience')?.value;
+  return ['research','graduate','undergraduate'].includes(value)?value:'graduate';
+}
+function renderReadabilityCaps(){
+  const box=$('analyze-caps'); if(!box)return;
+  const entry=readabilityEngineEntry(), policy=readabilityPolicy();
+  box.replaceChildren(); box.classList.remove('refused');
+  if(!entry||!policy)return;
+  const guest=viewerIsGuest();
+  if(entry.requires_login||policy.enabled===false){
+    box.classList.add('refused');
+    box.append(String(policy.reason||(entry.requires_login?'Readability needs a signed-in account on this site.':'Readability is turned off on this site.'))+' ');
+    if(guest){ const signIn=analyzeEl('a','', 'Sign in →'); signIn.href=pcUrl('/login'); box.append(signIn); }
+    return;
+  }
+  if(!entry.available){ box.textContent='Readability needs setup on this server — '+String(entry.health_detail||entry.hint||'its runner is unavailable'); return; }
+  const sponsored=readabilityRouteSponsored();
+  const caps=sponsored?policy.caps?.sponsored:(policy.caps?.own_key||policy.caps?.sponsored);
+  const lines=[];
+  if(caps){
+    const minutes=Math.max(1,Math.round(Number(caps.max_seconds||0)/60));
+    lines.push(`Up to ${Number(caps.max_parts)||0} parts rewritten and checked · ${Number(caps.max_calls)||0} model calls · ${minutes} min${sponsored?' on sponsored Kimi K3':''}.`);
+  }
+  if(guest){
+    const per=Number(policy.runs_per_hour)||1, chars=Number(policy.sources?.paste_chars)||20000;
+    lines.push(`Guests: ${per} readable ${per===1?'version':'versions'} per hour, counted against the guest runs · arXiv, GitHub and openai/math links, pasted text up to ${chars.toLocaleString('en-US')} characters, or text files. Sign in for PDFs, archives and other file links.`);
+  }
+  // Analyze and Readability share the site's daily sponsored manuscript runs.
+  const daily=policy.sponsored;
+  if(sponsored&&daily){
+    if(daily.available===false)lines.push(guest?'Sponsored Readability is turned off on this site — sign in and use your own Kimi key.':'Sponsored Readability is turned off on this site — use your own Kimi key.');
+    else if(Number(daily.remaining_today)<=0)lines.push(guest?"Sponsored manuscript runs are at today's limit — try tomorrow, or sign in and use your own Kimi key.":"Sponsored manuscript runs are at today's limit — try tomorrow or use your own Kimi key.");
+    else if(Number(daily.remaining_today)<=5)lines.push(`${Number(daily.remaining_today)} sponsored manuscript ${Number(daily.remaining_today)===1?'run':'runs'} left today on this site.`);
+  }
+  lines.forEach(line=>box.append(analyzeEl('span','',line)));
+}
+async function startReadabilityRun(){
+  const eb=$('form-error'); eb.style.display='none';
+  const fail=message=>{ eb.style.display='block'; eb.textContent=String(message); };
+  // Enter / Ctrl+Enter reach here even while the start button is disabled.
+  if(initialAttachments.busy||analyzeLinkLookupPending)return;
+  const entry=readabilityEngineEntry(), policy=readabilityPolicy();
+  if(!entry||!policy)return fail('Readability is not available on this site right now.');
+  if(entry.requires_login){ showEngineSignIn(entry.label||'Ansatz Readability'); return; }
+  if(policy.enabled===false)return fail(policy.reason||'Readability is turned off on this site.');
+  if(!entry.available)return fail((entry.label||'Ansatz Readability')+' needs setup — '+(entry.health_detail||entry.hint||'runner unavailable'));
+  let source=analyzeSourceFromComposer();
+  if(source.error)return fail(source.error);
+  // As for an analysis, a link is looked up before it starts a run.
+  if(source.kind==='url'&&!analyzeResolveCache.has(source.url)){
+    clearTimeout(analyzeResolveTimer);
+    $('start-btn').disabled=true; analyzeLinkLookupPending=true;
+    try{ await resolveAnalyzeLink(source.url); }finally{ $('start-btn').disabled=false; analyzeLinkLookupPending=false; }
+    source=analyzeSourceFromComposer();
+    if(source.error)return fail(source.error);
+  }
+  const sponsoredOnly=readabilitySponsoredOnly();
+  if(!sponsoredOnly){ const issue=engineRuntimeIssue(entry); if(issue)return fail(issue); }
+  // Sponsored-only viewers name no model: the server runs Kimi K3.
+  const model=sponsoredOnly?'':currentModel();
+  if(!model&&!sponsoredOnly)return fail(selectedAccountRuntime()==='api'?'Configure and verify an API provider in Settings, then choose a model.':runtimeDisplayName()+' has no available model for Readability.');
+  const pill=$('live-pill'), pillBefore={cls:pill.className,text:pill.textContent};
+  $('start-btn').disabled=true; setPill('running','starting…');
+  initialAttachments.lock(true);
+  try{
+    const tuning=currentRunTuning(), focus=$('readability-focus').value.trim();
+    const request={run_kind:'readability',engine:'readability',model:model||null,auth_route:runAuthRoute(),
+      reasoning_effort:tuning.reasoning_effort,speed_mode:tuning.speed_mode,readability:{audience:readabilityAudience()}};
+    if(focus)request.readability.focus=focus;
+    if(source.kind==='url')request.source={url:source.url};
+    else if(source.kind==='paste')request.source=source.format?{text:source.text,format:source.format}:{text:source.text};
+    else request.attachments=await initialAttachments.payload();
+    const response=await fetch('/api/runs',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(request)});
+    const started=await response.json().catch(()=>({}));
+    if(started.guest_policy){GUEST_POLICY=started.guest_policy;applyGuestUi();}
+    if(!response.ok){
+      const message=String(started.error||('HTTP '+response.status));
+      const refused=new Error(response.status===429&&!/tomorrow/i.test(message)?limitMessage(message,response):message);
+      refused.refused=true; throw refused;
+    }
+    initialAttachments.clear();
+    RUN_KIND_BY_ID.set(String(started.run_id),'readability');
+    selectRun(started.run_id,started.job_id); goSession('sandbox');
+    loadEngines().catch(()=>{});  // today's sponsored count moved
+  }catch(err){
+    fail(err.message);
+    if(err.refused&&pill.textContent==='starting…'){pill.className=pillBefore.cls;pill.textContent=pillBefore.text;}
+    else setPill('failed','failed');
+  }
+  finally{initialAttachments.lock(false);$('start-btn').disabled=false;}
+}
+
 /* ── Analyze: run view ──
    An analysis shows its generated report (read-only) in the Sandbox, its
    runner stages (Ingest → Segment → Check → Roll-up → Report), a Manuscript
    DAG coloured by model-verifier verdicts, and statement-only Lean. It is
    never continued: a new analysis or a node re-check replaces that. */
 const ANALYZE_STAGES=[['scaffold','Ingest'],['work','Segment'],['verify','Check'],['curate','Roll-up'],['finalize','Report']];
+// A readable version: the same five trusted stage ids under its own names.
+const READABILITY_STAGES=[['scaffold','Ingest'],['work','Guide'],['verify','Rewrite'],['curate','Check'],['finalize','Publish']];
+const READABILITY_ASK_NOTE='Questions are answered by a model from this paper — not a certificate. A readable version is never continued.';
 let analysisSourceShown=false, analysisSourceRunId='', analysisRecheckMark='';
 function isAnalysisRun(run){ return !!run&&typeof run==='object'&&(run.run_kind==='analyze'||run.engine==='analyze'||run.sandbox_preview?.kind==='analysis'); }
-function applyRunKindView(analysis,rid){
-  document.body.classList.toggle('analysis-run',!!analysis);
-  $('chat-title').textContent=analysis?'Progress':'Human in the loop';
-  $('chat-subtitle').textContent=analysis?ANALYZE_CONTINUE_NOTE:'Guide the prover — feedback continues the run';
-  $('proof-title').textContent=analysis?'Analysis':'Proof';
+function isReadabilityRun(run){ return !!run&&typeof run==='object'&&(run.run_kind==='readability'||run.engine==='readability'||run.sandbox_preview?.kind==='readability'); }
+/* readability.js (#readability-loader, after this script) draws readable
+   versions and the Paper map. Until it has loaded they say so instead of
+   failing, and it draws the selected run when it arrives. */
+let readabilityUiMissing=false;
+function readabilityUiReady(){ return typeof initReadabilityUi==='function'; }
+function readabilityUiUnavailable(){
+  readabilityUiMissing=true;
+  if(runId&&lastSandboxRun?.run_id===runId)applySandboxPreview(lastSandboxRun);
+  if(workspaceView==='dag'&&dagMode==='paper-map')refreshDagView();
+}
+function showReadabilityPending(){
+  $('proof-label').textContent=readabilityUiMissing?'not loaded':'loading…';
   const empty=$('proof-empty')?.lastElementChild;
-  if(empty)empty.textContent=analysis?'The analysis report will appear here.':'Proof preview will appear here.';
+  if(empty)empty.textContent=readabilityUiMissing?'The readable version could not be loaded. Reload the page to try again.':'Loading the readable version…';
+  return false;
+}
+// kind: the run kind the view is for ('analyze', 'readability' or 'prove').
+function applyRunKindView(kind,rid){
+  const analysis=kind==='analyze', readability=kind==='readability';
+  document.body.classList.toggle('analysis-run',analysis);
+  document.body.classList.toggle('readability-run',readability);
+  $('chat-title').textContent=analysis?'Progress':readability?'Ask about this paper':'Human in the loop';
+  $('chat-subtitle').textContent=analysis?ANALYZE_CONTINUE_NOTE:readability?READABILITY_ASK_NOTE:'Guide the prover — feedback continues the run';
+  $('proof-title').textContent=analysis?'Analysis':readability?'Readability':'Proof';
+  const empty=$('proof-empty')?.lastElementChild;
+  if(empty)empty.textContent=analysis?'The analysis report will appear here.':readability?'The readable version will appear here.':'Proof preview will appear here.';
+  // A readable version has tabs of its own, the Ask panel instead of the chat,
+  // and no Lean.
+  for(const id of ['readability-tabs','ask-list','ask-compose']){ const el=$(id); if(el)el.hidden=!readability; }
+  // The view is the tabs' panel while a readable version is shown.
+  const panel=$('md-view');
+  if(panel&&readability){ panel.setAttribute('role','tabpanel'); panel.setAttribute('aria-labelledby','rd-tab-'+(typeof readabilityTab==='string'?readabilityTab:'readable')); }
+  else if(panel){ panel.removeAttribute('role'); panel.removeAttribute('aria-labelledby'); }
+  $('sel-pop').textContent=readability?'Ask about this':'💬 Add to chat';
+  $('analysis-stages').setAttribute('aria-label',readability?'Readability stages':'Analyze stages');
+  if(readability&&workspaceView==='lean')setWorkspaceView('sandbox');
+  // A proof run has no manuscript source (an analysis or readable version sets its own).
+  if(kind==='prove'){ $('analysis-source-link').hidden=true; $('analysis-source-toggle').hidden=true; }
   const gen=$('lean-gen');
   if(gen){
     gen.textContent=analysis?'∎ Formalize statements':'∎ Verify';
@@ -7261,25 +7939,32 @@ function applyRunKindView(analysis,rid){
     const text=step.lastChild;
     if(text&&text.nodeType===3&&steps[step.dataset.stage])text.textContent=steps[step.dataset.stage];
   });
-  syncDagModeForRun(!!analysis,rid);
+  syncDagModeForRun(kind,rid);
   if(!analysis){ const upstream=$('lean-upstream'); if(upstream)upstream.hidden=true; }
 }
-// An analysis opens on its Manuscript DAG; a proof run never shows that mode.
-function syncDagModeForRun(analysis,rid){
-  const manuscript=document.querySelector('#dag-mode [data-mode="analysis"]'), cgm=document.querySelector('#dag-mode [data-mode="engine"]');
+// An analysis opens on its Manuscript DAG and a readable version on its Paper
+// map (its only graph); a proof run never shows those modes.
+function syncDagModeForRun(kind,rid){
+  const analysis=kind==='analyze', readability=kind==='readability';
+  const manuscript=document.querySelector('#dag-mode [data-mode="analysis"]'), paperMap=document.querySelector('#dag-mode [data-mode="paper-map"]'), cgm=document.querySelector('#dag-mode [data-mode="engine"]');
   if(manuscript)manuscript.hidden=!analysis;
-  if(cgm)cgm.hidden=analysis;
+  if(paperMap)paperMap.hidden=!readability;
+  if(cgm)cgm.hidden=analysis||readability;
+  document.querySelectorAll('#dag-mode [data-mode="informal"],#dag-mode [data-mode="formal"],#dag-mode [data-mode="compiler"]').forEach(button=>{ button.hidden=readability; });
+  // An analysis keeps an Outline, Formal or Compiler view chosen for it; a
+  // mode its buttons hide (the CGM graph, the Paper map) gives way.
   let wanted=dagMode;
-  if(analysis&&(rid&&rid!==dagAutoRunId||dagMode==='engine'))wanted='analysis';
-  if(!analysis&&dagMode==='analysis')wanted='engine';
+  if(analysis&&(rid&&rid!==dagAutoRunId||dagMode==='engine'||dagMode==='paper-map'))wanted='analysis';
+  if(readability)wanted='paper-map';
+  if(!analysis&&!readability&&(dagMode==='analysis'||dagMode==='paper-map'))wanted='engine';
   if(rid)dagAutoRunId=rid;
   if(wanted!==dagMode)setDagMode(wanted,{refresh:workspaceView==='dag'});
 }
 function syncAnalyzeRunUi(run){
-  const analysis=isAnalysisRun(run), rid=String(run?.run_id||'');
-  if(rid)RUN_KIND_BY_ID.set(rid,analysis?'analyze':'prove');
-  applyRunKindView(analysis,rid);
-  renderAnalysisStages(analysis?run:null);
+  const kind=isAnalysisRun(run)?'analyze':isReadabilityRun(run)?'readability':'prove', analysis=kind==='analyze', rid=String(run?.run_id||'');
+  if(rid)RUN_KIND_BY_ID.set(rid,kind);
+  applyRunKindView(kind,rid);
+  renderAnalysisStages(kind==='prove'?null:run,kind==='readability'?READABILITY_STAGES:ANALYZE_STAGES);
   if(!analysis)return;
   // A finished re-check changed verdicts: reload the graph views once.
   const recheck=run.analyze?.recheck, mark=recheck?rid+'|'+String(recheck.job_id||'')+'|'+String(recheck.status||''):rid+'|';
@@ -7296,8 +7981,9 @@ function syncAnalyzeRunUi(run){
   }
   if(workspaceView==='lean')renderLeanUpstream(run);
 }
-function analysisStageStates(run){
-  const ids=ANALYZE_STAGES.map(([id])=>id), status=String(run?.status||'');
+// stages: ANALYZE_STAGES, or READABILITY_STAGES for a readable version.
+function analysisStageStates(run,stages=ANALYZE_STAGES){
+  const ids=stages.map(([id])=>id), status=String(run?.status||'');
   let reached=-1;
   // The session summary the console appends at the end is filed under the
   // last stage; it says nothing about how far the runner got.
@@ -7309,8 +7995,8 @@ function analysisStageStates(run){
     const index=ids.indexOf(String(agent?.pipeline_stage||'')); if(index>reached)reached=index;
   });
   // A stopped (or partly failed) analysis still publishes what had settled.
-  const published=!!run?.sandbox_preview?.has_report&&status!=='running';
-  return ANALYZE_STAGES.map(([id,label],index)=>{
+  const published=!!(run?.sandbox_preview?.has_report||run?.sandbox_preview?.has_readable)&&status!=='running';
+  return stages.map(([id,label],index)=>{
     let state='waiting';
     if(status==='finished')state='done';
     else if(index<reached)state='done';
@@ -7319,11 +8005,12 @@ function analysisStageStates(run){
     return {id,label,state};
   });
 }
-function renderAnalysisStages(run){
+// stages: as analysisStageStates (Analyze's when left out).
+function renderAnalysisStages(run,stages){
   const list=$('analysis-stages'); if(!list)return;
   if(!run){ list.hidden=true; list.replaceChildren(); return; }
   const words={done:'done',running:'in progress',waiting:'waiting',error:'stopped with an error',stopped:'stopped'};
-  list.replaceChildren(...analysisStageStates(run).map(stage=>{
+  list.replaceChildren(...analysisStageStates(run,stages).map(stage=>{
     // The state is read out (and shown in forced colours), not only coloured.
     const item=analyzeEl('li',stage.state,stage.label);
     item.append(analyzeEl('span','sr-only',' — '+(words[stage.state]||stage.state)));
@@ -7687,11 +8374,12 @@ function analysisResolveRefs(text,refLabels){
 // Model-written prose (findings, notes, progress): accents and references
 // read as text outside math; nothing else is changed (in model prose "~"
 // can mean "of the order of", so only ties are spaces).
-const ANALYZE_MATH_SPLIT=/(\$\$[\s\S]+?\$\$|\$[^$\n]+?\$|\\\([\s\S]+?\\\)|\\\[[\s\S]+?\\\])/;
+// The math of /(\$\$[\s\S]+?\$\$|\$[^$\n]+?\$|\\\([\s\S]+?\\\)|\\\[[\s\S]+?\\\])/ (see mathSpans).
+const ANALYZE_MATH_KINDS=s=>[mathBetween(s,'$$','$$',1),mathDollarLine(s),mathBetween(s,'\\(','\\)',1),mathBetween(s,'\\[','\\]',1)];
 function analysisModelProse(text,refLabels){
   const value=String(text??'');
   if(!/[\\~]/.test(value))return value;
-  return value.split(ANALYZE_MATH_SPLIT).map((part,index)=>index%2?part:analysisResolveRefs(analysisTextAccents(part),refLabels)).join('');
+  return splitMath(value,ANALYZE_MATH_KINDS).map((part,index)=>index%2?part:analysisResolveRefs(analysisTextAccents(part),refLabels)).join('');
 }
 // TeX text accents outside math read as letters (Erd\H{o}s → Erdős), as in
 // the report; a bare letter after an accent counts only where that accent is
@@ -7702,7 +8390,7 @@ const ANALYZE_TEXT_LETTERS={o:'ø',O:'Ø',ss:'ß',ae:'æ',AE:'Æ',oe:'œ',OE:'Œ
 function analysisTextAccents(text){
   const value=String(text??'');
   if(!value.includes('\\'))return value;
-  return value.split(/(\$\$[\s\S]+?\$\$|\$[^$\n]+?\$|\\\([\s\S]+?\\\)|\\\[[\s\S]+?\\\])/).map((part,index)=>index%2?part:part
+  return splitMath(value,ANALYZE_MATH_KINDS).map((part,index)=>index%2?part:part
     .replace(/(\{)?\\(?:(['`^"~=.])|([Hcvurk])(?![A-Za-z]))(?:\s*\{\s*(\\[ij](?![A-Za-z])|[A-Za-z])\s*\}|\s*(\\[ij](?![A-Za-z])|[A-Za-z]))(\})?/g,(match,open,sym,letter,braced,bare,close)=>{
       const accent=sym||letter, base=braced||bare;
       if(bare&&sym&&!ANALYZE_BARE_ACCENTED[sym].includes(bare))return match;
@@ -7712,11 +8400,48 @@ function analysisTextAccents(text){
     .replace(/\{\\(o|O|ss|ae|AE|oe|OE|aa|AA|l|L)\}|\\(o|O|ss|ae|AE|oe|OE|aa|AA|l|L)(?:\{\}| (?=[A-Za-z]))/g,(_,a,b)=>ANALYZE_TEXT_LETTERS[a||b])
   ).join('');
 }
-// Statements as readable prose: \ref becomes the result's label and simple
-// text markup is dropped; math is left as written for KaTeX.
+// The math of /(\\begin\{equation\*?\}[\s\S]*?\\end\{equation\*?\}|<align, alignat and gather alike>|\$\$[\s\S]*?\$\$|\\\[[\s\S]*?\\\]|\\\([\s\S]*?\\\)|\$(?:\\.|[^$\\])+\$)/.
+const ANALYZE_STATEMENT_MATH_KINDS=s=>[...['equation','align','alignat','gather'].map(name=>mathEnvironment(s,name)),
+  mathBetween(s,'$$','$$',0),mathBetween(s,'\\[','\\]',0),mathBetween(s,'\\(','\\)',0),mathEscapedDollar(s)];
+// Statements as readable prose: \ref becomes the result's label, simple text
+// markup is dropped and a list reads inline with the manuscript's labels
+// ("(i) … (ii) …"); math is left as written for KaTeX.
 function analysisProse(text,refLabels){
   // Display environments are math too: their \\ row breaks must survive.
-  const parts=String(text||'').split(/(\\begin\{equation\*?\}[\s\S]*?\\end\{equation\*?\}|\\begin\{align\*?\}[\s\S]*?\\end\{align\*?\}|\\begin\{alignat\*?\}[\s\S]*?\\end\{alignat\*?\}|\\begin\{gather\*?\}[\s\S]*?\\end\{gather\*?\}|\$\$[\s\S]*?\$\$|\\\[[\s\S]*?\\\]|\\\([\s\S]*?\\\)|\$(?:\\.|[^$\\])+\$)/);
+  let parts=splitMath(String(text||''),ANALYZE_STATEMENT_MATH_KINDS);
+  // Markup around math ("\emph{arity-$k$ diagram}") and lists are read across
+  // the formulas, each standing in as one character while they are matched.
+  const roman=n=>[[1000,'m'],[900,'cm'],[500,'d'],[400,'cd'],[100,'c'],[90,'xc'],[50,'l'],[40,'xl'],[10,'x'],[9,'ix'],[5,'v'],[4,'iv'],[1,'i']]
+    .reduce((out,[value,digits])=>{ while(n>=value){ out+=digits; n-=value; } return out; },'');
+  const styles={arabic:String,roman,Roman:n=>roman(n).toUpperCase(),alph:n=>String.fromCharCode(96+(n-1)%26+1),Alph:n=>String.fromCharCode(64+(n-1)%26+1)};
+  // An enumerate's own labels: "[(i)]", "[a)]" or "[label=\textup{(\roman*)}]"; else "1.", "2.".
+  const numbering=option=>{
+    const plain=String(option||'').replace(/\\text[a-z]{0,6}\{([^{}]*)\}/g,'$1')
+      .replace(/\\(?:upshape|rmfamily|rm|itshape|it|slshape|bfseries|bf|normalfont|sffamily|sf|scshape|em)(?![A-Za-z])\s*|[{}]/g,'').trim();
+    const keyed=/label\s*=\s*\{?([^,{}]*?)\}?\s*(?:,|$)/.exec(plain);
+    const at=keyed?/\\(arabic|roman|Roman|alph|Alph)\*/.exec(keyed[1]):!plain.includes('=')&&plain.length<=12?/(?<![A-Za-z])[1iIaA](?![A-Za-z])/.exec(plain):null;
+    if(!at)return null;
+    const template=keyed?keyed[1]:plain, style=keyed?at[1]:{1:'arabic',i:'roman',I:'Roman',a:'alph',A:'Alph'}[at[0]];
+    return n=>template.slice(0,at.index)+styles[style](n)+template.slice(at.index+at[0].length);
+  };
+  const lists=[], open={enumerate:0,itemize:0,description:0};
+  const joined=parts.filter((part,index)=>!(index%2)).map(part=>part.replace(/\uE000/g,'')).join('\uE000');
+  const read=joined.replace(/\\(?:emph|textbf|textit|textsc|textrm|textsf|texttt|text|mbox)\{([^{}\uE000]*\uE000[^{}]*)\}/g,'$1')
+    .replace(/\\(begin|end)\{(enumerate|itemize|description)\}(?:[ \t]*\[([^\[\]\n]{0,80})\])?|\\item(?![A-Za-z])(?:[ \t]*\[([^\[\]\n]{0,80})\])?/g,(match,side,kind,option,label)=>{
+      if(side==='begin'){ lists.push({kind,count:0,number:kind==='enumerate'?numbering(option):null}); open[kind]++; return ' '; }
+      if(side==='end'){
+        // An end with no list of its kind open costs nothing.
+        const at=open[kind]?lists.map(list=>list.kind).lastIndexOf(kind):-1;
+        if(at>=0){ lists.slice(at).forEach(list=>open[list.kind]--); lists.length=at; }
+        return ' ';
+      }
+      const list=lists[lists.length-1];
+      if(label!==undefined)return ' '+label.trim()+' ';
+      if(!list||list.kind!=='enumerate')return ' • ';
+      list.count++;
+      return ' '+(list.number?list.number(list.count):list.count+'.')+' ';
+    });
+  if(read!==joined){ const texts=read.split('\uE000'); parts=parts.map((part,index)=>index%2?part:texts[index>>1]); }
   // KaTeX would number these itself, never with the manuscript's numbers: show them unnumbered.
   return parts.map((part,index)=>index%2?part.replace(/\\(begin|end)\{(equation|align|alignat|gather)\}/g,'\\$1{$2*}'):analysisResolveRefs(analysisTextAccents(part),refLabels)
     .replace(/\\(?:emph|textbf|textit|textsc|textrm|textsf|texttt|text|mbox)\{([^{}]*)\}/g,'$1')
@@ -8039,6 +8764,8 @@ function applyGuestUi(){
   allowance.innerHTML=`<span><strong>${Number(left)} of ${Number(limit)} guest runs remaining.</strong> ${GUEST_POLICY?.hosted_guest_available||SETTINGS?.providers?.some(p=>p.id==='kimi'&&p.api_key_set)?'Ansatz CGM on Kimi K3, Lean verification, and the Facts / Explore graphs are ready.':'Add a Kimi API key in Settings to start.'} Sign in to use your own API keys and keep saved history.</span><a href="${pcUrl('/login')}">Sign in →</a>`;
   syncStartButton();
   if(runKindChoice()==='analyze')renderAnalyzeCaps();
+  if(runKindChoice()==='readability')renderReadabilityCaps();
+  syncMakeReadable();  // it counts the guest runs left too
 }
 async function loadUser(){
   try{
@@ -8163,7 +8890,7 @@ function consumeCatalogueProblem(){
     if(input.value.trim())return false;
     if(item.mode==='analyze'&&analyzeOffered())return loadAnalyzeHandoff(item);
     // A problem to prove opens in a Prove mode (the saved proof output is kept).
-    if(runKindChoice()==='analyze')chooseMode(formalizeChoice()?'formal':'informal');
+    if(runKindChoice()!=='prove')chooseMode(formalizeChoice()?'formal':'informal');
     const prompt=[item.title,item.statement,'Source: '+item.source,
       item.status?'Source status: '+item.status:'',item.context,
       'Investigate this statement carefully. Distinguish established partial results, reported proof claims, and unresolved gaps. A claimed proof is not an accepted solution.']
@@ -8191,6 +8918,7 @@ function loadAnalyzeHandoff(item){
 setInterval(()=>{ if(!document.hidden)loadRuns().catch(()=>{}); }, 5000);
 </script>
 <script id="sharing-loader">{const s=document.createElement("script");s.src=(window.__PC_BASE__||"")+"/static/sharing.js";document.body.append(s);}</script>
+<script id="readability-loader">{const base=window.__PC_BASE__||"",css=document.createElement("link"),s=document.createElement("script");css.rel="stylesheet";css.href=base+"/static/readability.css";document.head.append(css);s.src=base+"/static/readability.js";s.onerror=()=>readabilityUiUnavailable();document.body.append(s);}</script>
 <script id="landing-geometry-script">
 (() => {
   const landing = document.getElementById('view-landing');

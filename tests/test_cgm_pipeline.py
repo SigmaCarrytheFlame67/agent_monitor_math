@@ -10,7 +10,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
 
-from agent_monitor import engine_graph
+from agent_monitor import engine_graph, proof_graph
 from agent_monitor.cgm import closure as cgm_closure
 from agent_monitor.cgm import curation as cgm_curation
 from agent_monitor.cgm import parsing as cgm_parsing
@@ -197,11 +197,23 @@ class RunPipelineEntryPointTests(unittest.TestCase):
             self.assertTrue(all(item["attested"] for item in dag))
             self.assertEqual(target["statement"], PROBLEM)
             self.assertTrue(lemma2["proof"].startswith(f"Cited facts: L1 = fact {lemma1['fact_id']}."))
+            # proof.md names each lemma by the label its citing proofs use.
+            labels = engine_graph.load_proof_labels(workspace)
+            self.assertEqual(labels, {lemma1["fact_id"]: "L1", lemma2["fact_id"]: "L2"})
             self.assertEqual(
                 (workspace / "proof.md").read_text(),
-                engine_graph.render_fact_closure(dag, target["fact_id"]),
+                engine_graph.render_fact_closure(dag, target["fact_id"], labels=labels),
             )
+            self.assertIn(f"## Lemma L2 · fact {lemma2['fact_id']}", result["proof_text"])
+            self.assertIn(f"**Uses:** Lemma L2 (fact {lemma2['fact_id']}).", result["proof_text"])
             self.assertEqual(result["proof_text"], (workspace / "proof.md").read_text())
+            # The Outline names the lemmas as proof.md does.
+            outline = proof_graph.fact_graph_result(workspace)
+            self.assertEqual(
+                [node["label"] for node in outline["graph"]["nodes"]],
+                ["Lemma L1", "Lemma L2", "Target theorem"],
+            )
+            self.assertTrue(outline["attested"])
 
             facts = engine_graph.build(workspace, {"engine": "math_harness"})
             self.assertEqual(facts["provenance"]["attestation"], "harness-gate-receipt")
@@ -258,6 +270,35 @@ class RunPipelineEntryPointTests(unittest.TestCase):
             self.assertEqual(engine_graph.rebuild(workspace, {"engine": "math_harness"}, view="workflow"), workflow)
             self.assertEqual(engine_graph.load_cached(workspace, view="workflow"), workflow)
 
+    def test_a_proof_edit_keeps_the_lemma_names_of_its_facts(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            workspace = Path(raw)
+            _accepted(workspace)
+            labels = engine_graph.load_proof_labels(workspace)
+            proof = workspace / "proof.md"
+            proof.write_text(proof.read_text() + "\nA reader's note.\n")
+            # The edit unbinds the receipt, but its facts keep the names that
+            # proof.md still gives them.
+            facts = engine_graph.build(workspace, {"engine": "math_harness"})
+            self.assertEqual(facts["provenance"]["attestation"], "unattested")
+            self.assertEqual(engine_graph.load_proof_labels(workspace), labels)
+            outline = proof_graph.fact_graph_result(workspace)
+            self.assertEqual(
+                [node["label"] for node in outline["graph"]["nodes"]],
+                ["Lemma L1", "Lemma L2", "Target theorem"],
+            )
+            self.assertFalse(outline["attested"])
+            # Facts the receipt does not list exactly get no names from it.
+            path = workspace / "math_harness" / "project" / "engine_receipt.json"
+            receipt = json.loads(path.read_text())
+            receipt["facts"][0]["sha256"] = "0" * 64
+            path.write_text(json.dumps(receipt))
+            self.assertIsNone(engine_graph.load_proof_labels(workspace))
+            self.assertEqual(
+                [node["label"] for node in proof_graph.fact_graph_result(workspace)["graph"]["nodes"]],
+                ["Lemma 1", "Lemma 2", "Target theorem"],
+            )
+
 
 class ClosureRenderingTests(unittest.TestCase):
     FACTS = [
@@ -276,6 +317,93 @@ class ClosureRenderingTests(unittest.TestCase):
         self.assertNotIn("unrelated", rendered)
         self.assertTrue(rendered.endswith("\n") and not rendered.endswith("\n\n"))
         self.assertEqual(cgm_closure.closure_order(self.FACTS, "c" * 16), ["a" * 16, "b" * 16, "c" * 16])
+
+    # Two independent lemmas whose fact-id order (a < b) is the reverse of
+    # their label order (L2 < L10), and the target citing both.
+    LABELLED = [
+        {"fact_id": "a" * 16, "statement": "A", "proof": "base a", "predecessors": []},
+        {"fact_id": "b" * 16, "statement": "B", "proof": "base b", "predecessors": []},
+        {
+            "fact_id": "c" * 16,
+            "statement": "C",
+            "proof": "Cited facts: L2 = fact " + "b" * 16 + "; L10 = fact " + "a" * 16 + ".\n\nby L2 and L10",
+            "predecessors": ["a" * 16, "b" * 16],
+        },
+    ]
+    LABELS = {"a" * 16: "L10", "b" * 16: "L2"}
+
+    def test_labelled_rendering_names_and_orders_lemmas_by_label(self) -> None:
+        numbered = cgm_closure.render_verified_closure(self.LABELLED, "c" * 16)
+        labelled = cgm_closure.render_verified_closure(self.LABELLED, "c" * 16, labels=self.LABELS)
+        self.assertLess(numbered.index("## Lemma 1 · fact " + "a" * 16), numbered.index("## Lemma 2 · fact " + "b" * 16))
+        self.assertLess(labelled.index("## Lemma L2 · fact " + "b" * 16), labelled.index("## Lemma L10 · fact " + "a" * 16))
+        self.assertIn(f"**Uses:** Lemma L2 (fact {'b' * 16}), Lemma L10 (fact {'a' * 16}).", labelled)
+        self.assertIn("## Main theorem · fact " + "c" * 16, labelled)
+        self.assertNotIn("## Lemma 1", labelled)
+        # Same header and verbatim bodies, including the "Cited facts" line.
+        self.assertTrue(labelled.startswith("# Proof\n\n" + cgm_closure.CLOSURE_HEADER + "\n\n## Lemma L2"))
+        self.assertIn("Cited facts: L2 = fact " + "b" * 16, labelled)
+        self.assertTrue(labelled.endswith("by L2 and L10\n"))
+        self.assertEqual(
+            labelled,
+            cgm_closure.render_verified_closure(list(reversed(self.LABELLED)), "c" * 16, labels=self.LABELS),
+        )
+        # The target's own label is optional; labels outside the closure are ignored.
+        self.assertEqual(
+            labelled,
+            cgm_closure.render_verified_closure(
+                self.LABELLED, "c" * 16, labels={**self.LABELS, "c" * 16: "THEOREM", "e" * 16: "L1"}
+            ),
+        )
+        self.assertEqual(
+            cgm_closure.closure_order(self.LABELLED, "c" * 16, labels=self.LABELS),
+            ["b" * 16, "a" * 16, "c" * 16],
+        )
+        self.assertEqual(cgm_closure.closure_order(self.LABELLED, "c" * 16), ["a" * 16, "b" * 16, "c" * 16])
+        # Dependencies still come first, whatever the labels say.
+        self.assertEqual(
+            cgm_closure.closure_order(self.FACTS, "c" * 16, labels={"a" * 16: "L9", "b" * 16: "L1"}),
+            ["a" * 16, "b" * 16, "c" * 16],
+        )
+
+    def test_natural_label_order(self) -> None:
+        labels = ["L10", "L2", "L1", "LEMMA", "L1A", "B3", "L02"]
+        self.assertEqual(sorted(labels, key=cgm_closure.natural_key), ["B3", "L1", "L1A", "L2", "L02", "L10", "LEMMA"])
+
+    def test_labelled_rendering_needs_one_unique_label_per_lemma(self) -> None:
+        for name, labels in (
+            ("missing", {"a" * 16: "L1"}),
+            ("shared", {"a" * 16: "L1", "b" * 16: "L1"}),
+            ("shared with the target", {"a" * 16: "L1", "b" * 16: "L2", "c" * 16: "L1"}),
+            ("two tokens", {"a" * 16: "L 1", "b" * 16: "L2"}),
+            ("multi-line", {"a" * 16: "L1\n## Main theorem", "b" * 16: "L2"}),
+            ("empty", {"a" * 16: "", "b" * 16: "L2"}),
+            ("not text", {"a" * 16: 1, "b" * 16: "L2"}),
+        ):
+            with self.subTest(name), self.assertRaises(cgm_closure.ClosureError):
+                cgm_closure.render_verified_closure(self.LABELLED, "c" * 16, labels=labels)
+        with self.assertRaises(engine_graph.EngineGraphError):
+            engine_graph.render_fact_closure(self.LABELLED, "c" * 16, labels={"a" * 16: "L1"})
+
+    def test_runner_falls_back_to_numbered_lemmas_when_labels_collide(self) -> None:
+        def record(fact: dict, label: str) -> runner._FactRecord:
+            return runner._FactRecord(
+                label=label, fact_id=fact["fact_id"], statement=fact["statement"],
+                proof=fact["proof"], predecessors=tuple(fact["predecessors"]), payload=b"",
+                verification_attempt=1, is_target=label == "THEOREM",
+            )
+
+        lemma_a, lemma_b, target = self.LABELLED
+        text, rendering = runner._render_closure(
+            [record(lemma_a, "L10"), record(lemma_b, "L2"), record(target, "THEOREM")], "c" * 16
+        )
+        self.assertEqual(rendering, cgm_schema.PROOF_RENDERING_VERIFIED_V2)
+        self.assertEqual(text, cgm_closure.render_verified_closure(self.LABELLED, "c" * 16, labels=self.LABELS))
+        text, rendering = runner._render_closure(
+            [record(lemma_a, "L1"), record(lemma_b, "L1"), record(target, "THEOREM")], "c" * 16
+        )
+        self.assertEqual(rendering, cgm_schema.PROOF_RENDERING_VERIFIED)
+        self.assertEqual(text, cgm_closure.render_verified_closure(self.LABELLED, "c" * 16))
 
     def test_malformed_dags_raise(self) -> None:
         cyclic = [
@@ -413,6 +541,38 @@ class AttestationTamperTests(unittest.TestCase):
         def verdict_reply_rebound(ws: Path) -> None:
             _rewrite_receipt(ws, lambda r: r["verdicts"][0].update(response_sha256="0" * 64))
 
+        # Rendering @2: proof.md names lemmas by the receipt's labels.
+        def rendering_claimed_numbered(ws: Path) -> None:
+            _rewrite_receipt(
+                ws, lambda r: r.update(proof_rendering=cgm_schema.PROOF_RENDERING_VERIFIED)
+            )
+
+        def numbered_bytes_claimed_labelled(ws: Path) -> None:
+            dag = engine_graph.load_fact_dag(ws)
+            target = next(item for item in dag if item["is_target"])
+            numbered = engine_graph.render_fact_closure(dag, target["fact_id"])
+            (ws / "proof.md").write_text(numbered)
+            digest = hashlib.sha256(numbered.encode()).hexdigest()
+            _rewrite_receipt(ws, lambda r: r.update(proof_sha256=digest))
+
+        def labels_swapped(ws: Path) -> None:
+            def swap(r: dict) -> None:
+                first, second = [item for item in r["facts"] if not item["is_target"]]
+                first["label"], second["label"] = second["label"], first["label"]
+
+            _rewrite_receipt(ws, swap)
+
+        def label_shared(ws: Path) -> None:
+            def share(r: dict) -> None:
+                for item in r["facts"]:
+                    if not item["is_target"]:
+                        item["label"] = "L1"
+
+            _rewrite_receipt(ws, share)
+
+        def unknown_rendering(ws: Path) -> None:
+            _rewrite_receipt(ws, lambda r: r.update(proof_rendering="verified-closure@3"))
+
         for label, tamper in (
             ("proof edited", edit_proof),
             ("proof whitespace", whitespace_proof),
@@ -435,6 +595,11 @@ class AttestationTamperTests(unittest.TestCase):
             ("old policy on schema 3", old_policy_on_schema_three),
             ("call order label", call_order_label),
             ("verdict reply rebound", verdict_reply_rebound),
+            ("labelled proof claimed numbered", rendering_claimed_numbered),
+            ("numbered proof claimed labelled", numbered_bytes_claimed_labelled),
+            ("labels swapped", labels_swapped),
+            ("label shared", label_shared),
+            ("unknown rendering", unknown_rendering),
         ):
             with self.subTest(tamper=label), tempfile.TemporaryDirectory() as raw:
                 workspace = Path(raw)
@@ -444,6 +609,33 @@ class AttestationTamperTests(unittest.TestCase):
                 if label not in {"proof whitespace"}:
                     with self.assertRaises(engine_graph.EngineGraphError):
                         engine_graph.build(workspace, {"engine": "math_harness"}, view="workflow")
+
+    def test_a_numbered_proof_still_attests_when_its_receipt_says_so(self) -> None:
+        # verified-closure@1 stays a valid schema-3 rendering: the same facts,
+        # rendered with numbered lemmas and bound by hash, attest as before.
+        with tempfile.TemporaryDirectory() as raw:
+            workspace = Path(raw)
+            result, _calls, _events = _accepted(workspace)
+            receipt = json.loads((workspace / "math_harness/project/engine_receipt.json").read_text())
+            self.assertEqual(receipt["proof_rendering"], cgm_schema.PROOF_RENDERING_VERIFIED_V2)
+            dag = engine_graph.load_fact_dag(workspace)
+            numbered = engine_graph.render_fact_closure(dag, result["target_fact_id"])
+            self.assertNotEqual(numbered, result["proof_text"])
+            (workspace / "proof.md").write_text(numbered)
+            digest = hashlib.sha256(numbered.encode()).hexdigest()
+            _rewrite_receipt(
+                workspace,
+                lambda r: r.update(
+                    proof_rendering=cgm_schema.PROOF_RENDERING_VERIFIED, proof_sha256=digest
+                ),
+            )
+            facts = engine_graph.build(workspace, {"engine": "math_harness"})
+            self.assertEqual(facts["provenance"]["attestation"], "harness-gate-receipt")
+            self.assertIsNone(engine_graph.load_proof_labels(workspace))
+            graph = proof_graph.fact_graph_result(workspace)["graph"]
+            self.assertEqual(
+                [node["label"] for node in graph["nodes"]], ["Lemma 1", "Lemma 2", "Target theorem"]
+            )
 
     def test_fact_content_edit_fails_closed(self) -> None:
         with tempfile.TemporaryDirectory() as raw:

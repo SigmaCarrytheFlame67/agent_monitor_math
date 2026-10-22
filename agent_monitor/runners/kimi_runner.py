@@ -23,9 +23,10 @@ Model-verifier acceptance is never a Lean certificate.
 Usage: ``kimi_runner.py --prompt-file PATH`` (or ``kimi_runner.py "<prompt>"``)
 from a run workspace that contains the canonical ``problem.txt``.  Emits
 Codex-shaped JSONL events on stdout.  Exit status: 0 when the pipeline
-published its artifacts (accepted or not), 2 for a missing prompt, key or
-attested endpoint, 143 when a stop request (SIGTERM) ended the run before
-publication (nothing is published), and 1 for any other failure.
+published its artifacts (accepted or not; a stop request during the
+written-proof round after publication ends only that round), 2 for a missing
+prompt, key or attested endpoint, 143 when a stop request (SIGTERM) ended the
+run before publication (nothing is published), and 1 for any other failure.
 """
 from __future__ import annotations
 
@@ -269,7 +270,10 @@ def main() -> int:
     emit_item(
         {
             "type": "file_change",
-            "changes": [{"path": path} for path in result.get("written") or []],
+            "changes": [
+                {"path": path}
+                for path in [*(result.get("written") or []), *harness.writeup_paths(result)]
+            ],
         }
     )
     facts = len(result.get("fact_ids") or [])
@@ -279,6 +283,9 @@ def main() -> int:
         if result.get("accepted")
         else "not verifier-accepted (unattested candidate)"
     )
+    written_proof = harness.writeup_status_line(result)
+    if written_proof:
+        status += f"\n{written_proof}"
     observed = result.get("observed_model")
     emit_item(
         {

@@ -606,27 +606,36 @@ def test_guest_lean_status_is_read_only_and_reveals_no_host_details(
 def test_guest_engine_policy_defaults_and_environment_overrides(
     guest_console, monkeypatch: pytest.MonkeyPatch
 ):
-    # Guests may analyze by default (Ansatz Analyze, behind its own switch).
-    assert set(console.guest_engine_allowlist()) == {"kimi", "plain", "analyze"}
+    # Guests may analyze and make manuscripts readable by default (Ansatz
+    # Analyze and Ansatz Readability, each behind its own switch).
+    assert set(console.guest_engine_allowlist()) == {"kimi", "plain", "analyze", "readability"}
     assert console.guest_max_iterations() == 8
 
     monkeypatch.setenv("AGENT_MONITOR_GUEST_ENGINES", " plain, improof,ucla ")
     monkeypatch.setenv("AGENT_MONITOR_GUEST_MAX_ITERATIONS", "3")
-    assert set(console.guest_engine_allowlist()) == {"plain", "analyze"}
+    assert set(console.guest_engine_allowlist()) == {"plain", "analyze", "readability"}
     assert console.guest_max_iterations() == 3
 
     monkeypatch.setenv("PLAIN_CMD", "/usr/bin/false")
-    assert set(console.guest_engine_allowlist()) == {"analyze"}
+    assert set(console.guest_engine_allowlist()) == {"analyze", "readability"}
     assert console.guest_access_enabled() is True
-    # Analyze has its own guest switch (and kill switch, and command guard).
+    # Analyze has its own guest switch (and kill switch, and command guard);
+    # Readability's guest switch follows it unless it is set itself.
     monkeypatch.setenv("AGENT_MONITOR_ANALYZE_GUESTS", "0")
     assert set(console.guest_engine_allowlist()) == set()
     assert console.guest_access_enabled() is False
+    monkeypatch.setenv("AGENT_MONITOR_READABILITY_GUESTS", "1")
+    assert set(console.guest_engine_allowlist()) == {"readability"}
+    monkeypatch.delenv("AGENT_MONITOR_READABILITY_GUESTS")
     monkeypatch.delenv("AGENT_MONITOR_ANALYZE_GUESTS")
     monkeypatch.setenv("ANALYZE_CMD", "/usr/bin/false")
+    assert set(console.guest_engine_allowlist()) == {"readability"}
+    monkeypatch.setenv("READABILITY_CMD", "/usr/bin/false")
     assert set(console.guest_engine_allowlist()) == set()
     monkeypatch.delenv("ANALYZE_CMD")
+    monkeypatch.delenv("READABILITY_CMD")
     monkeypatch.setenv("AGENT_MONITOR_ANALYZE_ENABLED", "0")
+    monkeypatch.setenv("AGENT_MONITOR_READABILITY_ENABLED", "0")
     assert set(console.guest_engine_allowlist()) == set()
     assert console.guest_access_enabled() is False
     with pytest.raises(ValueError, match="PLAIN_CMD"):

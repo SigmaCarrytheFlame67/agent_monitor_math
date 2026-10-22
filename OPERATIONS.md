@@ -140,13 +140,17 @@ ceilings, so an environment value can only lower them.
 - A problem statement may be at most 44,000 bytes of UTF-8 text; larger ones
   are refused before a run slot or a sponsored credential is used.
 - Calls still in flight 15 s after `AGENT_MONITOR_CGM_MAX_SECONDS` are
-  abandoned. Stop sends SIGTERM: the runner abandons its in-flight calls,
-  publishes nothing and exits 143 (`kimi` and `math_harness` alike); any
-  other failure exits 1.
+  abandoned. Stop sends SIGTERM: the runner abandons its in-flight calls
+  (the console then ends their Claude Code or Codex processes), publishes
+  nothing and exits 143 (`kimi` and `math_harness` alike); any other
+  failure exits 1.
 - A run writes `proof.md` only when it publishes, so the derived-views
   pipeline (Lean and the DAGs) waits at least the run's outer watchdog, which
   follows `AGENT_MONITOR_CGM_MAX_SECONDS`, plus 300 s
   (`AGENT_MONITOR_AUTO_PIPELINE_TIMEOUT`, default 7200 s, only raises it).
+  That is a signed-in run's watchdog whatever the console's own
+  `AGENT_MONITOR_SPONSORED_KIMI` service switch; guest and sponsored runs
+  have shorter ones.
 - Every published run carries `math_harness/project/engine_receipt.json`.
   The current writer records receipt schema 3 (schema 4 for Max, below) with verification policy
   `solved-first-topological-waves-stop-on-target@1` (the first block, in the
@@ -235,6 +239,86 @@ ceilings, so an environment value can only lower them.
 - After deploying a change to `agent_monitor/kimi_k3.py`, restart
   `agent-monitor`: the console loads that module at start, and Formal/DAG and
   Lean calls keep their previous sponsored handling until the restart.
+- An accepted run's `proof.md` names each lemma by the label its proofs cite
+  it by (`## Lemma L1 · fact …`, `**Uses:** Lemma L1 (fact …)`; ties in the
+  order are broken by label, L2 before L10). The receipt records this as
+  `proof_rendering: verified-closure@2`; runs published earlier keep their
+  numbered `verified-closure@1` proof and attest as before.
+
+### Written proof (write-up)
+
+After an accepted run is published, a written-proof round turns the verified
+fact closure into one proof written for a reader (`agent_monitor/cgm/writeup.py`,
+prompt version `cgm-writeup@1`). A writer receives only the problem and the
+verified blocks (each statement and proof exactly as the verifier accepted
+it, in the worker's order, without fact ids) and writes a **Theorem**, any
+**Conventions** once, and the **Proof** in Markdown with LaTeX. An independent
+checker, the CGM verifier with no predecessors, then reads the problem and
+that text alone. A rejected text may be revised and checked again.
+
+- The write-up is `writeup.md` (a fixed header by status, then the model's
+  text) with its sidecar `math_harness/project/writeup.json`: status, the
+  generation it was written from (receipt binding, `proof.md` hash, target,
+  rendering), its own hash, the prompt hash, routes, call records, the check
+  and `certificate: false`. Neither is part of the engine receipt: `proof.md`,
+  the facts and attestation are unchanged, and the verified facts remain the
+  proof. Model-verifier acceptance of the write-up is not a certificate.
+- Status `accepted` (the last check passed), `rejected` (it found problems,
+  listed at the end of `writeup.md`) or `unchecked` (the check could not be
+  made). When the writer gives no usable text there is no write-up. Every
+  publication of a generation first removes the previous write-up, and the
+  console marks a write-up stale once `proof.md` or the receipt changed.
+- The round never fails or changes a published run: provider, budget and
+  format failures only degrade it (`writeup.json` and the run result list why).
+- Stop during the round ends only the round. Stop sends the runner SIGTERM
+  (see above): before its publication the run is stopped and nothing is
+  published; after it, the runner records the write-up as far as it got,
+  reports and exits 0, and the console records the run as finished (a
+  receipt written during the run is the evidence; the Stop itself is
+  recorded before the runner is signalled, so the run's outcome is the last
+  word) without starting queued follow-ups. Stop pressed again meanwhile
+  sends nothing more; a runner that
+  has not exited 30 s after the first is killed. The watchdog firing during
+  the round likewise leaves the run finished. A server restart during the
+  round marks the run interrupted, as for any running run: its `proof.md`
+  and receipt stay published and attest, and the write-up may be missing or
+  not checked.
+- The console decides per run: `AGENT_MONITOR_CGM_WRITEUP` (default on; `0`
+  turns the round off for every CGM run) and
+  `AGENT_MONITOR_CGM_WRITEUP_GUESTS` (default on; `0` turns it off for guest
+  and sponsored runs). The runner reads only the `AGENT_MONITOR_CGM_WRITEUP`
+  value jobs.py passes, and an unset value means off.
+
+| Variable | Signed-in default (range) | Guest, public, sponsored |
+|---|---|---|
+| `AGENT_MONITOR_CGM_WRITEUP_MAX_CALLS` (the round's own calls, retries included) | 6 (2–12) | 4 |
+| `AGENT_MONITOR_CGM_WRITEUP_MAX_SECONDS` (its own wall clock) | 1800, Max 3600 (120–3600) | 1200 |
+| `AGENT_MONITOR_CGM_WRITEUP_MAX_FIXES` (revisions of a rejected text) | 1 (0–2) | 0 |
+
+- The round runs on the run's route; in Max, Codex writes and revises and
+  Claude Code checks. Kimi writes at low effort under the 8192-token ceiling.
+  Claude Code calls use the candidate (writer), revision (fix) and critic
+  (check) timeouts.
+- The outer watchdog, a sponsored token's lifetime and the derived-views wait
+  add the round's `MAX_SECONDS` plus 60 s when it is on (Max: at least
+  14760 s), also on top of an operator's `AGENT_MONITOR_CLI_TIMEOUT` or
+  `AGENT_MONITOR_{KIMI,MATH_HARNESS}_TIMEOUT`. Those bound the run until it
+  publishes: a run that has not published by then is timed out as before,
+  and only a published run gets the round's allowance (not for Max, which
+  operator timeouts never cut short). A
+  sponsored run stays within the 6600 s cap: 2400 + 900 + 300 + 1200 + 60 s
+  at most.
+- Lean and the DAGs of a run that gets the round start once the run has
+  ended, as for a guest's run, not as soon as its `proof.md` is stable: the
+  round may still be calling the same Claude Code or Codex account, or the
+  sponsored pool. Until then those stages read "Waiting for the run's
+  written-proof round to end". Should the derived-views wait run out first,
+  they start from the published `proof.md` all the same.
+- Policy note for the owner: with the round on, a guest or sponsored run
+  whose proof is accepted makes up to 4 more Kimi calls (16 recorded calls
+  instead of 12, plus the run's shared six transport retries), counted
+  against the broker's per-token quota and `PUBLIC_KIMI_GATEWAY_CALLS_PER_HOUR`.
+  `AGENT_MONITOR_CGM_WRITEUP_GUESTS=0` keeps guests and sponsored runs at 12.
 
 ### Guest Formal/Lean and DAG actions
 
@@ -529,6 +613,173 @@ when the server offers it.
 | `AGENT_MONITOR_ANALYZE_CONCURRENCY` | 3 (sponsored and guest at most 2, subscriptions 1) |
 | `AGENT_MONITOR_ANALYZE_API_TIMEOUT` | 300 s (630 s on sponsored Kimi) |
 | `AGENT_MONITOR_ANALYZE_GITHUB_TOKEN` | unset |
+
+## Readability runs
+
+Readability rewrites an existing manuscript (a link, pasted text or uploads)
+so that a chosen audience can follow it, keeping every statement and
+argument, and checks each rewritten part against the original with an
+independent model call. The runner is
+`agent_monitor/runners/readability_runner.py`; it reads
+`readability/request.json` (written by `jobs.py` with
+`agent_monitor.readability.request`) and reuses Analyze's ingest, its
+sandboxed parsers and the same response-only turn machinery and routes. The
+console offers it as the fourth mode: `POST /api/runs` with
+`run_kind: "readability"` (engine `readability`, `modes: ["readability"]` in
+the listing, with a per-viewer `readability` policy).
+
+- **Request.** `{run_kind: "readability", engine: "readability", model,
+  auth_route, reasoning_effort, speed_mode, source: {url} | {text, format?} |
+  attachments: [{name, data}], readability: {audience: "research" |
+  "graduate" | "undergraduate", focus: "≤ 2,000 characters"}, project_id?,
+  project_task?}`. The sources follow Analyze's rules by role (guests:
+  arXiv, GitHub and openai/math links, a paste of at most 20,000 characters,
+  the text-only guest uploads; accounts also HTTPS PDF/TeX/zip links, pastes
+  of 400,000 characters and PDF or archive uploads). The run list shows
+  "Readability · <title>"; a project's task becomes the focus.
+- **Routes.**
+
+  | Role | Route | Parts / calls / wall clock |
+  |---|---|---|
+  | guest | sponsored Kimi K3 only | 6 / 16 / 2,400 s |
+  | member | sponsored Kimi K3, or its own Kimi key (Kimi K3 only; never a subscription or Max) | sponsored 12 / 30 / 3,600 s; own key 40 / 90 / 3,600 s |
+  | admin | also its own Kimi key, or a Codex or Claude Code account (response-only, tool-free, one call in flight) | 120 / 300 / 14,400 s |
+
+  On an API key Readability runs Kimi K3 only (another provider's model is
+  refused, by `start_job` and by the runner); Max is refused. A sponsored run
+  is also held to 150 calls and 5,400 s. Guests start one readability run
+  per hour (three per client network) on top of the guest run limits;
+  members count against the member run limits (2 at once, 12 per hour).
+  Policy note for the owner: a member's sponsored run may spend up to four
+  of its 30 calls on repairs (two parts rewritten again and re-checked);
+  guests' runs are never repaired.
+- **Sponsored capacity.** Readability shares Analyze's sponsored pool
+  (`AGENT_MONITOR_ANALYZE_SPONSORED_*`, the same daily count file): a run
+  holds the key `<run id>` and counts as one sponsored start. A question
+  holds `<run id>#ask` while it is answered but never uses up the
+  manuscript starts: it counts against the day's sponsored questions
+  (`asks` in the same file, guests at most half of them). Refusals name
+  Readability ("Sponsored Readability is busy …", "… at today's limit …",
+  "Sponsored questions are at today's limit …"). Credentials are issued
+  under the broker's `math_harness` scope.
+- **Stages.** 1 Ingest (`readability/source/`, `manuscript.json`,
+  `segments.json` as Analyze segments, and `original.txt`: the manuscript in
+  reading order; for TeX the root file with its `\input`/`\include`/`\subfile`
+  closure inlined, comments and `\iffalse` blocks removed, the body only; an
+  included file that is a document of its own, such as a subfile or a
+  standalone figure, gives its body only, and text after an
+  `\end{document}` is left out with a warning in `manuscript.json`, as is
+  any result the parser found outside the text that was read; Markdown and
+  text are segmented as Analyze does, in the same sandboxed child, and also
+  read a CGM run's verified fact closure (`proof.md` in any of its
+  renderings, also as copied from the console: one result per lemma and the
+  main theorem, dependencies from its **Uses:** lines, parser
+  `text-1+cgm-closure`) and Markdown headings that name a result
+  ("## Theorem 2.1", "### Lemma L2"); a text that is not clearly a closure,
+  such as one with a heading or a result of its own after it, is never read
+  as one), 2 Guide (one call: what the manuscript shows, its
+  key idea, roadmap, notation and terms, the role and importance of each
+  result, with its mathematics in `$...$`; on guest and sponsored runs it
+  runs at low effort and is asked to stay short; a guide that fails becomes
+  a deterministic outline), 3 Rewrite (one call per part, in waves; parts
+  follow top-level sections, and the pages of a PDF fill each part in turn,
+  at most 30,000 characters of source, 12,000 on guest and sponsored runs;
+  the bibliography is never rewritten; each rewrite gets the printed name
+  of every label its part cites, `<REFERENCES>`), 4 Check
+  (one independent call per rewritten part; a part with major problems is
+  rewritten once more and checked again, within the run's call cap: at most
+  two parts on a member's sponsored run, none on a guest's), 5 Publish (`readable.md`, `paper_map.json`, `notation.json`,
+  `guide.json`, `check.json`, and `receipt.json` written last). In
+  `readable.md` (and in answers) leftover LaTeX is written out: `\ref`,
+  `\eqref`, `\cref`, `\Cref`, `\autoref` and `\pageref` become the printed
+  name ("Section 3"; "Lemmas 3.4 and 3.5" in a list), or the label in
+  brackets when the parser does not know it. Equation labels are known only
+  where the same part tags the display (`\tag{2.1}\label{x}`: `\eqref{x}`
+  reads "(2.1)"); the parser numbers no equations. `\cite[x]{a,b}` becomes
+  "[a, b, x]" and `\label` is dropped; text-mode LaTeX a rewrite kept is
+  written as Markdown (a theorem-like environment opens with its printed
+  name in bold, a proof ends with ∎, lists keep the manuscript's labels,
+  `\emph`, `\section`, footnotes, TeX quotes, accents and dashes), and
+  each part and answer is then held to the parser's contract again (no line
+  opens a link definition, one of the runner's marks or a fence, and no raw
+  HTML outside math); each part's headings are shifted so
+  that its top one is `##`. A manuscript with no title of its own (pasted
+  without one, or headed only "Proof" or "Written proof", as Make readable
+  pastes a written proof) is named by the guide's title in `readable.md`,
+  the paper map and the run list. The receipt's `notes` say why the first reply
+  of a stage could not be read (the parser's message, or that the reply was
+  refused unread for its size or tool-call markup), which is what its format
+  reminder answered.
+- **Budget.** The plan keeps a check for every part it rewrites: parts past
+  the part cap or the call budget are not rewritten, and `readable.md` shows
+  them in their original form, marked; nothing is dropped silently. A
+  rewrite must carry one `[[result:<id>]]` anchor per result its part holds;
+  one that only misses an anchor is accepted after its format reminder and
+  marked as a coverage issue.
+- **Statuses.** Each part is `faithful`, `issues` (the check found problems
+  that change the meaning; `readable.md` opens the part with a
+  "⚠ Check" blockquote), `unchecked` or `not-rewritten`. The counts
+  (receipt `parts`, the run record's summary, the provenance note) cover the
+  parts meant to be rewritten; the bibliography, kept as in the original, is
+  counted apart as `kept`. A stop publishes the parts whose rewrite had
+  already come back, unchecked. The checks are a model's judgement: the
+  receipt says `certificate: false`, and `readable.md` opens with a
+  provenance note (which also says when the text was extracted from a PDF,
+  so formulas may be garbled).
+- **Run record.** `run_kind: "readability"` and `run["readability"]`
+  (`agent_monitor.readability.record.run_block`: source card, caps,
+  audience, focus, summary), plus `ask` (a question in flight), `asks` (the
+  last 50 with their answers), `asks_started` and `ask_usage`. Success is exit
+  0 with `readability/readable.md` and `readability/receipt.json`; nothing is
+  promoted to `proof.md`, no derived-views pipeline starts, the library and
+  DAG memory are never injected, and a readability run never becomes shared
+  DAG memory. Continue, chat, proof editing, Lean actions, model-built DAGs
+  and compilation (`/pdf`, `final.pdf`, `final_latex`) are refused.
+- **HTTP API.** `GET /api/run/<id>` carries `sandbox_preview` with
+  `kind: "readability"` (the readable version, or the progress notes while
+  it runs, the parts and their checks — `check[].issues[]` is `{severity,
+  location, problem, fix}`: the major issues are also marked in the text,
+  the minor ones are the part's check notes — notation, macros, `original_path`;
+  at most 400,000 characters of the readable version, cut before a part
+  with a note saying so, as in a shared link).
+  `GET /api/run/<id>/proof_graph?kind=paper-map` returns the paper map
+  (results with label, statement, section, importance 1-5, role and part;
+  dependencies with `kind` proof or statement and provenance ref, inferred or
+  model). The owner reads `readability/original.txt` and the stored source
+  through `/api/workspace/<id>/file`. A shared snapshot holds the readable
+  version without the parts shown in their original form, the paper map, the
+  notation and the check summary; never `readability/source/**` or the
+  original text.
+- **Questions.** `POST /api/run/<id>/readability/ask {question (≤ 2,000
+  characters), selection? (≤ 4,000), view: "readable" | "original",
+  node_id?}` answers in the background (202 `{ask_id}`) with one call
+  (stage `ask`) on the run's own route: `readability_runner.py --ask <id>`
+  reads `readability/asks/<id>.json` and writes `<id>.reply.json`. The
+  context is the part holding the selected passage (looked up in the view
+  it was selected in, then the other, ignoring Markdown marks, math
+  delimiters and whitespace; else the selected result's part, else the
+  guide alone). One question at a time per run;
+  guests 3 per run and 6 per hour (12 per client network), members 30 per
+  hour, administrators 120. Answers, like rewrites, are refused when they
+  carry raw HTML outside math.
+  Project members read the answers but may not ask. Each call is booked in
+  the usage ledger as stage `ask`; a question a restart left running becomes
+  `interrupted`, and an in-flight question defers an automatic deploy.
+- **Exit status.** 0 published, 2 configuration, 143 stopped (what had
+  settled is published), 1 failed (also when no part could be rewritten;
+  what exists is still published).
+
+| Variable | Default |
+|---|---|
+| `AGENT_MONITOR_READABILITY_ENABLED` | on |
+| `AGENT_MONITOR_READABILITY_GUESTS` | as `AGENT_MONITOR_ANALYZE_GUESTS` |
+| `READABILITY_CMD` | unset (an override removes Readability from guests and members) |
+| `AGENT_MONITOR_READABILITY_<PROFILE>_MAX_PARTS`, `_MAX_CALLS`, `_MAX_SECONDS` (`GUEST`, `MEMBER_SPONSORED`, `MEMBER_OWN_KEY`, `ADMIN`) | 6/16/2400, 12/30/3600, 40/90/3600, 120/300/14400 (ceilings 120/300/14400) |
+| `AGENT_MONITOR_READABILITY_CONCURRENCY` | 3 (sponsored and guest at most 2, subscriptions 1) |
+| `AGENT_MONITOR_READABILITY_API_TIMEOUT` | 300 s (630 s on sponsored Kimi) |
+| `AGENT_MONITOR_READABILITY_WATCHDOG_SECONDS` | set per run: its deadline + one call + 300 s |
+| `AGENT_MONITOR_READABILITY_SPONSORED_ASKS_PER_DAY` | 200 sponsored questions per UTC day (0 turns them off) |
+| `AGENT_MONITOR_READABILITY_GUEST_SPONSORED_ASKS_PER_DAY` | half of the above |
 
 ## Research atlas and shared memory
 

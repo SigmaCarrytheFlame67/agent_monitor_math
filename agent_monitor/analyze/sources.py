@@ -1240,10 +1240,14 @@ def guess_format(text: str, *, hint: str | None = None, suffix: str = "") -> str
         return "tex"
     if suffix in (".md", ".markdown"):
         return "md"
-    if re.search(r"\\(?:documentclass|begin\s*\{|section\*?\s*\{|newtheorem)", text):
+    if re.search(r"\\(?:documentclass|begin\s*\{document\}|section\*?\s*\{|newtheorem)", text):
         return "tex"
+    # Markdown with display environments in its math ("$$\\begin{aligned}...")
+    # is Markdown: read as TeX, its "%" would start comments.
     if re.search(r"(?m)^#{1,6} \S|\*\*(?:Theorem|Lemma|Proposition|Proof)", text):
         return "md"
+    if re.search(r"\\begin\s*\{", text):
+        return "tex"
     return "txt"
 
 

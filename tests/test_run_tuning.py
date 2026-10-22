@@ -423,8 +423,8 @@ class Gpt6RunTuningTests(unittest.TestCase):
     def test_settings_payload_names_the_harnesses_of_partial_options(self) -> None:
         astra = run_tuning.capabilities("gpt-6-astra", "api_key")
         sol = run_tuning.capabilities("gpt-6-sol", "api_key")
-        # Ansatz Analyze applies a profile exactly as math_harness does.
-        responses = ["analyze", "hermes", "math_harness", "metaharness", "plain"]
+        # Ansatz Analyze and Ansatz Readability apply a profile exactly as math_harness does.
+        responses = ["analyze", "hermes", "math_harness", "metaharness", "plain", "readability"]
         speeds = {item["id"]: item for item in astra["speed"]}
         none = next(item for item in sol["reasoning"] if item["id"] == "none")
         self.assertEqual(speeds["ultrafast"]["engines"], responses)
