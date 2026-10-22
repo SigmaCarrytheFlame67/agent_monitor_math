@@ -585,6 +585,31 @@ def _terminate_registered_proc(proc: Any, *, force: bool = True) -> None:
         pass
 
 
+def _stop_cgm_runner(proc: Any) -> None:
+    """SIGTERM an Ansatz CGM runner, then the processes of its model calls.
+
+    The runner takes the request first (its handler only sets an event), so
+    a call the stop cuts short never reads to it as a provider failure to
+    carry on from (publishing without its curator, say).  Those processes
+    (Claude Code, Codex) run in sessions of their own and are found through
+    the runner, which lives on until its coordinator next looks, so they are
+    signalled at once.  The runner gets this one SIGTERM: a second one after
+    its publication could end it before its report.
+    """
+    from agent_monitor.process_control import terminate_descendants
+
+    try:
+        pid = int(proc.pid)
+        # As _terminate_registered_proc: only a runner's own group.
+        if os.getpgid(pid) == pid:
+            os.killpg(pid, signal.SIGTERM)
+        else:
+            proc.terminate()
+    except (AttributeError, OSError, ProcessLookupError, TypeError, ValueError):
+        return
+    terminate_descendants(pid, force=False)
+
+
 def _register_proc(run_id: str, proc: Any) -> None:
     with _LOCK:
         _PROCS[run_id] = proc
@@ -4644,6 +4669,9 @@ def _apply_math_harness_iteration_env(
 
 # Set by _run_cli_engine on a CGM run the user stopped after it published.
 _PUBLISHED_BEFORE_STOP = "published_before_stop"
+# How long a CLI runner that Stop or the watchdog signalled may take to exit
+# before _run_cli_engine kills its group.
+_RUNNER_SETTLE_SECONDS = 30
 
 
 def _published_before_stop(result: dict[str, Any]) -> bool:
@@ -5076,6 +5104,10 @@ def _run_cli_engine(
 
     def _terminate_group(*, force: bool = False) -> None:
         """Stop this wrapper and its grandchildren, without touching other runs."""
+        if cgm_run and not force:
+            # The watchdog stops a CGM runner as Stop does.
+            _stop_cgm_runner(proc)
+            return
         _terminate_registered_proc(proc, force=force)
         # The leader may have exited while a tool still holds the output pipe.
         # This Popen always owns a fresh session, so its original PGID is safe.
@@ -5159,8 +5191,12 @@ def _run_cli_engine(
             if now - last_flush > 2.0:
                 _flush(parser.output())
                 last_flush = now
-        settle = time.time() + 30
+        settle = time.time() + _RUNNER_SETTLE_SECONDS
         if cgm_run and (stopped or timed_out):
+            if stopped:
+                # A progress write above may have crossed stop_run's: the
+                # record reads "stopped" while the runner winds down.
+                _flush(parser.output(), status="stopped")
             # On SIGTERM a CGM runner exits 143 before its publication, and
             # after it ends its written-proof round and reports the run.
             _drain_output(settle)
@@ -7654,7 +7690,8 @@ def stop_run(run_id: str) -> dict[str, Any]:
 
     An Analyze or Readability runner (or a re-check, or a question) gets
     SIGTERM first: it publishes what had settled (a re-check restores the
-    node) and exits 143.  So does an Ansatz CGM runner: before its
+    node) and exits 143.  So does an Ansatz CGM runner (signalled before the
+    processes of its model calls, see _stop_cgm_runner): before its
     publication it publishes nothing and exits 143; after it, the stop ends
     only its written-proof round and the run is recorded as finished.  The
     worker kills a group that does not exit within 30 s.
@@ -7668,7 +7705,10 @@ def stop_run(run_id: str) -> dict[str, Any]:
         or active.get("kind") in ("recheck", "ask")
     )
     if proc is not None:
-        _terminate_registered_proc(proc, force=not graceful)
+        if graceful and active.get("engine") in _CGM_ENGINES:
+            _stop_cgm_runner(proc)
+        else:
+            _terminate_registered_proc(proc, force=not graceful)
     if not active:
         # Nothing runs here: a re-check (or a question) left "running" by a
         # lost worker is repaired so the run is usable again.
