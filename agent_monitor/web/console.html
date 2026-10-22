@@ -4603,15 +4603,163 @@ function liveSandboxText(run){
   if(writes.length) return writes.join('\n\n---\n\n');
   return longest;
 }
+/* Math is found by scanners that resume where they stopped, so a text costs
+   linear time. The regular expressions they stand for (quoted below) took
+   quadratic time on unclosed \[ or \( and exponential time on a "$" before a
+   long run of backslashes, so hostile text could hang the page; on any text
+   the scanners find the same math. */
+// The first `needle` at or after a position, for positions that only grow.
+function mathNextIndex(s,needle){
+  let found=-2;
+  return from=>{ if(found!==-1&&found<from)found=s.indexOf(needle,from); return found; };
+}
+// `open`…`close` with at least `inside` characters between, closed as early
+// as possible: /\\\[[\s\S]+?\\\]/ has `inside` 1, /\\\[[\s\S]*?\\\]/ 0.
+function mathBetween(s,open,close,inside){
+  const opener=mathNextIndex(s,open), closer=mathNextIndex(s,close);
+  return from=>{
+    const start=opener(from); if(start<0)return null;
+    const end=closer(start+open.length+inside);
+    return end<0?null:[start,end+close.length];
+  };
+}
+// /\\begin\{equation\*?\}[\s\S]*?\\end\{equation\*?\}/ for one environment `name`.
+function mathEnvironment(s,name){
+  const opener=new RegExp('\\\\begin\\{'+name+'\\*?\\}','g'), plain='\\end{'+name+'}', starred='\\end{'+name+'*}';
+  const plainAt=mathNextIndex(s,plain), starredAt=mathNextIndex(s,starred);
+  return from=>{
+    opener.lastIndex=from;
+    const match=opener.exec(s); if(!match)return null;
+    const a=plainAt(opener.lastIndex), b=starredAt(opener.lastIndex);
+    if(a<0&&b<0)return null;
+    return a>=0&&(b<0||a<b)?[match.index,a+plain.length]:[match.index,b+starred.length];
+  };
+}
+// /\$[^$\n]+?\$/: within a line, the next "$" closes it.
+function mathDollarLine(s){
+  return from=>{
+    for(let start=s.indexOf('$',from);start>=0;){
+      const first=s[start+1];
+      if(first===undefined)return null;
+      if(first==='$'||first==='\n'){ start=s.indexOf('$',start+1); continue; }
+      let end=start+2;
+      while(end<s.length&&s[end]!=='$'&&s[end]!=='\n')end++;
+      if(s[end]==='$')return [start,end+1];
+      start=s.indexOf('$',end);
+    }
+    return null;
+  };
+}
+// /\$(?:\\.|[^$\\])+\$/: a "$" closes it unless a backslash escapes it; a
+// backslash takes the next character with it (never a line break). There is
+// one reading only, so where each position leads is kept for every later "$"
+// (an escaped one inside a formula) that reaches it.
+function mathEscapedDollar(s){
+  const closing=new Int32Array(s.length+1).fill(-2);
+  // The closing "$" reached from `from`, after the first character; -1 if none.
+  const close=from=>{
+    const path=[];
+    let at=from, end=-1;
+    for(;;){
+      if(closing[at]!==-2){ end=closing[at]; break; }
+      path.push(at);
+      if(s[at]==='$'){ end=at; break; }
+      if(s[at]==='\\'){ if(at+1<s.length&&!'\n\r\u2028\u2029'.includes(s[at+1])){ at+=2; continue; } break; }
+      if(at>=s.length)break;
+      at++;
+    }
+    path.forEach(position=>{ closing[position]=end; });
+    return end;
+  };
+  return from=>{
+    for(let start=s.indexOf('$',from);start>=0;start=s.indexOf('$',start+1)){
+      const first=s[start+1];
+      if(first===undefined||first==='$')continue;
+      if(first==='\\'&&(start+2>=s.length||'\n\r\u2028\u2029'.includes(s[start+2])))continue;
+      const end=close(start+(first==='\\'?3:2));
+      if(end>=0)return [start,end+1];
+    }
+    return null;
+  };
+}
+// The math the `kinds` find in `s`, as one regular expression with those
+// alternatives finds it: from each position on, the match that starts first
+// (the earlier kind on a tie), then on from its end.
+function mathSpans(s,kinds){
+  const spans=[], found=kinds.map(()=>null);
+  for(let at=0;;){
+    let best=-1;
+    kinds.forEach((kind,index)=>{
+      if(found[index]&&found[index][0]<at)found[index]=null;
+      if(found[index]===null)found[index]=kind(at)||false;
+      if(found[index]&&(best<0||found[index][0]<found[best][0]))best=index;
+    });
+    if(best<0)return spans;
+    spans.push(found[best]); at=found[best][1];
+  }
+}
+// `s` split as s.split(/(…)/) splits it on those alternatives: prose and math
+// in turn, the math at odd places. `kinds(s)` lists the scanners.
+function splitMath(s,kinds){
+  const parts=[]; let at=0;
+  for(const [start,end] of mathSpans(s,kinds(s))){ parts.push(s.slice(at,start),s.slice(start,end)); at=end; }
+  parts.push(s.slice(at));
+  return parts;
+}
+// `s` with what one `kind` finds set aside by `hold`.
+function holdMath(s,kind,hold){
+  let out='', at=0;
+  for(const [start,end] of mathSpans(s,[kind])){ out+=s.slice(at,start)+hold(s.slice(start,end)); at=end; }
+  return out+s.slice(at);
+}
+// Math is set aside as @@MATHn@@ before Markdown is read (and put back
+// after): $$…$$, then \[…\], then \(…\), then $…$ within a line, each pass
+// over the last: /\$\$[\s\S]+?\$\$/g, /\\\[[\s\S]+?\\\]/g, /\\\([\s\S]+?\\\)/g,
+// then /(^|[^\\$])(\$(?!\$)(?:\\.|[^$\n])+\$)/g.
 function stashMath(src){
   const slots=[];
   const hold=m=>{ slots.push(m); return '@@MATH'+ (slots.length-1) +'@@'; };
   let s=String(src||'');
-  s=s.replace(/\$\$[\s\S]+?\$\$/g,hold);
-  s=s.replace(/\\\[[\s\S]+?\\\]/g,hold);
-  s=s.replace(/\\\([\s\S]+?\\\)/g,hold);
-  s=s.replace(/(^|[^\\$])(\$(?!\$)(?:\\.|[^$\n])+\$)/g,(m,pre,eq)=>pre+hold(eq));
+  s=holdMath(s,mathBetween(s,'$$','$$',1),hold);
+  s=holdMath(s,mathBetween(s,'\\[','\\]',1),hold);
+  s=holdMath(s,mathBetween(s,'\\(','\\)',1),hold);
+  s=stashInlineMath(s,hold);
   return {s,slots};
+}
+// $…$ opened by a "$" that starts the text or follows a character other than
+// \ and $ (that character stays text), and is not followed by another "$".
+function stashInlineMath(s,hold){
+  let out='', at=0, dead=null;
+  for(let open=s.indexOf('$');open>=0;open=s.indexOf('$',open+1)){
+    if(open>0&&(open-1<at||s[open-1]==='\\'||s[open-1]==='$'))continue;
+    dead=dead||new Uint8Array(s.length+1);
+    const end=inlineMathEnd(s,open,dead);
+    if(end<0)continue;
+    out+=s.slice(at,open)+hold(s.slice(open,end+1));
+    at=end+1; open=end;
+  }
+  return out+s.slice(at);
+}
+// The "$" that closes the formula opened at `open`, as (?:\\.|[^$\n])+\$
+// finds it: a backslash either takes the next character with it (never a
+// line break) or stands alone, and the pattern backtracks through both
+// readings, escape first. This walks the same choices depth first but
+// remembers each position from which no "$" can be reached (`dead`, shared by
+// the whole text), so no position is explored twice. -1 when there is none.
+function inlineMathEnd(s,open,dead){
+  const first=open+1;
+  if(first>=s.length||s[first]==='$'||s[first]==='\n')return -1;
+  const stack=[first], tried=[0];
+  while(stack.length){
+    const top=stack.length-1, at=stack[top];
+    if(s[at]==='$')return at;
+    let next=-1;
+    if(tried[top]===0){ tried[top]=1; if(s[at]==='\\'&&at+1<s.length&&!'\n\r\u2028\u2029'.includes(s[at+1]))next=at+2; }
+    if(next<0&&tried[top]===1){ tried[top]=2; if(at<s.length&&s[at]!=='\n')next=at+1; }
+    if(next<0){ dead[at]=1; stack.pop(); tried.pop(); }
+    else if(!dead[next]){ stack.push(next); tried.push(0); }
+  }
+  return -1;
 }
 const SAFE_MARKDOWN_TAGS=new Set([
   'A','BLOCKQUOTE','BR','CODE','DEL','EM','H1','H2','H3','H4','H5','H6','HR',
@@ -8090,11 +8238,12 @@ function analysisResolveRefs(text,refLabels){
 // Model-written prose (findings, notes, progress): accents and references
 // read as text outside math; nothing else is changed (in model prose "~"
 // can mean "of the order of", so only ties are spaces).
-const ANALYZE_MATH_SPLIT=/(\$\$[\s\S]+?\$\$|\$[^$\n]+?\$|\\\([\s\S]+?\\\)|\\\[[\s\S]+?\\\])/;
+// The math of /(\$\$[\s\S]+?\$\$|\$[^$\n]+?\$|\\\([\s\S]+?\\\)|\\\[[\s\S]+?\\\])/ (see mathSpans).
+const ANALYZE_MATH_KINDS=s=>[mathBetween(s,'$$','$$',1),mathDollarLine(s),mathBetween(s,'\\(','\\)',1),mathBetween(s,'\\[','\\]',1)];
 function analysisModelProse(text,refLabels){
   const value=String(text??'');
   if(!/[\\~]/.test(value))return value;
-  return value.split(ANALYZE_MATH_SPLIT).map((part,index)=>index%2?part:analysisResolveRefs(analysisTextAccents(part),refLabels)).join('');
+  return splitMath(value,ANALYZE_MATH_KINDS).map((part,index)=>index%2?part:analysisResolveRefs(analysisTextAccents(part),refLabels)).join('');
 }
 // TeX text accents outside math read as letters (Erd\H{o}s → Erdős), as in
 // the report; a bare letter after an accent counts only where that accent is
@@ -8105,7 +8254,7 @@ const ANALYZE_TEXT_LETTERS={o:'ø',O:'Ø',ss:'ß',ae:'æ',AE:'Æ',oe:'œ',OE:'Œ
 function analysisTextAccents(text){
   const value=String(text??'');
   if(!value.includes('\\'))return value;
-  return value.split(/(\$\$[\s\S]+?\$\$|\$[^$\n]+?\$|\\\([\s\S]+?\\\)|\\\[[\s\S]+?\\\])/).map((part,index)=>index%2?part:part
+  return splitMath(value,ANALYZE_MATH_KINDS).map((part,index)=>index%2?part:part
     .replace(/(\{)?\\(?:(['`^"~=.])|([Hcvurk])(?![A-Za-z]))(?:\s*\{\s*(\\[ij](?![A-Za-z])|[A-Za-z])\s*\}|\s*(\\[ij](?![A-Za-z])|[A-Za-z]))(\})?/g,(match,open,sym,letter,braced,bare,close)=>{
       const accent=sym||letter, base=braced||bare;
       if(bare&&sym&&!ANALYZE_BARE_ACCENTED[sym].includes(bare))return match;
@@ -8115,11 +8264,14 @@ function analysisTextAccents(text){
     .replace(/\{\\(o|O|ss|ae|AE|oe|OE|aa|AA|l|L)\}|\\(o|O|ss|ae|AE|oe|OE|aa|AA|l|L)(?:\{\}| (?=[A-Za-z]))/g,(_,a,b)=>ANALYZE_TEXT_LETTERS[a||b])
   ).join('');
 }
+// The math of /(\\begin\{equation\*?\}[\s\S]*?\\end\{equation\*?\}|<align, alignat and gather alike>|\$\$[\s\S]*?\$\$|\\\[[\s\S]*?\\\]|\\\([\s\S]*?\\\)|\$(?:\\.|[^$\\])+\$)/.
+const ANALYZE_STATEMENT_MATH_KINDS=s=>[...['equation','align','alignat','gather'].map(name=>mathEnvironment(s,name)),
+  mathBetween(s,'$$','$$',0),mathBetween(s,'\\[','\\]',0),mathBetween(s,'\\(','\\)',0),mathEscapedDollar(s)];
 // Statements as readable prose: \ref becomes the result's label and simple
 // text markup is dropped; math is left as written for KaTeX.
 function analysisProse(text,refLabels){
   // Display environments are math too: their \\ row breaks must survive.
-  const parts=String(text||'').split(/(\\begin\{equation\*?\}[\s\S]*?\\end\{equation\*?\}|\\begin\{align\*?\}[\s\S]*?\\end\{align\*?\}|\\begin\{alignat\*?\}[\s\S]*?\\end\{alignat\*?\}|\\begin\{gather\*?\}[\s\S]*?\\end\{gather\*?\}|\$\$[\s\S]*?\$\$|\\\[[\s\S]*?\\\]|\\\([\s\S]*?\\\)|\$(?:\\.|[^$\\])+\$)/);
+  const parts=splitMath(String(text||''),ANALYZE_STATEMENT_MATH_KINDS);
   // KaTeX would number these itself, never with the manuscript's numbers: show them unnumbered.
   return parts.map((part,index)=>index%2?part.replace(/\\(begin|end)\{(equation|align|alignat|gather)\}/g,'\\$1{$2*}'):analysisResolveRefs(analysisTextAccents(part),refLabels)
     .replace(/\\(?:emph|textbf|textit|textsc|textrm|textsf|texttt|text|mbox)\{([^{}]*)\}/g,'$1')

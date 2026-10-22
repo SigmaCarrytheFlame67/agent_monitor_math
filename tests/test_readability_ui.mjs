@@ -88,10 +88,14 @@ function constant(name) {
 }
 const plain = value => value === undefined ? undefined : JSON.parse(JSON.stringify(value))
 // `raw` hands back the result as it is (a DOM node, a function returning one).
+// The console's math scanners: its Markdown and prose helpers find math with them.
+const MATH_SCANNERS = ['mathNextIndex', 'mathBetween', 'mathEnvironment', 'mathDollarLine', 'mathEscapedDollar', 'mathSpans', 'splitMath', 'holdMath']
+const MATH_KINDS = ['ANALYZE_MATH_KINDS', 'ANALYZE_STATEMENT_MATH_KINDS']
 function run(names, consts, prelude, body, { marked = false, context = {}, raw = false } = {}) {
   const sandbox = vm.createContext({ console, URL, Date, ...context })
   if (marked) vm.runInContext(markedSource, sandbox)
-  const code = [prelude, ...consts.map(constant), ...names.map(fn), body].join('\n')
+  const code = [prelude, ...consts.map(constant), ...MATH_KINDS.filter(name => !consts.includes(name)).map(constant),
+    ...names.map(fn), ...MATH_SCANNERS.filter(name => !names.includes(name)).map(fn), body].join('\n')
   const result = vm.runInContext(code, sandbox)
   if (raw) return result
   return typeof result === 'function' ? (...args) => plain(result(...args)) : plain(result)
@@ -240,7 +244,7 @@ function miniDocument() {
   return { document, assigned }
 }
 // The console's own sanitizer and its helpers, and the readable-Markdown renderer, for the vm harness.
-const SANITIZER = ['escapeHtml', 'stashMath', 'safeMarkdownHref', 'sanitizeRenderedHtml', 'analyzeEl']
+const SANITIZER = ['escapeHtml', 'stashMath', 'stashInlineMath', 'inlineMathEnd', 'safeMarkdownHref', 'sanitizeRenderedHtml', 'analyzeEl']
 const READABLE = ['readableMarkdown', 'renderReadableMarkdown', 'readableTextNodes', 'placeReadableMarks', 'readableAnchorNode', 'readableRefNode']
 
 test('Readability is the fourth mode: its own composer, a locked engine chip and "Make readable"', () => {
