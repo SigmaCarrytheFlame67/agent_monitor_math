@@ -123,6 +123,7 @@ class Elem {
     return event
   }
   focus() { this.ownerDocument.activeElement = this }
+  setSelectionRange() {}
   querySelectorAll(selector) { return descendants(this).filter(el => matches(el, selector)) }
   querySelector(selector) { return this.querySelectorAll(selector)[0] || null }
 }
@@ -213,33 +214,42 @@ const switchWiring = () => sourceFrom(script.indexOf(`document.querySelectorAll(
 const CONSOLE_FUNCTIONS = [
   'escapeHtml', 'stashMath', 'safeMarkdownHref', 'sanitizeRenderedHtml', 'mdToHtml', 'unwrapProofMarkdownFence',
   'normalizeProofMarkdown', 'splitProofs', 'problemItems', 'problemCardHtml', 'liveSandboxText', 'isAnalysisRun',
-  'syncSandboxEditor', 'applySandboxPreview', 'runWriteup', 'proofDocShown', 'proofDocLabel', 'setProofDocDownload',
-  'syncProofDocSwitch', 'chooseProofDoc', 'writeupBannerHtml', 'closureCitedLemmas', 'renderMarkdownIntoView',
-  'showProofMd', 'refreshProofPreview',
+  'syncSandboxEditor', 'beginSandboxEdit', 'saveSandboxProof', 'finishSandboxEdit', 'applySandboxPreview', 'runWriteup',
+  'proofDocShown', 'showProofDocFile', 'syncProofDocSwitch', 'chooseProofDoc', 'writeupBannerHtml', 'closureCitedLemmas',
+  'renderMarkdownIntoView', 'showProofMd', 'refreshProofPreview',
 ]
-// The proof toolbar exactly as the page has it, plus the Sandbox body.
+// The proof toolbar and the Sandbox body (with its proof.md editor) exactly as the page has them.
 const TOOLBAR = consoleHtml.slice(consoleHtml.indexOf('<div class="proof-toolbar">'), consoleHtml.indexOf('<div class="prompt-strip'))
-const SANDBOX_BODY = '<div class="proof-body" id="proof-body"><div id="pdf-pages"></div><div id="md-view" class="md-view"></div></div><textarea id="notion-editor"></textarea>'
+const SANDBOX_BODY = consoleHtml.slice(consoleHtml.indexOf('<div class="proof-body" id="proof-body">'), consoleHtml.indexOf('<div class="cite-strip'))
 
 function consolePage() {
   const document = createDocument(TOOLBAR + SANDBOX_BODY)
-  const calls = { math: 0, coverage: 0, downloads: [], analysis: 0, fetches: [] }
+  const calls = { math: 0, coverage: 0, downloads: [], analysis: 0, fetches: [], saves: [], status: [] }
+  // proof.md on the server; its revision is "rev-<mtime>".
   const files = { proof: CLOSURE, mtime: 1 }
-  const context = vm.createContext({ console, URL, document, calls, files })
+  const context = vm.createContext({ console, URL, document, calls, files, setTimeout, clearTimeout })
   context.window = context
   context.location = { href: 'https://ansatze.test/console' }
   vm.runInContext(markedJs, context)
   vm.runInContext([
     'const $=id=>document.getElementById(id);',
-    "let runId='r1', lastSandboxRun=null, sandboxEditing=false, sandboxDirty=false, sandboxConflict=false, sandboxSaving=false;",
+    "let runId='r1', lastSandboxRun=null, sandboxEditing=false, sandboxDirty=false, sandboxConflict=false, sandboxSaving=false, sandboxSaveAgain=false, sandboxSaveTimer=null;",
     "let sandboxText='', sandboxRevision='missing', sandboxServerRevision='', lastProofMtime=0;",
     'function renderMathIn(){ calls.math++; }',
     'function applyFormalCoverage(){ calls.coverage++; }',
     'function setDownloadUrl(url,name){ calls.downloads.push([url,name]); }',
     'function applyAnalysisPreview(){ calls.analysis++; return true; }',
-    'function setProofEmpty(){} function renderCitations(){} function editorStatus(){} function resizeSandboxEditor(){} function showProofPdf(){}',
-    `async function fetch(url){
+    'function editorStatus(message){ calls.status.push(message); }',
+    'function setProofEmpty(){} function renderCitations(){} function resizeSandboxEditor(){} function showProofPdf(){}',
+    `async function fetch(url,init){
       calls.fetches.push(url);
+      if(init?.method==='POST'){
+        // As console_server._save_sandbox_proof: an edit of an older proof.md is a conflict unless forced.
+        const body=JSON.parse(init.body), current='rev-'+files.mtime; calls.saves.push(body);
+        if(body.expected_revision&&body.expected_revision!==current&&!body.force)return {ok:false,status:409,json:async()=>({error:'proof.md changed since editing began',conflict:true,revision:current,content:files.proof})};
+        files.proof=body.content; files.mtime++;
+        return {ok:true,status:200,json:async()=>({ok:true,path:'proof.md',revision:'rev-'+files.mtime,mtime:files.mtime,size:files.proof.length})};
+      }
       if(/\\/files$/.test(url))return {ok:true,json:async()=>({files:[{path:'proof.md',mtime:files.mtime,size:files.proof.length}]})};
       if(url.includes('path=proof.md'))return {ok:true,text:async()=>JSON.stringify({path:'proof.md',content:files.proof,revision:'rev-'+files.mtime})};
       throw new Error('unexpected fetch '+url);
@@ -265,10 +275,11 @@ function consolePage() {
   })
   return { context, document, calls, files, $, radio, state, run: code => vm.runInContext(code, context) }
 }
-const cgmRun = (writeup, extra = {}) => ({
+// A run record as /api/run returns it; `proof` replaces fields of its proof.md preview.
+const cgmRun = (writeup, extra = {}, proof = {}) => ({
   run_id: 'r1', status: 'finished', engine: 'kimi', problem_text: 'Prove that for every natural number n, 1 + 3 + ... + (2n-1) = n^2.',
   proof_coverage: { source_revision: 'lean-1', items: [] },
-  sandbox_preview: { text: CLOSURE, source: 'proof.md', has_proof_md: true, has_proof_tex: false, revision: 'rev-1', mtime: 1, ...(writeup === undefined ? {} : { writeup }) },
+  sandbox_preview: { text: CLOSURE, source: 'proof.md', has_proof_md: true, has_proof_tex: false, revision: 'rev-1', mtime: 1, ...proof, ...(writeup === undefined ? {} : { writeup }) },
   ...extra,
 })
 const writeupBlock = (status, fresh = true, text = WRITEUP) => ({
@@ -335,16 +346,14 @@ test("a reader's choice survives polls and proof.md refreshes, per run", async (
   let now = state()
   assert.deepEqual([now.checked, now.label, now.download, now.editHidden, now.banner], [['facts'], 'proof.md', 'proof.md', false, null])
   assert.match(now.doc, /Lemma 3 · fact a8021b90635eb4e2/)
-  // A later poll of the same run, then a forced refresh of proof.md.
+  // A later poll of the same run, then a forced refresh that reads proof.md again.
   context.applySandboxPreview({ ...cgmRun(writeupBlock('accepted')), updated_at: 'later' })
   assert.deepEqual(state().checked, ['facts'])
-  page.files.mtime = 2
   assert.equal(await context.refreshProofPreview(true, run), true)
   now = state()
   assert.deepEqual([now.checked, now.label, now.download, now.banner], [['facts'], 'proof.md', 'proof.md', null])
 
   context.chooseProofDoc('writeup')
-  page.files.mtime = 3
   await context.refreshProofPreview(true, run)
   now = state()
   assert.deepEqual([now.checked, now.label, now.download, now.editHidden, now.banner], [['writeup'], 'writeup.md', 'writeup.md', true, BANNER.accepted])
@@ -420,20 +429,119 @@ test('the write-up is rendered through the sanitizer, gets no Lean marks, and is
   assert.equal($('md-view').querySelectorAll('.writeup-banner p').length, 2)
 })
 
-test('the switch waits while proof.md is being edited, and Edit returns with the facts', () => {
+test('the switch waits while proof.md is being edited, and Edit returns with the facts', async () => {
   const page = consolePage(), { context, state, radio } = page
   context.applySandboxPreview(cgmRun(writeupBlock('rejected')))
   assert.equal(state().editHidden, false)
-  page.run('sandboxEditing=true; syncSandboxEditor();')
+  context.beginSandboxEdit()
   assert.deepEqual([radio('writeup').disabled, radio('facts').disabled], [true, true])
   context.chooseProofDoc('writeup')
   assert.deepEqual(state().checked, ['facts'])
-  page.run('sandboxEditing=false; syncSandboxEditor();')
+  await context.finishSandboxEdit()
   assert.deepEqual([radio('writeup').disabled, radio('facts').disabled], [false, false])
   context.chooseProofDoc('writeup')
   assert.deepEqual([state().checked, state().editHidden], [['writeup'], true])
   context.chooseProofDoc('facts')
   assert.equal(state().editHidden, false)
+})
+
+test('an edit saved on a finished run survives the switch, and the write-up then reads as stale', async () => {
+  const page = consolePage(), { context, state, files, calls, $, radio } = page
+  // The last record of a finished run: it is no longer polled, so it keeps the proof.md before the edit.
+  const run = cgmRun(writeupBlock('accepted'))
+  context.applySandboxPreview(run)
+  await context.refreshProofPreview(true, run)
+  context.chooseProofDoc('facts')
+  context.beginSandboxEdit()
+  const editor = $('notion-editor')
+  editor.value = files.proof.replace('# Proof', '# Proof\n\nFirst edit.')
+  page.run('sandboxDirty=true')
+  await context.finishSandboxEdit()
+  assert.deepEqual(calls.saves.map(save => save.expected_revision), ['rev-1'])
+  let now = state()
+  assert.deepEqual([now.checked, now.label, now.download, now.banner], [['facts'], 'proof.md', 'proof.md', null])
+  assert.match(now.doc, /First edit\./)
+  // The record still calls the write-up fresh, but it was written for the proof.md this edit replaced.
+  assert.equal(radio('writeup').title, BANNER.accepted + ' ' + STALE)
+
+  context.chooseProofDoc('writeup')
+  now = state()
+  assert.deepEqual($('md-view').querySelectorAll('.writeup-banner p').map(p => p.textContent), [BANNER.accepted, STALE])
+  assert.deepEqual([now.label, now.download], ['writeup.md', 'writeup.md'])
+  // Back on the facts, the Sandbox still holds the saved edit and its revision.
+  context.chooseProofDoc('facts')
+  assert.match(state().doc, /First edit\./)
+  assert.deepEqual([page.run('sandboxRevision'), page.run('sandboxText')], ['rev-2', files.proof])
+
+  // So the next edit starts from it and saves without a conflict.
+  context.beginSandboxEdit()
+  assert.match(editor.value, /First edit\./)
+  editor.value += '\nSecond edit.\n'
+  page.run('sandboxDirty=true')
+  assert.equal(await context.saveSandboxProof(false), true)
+  assert.equal(page.run('sandboxConflict'), false)
+  assert.deepEqual(calls.saves.map(save => [save.expected_revision, save.force]), [['rev-1', false], ['rev-2', false]])
+  assert.match(files.proof, /First edit\.[\s\S]*Second edit\./)
+  assert.ok(!calls.status.includes('New engine version — review or overwrite'), calls.status.join(' | '))
+})
+
+test('a write-up that lands while proof.md is in the editor waits behind the facts', async () => {
+  const page = consolePage(), { context, state, $, radio } = page
+  // The write-up round runs after the run published proof.md, so Edit is offered meanwhile.
+  context.applySandboxPreview(cgmRun(undefined, { status: 'running' }))
+  context.beginSandboxEdit()
+  context.applySandboxPreview(cgmRun(writeupBlock('accepted'), { status: 'running' }))
+  let now = state()
+  assert.deepEqual([now.switchHidden, now.checked, now.chip, now.label, now.download], [false, ['facts'], 'accepted', 'proof.md · live', 'proof.md'])
+  assert.deepEqual([radio('writeup').disabled, $('notion-editor-wrap').hidden], [true, false])
+  // Done returns to the proof.md that was open in the editor.
+  await context.finishSandboxEdit()
+  now = state()
+  assert.deepEqual([now.checked, now.label, now.download, now.banner, radio('writeup').disabled], [['facts'], 'proof.md · live', 'proof.md', null, false])
+  assert.match(now.doc, /Lemma 3 · fact a8021b90635eb4e2/)
+  // Nothing was saved, so the write-up is still fresh for this proof.md.
+  context.chooseProofDoc('writeup')
+  assert.equal(state().banner, BANNER.accepted)
+})
+
+test('a proof.md newer than the run record leaves the write-up stale until a record judges that proof.md', async () => {
+  const page = consolePage(), { context, state, files, radio } = page
+  const run = cgmRun(writeupBlock('accepted'))
+  context.applySandboxPreview(run)
+  assert.equal(state().label, 'writeup.md')
+  // Saved from another tab after this record was made: the refresh reads it.
+  files.proof = CLOSURE.replace('# Proof', '# Proof\n\nEdited elsewhere.')
+  files.mtime = 2
+  await context.refreshProofPreview(true, run)
+  let now = state()
+  assert.deepEqual([now.checked, now.label, now.download, now.banner], [['facts'], 'proof.md', 'proof.md', null])
+  assert.match(now.doc, /Edited elsewhere\./)
+  assert.equal(radio('writeup').title, BANNER.accepted + ' ' + STALE)
+  // The server judges each proof.md it sends: stale for this one...
+  context.applySandboxPreview(cgmRun(writeupBlock('accepted', false), {}, { text: files.proof, revision: 'rev-2', mtime: 2 }))
+  assert.deepEqual([state().checked, radio('writeup').title], [['facts'], BANNER.accepted + ' ' + STALE])
+  // ...and fresh again for one the write-up was made for.
+  context.applySandboxPreview(cgmRun(writeupBlock('accepted'), {}, { revision: 'rev-3', mtime: 3 }))
+  now = state()
+  assert.deepEqual([now.checked, now.label, now.banner, radio('writeup').title], [['writeup'], 'writeup.md', BANNER.accepted, BANNER.accepted])
+})
+
+test('a document newly on screen opens at its top, and a redraw of the same one keeps the place', () => {
+  const page = consolePage(), { context, state, $, radio } = page
+  const body = $('proof-body')
+  const longer = { text: CLOSURE + '\nOne more line.\n', revision: 'rev-2', mtime: 2 }
+  context.applySandboxPreview(cgmRun(undefined, { status: 'running' }))
+  body.scrollTop = 500
+  context.applySandboxPreview(cgmRun(undefined, { status: 'running' }, longer))
+  assert.equal(body.scrollTop, 500)
+  // The accepted write-up lands and takes the facts' place: it opens under its banner.
+  context.applySandboxPreview(cgmRun(writeupBlock('accepted'), { status: 'running' }, longer))
+  assert.deepEqual([state().checked, state().banner, body.scrollTop], [['writeup'], BANNER.accepted, 0])
+  body.scrollTop = 300
+  radio('writeup').dispatch('click')
+  assert.equal(body.scrollTop, 300, 'choosing the document already shown moves nothing')
+  radio('facts').dispatch('click')
+  assert.deepEqual([state().checked, body.scrollTop], [['facts'], 0])
 })
 
 test('the radios work with a click, the arrow keys, Home and End', () => {

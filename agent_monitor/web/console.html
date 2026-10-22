@@ -4482,6 +4482,8 @@ function resetSandboxEditor(){
 }
 function beginSandboxEdit(){
   if(!runId||!sandboxText.trim())return;
+  // Edit opens proof.md, so the facts stay on screen afterwards, even when a write-up lands meanwhile.
+  proofDocChoice.set(String(runId),'facts');
   sandboxEditing=true; sandboxDirty=false; sandboxConflict=false; sandboxServerRevision='';
   const editor=$('notion-editor'), wrap=$('notion-editor-wrap');
   editor.value=sandboxText; wrap.hidden=false;
@@ -4617,9 +4619,6 @@ function applySandboxPreview(run){
   const box=run?.sandbox_preview||{};
   const text=String(box.text||liveSandboxText(run)||'').trim();
   const incomingRevision=String(box.revision||'missing');
-  if(box.has_proof_md){ $('proof-label').textContent=proofDocLabel(run,live); setProofDocDownload(run); }
-  else if(text) $('proof-label').textContent=live?'streaming…':'draft';
-  else $('proof-label').textContent=live?'writing…':'waiting for proof.md…';
   if(sandboxEditing&&incomingRevision!==sandboxRevision){
     if(sandboxDirty){
       sandboxConflict=true; sandboxServerRevision=incomingRevision;
@@ -4631,6 +4630,10 @@ function applySandboxPreview(run){
   }else if(!sandboxEditing){
     sandboxText=text; sandboxRevision=incomingRevision;
   }
+  // Named once the page's proof.md is current: the write-up's freshness follows it.
+  if(box.has_proof_md) showProofDocFile(run,live);
+  else if(text) $('proof-label').textContent=live?'streaming…':'draft';
+  else $('proof-label').textContent=live?'writing…':'waiting for proof.md…';
   syncSandboxEditor();
   if(!sandboxEditing&&(text||problemItems(run).length))renderMarkdownIntoView(text,live&&!box.has_proof_md,run);
   return !!(text||problemItems(run).length);
@@ -4784,7 +4787,7 @@ function dagCoverageForNode(node,isLean){
    from the verifier-accepted facts, then checked as a whole by a model
    verifier. proof.md, the attested fact closure, stays the proof. The Sandbox
    shows one of the two; a reader's choice is kept per run for this page only,
-   so polls never switch it back. */
+   so polls never switch it back, and editing proof.md chooses the facts. */
 const WRITEUP_BANNER={
   accepted:'✓ Written from the verified facts and checked as a whole by an independent model verifier — not a formal certificate.',
   rejected:'⚠ Not accepted — the independent check found problems (listed below). The verified facts remain the proof.',
@@ -4793,11 +4796,14 @@ const WRITEUP_BANNER={
 const WRITEUP_STALE_NOTE='This write-up was made for an earlier version of proof.md.';
 const proofDocChoice=new Map();
 function runWriteup(run){
-  const writeup=run?.sandbox_preview?.writeup;
+  const box=run?.sandbox_preview, writeup=box?.writeup;
   if(!writeup||typeof writeup!=='object'||typeof writeup.text!=='string'||!writeup.text.trim())return null;
   // Only the server's exact status counts; anything else reads as not checked.
   const status=['accepted','rejected','unchecked'].includes(writeup.status)?writeup.status:'unchecked';
-  return {text:writeup.text,status,fresh:writeup.fresh===true};
+  // The server judged freshness for the proof.md in this record. Once the page
+  // holds another one (an edit saved here, or a newer file read since), it is stale.
+  const fresh=writeup.fresh===true&&String(box.revision||'missing')===sandboxRevision;
+  return {text:writeup.text,status,fresh};
 }
 function proofDocShown(run){
   const writeup=runWriteup(run);
@@ -4806,10 +4812,10 @@ function proofDocShown(run){
   if(chosen)return chosen;
   return writeup.status==='accepted'&&writeup.fresh?'writeup':'facts';
 }
-function proofDocLabel(run,live){ return proofDocShown(run)==='writeup'?'writeup.md':'proof.md'+(live?' · live':''); }
-// Download follows the document on screen (only proof.md can be edited).
-function setProofDocDownload(run){
+// The toolbar names the document on screen, and Download saves that file.
+function showProofDocFile(run,live){
   const file=proofDocShown(run)==='writeup'?'writeup.md':'proof.md';
+  $('proof-label').textContent=file==='proof.md'&&live?'proof.md · live':file;
   setDownloadUrl('/api/workspace/'+encodeURIComponent(runId)+'/file?path='+encodeURIComponent(file)+'&download=1',file);
 }
 function syncProofDocSwitch(){
@@ -4829,8 +4835,10 @@ function chooseProofDoc(doc){
   const run=lastSandboxRun;
   if(!run||run.run_id!==runId||sandboxEditing||!runWriteup(run))return;
   proofDocChoice.set(String(run.run_id),doc==='writeup'?'writeup':'facts');
-  applySandboxPreview(run);
-  $('proof-body').scrollTop=0;
+  // Redraw from the page's own proof.md, never by applying this record again:
+  // a finished run is no longer polled, so an edit saved since is newer than its copy.
+  if(run.sandbox_preview?.has_proof_md)showProofDocFile(run,run.status==='running');
+  renderMarkdownIntoView(sandboxText,false,run);
 }
 document.querySelectorAll('#proof-doc-switch [role="radio"]').forEach(button=>{
   button.onclick=()=>chooseProofDoc(button.dataset.proofDoc);
@@ -4878,7 +4886,9 @@ function renderMarkdownIntoView(text, live, run){
   if(view._proofRenderKey===key)return;
   view._proofRenderKey=key;
   const body=$('proof-body');
-  const previousTop=body.scrollTop;
+  // A document newly on screen (the facts or the write-up) opens at its top.
+  const shown=writeup?'writeup':'facts', previousTop=view._proofDoc===shown?body.scrollTop:0;
+  view._proofDoc=shown;
   const stick=live&&body.scrollHeight-body.scrollTop-body.clientHeight<80;
   try{ renderCitations(displayText); }catch(e){}
   const n=Math.max(problems.length, proofs.length, 1);
@@ -4980,9 +4990,9 @@ async function refreshProofPreview(force, run){
   const viewEmpty=!($('md-view')&&$('md-view').innerHTML);
   if(md){
     if(!force&&!viewEmpty&&stamp(md)===String(lastProofMtime))return true; lastProofMtime=stamp(md);
-    $('proof-label').textContent=proofDocLabel(current,live);
     const u='/api/workspace/'+encodeURIComponent(runId)+'/file?path='+encodeURIComponent(md.path)+'&t='+Date.now();
-    await showProofMd(u, live); setProofDocDownload(current); return true;
+    // Named after the read: a proof.md newer than the run record leaves the write-up stale.
+    await showProofMd(u, live); showProofDocFile(current,live); return true;
   }
   if(live) return false;
   if(tex){
