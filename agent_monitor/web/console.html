@@ -357,7 +357,7 @@ html.read-only-run .run-access-note { display: flex; }
 /* The written proof of a CGM run: a two-way switch beside the file name and a
    status banner above the write-up. Colours follow the model verifier's
    verdicts (blue accepted, amber problems); green stays reserved for Lean. */
-.proof-toolbar:has(> .proof-doc-switch:not([hidden])) { flex-wrap: wrap; row-gap: 8px; }
+.proof-toolbar:has(> .proof-doc-switch:not([hidden])), .proof-toolbar:has(> #make-readable-btn:not([hidden])) { flex-wrap: wrap; row-gap: 8px; }
 .proof-doc-switch { display: inline-flex; flex-shrink: 0; gap: 2px; padding: 2px; border: 1px solid var(--border); border-radius: 9px; background: var(--panel2); }
 .proof-doc-switch[hidden] { display: none; }
 .proof-toolbar .proof-doc-switch button { border: 0; border-radius: 7px; background: transparent; color: var(--dim); padding: 4px 10px; font-weight: 500; white-space: nowrap; }
@@ -365,6 +365,10 @@ html.read-only-run .run-access-note { display: flex; }
 .proof-toolbar .proof-doc-switch button[aria-checked="true"] { background: var(--panel); color: var(--fg); font-weight: 600; box-shadow: 0 1px 2px rgb(0 0 0 / .12); }
 .proof-toolbar .proof-doc-switch button:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
 @media (forced-colors: active) { .proof-toolbar .proof-doc-switch button[aria-checked="true"] { outline: 2px solid Highlight; } }
+/* Make readable, and why it could not paste the document shown. */
+.proof-toolbar #make-readable-btn { white-space: nowrap; }
+.make-readable-note { max-width: 320px; color: var(--err); font-size: 10.5px; line-height: 1.35; }
+.make-readable-note:empty { display: none; }
 .writeup-chip[data-status="accepted"] { color: var(--verdict-checked); }
 .writeup-chip[data-status="rejected"] { color: var(--verdict-gap); }
 .md-view .writeup-banner { margin: 0 0 14px; padding: 9px 14px; border: 1px solid var(--border); border-left: 3px solid var(--verdict-none); border-radius: 8px; background: var(--panel2); color: var(--muted); font-size: 12.5px; line-height: 1.55; }
@@ -1587,6 +1591,8 @@ button.start { grid-column: auto; grid-row: auto; }
 .choice-scroll .opt-name b { display:block; font-size:12px; line-height:1.35; overflow-wrap:anywhere; white-space:normal; }
 .choice-scroll .opt-name span { display:none; }
 .choice-scroll .opt-desc { display:block; margin-top:3px; font-size:11px; line-height:1.35; color:var(--muted); }
+/* Ansatz CGM says what its runs end with: up to three lines of it show. */
+.choice-scroll .cgm-engine .opt-desc { white-space:normal; display:-webkit-box; -webkit-box-orient:vertical; -webkit-line-clamp:3; line-clamp:3; }
 .choice-scroll .opt-state { display:none; }
 .choice-check { width:17px; height:17px; border-radius:50%; display:grid; place-items:center; color:var(--accent); font-size:11px; background:color-mix(in srgb,var(--accent) 12%,transparent); opacity:0; }
 .choice-option.active .choice-check { opacity:1; }
@@ -1996,6 +2002,8 @@ body { background:var(--bg); }
                   <button type="button" role="radio" data-proof-doc="writeup" aria-checked="false" tabindex="-1">Written proof<span class="writeup-chip" id="writeup-chip"></span></button>
                   <button type="button" role="radio" data-proof-doc="facts" aria-checked="true" title="proof.md: the verifier-accepted facts, which are the proof">Verified facts</button>
                 </div>
+                <span class="make-readable-note" id="make-readable-note" role="status" aria-live="polite"></span>
+                <button type="button" id="make-readable-btn" hidden title="Paste the document shown here into Readability, which rewrites it to be easier to follow and checks each part against it">¶ Make readable</button>
                 <button id="proof-edit-btn" class="primary" disabled>✎ Edit</button>
                 <button id="proof-save-btn" class="primary" hidden>Save</button>
                 <button id="proof-done-btn" hidden>Done</button>
@@ -3655,10 +3663,10 @@ const ENGINE_TONE={kimi:'195 74% 48%',hermes:'154 72% 45%',improof:'221 89% 59%'
 /* The Ansatz CGM engines lead the launcher: Kimi K3 (guest default) and the
    same pipeline on an account's own Codex / Claude Code / API route. */
 const CGM_ENGINE_COPY={
-  kimi:'Ansatz CGM on Kimi K3: strategist → workers → independent verifier → curator · tool-free · Facts + Explore graphs',
-  math_harness:'Ansatz CGM on your own Codex, Claude Code or API route · same pipeline · Facts + Explore graphs',
+  kimi:'Ansatz CGM on Kimi K3 · by default, accepted runs end with a written proof, checked as a whole · strategist → workers → independent verifier → curator · tool-free · Facts + Explore graphs',
+  math_harness:'Ansatz CGM on your own Codex, Claude Code or API route · by default, accepted runs end with a written proof, checked as a whole · same pipeline · Facts + Explore graphs',
   // The harness as a member sees it (own_key_only): its own API keys only.
-  own_key:'Ansatz CGM on a model from your own API keys · same pipeline · Facts + Explore graphs',
+  own_key:'Ansatz CGM on a model from your own API keys · by default, accepted runs end with a written proof, checked as a whole · same pipeline · Facts + Explore graphs',
 };
 function engineMenuOrder(list){
   /* CGM engines first: one this session can use before a sign-in-only one,
@@ -3672,8 +3680,8 @@ function engineMenuOrder(list){
    model on `math_harness`, the same pipeline on the account's own route. Runs
    keep the real engine id. */
 const CGM_FAMILY={label:'Ansatz CGM',vendor:'Ansatz · CGM',mark:'CG',tone:'267 86% 64%',
-  copy:'Strategist → workers → independent verifier → curator · Kimi K3 included or your own Codex, Claude Code or API models · Facts + Explore graphs',
-  ownKeyCopy:'Strategist → workers → independent verifier → curator · Kimi K3 included or models from your own API keys · Facts + Explore graphs'};
+  copy:'Strategist → workers → independent verifier → curator · by default, accepted runs end with a written proof, checked as a whole · Kimi K3 included or your own Codex, Claude Code or API models · Facts + Explore graphs',
+  ownKeyCopy:'Strategist → workers → independent verifier → curator · by default, accepted runs end with a written proof, checked as a whole · Kimi K3 included or models from your own API keys · Facts + Explore graphs'};
 const ENGINE_AUTH_LABELS={codex_subscription:'Codex',claude_subscription:'Claude Code',api_key:'API'};
 function cgmEngineUsable(id){ const e=ENGINES.find(x=>x.id===id); return !!e&&!!e.available&&!e.requires_login&&!engineRuntimeIssue(e); }
 function cgmModels(){
@@ -3706,6 +3714,8 @@ function engineView(e){
   return {label:CGM_FAMILY.label,vendor:CGM_FAMILY.vendor,mark:CGM_FAMILY.mark,tone:CGM_FAMILY.tone,auth,issue,available:own.length>0||!!e.available,usable:own.length>0,copy};
 }
 function renderEngines(){
+  // The proof toolbar's Make readable follows the Readability policy and settings this draws from.
+  syncMakeReadable();
   // Analyze and Readability run on their own engines only, and Prove never offers those.
   syncEngineForRunKind();
   renderFormalizeSwitch();
@@ -4518,6 +4528,7 @@ function syncSandboxEditor(){
   if(save){save.hidden=!sandboxEditing;save.disabled=sandboxSaving||(!sandboxDirty&&!sandboxConflict);save.textContent=sandboxConflict?'Overwrite':'Save';}
   if(done){done.hidden=!sandboxEditing;done.disabled=sandboxSaving;}
   syncProofDocSwitch();
+  syncMakeReadable();
 }
 function resetSandboxEditor(){
   if(sandboxSaveTimer){clearTimeout(sandboxSaveTimer);sandboxSaveTimer=null;}
@@ -4585,7 +4596,67 @@ async function finishSandboxEdit(){
 }
 // Display environments written without $$ (manuscripts: \begin{align} ... \end{align}) render too.
 function mathEnvDelimiters(){ return ['equation','equation*','align','align*','alignat','alignat*','gather','gather*'].map(env=>({left:'\\begin{'+env+'}',right:'\\end{'+env+'}',display:true})); }
-function renderMathIn(el,macros){ if(window.renderMathInElement){ try{ renderMathInElement(el,{delimiters:[...mathEnvDelimiters(),{left:'$$',right:'$$',display:true},{left:'\\[',right:'\\]',display:true},{left:'$',right:'$',display:false},{left:'\\(',right:'\\)',display:false}],ignoredTags:['script','noscript','style','textarea','pre','code','option'],throwOnError:false,...(macros&&typeof macros==='object'?{macros:{...macros},maxExpand:200}:{})}); }catch(e){} } }
+function renderMathIn(el,macros){ if(window.renderMathInElement){ try{ renderMathInElement(el,{delimiters:[...mathEnvDelimiters(),{left:'$$',right:'$$',display:true},{left:'\\[',right:'\\]',display:true},{left:'$',right:'$',display:false},{left:'\\(',right:'\\)',display:false}],ignoredTags:['script','noscript','style','textarea','pre','code','option'],throwOnError:false,preProcess:katexReferenceText,macros:withKatexFallbacks(macros,untypesetText(el)),...(macros&&typeof macros==='object'?{maxExpand:200}:{})}); }catch(e){} } }
+// The text of el that KaTeX has yet to typeset: formulas it typeset before are left out.
+function untypesetText(el){
+  if(typeof el?.querySelector!=='function'||!el.querySelector('.katex'))return String(el?.textContent||'');
+  const walker=document.createTreeWalker(el,NodeFilter.SHOW_TEXT); let text='';
+  for(let node=walker.nextNode();node;node=walker.nextNode())if(!node.parentElement?.closest('.katex'))text+=node.data;
+  return text;
+}
+/* Commands KaTeX 0.16.11 does not know, as the nearest it does, so that a
+   write-up's $\qed$ or a manuscript's \abs{x} is typeset instead of shown as
+   a red error. Every KaTeX call takes them, under the author's own macros
+   (theirs win). */
+const KATEX_FALLBACK_MACROS=Object.freeze({
+  '\\qed':'\\square','\\qedhere':'','\\mathbbm':'\\mathbb','\\mathds':'\\mathbb','\\symbb':'\\mathbb','\\divides':'\\mid','\\textsc':'\\text',
+  '\\abs':'\\left\\lvert #1\\right\\rvert','\\norm':'\\left\\lVert #1\\right\\rVert','\\ceil':'\\left\\lceil #1\\right\\rceil','\\floor':'\\left\\lfloor #1\\right\\rfloor',
+  '\\ref':'\\text{#1}','\\cref':'\\text{#1}','\\Cref':'\\text{#1}','\\autoref':'\\text{#1}','\\eqref':'(\\text{#1})','\\cite':'[\\text{#1}]',
+  // A label is dropped: its argument is taken and nothing is written.
+  '\\label':'\\@firstoftwo{}{#1}',
+});
+// The key of \ref, \eqref, \cref, \Cref, \autoref or \cite as those stand-ins
+// print it, in text: its _ # & % ^ $ escaped (a key written with a backslash
+// is left as it is), and \cite[note]{key} as \cite{key, note}. Every KaTeX
+// call passes its TeX through this first.
+function katexReferenceText(tex){
+  const text=key=>key.includes('\\')?key:key.replace(/[_#&%$]/g,'\\$&').replace(/\^/g,'\\textasciicircum{}');
+  return String(tex).replace(/\\(ref|eqref|cref|Cref|autoref|cite)(?:\[([^[\]{}]*)\])?\{([^{}]*)\}/g,
+    (whole,name,note,key)=>note===undefined?'\\'+name+'{'+text(key)+'}':name==='cite'?'\\cite{'+text(key)+', '+text(note)+'}':whole);
+}
+// The macros for typesetting `text`: the fallbacks, then the author's. KaTeX
+// refuses \newcommand for a name it knows, so a fallback is left out where
+// the text defines that name itself.
+function withKatexFallbacks(author,text){
+  const macros={...KATEX_FALLBACK_MACROS};
+  for(const match of String(text||'').matchAll(/\\newcommand\*?\s*(?:\{\s*)?(\\[A-Za-z]+)/g))delete macros[match[1]];
+  return Object.assign(macros,countedAuthorMacros(author,text));
+}
+/* KaTeX's maxExpand counts expansions, not what they write: three preamble
+   macros of a few hundred characters can make one short formula typeset
+   hundreds of thousands of symbols and hold the page for minutes. So what an
+   author's macros write is counted as KaTeX expands them: in one call at most
+   400 characters plus 2 for each character of `text` (what is to be
+   typeset), and 8,000 in one formula (each formula has an expander of its
+   own); past that KaTeX shows the formula as written. A macro that writes one
+   of its arguments more than once is left out: KaTeX copies the argument
+   after this count. */
+function countedAuthorMacros(author,text){
+  const counted={};
+  if(!author||typeof author!=='object')return counted;
+  let room=400+2*String(text||'').length, formula=null, written=0;
+  for(const [name,body] of Object.entries(author)){
+    const uses=typeof body==='string'?body.replace(/##/g,'').match(/#[1-9]/g)||[]:null;
+    if(!uses||new Set(uses).size<uses.length)continue;
+    counted[name]=expander=>{
+      if(expander!==formula){ formula=expander; written=0; }
+      room-=body.length; written+=body.length;
+      if(room<0||written>8000)throw new window.katex.ParseError('the author\u2019s macros write too much here');
+      return body;
+    };
+  }
+  return counted;
+}
 function liveSandboxText(run){
   const agents=run?.agents||[];
   const writes=[];
@@ -4603,15 +4674,163 @@ function liveSandboxText(run){
   if(writes.length) return writes.join('\n\n---\n\n');
   return longest;
 }
+/* Math is found by scanners that resume where they stopped, so a text costs
+   linear time. The regular expressions they stand for (quoted below) took
+   quadratic time on unclosed \[ or \( and exponential time on a "$" before a
+   long run of backslashes, so hostile text could hang the page; on any text
+   the scanners find the same math. */
+// The first `needle` at or after a position, for positions that only grow.
+function mathNextIndex(s,needle){
+  let found=-2;
+  return from=>{ if(found!==-1&&found<from)found=s.indexOf(needle,from); return found; };
+}
+// `open`…`close` with at least `inside` characters between, closed as early
+// as possible: /\\\[[\s\S]+?\\\]/ has `inside` 1, /\\\[[\s\S]*?\\\]/ 0.
+function mathBetween(s,open,close,inside){
+  const opener=mathNextIndex(s,open), closer=mathNextIndex(s,close);
+  return from=>{
+    const start=opener(from); if(start<0)return null;
+    const end=closer(start+open.length+inside);
+    return end<0?null:[start,end+close.length];
+  };
+}
+// /\\begin\{equation\*?\}[\s\S]*?\\end\{equation\*?\}/ for one environment `name`.
+function mathEnvironment(s,name){
+  const opener=new RegExp('\\\\begin\\{'+name+'\\*?\\}','g'), plain='\\end{'+name+'}', starred='\\end{'+name+'*}';
+  const plainAt=mathNextIndex(s,plain), starredAt=mathNextIndex(s,starred);
+  return from=>{
+    opener.lastIndex=from;
+    const match=opener.exec(s); if(!match)return null;
+    const a=plainAt(opener.lastIndex), b=starredAt(opener.lastIndex);
+    if(a<0&&b<0)return null;
+    return a>=0&&(b<0||a<b)?[match.index,a+plain.length]:[match.index,b+starred.length];
+  };
+}
+// /\$[^$\n]+?\$/: within a line, the next "$" closes it.
+function mathDollarLine(s){
+  return from=>{
+    for(let start=s.indexOf('$',from);start>=0;){
+      const first=s[start+1];
+      if(first===undefined)return null;
+      if(first==='$'||first==='\n'){ start=s.indexOf('$',start+1); continue; }
+      let end=start+2;
+      while(end<s.length&&s[end]!=='$'&&s[end]!=='\n')end++;
+      if(s[end]==='$')return [start,end+1];
+      start=s.indexOf('$',end);
+    }
+    return null;
+  };
+}
+// /\$(?:\\.|[^$\\])+\$/: a "$" closes it unless a backslash escapes it; a
+// backslash takes the next character with it (never a line break). There is
+// one reading only, so where each position leads is kept for every later "$"
+// (an escaped one inside a formula) that reaches it.
+function mathEscapedDollar(s){
+  const closing=new Int32Array(s.length+1).fill(-2);
+  // The closing "$" reached from `from`, after the first character; -1 if none.
+  const close=from=>{
+    const path=[];
+    let at=from, end=-1;
+    for(;;){
+      if(closing[at]!==-2){ end=closing[at]; break; }
+      path.push(at);
+      if(s[at]==='$'){ end=at; break; }
+      if(s[at]==='\\'){ if(at+1<s.length&&!'\n\r\u2028\u2029'.includes(s[at+1])){ at+=2; continue; } break; }
+      if(at>=s.length)break;
+      at++;
+    }
+    path.forEach(position=>{ closing[position]=end; });
+    return end;
+  };
+  return from=>{
+    for(let start=s.indexOf('$',from);start>=0;start=s.indexOf('$',start+1)){
+      const first=s[start+1];
+      if(first===undefined||first==='$')continue;
+      if(first==='\\'&&(start+2>=s.length||'\n\r\u2028\u2029'.includes(s[start+2])))continue;
+      const end=close(start+(first==='\\'?3:2));
+      if(end>=0)return [start,end+1];
+    }
+    return null;
+  };
+}
+// The math the `kinds` find in `s`, as one regular expression with those
+// alternatives finds it: from each position on, the match that starts first
+// (the earlier kind on a tie), then on from its end.
+function mathSpans(s,kinds){
+  const spans=[], found=kinds.map(()=>null);
+  for(let at=0;;){
+    let best=-1;
+    kinds.forEach((kind,index)=>{
+      if(found[index]&&found[index][0]<at)found[index]=null;
+      if(found[index]===null)found[index]=kind(at)||false;
+      if(found[index]&&(best<0||found[index][0]<found[best][0]))best=index;
+    });
+    if(best<0)return spans;
+    spans.push(found[best]); at=found[best][1];
+  }
+}
+// `s` split as s.split(/(…)/) splits it on those alternatives: prose and math
+// in turn, the math at odd places. `kinds(s)` lists the scanners.
+function splitMath(s,kinds){
+  const parts=[]; let at=0;
+  for(const [start,end] of mathSpans(s,kinds(s))){ parts.push(s.slice(at,start),s.slice(start,end)); at=end; }
+  parts.push(s.slice(at));
+  return parts;
+}
+// `s` with what one `kind` finds set aside by `hold`.
+function holdMath(s,kind,hold){
+  let out='', at=0;
+  for(const [start,end] of mathSpans(s,[kind])){ out+=s.slice(at,start)+hold(s.slice(start,end)); at=end; }
+  return out+s.slice(at);
+}
+// Math is set aside as @@MATHn@@ before Markdown is read (and put back
+// after): $$…$$, then \[…\], then \(…\), then $…$ within a line, each pass
+// over the last: /\$\$[\s\S]+?\$\$/g, /\\\[[\s\S]+?\\\]/g, /\\\([\s\S]+?\\\)/g,
+// then /(^|[^\\$])(\$(?!\$)(?:\\.|[^$\n])+\$)/g.
 function stashMath(src){
   const slots=[];
   const hold=m=>{ slots.push(m); return '@@MATH'+ (slots.length-1) +'@@'; };
   let s=String(src||'');
-  s=s.replace(/\$\$[\s\S]+?\$\$/g,hold);
-  s=s.replace(/\\\[[\s\S]+?\\\]/g,hold);
-  s=s.replace(/\\\([\s\S]+?\\\)/g,hold);
-  s=s.replace(/(^|[^\\$])(\$(?!\$)(?:\\.|[^$\n])+\$)/g,(m,pre,eq)=>pre+hold(eq));
+  s=holdMath(s,mathBetween(s,'$$','$$',1),hold);
+  s=holdMath(s,mathBetween(s,'\\[','\\]',1),hold);
+  s=holdMath(s,mathBetween(s,'\\(','\\)',1),hold);
+  s=stashInlineMath(s,hold);
   return {s,slots};
+}
+// $…$ opened by a "$" that starts the text or follows a character other than
+// \ and $ (that character stays text), and is not followed by another "$".
+function stashInlineMath(s,hold){
+  let out='', at=0, dead=null;
+  for(let open=s.indexOf('$');open>=0;open=s.indexOf('$',open+1)){
+    if(open>0&&(open-1<at||s[open-1]==='\\'||s[open-1]==='$'))continue;
+    dead=dead||new Uint8Array(s.length+1);
+    const end=inlineMathEnd(s,open,dead);
+    if(end<0)continue;
+    out+=s.slice(at,open)+hold(s.slice(open,end+1));
+    at=end+1; open=end;
+  }
+  return out+s.slice(at);
+}
+// The "$" that closes the formula opened at `open`, as (?:\\.|[^$\n])+\$
+// finds it: a backslash either takes the next character with it (never a
+// line break) or stands alone, and the pattern backtracks through both
+// readings, escape first. This walks the same choices depth first but
+// remembers each position from which no "$" can be reached (`dead`, shared by
+// the whole text), so no position is explored twice. -1 when there is none.
+function inlineMathEnd(s,open,dead){
+  const first=open+1;
+  if(first>=s.length||s[first]==='$'||s[first]==='\n')return -1;
+  const stack=[first], tried=[0];
+  while(stack.length){
+    const top=stack.length-1, at=stack[top];
+    if(s[at]==='$')return at;
+    let next=-1;
+    if(tried[top]===0){ tried[top]=1; if(s[at]==='\\'&&at+1<s.length&&!'\n\r\u2028\u2029'.includes(s[at+1]))next=at+2; }
+    if(next<0&&tried[top]===1){ tried[top]=2; if(at<s.length&&s[at]!=='\n')next=at+1; }
+    if(next<0){ dead[at]=1; stack.pop(); tried.pop(); }
+    else if(!dead[next]){ stack.push(next); tried.push(0); }
+  }
+  return -1;
 }
 const SAFE_MARKDOWN_TAGS=new Set([
   'A','BLOCKQUOTE','BR','CODE','DEL','EM','H1','H2','H3','H4','H5','H6','HR',
@@ -4855,6 +5074,19 @@ function runWriteup(run){
   const fresh=writeup.fresh===true&&String(box.revision||'missing')===sandboxRevision;
   return {text:writeup.text,status,fresh};
 }
+// writeup.md as shown: without its "# Written proof" heading and the status
+// note under it, which the banner above it says already. Download saves the
+// file as written.
+function writeupBody(text){
+  const lines=String(text||'').split('\n');
+  if(!/^# Written proof[ \t\r]*$/.test(lines[0]))return String(text||'');
+  let at=1;
+  const skipBlank=()=>{ while(at<lines.length&&!lines[at].trim())at++; };
+  skipBlank();
+  if(at<lines.length&&/^ {0,3}>/.test(lines[at]))while(at<lines.length&&lines[at].trim())at++;
+  skipBlank();
+  return lines.slice(at).join('\n');
+}
 function proofDocShown(run){
   const writeup=runWriteup(run);
   if(!writeup)return 'facts';
@@ -4900,6 +5132,49 @@ document.querySelectorAll('#proof-doc-switch [role="radio"]').forEach(button=>{
     document.querySelector('#proof-doc-switch [aria-checked="true"]')?.focus();
   };
 });
+/* Make readable: the document a finished CGM run shows (the written proof
+   when it is on screen, else proof.md) becomes the pasted source of a new
+   readable version in the composer; nothing runs until that is started. It is
+   offered as the server's Readability policy allows this viewer, while the
+   viewer's guest runs and, for a run that would go to sponsored Kimi K3 (as
+   the composer reckons it: a guest's, or a member's without a Kimi key of
+   their own), today's sponsored runs leave room for one. */
+function makeReadableSource(run){
+  if(!run||run.run_id!==runId||!dagIsCgmEngine(run.engine)||run.status!=='finished'||!run.sandbox_preview?.has_proof_md||sandboxEditing)return null;
+  const entry=readabilityEngineEntry(), daily=readabilityPolicy()?.sponsored;
+  if(!readabilityOffered()||!entry.available||entry.requires_login||readabilityPolicy().enabled===false)return null;
+  if(viewerIsGuest()&&Number(GUEST_POLICY?.runs_remaining)<=0)return null;
+  if(readabilityRouteSponsored()&&daily&&(daily.available===false||Number(daily.remaining_today)<=0))return null;
+  const writeup=proofDocShown(run)==='writeup'?runWriteup(run):null, text=writeup?writeup.text:sandboxText;
+  return text.trim()?{text,name:writeup?'written proof':'proof.md'}:null;
+}
+function syncMakeReadable(){
+  const button=$('make-readable-btn'), note=$('make-readable-note'); if(!button||!note)return;
+  const source=makeReadableSource(lastSandboxRun), shown=source?runId+' '+source.name:'';
+  button.hidden=!source;
+  // A note about one document goes when another is shown.
+  if(button.dataset.shown!==shown){ button.dataset.shown=shown; note.textContent=''; }
+}
+function makeReadable(){
+  const source=makeReadableSource(lastSandboxRun);
+  // No longer offered (today's runs or the policy moved since it was shown): the button goes.
+  if(!source){ syncMakeReadable(); return; }
+  const limit=Number(readabilityPolicy().sources?.paste_chars)||20000;
+  if(source.text.length>limit){
+    $('make-readable-note').textContent=`The ${source.name} has ${source.text.length.toLocaleString('en-US')} characters: too long to paste into Readability (at most ${limit.toLocaleString('en-US')}${viewerIsGuest()?' for guests':''}).`;
+    return;
+  }
+  // As New does: the run is left for the composer, now in Readability, with
+  // this document its one source (files still attached would be a second).
+  runId=null; jobId=null; stopPolling(); goLanding();
+  chooseMode('readability');
+  if(initialAttachments.files.length)initialAttachments.clear();
+  const input=$('problem-text');
+  input.value=source.text;
+  input.dispatchEvent(new Event('input',{bubbles:true}));
+  input.focus(); input.setSelectionRange(0,0); input.scrollTop=0;
+}
+$('make-readable-btn').onclick=makeReadable;
 function writeupBannerHtml(writeup){
   const stale=writeup.fresh?'':`<p class="writeup-stale">${escapeHtml(WRITEUP_STALE_NOTE)}</p>`;
   return `<div class="writeup-banner" data-status="${escapeHtml(writeup.status)}" role="note"><p>${escapeHtml(WRITEUP_BANNER[writeup.status])}</p>${stale}</div>`;
@@ -4925,7 +5200,7 @@ function renderMarkdownIntoView(text, live, run){
   // The written proof takes proof.md's place on screen only: sandboxText stays proof.md for Edit.
   const writeup=proofDocShown(run)==='writeup'?runWriteup(run):null;
   if(writeup)live=false;
-  const displayText=writeup?writeup.text:closureCitedLemmas(normalizeProofMarkdown(sandboxText));
+  const displayText=writeup?writeupBody(writeup.text):closureCitedLemmas(normalizeProofMarkdown(sandboxText));
   const proofs=writeup?[displayText]:splitProofs(displayText);
   if(!problems.length&&!proofs.length)return;
   setProofEmpty(false); $('pdf-pages').style.display='none';
@@ -8090,11 +8365,12 @@ function analysisResolveRefs(text,refLabels){
 // Model-written prose (findings, notes, progress): accents and references
 // read as text outside math; nothing else is changed (in model prose "~"
 // can mean "of the order of", so only ties are spaces).
-const ANALYZE_MATH_SPLIT=/(\$\$[\s\S]+?\$\$|\$[^$\n]+?\$|\\\([\s\S]+?\\\)|\\\[[\s\S]+?\\\])/;
+// The math of /(\$\$[\s\S]+?\$\$|\$[^$\n]+?\$|\\\([\s\S]+?\\\)|\\\[[\s\S]+?\\\])/ (see mathSpans).
+const ANALYZE_MATH_KINDS=s=>[mathBetween(s,'$$','$$',1),mathDollarLine(s),mathBetween(s,'\\(','\\)',1),mathBetween(s,'\\[','\\]',1)];
 function analysisModelProse(text,refLabels){
   const value=String(text??'');
   if(!/[\\~]/.test(value))return value;
-  return value.split(ANALYZE_MATH_SPLIT).map((part,index)=>index%2?part:analysisResolveRefs(analysisTextAccents(part),refLabels)).join('');
+  return splitMath(value,ANALYZE_MATH_KINDS).map((part,index)=>index%2?part:analysisResolveRefs(analysisTextAccents(part),refLabels)).join('');
 }
 // TeX text accents outside math read as letters (Erd\H{o}s → Erdős), as in
 // the report; a bare letter after an accent counts only where that accent is
@@ -8105,7 +8381,7 @@ const ANALYZE_TEXT_LETTERS={o:'ø',O:'Ø',ss:'ß',ae:'æ',AE:'Æ',oe:'œ',OE:'Œ
 function analysisTextAccents(text){
   const value=String(text??'');
   if(!value.includes('\\'))return value;
-  return value.split(/(\$\$[\s\S]+?\$\$|\$[^$\n]+?\$|\\\([\s\S]+?\\\)|\\\[[\s\S]+?\\\])/).map((part,index)=>index%2?part:part
+  return splitMath(value,ANALYZE_MATH_KINDS).map((part,index)=>index%2?part:part
     .replace(/(\{)?\\(?:(['`^"~=.])|([Hcvurk])(?![A-Za-z]))(?:\s*\{\s*(\\[ij](?![A-Za-z])|[A-Za-z])\s*\}|\s*(\\[ij](?![A-Za-z])|[A-Za-z]))(\})?/g,(match,open,sym,letter,braced,bare,close)=>{
       const accent=sym||letter, base=braced||bare;
       if(bare&&sym&&!ANALYZE_BARE_ACCENTED[sym].includes(bare))return match;
@@ -8115,11 +8391,14 @@ function analysisTextAccents(text){
     .replace(/\{\\(o|O|ss|ae|AE|oe|OE|aa|AA|l|L)\}|\\(o|O|ss|ae|AE|oe|OE|aa|AA|l|L)(?:\{\}| (?=[A-Za-z]))/g,(_,a,b)=>ANALYZE_TEXT_LETTERS[a||b])
   ).join('');
 }
+// The math of /(\\begin\{equation\*?\}[\s\S]*?\\end\{equation\*?\}|<align, alignat and gather alike>|\$\$[\s\S]*?\$\$|\\\[[\s\S]*?\\\]|\\\([\s\S]*?\\\)|\$(?:\\.|[^$\\])+\$)/.
+const ANALYZE_STATEMENT_MATH_KINDS=s=>[...['equation','align','alignat','gather'].map(name=>mathEnvironment(s,name)),
+  mathBetween(s,'$$','$$',0),mathBetween(s,'\\[','\\]',0),mathBetween(s,'\\(','\\)',0),mathEscapedDollar(s)];
 // Statements as readable prose: \ref becomes the result's label and simple
 // text markup is dropped; math is left as written for KaTeX.
 function analysisProse(text,refLabels){
   // Display environments are math too: their \\ row breaks must survive.
-  const parts=String(text||'').split(/(\\begin\{equation\*?\}[\s\S]*?\\end\{equation\*?\}|\\begin\{align\*?\}[\s\S]*?\\end\{align\*?\}|\\begin\{alignat\*?\}[\s\S]*?\\end\{alignat\*?\}|\\begin\{gather\*?\}[\s\S]*?\\end\{gather\*?\}|\$\$[\s\S]*?\$\$|\\\[[\s\S]*?\\\]|\\\([\s\S]*?\\\)|\$(?:\\.|[^$\\])+\$)/);
+  const parts=splitMath(String(text||''),ANALYZE_STATEMENT_MATH_KINDS);
   // KaTeX would number these itself, never with the manuscript's numbers: show them unnumbered.
   return parts.map((part,index)=>index%2?part.replace(/\\(begin|end)\{(equation|align|alignat|gather)\}/g,'\\$1{$2*}'):analysisResolveRefs(analysisTextAccents(part),refLabels)
     .replace(/\\(?:emph|textbf|textit|textsc|textrm|textsf|texttt|text|mbox)\{([^{}]*)\}/g,'$1')
@@ -8443,6 +8722,7 @@ function applyGuestUi(){
   syncStartButton();
   if(runKindChoice()==='analyze')renderAnalyzeCaps();
   if(runKindChoice()==='readability')renderReadabilityCaps();
+  syncMakeReadable();  // it counts the guest runs left too
 }
 async function loadUser(){
   try{

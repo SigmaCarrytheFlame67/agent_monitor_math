@@ -88,10 +88,14 @@ function constant(name) {
 }
 const plain = value => value === undefined ? undefined : JSON.parse(JSON.stringify(value))
 // `raw` hands back the result as it is (a DOM node, a function returning one).
+// The console's math scanners: its Markdown and prose helpers find math with them.
+const MATH_SCANNERS = ['mathNextIndex', 'mathBetween', 'mathEnvironment', 'mathDollarLine', 'mathEscapedDollar', 'mathSpans', 'splitMath', 'holdMath']
+const MATH_KINDS = ['ANALYZE_MATH_KINDS', 'ANALYZE_STATEMENT_MATH_KINDS']
 function run(names, consts, prelude, body, { marked = false, context = {}, raw = false } = {}) {
   const sandbox = vm.createContext({ console, URL, Date, ...context })
   if (marked) vm.runInContext(markedSource, sandbox)
-  const code = [prelude, ...consts.map(constant), ...names.map(fn), body].join('\n')
+  const code = [prelude, ...consts.map(constant), ...MATH_KINDS.filter(name => !consts.includes(name)).map(constant),
+    ...names.map(fn), ...MATH_SCANNERS.filter(name => !names.includes(name)).map(fn), body].join('\n')
   const result = vm.runInContext(code, sandbox)
   if (raw) return result
   return typeof result === 'function' ? (...args) => plain(result(...args)) : plain(result)
@@ -166,6 +170,14 @@ function miniDocument() {
       this.parentNode = null
     }
     remove() { if (this.parentNode) { this.parentNode.childNodes.splice(this.parentNode.childNodes.indexOf(this), 1); this.parentNode = null } }
+    after(...items) {
+      const parent = this.parentNode
+      if (!parent) return
+      const nodes = this.adopt(items), index = parent.childNodes.indexOf(this)
+      nodes.forEach(node => { node.parentNode = parent })
+      parent.childNodes.splice(index + 1, 0, ...nodes)
+    }
+    addEventListener() {}
     descendants() { return this.childNodes.flatMap(child => child.nodeType === 1 ? [child, ...child.descendants()] : []) }
     querySelectorAll(selector) { return this.descendants().filter(matcher(selector)) }
     querySelector(selector) { return this.querySelectorAll(selector)[0] || null }
@@ -240,7 +252,7 @@ function miniDocument() {
   return { document, assigned }
 }
 // The console's own sanitizer and its helpers, and the readable-Markdown renderer, for the vm harness.
-const SANITIZER = ['escapeHtml', 'stashMath', 'safeMarkdownHref', 'sanitizeRenderedHtml', 'analyzeEl']
+const SANITIZER = ['escapeHtml', 'stashMath', 'stashInlineMath', 'inlineMathEnd', 'safeMarkdownHref', 'sanitizeRenderedHtml', 'analyzeEl']
 const READABLE = ['readableMarkdown', 'renderReadableMarkdown', 'readableTextNodes', 'placeReadableMarks', 'readableAnchorNode', 'readableRefNode']
 
 test('Readability is the fourth mode: its own composer, a locked engine chip and "Make readable"', () => {
@@ -488,9 +500,9 @@ const doc={firstElementChild:elements[0],querySelectorAll:()=>elements.filter(el
 })
 
 test('notation: symbols are typeset by KaTeX without trust; meanings and places are set as text', () => {
-  const view = run(['analyzeEl', 'dagDetailText', 'readabilityNotation', 'readabilityTex', 'readabilityTable', 'readabilityWhereCell', 'renderReadabilityNotation'], [],
+  const view = run(['analyzeEl', 'dagDetailText', 'readabilityNotation', 'katexReferenceText', 'withKatexFallbacks', 'countedAuthorMacros', 'readabilityTex', 'readabilityTable', 'readabilityWhereCell', 'renderReadabilityNotation'], ['KATEX_FALLBACK_MACROS'],
     miniDom + `
-const typeset=[]; const window={katex:{render(tex,el,options){ typeset.push([tex,options]); el.textContent='KATEX:'+tex; }}};
+const typeset=[]; const window={katex:{render(tex,el,options){ const R=options.macros['\\\\R']; typeset.push([tex,options,typeof R==='function'?R({}):'not counted']); el.textContent='KATEX:'+tex; }}};
 const readabilityMacros=()=>({'\\\\R':'\\\\mathbb{R}'}), renderMathIn=()=>{};`,
     `(run=>{ const view=make('div'); renderReadabilityNotation(run,view); return {doc:flat(view.kids[0]),typeset,texts:texts(view)}; })`)
   const out = view({ run_id: 'r1', status: 'finished', sandbox_preview: { notation: {
@@ -501,7 +513,10 @@ const readabilityMacros=()=>({'\\\\R':'\\\\mathbb{R}'}), renderMathIn=()=>{};`,
   assert.equal(out.typeset[0][0], '\\alpha_n<script>')
   assert.equal(out.typeset[0][1].trust, false)
   assert.equal(out.typeset[0][1].throwOnError, false)
-  assert.deepEqual(out.typeset[0][1].macros, { '\\R': '\\mathbb{R}' })
+  // The author's macros (counted as KaTeX expands them), over the console's stand-ins for commands KaTeX lacks.
+  assert.equal(out.typeset[0][2], '\\mathbb{R}')
+  assert.equal(out.typeset[0][1].macros['\\qed'], '\\square')
+  assert.equal(out.typeset[0][1].maxExpand, 200)
   // Model text arrives as text nodes, never markup.
   assert.ok(out.texts.includes('<img src=x onerror=alert(1)> a $\\mathbb{R}$-valued sequence'))
   assert.ok(out.texts.includes('§2 <b>bold</b>'))
@@ -968,4 +983,143 @@ test('the shared viewer\'s arrow keys skip the tabs a readable version hides', a
   tabs[1].hidden = tabs[3].hidden = false
   assert.equal(press('sandbox', 'ArrowRight'), 'lean')
   assert.equal(press('sandbox', 'End'), 'dag')
+})
+
+// ── Check notes: the minor points of a part's check, collapsed under it ──
+// A live readable version (rd-chpaper, Claude) cut short: its title and
+// provenance, then three parts; the third as a part with a major problem reads.
+const CHECKED_READABLE = [
+  '# A CH obstruction to a prescribed categoricity threshold — Readable version', '',
+  '> **Readable version** for researchers in the field, written by opus via a Claude account. Every statement and argument is meant to be kept; an independent model check compared each part with the original: 2 of 3 parts faithful, 1 with issues (marked), 0 unchecked. This is not a certificate of correctness.', '',
+  '[part:1]: #', '',
+  '## Abstract', '',
+  'Assuming the continuum hypothesis (CH), we construct an abstract elementary class (AEC) with Löwenheim–Skolem number $\\aleph_0$.', '',
+  '[result:thm:main]: #', '',
+  '**Theorem 1.1.** Assume CH. There is an abstract elementary class $K$ in a countable finitary relational language such that', '',
+  '[part:2]: #', '',
+  '## 3. The abstract elementary class', '',
+  'This section turns the color tests of Section 2 into a class of structures $K=(\\mathcal C,\\le_K)$.', '',
+  '[part:3]: #', '',
+  '> ⚠ **Check:** the independent check found problems that change the meaning here; compare with the original.',
+  '> - **Lemma 4.4:** the case $n=0$ is missing.', '',
+  '## 4. Two models at the prescribed endpoint', '',
+  'Both models have cardinality $\\beth_{\\omega_2}$.', '',
+].join('\n')
+// sandbox_preview.check as the console server sends it (check.json's parts, bounded).
+const CHECKED_PARTS = [
+  { index: 1, title: 'Introduction', kind: 'text', status: 'faithful', reason: '', lines: [1, 120], repaired: false, missing: [], issues: [
+    { severity: 'minor', location: "Section 1.1, paragraph 'Why H(K)'", problem: "The original says a model 'at that size' (H(K)) gives arbitrarily large models. The rewrite says 'of size at least H(K)'.",
+      fix: "Write 'If K has a model of size H(K)', or add a note that the two forms are equivalent by the Löwenheim–Skolem axiom." }] },
+  { index: 2, title: 'The abstract elementary class', kind: 'text', status: 'faithful', reason: '', lines: [121, 300], repaired: false, missing: [], issues: [
+    { severity: 'minor', location: 'Remarks before Lemma 3.4 and before Lemma 3.8', problem: 'The rewrite adds forward-looking claims not in the original.' },
+    { severity: 'minor', location: 'Section 3.2 introductory sentence', problem: 'The rewrite writes $S=2^\\omega/{=^*}$ explicitly <img src=x onerror=alert(1)>.' }] },
+  { index: 3, title: 'Two models', kind: 'text', status: 'issues', reason: '', lines: [301, 400], repaired: true, missing: [], issues: [
+    { severity: 'major', location: 'Lemma 4.4', problem: 'the case $n=0$ is missing.' },
+    { severity: 'minor', location: 'unspecified', problem: 'A sentence is long.' }] },
+  { index: 4, title: 'Nothing to note', status: 'faithful', issues: [] }, 'junk', { index: '5', issues: [{ severity: 'minor', problem: 'x' }] },
+]
+const READABLE_VIEW = ['readableParts', 'readabilityCheckNotes', 'readabilityCheckNotesBox', 'markReadableBlocks', 'readabilityCounts', 'readabilityProvenanceText', 'dagDetailText', 'renderReadableVersion']
+
+function readableVersionPage() {
+  const { document } = miniDocument()
+  return run([...SANITIZER, ...READABLE, ...READABLE_VIEW], ['SAFE_MARKDOWN_TAGS', 'READABLE_MARKER_LINE', 'READABLE_RESULT_LINK', 'READABLE_PART_LINE'],
+    `const window=globalThis; let readableMarkdownParser=null; const typeset=[];
+const body={scrollTop:0}, $=id=>id==='proof-body'?body:null;
+const readabilityLabels=()=>new Map([['thm:main','Theorem 1.1']]), readabilityMacros=()=>({}), renderMathIn=(el,macros)=>typeset.push(el);`,
+    `(run=>{ const view=document.createElement('div'); renderReadableVersion(run,view); return {view,typeset,again:()=>{ renderReadableVersion(run,view); return typeset.length; }}; })`,
+    { marked: true, raw: true, context: { document, location: { href: 'https://ansatze.test/console' } } })
+}
+
+test('a part\'s minor check notes follow it, collapsed; its major problems stay the "⚠ Check" note in the text', () => {
+  const render = readableVersionPage()
+  const run_ = { run_id: 'r1', status: 'finished', sandbox_preview: { kind: 'readability', has_readable: true, text: CHECKED_READABLE, check: CHECKED_PARTS } }
+  const { view, typeset, again } = render(run_)
+  const doc = view.querySelector('.rd-doc')
+  // The title and provenance, then each part in a section of its own.
+  assert.deepEqual(doc.children.map(el => el.tagName + (el.className ? '.' + el.className : '') + (el.dataset.rdPart ? '#' + el.dataset.rdPart : '')),
+    ['H1', 'BLOCKQUOTE.rd-provenance', 'SECTION.rd-part#1', 'SECTION.rd-part#2', 'SECTION.rd-part#3'])
+  const [one, two, three] = doc.querySelectorAll('section')
+  const notesOf = section => section.querySelectorAll('details').map(box => ({
+    last: section.lastChild === box, cls: box.className, summary: box.querySelector('summary').textContent,
+    items: box.querySelectorAll('li').map(item => item.textContent),
+  }))
+  assert.deepEqual(notesOf(one), [{ last: true, cls: 'rd-check-notes', summary: 'Check notes (1)',
+    items: ["Section 1.1, paragraph 'Why H(K)': The original says a model 'at that size' (H(K)) gives arbitrarily large models. The rewrite says 'of size at least H(K)'."
+      + " Suggested fix: Write 'If K has a model of size H(K)', or add a note that the two forms are equivalent by the Löwenheim–Skolem axiom."] }])
+  assert.equal(one.querySelector('.rd-check-fix').textContent.trim().slice(0, 15), 'Suggested fix: ')
+  assert.deepEqual(notesOf(two).map(box => [box.summary, box.items.length]), [['Check notes (2)', 2]])
+  // The checker's words are text, never markup; math in them is typeset with the rest.
+  assert.equal(doc.querySelectorAll('img').length, 0)
+  assert.match(notesOf(two)[0].items[1], /\$S=2\^\\omega\/\{=\^\*\}\$ explicitly <img src=x onerror=alert\(1\)>\.$/)
+  assert.equal(typeset.length, 1)
+  assert.equal(typeset[0], doc)
+  // A major problem is the part's "⚠ Check" note; only the minor point is a check note, without "unspecified".
+  assert.equal(three.querySelector('blockquote').className, 'rd-check')
+  assert.deepEqual(notesOf(three).map(box => box.items), [['A sentence is long.']])
+  assert.match(three.querySelector('.rd-check-foot').textContent, /not a certificate/)
+  // Anchors still mark the results; no part mark or token is left.
+  assert.equal(one.querySelector('.rd-anchor').dataset.rdAnchor, 'thm:main')
+  assert.doesNotMatch(doc.textContent, /\[part:|\[result:|@@/)
+  // Drawn once; the same record is not drawn again.
+  assert.equal(again(), 1)
+})
+
+test('readable.md splits at the runner\'s part marks only', () => {
+  const parts = run(['readableParts'], ['READABLE_PART_LINE'], '', 'readableParts')
+  assert.deepEqual(parts('# T\n\n[part:1]: #\n\nA\n\n[part:12]: #\n\nB\n').map(part => [part.index, part.text]),
+    [[null, '# T\n\n'], [1, '\n\nA\n\n'], [12, '\n\nB\n']])
+  // No part marks: one piece. The original text a part repeats has mark-like lines indented, so they mark nothing.
+  assert.deepEqual(parts('# T\n\nBody'), [{ index: null, text: '# T\n\nBody' }])
+  assert.deepEqual(parts('~~~~text\n [part:2]: #\n~~~~\n[part:x]: #\n[part:3]: # \n').length, 1)
+  assert.deepEqual(parts('[part:1]: #\r\nA').map(part => [part.index, part.text]), [[null, ''], [1, '\nA']])
+  // Notes are taken from well-formed parts only, minor ones, at most 12 a part.
+  const notes = run(['dagDetailText', 'readabilityCheckNotes'], [], '', `(check=>[...readabilityCheckNotes({sandbox_preview:{check}})])`)
+  assert.deepEqual(notes(CHECKED_PARTS).map(([index, list]) => [index, list.length]), [[1, 1], [2, 2], [3, 1]])
+  assert.deepEqual(notes([{ index: 1, issues: Array.from({ length: 20 }, (_, i) => ({ severity: 'minor', problem: 'p' + i })) }])[0][1].length, 12)
+  assert.deepEqual(notes([{ index: 1, issues: [{ severity: 'MINOR', problem: 'x' }, { severity: 'minor', problem: '  ' }, { severity: 'minor', problem: { toString: () => 'x' } }, null] }]), [])
+  assert.deepEqual(notes('junk'), [])
+  // A passage selected across a part's end leaves its check notes out.
+  const { document } = miniDocument()
+  const selected = run(['readabilitySelectionText', 'readabilityFormulaAt'], [], '', 'readabilitySelectionText', { raw: true, context: { document } })
+  const fragment = html => { const box = document.createElement('div'); box.innerHTML = html; const out = document.createDocumentFragment(); out.append(...box.childNodes); return out }
+  const selection = html => ({ rangeCount: 1, getRangeAt: () => ({ cloneRange: () => ({ startContainer: null, endContainer: null, setStartBefore() {}, setEndAfter() {}, cloneContents: () => fragment(html) }) }) })
+  assert.equal(selected(selection('<p>the end of part one.</p>\n<details class="rd-check-notes"><summary>Check notes (1)</summary><ul><li>x</li></ul></details>\n<h2>3. The class</h2>')),
+    'the end of part one. 3. The class')
+})
+
+test('the shared page shows the same check notes under each part of a readable version', () => {
+  const require = createRequire(import.meta.url)
+  const shared = require('../agent_monitor/web/run-viewer-readability.js')
+  const snapshot = { kind: 'readability', proof: CHECKED_READABLE, readability: { check: CHECKED_PARTS.map(part => typeof part === 'object' ? { index: part.index, title: part.title, status: part.status, issues: part.issues } : part) } }
+  assert.deepEqual([...shared.checkNotes(snapshot)].map(([index, list]) => [index, list.map(note => note.location)]),
+    [[1, ["Section 1.1, paragraph 'Why H(K)'"]], [2, ['Remarks before Lemma 3.4 and before Lemma 3.8', 'Section 3.2 introductory sentence']], [3, ['unspecified']]])
+  assert.deepEqual(shared.readableParts('a\n[part:2]: #\nb').map(part => part.index), [null, 2])
+  // Drawn into a page: each part rendered on its own (with the author's macros), its notes after it.
+  const { document } = miniDocument()
+  const context = vm.createContext({ console, document })
+  vm.runInContext(markedSource, context)
+  const renders = [], typeset = []
+  context.window = { AnsatzSharedText: { math: (element, options) => typeset.push([element.className, options?.macros]) } }
+  vm.runInContext(read('../agent_monitor/web/run-viewer-readability.js'), context)
+  const page = document.createElement('div'), target = document.createElement('article')
+  page.append(target)
+  const renderText = (element, value, options) => { renders.push([value.split('\n').find(line => line.trim()) || '', options?.macros]); element.innerHTML = context.marked.parse(value) }
+  context.window.AnsatzSharedReadability.render({ ...snapshot, readability: { ...snapshot.readability, paper_map: { nodes: [{ id: 'thm:main', label: 'Theorem 1.1' }], macros: { '\\R': '\\mathbb{R}' } } } }, { target, renderText })
+  const macros = { '\\R': '\\mathbb{R}' }
+  assert.deepEqual(plain(renders), [['# A CH obstruction to a prescribed categoricity threshold — Readable version', macros], ['## Abstract', macros], ['## 3. The abstract elementary class', macros],
+    ['> ⚠ **Check:** the independent check found problems that change the meaning here; compare with the original.', macros]])
+  assert.deepEqual(target.children.map(el => el.tagName + '.' + el.className), ['H1.', 'BLOCKQUOTE.rv-provenance', 'SECTION.rv-rd-part', 'SECTION.rv-rd-part', 'SECTION.rv-rd-part'])
+  const [one, two, three] = target.querySelectorAll('section')
+  for (const [section, summary] of [[one, 'Check notes (1)'], [two, 'Check notes (2)'], [three, 'Check notes (1)']]) {
+    const box = section.lastChild
+    assert.deepEqual([box.tagName, box.className, box.querySelector('summary').textContent], ['DETAILS', 'rv-check-notes', summary])
+  }
+  assert.equal(three.querySelector('blockquote').className, 'rv-check')
+  assert.equal(three.lastChild.querySelector('li').textContent, 'A sentence is long.')
+  assert.match(one.lastChild.querySelector('.rv-check-fix').textContent, /^ Suggested fix: Write 'If K has a model of size H\(K\)'/)
+  assert.equal(one.querySelector('.rv-anchor').textContent, 'Theorem 1.1')
+  assert.equal(target.querySelectorAll('img').length, 0)
+  // The notes' math is typeset with the author's macros, as are the notation and map sections.
+  assert.deepEqual(plain(typeset.filter(([cls]) => cls === 'rv-check-notes')), [['rv-check-notes', macros], ['rv-check-notes', macros], ['rv-check-notes', macros]])
+  assert.match(read('../agent_monitor/web/run-viewer.css'), /\.rv-markdown details\.rv-check-notes\{/)
 })

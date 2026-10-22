@@ -79,13 +79,19 @@ function constant(name) {
 }
 // Values cross the vm boundary as plain data (objects from another realm are never deep-equal).
 const plain = value => value === undefined ? undefined : JSON.parse(JSON.stringify(value))
+// The console's math scanners: the prose and report helpers find math with them.
+const MATH_SCANNERS = ['mathNextIndex', 'mathBetween', 'mathEnvironment', 'mathDollarLine', 'mathEscapedDollar', 'mathSpans', 'splitMath', 'holdMath']
+const MATH_KINDS = ['ANALYZE_MATH_KINDS', 'ANALYZE_STATEMENT_MATH_KINDS']
 function run(names, consts, prelude, body) {
-  const code = [prelude, ...consts.map(constant), ...names.map(fn), body].join('\n')
+  const code = [prelude, ...consts.map(constant), ...MATH_KINDS.filter(name => !consts.includes(name)).map(constant),
+    ...names.map(fn), ...MATH_SCANNERS.filter(name => !names.includes(name)).map(fn), body].join('\n')
   const context = vm.createContext({ console, URL, Date })
   const result = vm.runInContext(code, context)
   return typeof result === 'function' ? (...args) => plain(result(...args)) : plain(result)
 }
 const storage = `const store={};const localStorage={getItem:k=>k in store?store[k]:null,setItem:(k,v)=>{store[k]=String(v);},removeItem:k=>{delete store[k];}};`
+// The console's math stash and the scanners it runs.
+const STASH_MATH = ['stashMath', 'stashInlineMath', 'inlineMathEnd']
 
 test('the mode switch is four radios; Analyze and Readability appear only when the server offers them', () => {
   const out = run(
@@ -237,7 +243,7 @@ test('Manuscript DAG: verdicts map to blue, amber, red, grey and hollow — neve
 })
 
 test('report and verdict text stay text: raw HTML escaped, math kept, links sanitized', () => {
-  const render = run(['stashMath', 'escapeHtml', 'analysisMarkdownHtml', 'analysisReportMath', 'analysisTextAccents', 'analysisResolveRefs', 'analysisUnresolvedLabel'], ['ANALYZE_ACCENT_MARKS', 'ANALYZE_BARE_ACCENTED', 'ANALYZE_TEXT_LETTERS', 'ANALYZE_REF_TIE', 'ANALYZE_LABEL_KINDS'],
+  const render = run([...STASH_MATH, 'escapeHtml', 'analysisMarkdownHtml', 'analysisReportMath', 'analysisTextAccents', 'analysisResolveRefs', 'analysisUnresolvedLabel'], ['ANALYZE_ACCENT_MARKS', 'ANALYZE_BARE_ACCENTED', 'ANALYZE_TEXT_LETTERS', 'ANALYZE_REF_TIE', 'ANALYZE_LABEL_KINDS'],
     `let analysisMarkdownParser=null; const sanitizeRenderedHtml=html=>html; const window={};`,
     `(text,marked)=>{ window.marked=marked; analysisMarkdownParser=null; return analysisMarkdownHtml(text); }`)
   // Without marked the report is preformatted, escaped text.
@@ -551,7 +557,7 @@ test('a live analysis shows its progress notes as stages and verdict rows, never
     'Check · main results: Theorem 1.1', 'Check · Theorem 1.1 · checked', 'Check · Lemma 3.7 · error — sign of the trace term: \\(x < y\\) and \\(S \\ge',
     'Check · Lemma 4.2 · not_checked — Not checked: the result-check limit for this run was reached', 'Check · now checking Lemma 2.3, Proposition 2.1'])
   const view = run(['analyzeEl', 'analysisClosedMath', 'analysisProgressView', 'analysisModelProse', 'analysisTextAccents', 'analysisResolveRefs', 'analysisUnresolvedLabel'],
-    ['ANALYZE_STAGE_LINE', 'ANALYZE_RESULT_LINE', 'ANALYZE_NOW_LINE', 'ANALYZE_SOURCE_WORDS', 'ANALYZE_VERDICT_SHORT', 'ANALYZE_MATH_SPLIT', ...ANALYZE_TEXT_CONSTS], miniDom,
+    ['ANALYZE_STAGE_LINE', 'ANALYZE_RESULT_LINE', 'ANALYZE_NOW_LINE', 'ANALYZE_SOURCE_WORDS', 'ANALYZE_VERDICT_SHORT', ...ANALYZE_TEXT_CONSTS], miniDom,
     `(lines,status)=>flat(analysisProgressView(lines,{status}))`)
   const live = view(lines, 'running')
   assert.equal(live.tag, 'ol')
@@ -590,7 +596,7 @@ test('report math keeps |x| and < y: the report\'s Markdown escapes are undone i
   assert.equal(math('$\\\\|v\\\\|$'), '$\\|v\\|$')
   // A stand-in for marked: the text passes through, as a paragraph.
   class Marked { use() {} parse(source) { return `<p>${source}</p>` } }
-  const render = run(['stashMath', 'escapeHtml', 'analysisMarkdownHtml', 'analysisReportMath', 'analysisTextAccents', 'analysisResolveRefs', 'analysisUnresolvedLabel'], ['ANALYZE_ACCENT_MARKS', 'ANALYZE_BARE_ACCENTED', 'ANALYZE_TEXT_LETTERS', 'ANALYZE_REF_TIE', 'ANALYZE_LABEL_KINDS'],
+  const render = run([...STASH_MATH, 'escapeHtml', 'analysisMarkdownHtml', 'analysisReportMath', 'analysisTextAccents', 'analysisResolveRefs', 'analysisUnresolvedLabel'], ['ANALYZE_ACCENT_MARKS', 'ANALYZE_BARE_ACCENTED', 'ANALYZE_TEXT_LETTERS', 'ANALYZE_REF_TIE', 'ANALYZE_LABEL_KINDS'],
     `let analysisMarkdownParser=null; const sanitizeRenderedHtml=html=>html; const window={};`,
     `(text,marked)=>{ window.marked=marked; analysisMarkdownParser=null; return analysisMarkdownHtml(text); }`)
   const html = render('| Finding |\n| --- |\n| bound \\(\\|H\\| \\le X/4\\) and \\(x &lt; y\\); 1&lt;=a |', { Marked })
@@ -638,7 +644,7 @@ test('the shared viewer renders the report as Markdown and reads TeX references 
   const text = readFileSync(new URL('../agent_monitor/web/run-viewer-text.js', import.meta.url), 'utf8')
   // The report goes through the shared Markdown renderer (which drops the
   // report's \| and &lt; escapes) in manuscript mode, never as raw text.
-  assert.match(viewer, /AnsatzSharedText\.render\(target, text\(value\), \{ manuscript: analysis \}\)/)
+  assert.match(viewer, /AnsatzSharedText\.render\(target, text\(value\), \{ manuscript: analysis, macros: options\.macros \}\)/)
   const sandbox = { window: {}, document: {}, NodeFilter: {}, location: { href: 'https://example.test/' } }
   vm.runInNewContext(text, sandbox)
   const prose = sandbox.window.AnsatzSharedText.manuscriptProse
@@ -649,7 +655,7 @@ test('the shared viewer renders the report as Markdown and reads TeX references 
 })
 
 test('model prose reads TeX cross-references as the manuscript\'s results, or bare labels, never with their commands', () => {
-  const prose = run(['analysisTextAccents', 'analysisResolveRefs', 'analysisUnresolvedLabel', 'analysisModelProse', 'analysisRefLabels'], ['ANALYZE_MATH_SPLIT', ...ANALYZE_TEXT_CONSTS], '',
+  const prose = run(['analysisTextAccents', 'analysisResolveRefs', 'analysisUnresolvedLabel', 'analysisModelProse', 'analysisRefLabels'], [...ANALYZE_TEXT_CONSTS], '',
     `(text,graph)=>analysisModelProse(text,analysisRefLabels(graph))`)
   const graph = {
     nodes: [{ label: 'Corollary 1.2', meta: { number: '1.2', labels: ['cor:counting'] } },
@@ -684,7 +690,7 @@ test('model prose reads TeX cross-references as the manuscript\'s results, or ba
 test('a report\'s ties never strike text through, and its references read as results', () => {
   // A stand-in for marked that strikes "~text~" through, as GFM does.
   class Marked { use() {} parse(source) { return `<p>${source.replace(/~([^~\n]+)~/g, '<del>$1</del>')}</p>` } }
-  const render = run(['stashMath', 'escapeHtml', 'analysisMarkdownHtml', 'analysisReportMath', 'analysisTextAccents', 'analysisResolveRefs', 'analysisUnresolvedLabel', 'analysisRefLabels'], ANALYZE_TEXT_CONSTS,
+  const render = run([...STASH_MATH, 'escapeHtml', 'analysisMarkdownHtml', 'analysisReportMath', 'analysisTextAccents', 'analysisResolveRefs', 'analysisUnresolvedLabel', 'analysisRefLabels'], ANALYZE_TEXT_CONSTS,
     `let analysisMarkdownParser=null; const sanitizeRenderedHtml=html=>html; const window={};`,
     `(text,graph,marked)=>{ window.marked=marked; analysisMarkdownParser=null; return analysisMarkdownHtml(text,analysisRefLabels(graph)); }`)
   const graph = { nodes: [{ label: 'Corollary 1.2', meta: { number: '1.2', labels: ['cor:counting'] } }] }

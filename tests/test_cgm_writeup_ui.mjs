@@ -123,7 +123,8 @@ class Elem {
     return event
   }
   focus() { this.ownerDocument.activeElement = this }
-  setSelectionRange() {}
+  setSelectionRange(start, end) { this.selection = [start, end] }
+  dispatchEvent(event) { (this.events ||= []).push(event.type + (event.bubbles ? ' (bubbles)' : '')); return true }
   querySelectorAll(selector) { return descendants(this).filter(el => matches(el, selector)) }
   querySelector(selector) { return this.querySelectorAll(selector)[0] || null }
 }
@@ -212,19 +213,23 @@ const constant = name => sourceFrom(script.indexOf(`const ${name}=`), ';')
 const switchWiring = () => sourceFrom(script.indexOf(`document.querySelectorAll('#proof-doc-switch [role="radio"]')`), ';')
 
 const CONSOLE_FUNCTIONS = [
-  'escapeHtml', 'stashMath', 'safeMarkdownHref', 'sanitizeRenderedHtml', 'mdToHtml', 'unwrapProofMarkdownFence',
+  'escapeHtml', 'stashMath', 'stashInlineMath', 'inlineMathEnd', 'mathNextIndex', 'mathBetween', 'mathSpans', 'holdMath', 'safeMarkdownHref', 'sanitizeRenderedHtml', 'mdToHtml', 'unwrapProofMarkdownFence',
   'normalizeProofMarkdown', 'splitProofs', 'problemItems', 'problemCardHtml', 'liveSandboxText', 'isAnalysisRun',
   'isReadabilityRun', 'syncSandboxEditor', 'beginSandboxEdit', 'saveSandboxProof', 'finishSandboxEdit', 'applySandboxPreview', 'runWriteup',
-  'proofDocShown', 'showProofDocFile', 'syncProofDocSwitch', 'chooseProofDoc', 'writeupBannerHtml', 'closureCitedLemmas',
+  'writeupBody', 'proofDocShown', 'showProofDocFile', 'syncProofDocSwitch', 'chooseProofDoc', 'writeupBannerHtml', 'closureCitedLemmas',
   'renderMarkdownIntoView', 'showProofMd', 'refreshProofPreview',
+  // Make readable, and the Readability policy it follows.
+  'makeReadableSource', 'syncMakeReadable', 'makeReadable', 'dagIsCgmEngine', 'readabilityEngineEntry', 'readabilityPolicy',
+  'readabilityOffered', 'viewerIsAdmin', 'viewerIsGuest', 'readabilitySponsoredOnly', 'readabilityRouteSponsored', 'engineModelMode',
+  'selectedAccountRuntime',
 ]
 // The proof toolbar and the Sandbox body (with its proof.md editor) exactly as the page has them.
 const TOOLBAR = consoleHtml.slice(consoleHtml.indexOf('<div class="proof-toolbar">'), consoleHtml.indexOf('<div class="prompt-strip'))
 const SANDBOX_BODY = consoleHtml.slice(consoleHtml.indexOf('<div class="proof-body" id="proof-body">'), consoleHtml.indexOf('<div class="cite-strip'))
 
 function consolePage() {
-  const document = createDocument(TOOLBAR + SANDBOX_BODY)
-  const calls = { math: 0, coverage: 0, downloads: [], analysis: 0, fetches: [], saves: [], status: [] }
+  const document = createDocument(TOOLBAR + SANDBOX_BODY + '<textarea id="problem-text"></textarea>')
+  const calls = { math: 0, coverage: 0, downloads: [], analysis: 0, fetches: [], saves: [], status: [], left: [] }
   // proof.md on the server; its revision is "rev-<mtime>".
   const files = { proof: CLOSURE, mtime: 1 }
   const context = vm.createContext({ console, URL, document, calls, files, setTimeout, clearTimeout })
@@ -241,6 +246,12 @@ function consolePage() {
     'function applyAnalysisPreview(){ calls.analysis++; return true; }',
     'function editorStatus(message){ calls.status.push(message); }',
     'function setProofEmpty(){} function renderCitations(){} function resizeSandboxEditor(){} function showProofPdf(){}',
+    // No Readability on this page until a test lists it; leaving the run is recorded.
+    "let ENGINES=[], SETTINGS=null, CURRENT_USER={id:1}, GUEST_POLICY=null, jobId='j1';",
+    // The composer's attached files (none until a test attaches some).
+    "const initialAttachments={files:[],clear(){ calls.left.push('attachments cleared'); this.files=[]; }};",
+    "function stopPolling(){ calls.left.push('stop polling'); } function goLanding(){ calls.left.push('composer'); } function chooseMode(mode){ calls.left.push('mode '+mode); }",
+    'class Event{ constructor(type,init={}){ this.type=type; this.bubbles=!!init.bubbles; } }',
     `async function fetch(url,init){
       calls.fetches.push(url);
       if(init?.method==='POST'){
@@ -257,6 +268,7 @@ function consolePage() {
     ...['SAFE_MARKDOWN_TAGS', 'WRITEUP_BANNER', 'WRITEUP_STALE_NOTE', 'proofDocChoice'].map(constant),
     ...CONSOLE_FUNCTIONS.map(fn),
     switchWiring(),
+    sourceFrom(script.indexOf("$('make-readable-btn').onclick="), ';'),
   ].join('\n'), context)
   const $ = id => document.getElementById(id)
   const radio = doc => document.querySelector(`#proof-doc-switch [data-proof-doc="${doc}"]`)
@@ -588,6 +600,76 @@ test('a closure rendered before v2 names the lemma behind each cited label, on s
   assert.equal(page.run('sandboxText').trim(), CLOSURE.trim())
 })
 
+// ── the write-up's own header ──
+// writeup.md of a live run (Codex, n^2+n even), byte for byte, and the other
+// two headers as cgm/writeup.render_writeup writes them (a body may quote).
+const LIVE_WRITEUP = [
+  '# Written proof', '',
+  '> Written from the verifier-accepted facts (proof.md) and then checked as a whole by an independent, response-only model verifier that saw only the problem and this text. Model-verifier acceptance is not a Lean or other formal certificate.', '',
+  '**Theorem.** For every natural number $n$, the integer $n^2+n$ is even.', '',
+  '**Conventions.** Let $\\mathbb N=\\{0,1,2,\\ldots\\}$. An integer $m$ is even if $m=2k$ for some integer $k$.', '',
+  '**Proof.** We show that one of $n$ and $n+1$ is even, and then use the factorization $n^2+n=n(n+1)$.', '',
+  'Let $n\\in\\mathbb N$ be arbitrary. The division-with-remainder theorem states that for every integer $x$ and every positive integer $d$, there exist unique integers $a$ and $r$ such that $x=da+r$ and $0\\le r<d$. Applying it with $x=n$ and $d=2$ gives',
+  '$$', 'n=2a+r,\\qquad 0\\le r<2.', '$$',
+  'Since $r$ is an integer, either $r=0$ or $r=1$. Also, $a\\ge0$: otherwise $a\\le-1$, and thus', '$$', 'n=2a+r\\le-2+1=-1,', '$$', 'contrary to $n\\ge0$.', '',
+  'If $r=0$, set $q=a$. Then $n=2q$. The integer $k=q(n+1)$ satisfies', '$$', 'n^2+n=n(n+1)=(2q)(n+1)=2k.', '$$', '',
+  'If $r=1$, set $q=a+1$. Then', '$$', 'n+1=2a+2=2q.', '$$', 'The integer $k=nq$ therefore satisfies', '$$', 'n^2+n=n(n+1)=n(2q)=2k.', '$$', '',
+  'In either case, $n^2+n$ is even. Since $n$ was arbitrary, this holds for every $n\\in\\mathbb N$, and hence also under the convention that natural numbers begin at $1$. $\\blacksquare$', '',
+].join('\n')
+const QUOTING_BODY = '**Theorem.** For every natural number $n$, the integer $n^2+n$ is even.\n\n> A quoted remark inside the body stays.\n\n**Proof.** By cases. $\\blacksquare$'
+const REJECTED_WRITEUP = '# Written proof\n\n> Written from the verifier-accepted facts (proof.md). An independent model check of this text found problems, listed at the end, so this write-up is NOT accepted; the verified facts remain the proof.\n\n'
+  + QUOTING_BODY + '\n\n**Problems found by the check.**\n\n- Case 2: The step \\$n+1=2a+2\\$ uses \\$r=1\\$ but the case split never shows \\$r\\\\in\\\\{0,1\\\\}\\$.\n'
+const UNCHECKED_WRITEUP = '# Written proof\n\n> Written from the verifier-accepted facts (proof.md). This text has not been checked; the verified facts remain the proof.\n\n' + QUOTING_BODY + '\n'
+
+test('the write-up is shown without its own heading and status note: the banner says that already', () => {
+  const { context } = consolePage()
+  const body = context.writeupBody
+  assert.ok(body(LIVE_WRITEUP).startsWith('**Theorem.** For every natural number $n$'))
+  assert.equal(body(LIVE_WRITEUP), LIVE_WRITEUP.slice(LIVE_WRITEUP.indexOf('**Theorem.**')))
+  for (const file of [REJECTED_WRITEUP, UNCHECKED_WRITEUP]) {
+    const shown = body(file)
+    // The body's own quotation and the check's findings stay.
+    assert.ok(shown.startsWith(QUOTING_BODY), shown)
+    assert.doesNotMatch(shown, /Written proof|Written from the verifier-accepted facts/)
+  }
+  assert.match(body(REJECTED_WRITEUP), /\*\*Problems found by the check\.\*\*\n\n- Case 2:/)
+  // Only that header: another heading, no heading, or a heading without a note.
+  for (const other of ['# Proof\n\n> Note.\n\nBody', '**Theorem.** x\n\n> Note.', '', ' # Written proof\n\n> Note.\n\nBody'])
+    assert.equal(body(other), other)
+  assert.equal(body('# Written proof\n\n**Theorem.** x\n\n> kept'), '**Theorem.** x\n\n> kept')
+  assert.equal(body('# Written proof\r\n\r\n> Note.\r\n\r\n**Theorem.** x'), '**Theorem.** x')
+
+  // In the Sandbox: the banner, then the proof itself (the download is the file as written).
+  for (const [status, file, quotes] of [['accepted', LIVE_WRITEUP, 0], ['rejected', REJECTED_WRITEUP, 1], ['unchecked', UNCHECKED_WRITEUP, 1]]) {
+    const page = consolePage()
+    page.context.applySandboxPreview(cgmRun(writeupBlock(status, true, file)))
+    page.context.chooseProofDoc('writeup')
+    const doc = page.$('md-view').querySelector('.md-doc')
+    assert.equal(doc.querySelectorAll('h1').length, 0, status)
+    assert.equal(doc.querySelectorAll('blockquote').length, quotes, status)
+    assert.match(doc.textContent, /^\s*Theorem\. For every natural number/, status)
+    assert.deepEqual(page.$('md-view').querySelectorAll('.problem-message, .writeup-banner, .md-doc').map(el => el.className), ['problem-message', 'writeup-banner', 'md-doc'])
+    assert.equal(page.state().download, 'writeup.md')
+  }
+})
+
+test('the shared page shows the write-up without its own heading and status note', async () => {
+  for (const [status, file, quotes] of [['accepted', LIVE_WRITEUP, 0], ['rejected', REJECTED_WRITEUP, 1]]) {
+    const page = await sharedPage({ ...SNAPSHOT, writeup: file, writeup_status: status, writeup_fresh: true })
+    page.radio('writeup').dispatch('click')
+    const proof = page.$('rv-proof-text')
+    assert.equal(proof.querySelectorAll('h1').length, 0, status)
+    assert.equal(proof.querySelectorAll('blockquote').length, quotes, status)
+    assert.match(proof.textContent, /^\s*Theorem\. For every natural number/, status)
+    assert.doesNotMatch(proof.textContent, /Written from the verifier-accepted facts/)
+    assert.equal(page.state().bannerHidden, false)
+  }
+  // The verified facts are shown as saved.
+  const page = await sharedPage({ ...SNAPSHOT, writeup: LIVE_WRITEUP, writeup_status: 'accepted', writeup_fresh: true })
+  page.radio('facts').dispatch('click')
+  assert.equal(page.$('rv-proof-text').querySelectorAll('h1')[0].textContent, 'Proof')
+})
+
 // ── the shared page ──
 async function sharedPage(snapshot) {
   const document = createDocument(viewerHtml.slice(viewerHtml.indexOf('<body')))
@@ -671,4 +753,128 @@ test('the shared page shows no switch without a write-up, never for an analysis,
   for (const bad of ['<script', '<img', 'onerror', 'javascript:']) assert.ok(!html.includes(bad), `${bad} reached the page: ${html}`)
   assert.ok(html.includes('$a&lt;b$'))
   assert.equal(page.context.pwned, undefined)
+})
+
+// ── Make readable ──
+// The Readability entry of /api/engines for a viewer, as the server sends it (a member's by default).
+const readabilityEngine = ({ entry = {}, policy = {} } = {}) => ({
+  id: 'readability', modes: ['readability'], available: true, auth_modes: ['api_key'], ...entry,
+  readability: { enabled: true, routes: ['sponsored_kimi', 'api_key'], sources: { paste_chars: 400000 }, sponsored: { available: true, remaining_today: 12 }, ...policy },
+})
+// /api/settings of a member on the API route without a Kimi key of their own: their Kimi K3 runs are sponsored.
+const KEYLESS = { account_runtime: 'api', sponsored_kimi_available: true, kimi_user_key_set: false }
+function readablePage({ engine = readabilityEngine(), user = { id: 4 }, guestPolicy = null, settings = KEYLESS } = {}) {
+  const page = consolePage()
+  page.context.ENGINE_FOR_TEST = [engine]
+  page.run(`ENGINES=ENGINE_FOR_TEST; SETTINGS=${JSON.stringify(settings)}; CURRENT_USER=${JSON.stringify(user)}; GUEST_POLICY=${JSON.stringify(guestPolicy)};`)
+  page.button = () => page.$('make-readable-btn')
+  page.note = () => page.$('make-readable-note').textContent
+  return page
+}
+
+test('Make readable pastes the document on screen into Readability, as written, and starts nothing', () => {
+  // The button sits in the proof toolbar, hidden until a finished CGM run shows its document.
+  assert.match(TOOLBAR, /<span class="make-readable-note" id="make-readable-note" role="status" aria-live="polite"><\/span>\s*<button type="button" id="make-readable-btn" hidden title="[^"]+">¶ Make readable<\/button>/)
+  let page = readablePage(), { context, $, calls } = page
+  context.applySandboxPreview(cgmRun(writeupBlock('accepted')))
+  assert.equal(page.button().hidden, false)
+  page.button().dispatch('click')
+  // As New does: the run is left (no more polling) for the composer, now in Readability.
+  assert.deepEqual(calls.left, ['stop polling', 'composer', 'mode readability'])
+  assert.equal(page.run('runId'), null)
+  const input = $('problem-text')
+  // The written proof as the file has it (its header says how it was checked).
+  assert.equal(input.value, WRITEUP)
+  assert.deepEqual(input.events, ['input (bubbles)'])
+  assert.deepEqual(input.selection, [0, 0])
+  assert.equal(page.document.activeElement, input)
+
+  // With the verified facts on screen, proof.md.
+  page = readablePage(); ({ context, $, calls } = page)
+  context.applySandboxPreview(cgmRun(writeupBlock('accepted')))
+  context.chooseProofDoc('facts')
+  page.button().dispatch('click')
+  assert.equal($('problem-text').value, CLOSURE.trim())
+  // A run without a write-up offers its proof.md.
+  page = readablePage(); ({ context, $ } = page)
+  context.applySandboxPreview(cgmRun(undefined))
+  assert.equal(page.button().hidden, false)
+  page.button().dispatch('click')
+  assert.equal($('problem-text').value, CLOSURE.trim())
+  // The document becomes the composer's one source: files still attached there would be a second.
+  page = readablePage(); ({ context, $, calls } = page)
+  context.applySandboxPreview(cgmRun(writeupBlock('accepted')))
+  page.run("initialAttachments.files=[{file:{name:'notes.tex'}}];")
+  page.button().dispatch('click')
+  assert.deepEqual([calls.left, page.run('initialAttachments.files.length'), $('problem-text').value], [['stop polling', 'composer', 'mode readability', 'attachments cleared'], 0, WRITEUP])
+})
+
+test('Make readable pressed after it stopped applying pastes nothing, and the button goes', () => {
+  const page = readablePage(), { context, $, calls } = page
+  context.applySandboxPreview(cgmRun(writeupBlock('accepted')))
+  assert.equal(page.button().hidden, false)
+  // Today's last sponsored run went elsewhere since the button was drawn.
+  page.run('ENGINES[0].readability.sponsored.remaining_today=0;')
+  page.button().dispatch('click')
+  assert.deepEqual([page.button().hidden, calls.left, page.run('runId'), $('problem-text').value ?? ''], [true, [], 'r1', ''])
+  // The button follows the listing, the settings and the guest runs as they are drawn.
+  assert.match(fn('renderEngines'), /^function renderEngines\(\)\{\n\s*\/\/[^\n]*\n\s*syncMakeReadable\(\);/)
+  assert.match(fn('applyGuestUi'), /renderReadabilityCaps\(\);\n\s*syncMakeReadable\(\);/)
+})
+
+test('Make readable says when the document is longer than the viewer may paste, and pastes nothing', () => {
+  const page = readablePage({ engine: readabilityEngine({ policy: { sources: { paste_chars: 100 } } }), user: { id: 0, guest: true } })
+  const { context, $, calls } = page
+  context.applySandboxPreview(cgmRun(writeupBlock('accepted')))
+  page.button().dispatch('click')
+  assert.equal(page.note(), `The written proof has ${WRITEUP.length.toLocaleString('en-US')} characters: too long to paste into Readability (at most 100 for guests).`)
+  assert.deepEqual([calls.left, page.run('runId'), $('problem-text').value ?? ''], [[], 'r1', ''])
+  // The note is about that document: it goes when the other one is shown.
+  context.chooseProofDoc('facts')
+  assert.equal(page.note(), '')
+  page.button().dispatch('click')
+  assert.match(page.note(), /^The proof\.md has [\d,]+ characters: too long to paste into Readability \(at most 100 for guests\)\.$/)
+})
+
+test('Make readable is offered only for a finished CGM run, as the Readability policy allows the viewer', () => {
+  const shown = (setup, record = cgmRun(writeupBlock('accepted'))) => {
+    const page = readablePage(setup)
+    page.context.applySandboxPreview(record)
+    return !page.button().hidden
+  }
+  assert.equal(shown({}), true)
+  // Not while it runs, not for another harness, not without proof.md.
+  assert.equal(shown({}, cgmRun(writeupBlock('accepted'), { status: 'running' })), false)
+  assert.equal(shown({}, cgmRun(writeupBlock('accepted'), { status: 'failed' })), false)
+  assert.equal(shown({}, cgmRun(writeupBlock('accepted'), { engine: 'plain' })), false)
+  assert.equal(shown({}, cgmRun(undefined, {}, { has_proof_md: false })), false)
+  assert.equal(shown({}, cgmRun(writeupBlock('accepted'), { engine: 'math_harness' })), true)
+  // Only where Readability would start: offered, set up, open to this viewer.
+  assert.equal(shown({ engine: readabilityEngine({ entry: { requires_login: true } }) }), false)
+  assert.equal(shown({ engine: readabilityEngine({ policy: { enabled: false, reason: 'off' } }) }), false)
+  assert.equal(shown({ engine: readabilityEngine({ entry: { available: false } }), user: { id: 1, is_admin: true } }), false)
+  assert.equal(shown({ engine: { ...readabilityEngine(), readability: null } }), false)
+  // A guest with runs left; a run on sponsored Kimi K3 only while today's sponsored runs allow one.
+  const guest = { user: { id: 0, guest: true }, settings: null }
+  assert.equal(shown({ ...guest, guestPolicy: { runs_remaining: 2 } }), true)
+  assert.equal(shown({ ...guest, guestPolicy: { runs_remaining: 0 } }), false)
+  const atLimit = policy => readabilityEngine({ policy: { sponsored: { available: true, remaining_today: 0 }, ...policy } })
+  assert.equal(shown({ ...guest, engine: atLimit() }), false)
+  assert.equal(shown({ engine: readabilityEngine({ policy: { routes: ['sponsored_kimi'], sponsored: { available: false } } }) }), false)
+  // A member without a Kimi key of their own runs on sponsored Kimi K3 too (as the composer reckons it).
+  assert.equal(shown({ engine: atLimit() }), false)
+  assert.equal(shown({ engine: readabilityEngine({ policy: { sponsored: { available: false } } }) }), false)
+  // With their own key, or on an administrator's Codex account, the run is not a sponsored one.
+  assert.equal(shown({ engine: atLimit(), settings: { ...KEYLESS, kimi_user_key_set: true } }), true)
+  const routes = ['sponsored_kimi', 'api_key', 'codex_subscription', 'claude_subscription']
+  assert.equal(shown({ engine: { ...atLimit({ routes }), auth_modes: ['codex_subscription', 'claude_subscription', 'api_key'] },
+    user: { id: 1, is_admin: true }, settings: { account_runtime: 'codex', codex_connected: true } }), true)
+  // Analyses and readable versions have no proof document to paste.
+  const page = readablePage()
+  for (const engine of ['analyze', 'readability']) assert.equal(page.context.makeReadableSource({ ...cgmRun(writeupBlock('accepted')), engine }), null)
+  // Not while proof.md is open in the editor.
+  page.context.applySandboxPreview(cgmRun(writeupBlock('rejected')))
+  assert.equal(page.button().hidden, false)
+  page.context.beginSandboxEdit()
+  assert.equal(page.button().hidden, true)
 })
