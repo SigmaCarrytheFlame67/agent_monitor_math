@@ -1902,7 +1902,7 @@ body { background:var(--bg); }
             <label class="analyze-focus" for="readability-focus"><span>Focus</span><input id="readability-focus" type="text" maxlength="2000" autocomplete="off" spellcheck="false" placeholder="Optional — what to explain most carefully, e.g. the proof of Theorem 2"/></label>
           </div>
           <p class="analyze-provider" id="analyze-provider">Analyze sends the manuscript text to the selected model provider — sponsored Kimi K3 or your own provider. Don't submit work you aren't allowed to share.</p>
-          <p class="analyze-provider" id="readability-provider" hidden>Readability sends the manuscript text to the selected model provider — sponsored Kimi K3, your own Kimi key, or a connected Codex or Claude Code account. Don't submit work you aren't allowed to share.</p>
+          <p class="analyze-provider" id="readability-provider" hidden>Readability sends the manuscript text to the selected model provider. Don't submit work you aren't allowed to share.</p>
           <p class="analyze-caps" id="analyze-caps"></p>
         </div>
         <div class="choice-dock">
@@ -4208,7 +4208,7 @@ function updateChatStatus(run){
     // The latest progress note, never the tail of a verifier's JSON reply.
     detail=analysisProgressDetail(analysisRunProgress(run)).slice(0,160);
   }else if(readability){
-    detail=readabilityProgressDetail(readabilityRunProgress(run)).slice(0,160);
+    detail=readabilityUiReady()?readabilityProgressDetail(readabilityRunProgress(run)).slice(0,160):'';
   }else if(out){
     const lines=out.split('\n').map(s=>s.trim()).filter(Boolean);
     detail=(lines[lines.length-1]||'').slice(0,80);
@@ -4366,7 +4366,7 @@ function updateProcLog(run){
   // the progress notes then, and the session's own log once it has ended.
   // A readable version's log reads the same way.
   const lines=isAnalysisRun(run)?(/session summary$/.test(String(last?.stage_name||''))?analysisLogLines(raw):analysisRunProgress(run))
-    :isReadabilityRun(run)?(/session summary$/.test(String(last?.stage_name||''))?analysisLogLines(raw):readabilityRunProgress(run))
+    :isReadabilityRun(run)?(/session summary$/.test(String(last?.stage_name||''))?analysisLogLines(raw):readabilityUiReady()?readabilityRunProgress(run):[])
     :raw.split('\n').map(s=>s.replace(/\s+$/,'')).filter(s=>s.trim());
   const tail=lines.slice(-300);
   const text=tail.join('\n');
@@ -4637,7 +4637,7 @@ function applySandboxPreview(run){
   // An analysis previews its generated report (read-only), never a proof;
   // a readable version shows its tabs (readability.js).
   if(run?.sandbox_preview?.kind==='analysis'||isAnalysisRun(run))return applyAnalysisPreview(run);
-  if(isReadabilityRun(run))return applyReadabilityPreview(run);
+  if(isReadabilityRun(run))return readabilityUiReady()?applyReadabilityPreview(run):showReadabilityPending();
   const live=run?.status==='running';
   const box=run?.sandbox_preview||{};
   const text=String(box.text||liveSandboxText(run)||'').trim();
@@ -5390,6 +5390,11 @@ async function refreshDagView(){
     $('dag-empty').style.display='block'; $('dag-stage').style.display='none';
     $('dag-empty').innerHTML='<div style="font-size:28px;opacity:.4">◇</div><div>Loading the selected proof graph…</div>';
     dagStatus(requestedMode==='engine'?'loading CGM '+(requestedEngineView==='facts'?'Facts':'Explore')+' graph':requestedMode==='compiler'?'loading compiler facts':requestedMode==='analysis'?'loading the Manuscript DAG':requestedMode==='paper-map'?'loading the Paper map':'loading '+(requestedMode==='formal'?'Formal · Lean DAG':'informal outline'));
+  }
+  // readability.js draws the Paper map, and refreshes this view once it has loaded.
+  if(requestedMode==='paper-map'&&!readabilityUiReady()){
+    if(readabilityUiMissing){ $('dag-empty').innerHTML='<div style="font-size:28px;opacity:.4">◇</div><div>The Paper map could not be loaded. Reload the page to try again.</div>'; dagStatus('paper map unavailable'); }
+    return;
   }
   const runEngine=lastSandboxRun?.run_id===requestedRunId?String(lastSandboxRun?.engine||''):'';
   let d=null;
@@ -6749,9 +6754,10 @@ document.addEventListener('mouseup',e=>{
     const text=(sel?.toString()||'').trim();
     const inPdf=sel&&sel.rangeCount&&($('pdf-pages').contains(sel.anchorNode)||$('md-view').contains(sel.anchorNode));
     // A readable version asks about passages of its Readable and Original tabs.
-    const askable=!document.body.classList.contains('readability-run')||!!readabilitySelectionView();
+    const readable=document.body.classList.contains('readability-run');
+    const askable=!readable||readabilityUiReady()&&!!readabilitySelectionView();
     if(text&&inPdf&&askable){
-      selText=document.body.classList.contains('readability-run')?readabilitySelectionText(sel)||text:text;
+      selText=readable?readabilitySelectionText(sel)||text:text;
       const rect=sel.getRangeAt(0).getBoundingClientRect();
       selPop.style.display='flex';
       const scale=parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--console-scale'))||1;
@@ -6994,6 +7000,7 @@ function applyRunKindComposer(){
   $('analyze-provider').hidden=readability;
   $('readability-options').hidden=!readability;
   $('readability-provider').hidden=!readability;
+  if(readability)$('readability-provider').textContent=readabilityProviderText();
   syncStartButton();
   initialAttachments.refreshLimits();
   if(analyze)renderAnalyzeCaps();
@@ -7358,6 +7365,15 @@ function readabilitySponsoredOnly(){
   const routes=readabilityPolicy()?.routes;
   return viewerIsGuest()||(Array.isArray(routes)&&routes.length===1&&routes[0]==='sponsored_kimi');
 }
+// Where the manuscript goes: the routes the server lists for this viewer
+// (guests reach sponsored Kimi K3 only; subscriptions are the operator's).
+function readabilityProviderText(){
+  const routes=readabilityPolicy()?.routes, listed=Array.isArray(routes)?routes:[];
+  const accounts=[['codex_subscription','Codex'],['claude_subscription','Claude Code']].filter(([route])=>listed.includes(route)).map(([,name])=>name);
+  const places=[listed.includes('sponsored_kimi')?'sponsored Kimi K3':'',listed.includes('api_key')?'your own Kimi key':'',accounts.length?'a connected '+accounts.join(' or ')+' account':''].filter(Boolean);
+  const where=places.length>2?places.slice(0,-1).join(', ')+', or '+places.at(-1):places.join(' or ');
+  return 'Readability sends the manuscript text to the selected model provider'+(where?' — '+where:'')+". Don't submit work you aren't allowed to share.";
+}
 function readabilityRouteSponsored(){
   if(readabilitySponsoredOnly())return true;
   return engineModelMode(readabilityEngineEntry())==='api_key'&&!!SETTINGS?.sponsored_kimi_available&&!SETTINGS?.kimi_user_key_set;
@@ -7467,6 +7483,22 @@ const READABILITY_ASK_NOTE='Questions are answered by a model from this paper �
 let analysisSourceShown=false, analysisSourceRunId='', analysisRecheckMark='';
 function isAnalysisRun(run){ return !!run&&typeof run==='object'&&(run.run_kind==='analyze'||run.engine==='analyze'||run.sandbox_preview?.kind==='analysis'); }
 function isReadabilityRun(run){ return !!run&&typeof run==='object'&&(run.run_kind==='readability'||run.engine==='readability'||run.sandbox_preview?.kind==='readability'); }
+/* readability.js (#readability-loader, after this script) draws readable
+   versions and the Paper map. Until it has loaded they say so instead of
+   failing, and it draws the selected run when it arrives. */
+let readabilityUiMissing=false;
+function readabilityUiReady(){ return typeof initReadabilityUi==='function'; }
+function readabilityUiUnavailable(){
+  readabilityUiMissing=true;
+  if(runId&&lastSandboxRun?.run_id===runId)applySandboxPreview(lastSandboxRun);
+  if(workspaceView==='dag'&&dagMode==='paper-map')refreshDagView();
+}
+function showReadabilityPending(){
+  $('proof-label').textContent=readabilityUiMissing?'not loaded':'loading…';
+  const empty=$('proof-empty')?.lastElementChild;
+  if(empty)empty.textContent=readabilityUiMissing?'The readable version could not be loaded. Reload the page to try again.':'Loading the readable version…';
+  return false;
+}
 // kind: the run kind the view is for ('analyze', 'readability' or 'prove').
 function applyRunKindView(kind,rid){
   const analysis=kind==='analyze', readability=kind==='readability';
@@ -7515,10 +7547,12 @@ function syncDagModeForRun(kind,rid){
   if(paperMap)paperMap.hidden=!readability;
   if(cgm)cgm.hidden=analysis||readability;
   document.querySelectorAll('#dag-mode [data-mode="informal"],#dag-mode [data-mode="formal"],#dag-mode [data-mode="compiler"]').forEach(button=>{ button.hidden=readability; });
+  // An analysis keeps an Outline, Formal or Compiler view chosen for it; a
+  // mode its buttons hide (the CGM graph, the Paper map) gives way.
   let wanted=dagMode;
-  if(analysis&&(rid&&rid!==dagAutoRunId||dagMode==='engine'))wanted='analysis';
+  if(analysis&&(rid&&rid!==dagAutoRunId||dagMode==='engine'||dagMode==='paper-map'))wanted='analysis';
   if(readability)wanted='paper-map';
-  if(!analysis&&dagMode==='analysis'||!readability&&dagMode==='paper-map')wanted='engine';
+  if(!analysis&&!readability&&(dagMode==='analysis'||dagMode==='paper-map'))wanted='engine';
   if(rid)dagAutoRunId=rid;
   if(wanted!==dagMode)setDagMode(wanted,{refresh:workspaceView==='dag'});
 }
@@ -8441,7 +8475,7 @@ function loadAnalyzeHandoff(item){
 setInterval(()=>{ if(!document.hidden)loadRuns().catch(()=>{}); }, 5000);
 </script>
 <script id="sharing-loader">{const s=document.createElement("script");s.src=(window.__PC_BASE__||"")+"/static/sharing.js";document.body.append(s);}</script>
-<script id="readability-loader">{const base=window.__PC_BASE__||"",css=document.createElement("link"),s=document.createElement("script");css.rel="stylesheet";css.href=base+"/static/readability.css";document.head.append(css);s.src=base+"/static/readability.js";document.body.append(s);}</script>
+<script id="readability-loader">{const base=window.__PC_BASE__||"",css=document.createElement("link"),s=document.createElement("script");css.rel="stylesheet";css.href=base+"/static/readability.css";document.head.append(css);s.src=base+"/static/readability.js";s.onerror=()=>readabilityUiUnavailable();document.body.append(s);}</script>
 <script id="landing-geometry-script">
 (() => {
   const landing = document.getElementById('view-landing');

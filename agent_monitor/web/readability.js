@@ -142,17 +142,21 @@ let readableMarkdownParser=null;
 const READABLE_MARKER_LINE=/^[ \t]{0,3}\[result:([^\]\s]{1,80})\]:[ \t]*#[ \t]*$/gm;
 const READABLE_RESULT_LINK=/\[\[\s*result\s*:\s*([^\]\s]{1,80})\s*\]\]/gi;
 /* Readable text (and answers) are Markdown with TeX, written by a model from
-   someone else's manuscript: raw HTML is shown as text and the result is
-   sanitized like any run output. The runner's result markers (a line
+   someone else's manuscript: raw HTML is shown as text and the rendered HTML
+   is sanitized like any run output, last. The runner's result markers (a line
    "[result:<id>]: #", which Markdown renders as nothing) become anchor badges
-   and an answer's "[[result:<id>]]" a button that jumps to that anchor; both
-   are built here from escaped text, never taken from the input as markup. */
-function readableMarkdownHtml(text,labels){
-  const anchors=[], refs=[];
+   and an answer's "[[result:<id>]]" a button that jumps to that anchor. Each
+   crosses Markdown and the sanitizer as a token of plain text that no input
+   can contain (it carries a fresh nonce), and placeReadableMarks builds its
+   element in place of the token: in text nodes only, never from markup. */
+function readableMarkdown(text){
+  const nonce=Math.random().toString(36).slice(2,10).padEnd(8,'0'), marks=[];
+  const tokenFor=mark=>{ marks.push(mark); return '@@RD'+nonce+'x'+(marks.length-1)+'@@'; };
   const source=String(text||'').replace(/\r\n?/g,'\n')
-    .replace(READABLE_MARKER_LINE,(_,id)=>{ anchors.push(id.toLowerCase()); return '\n@@RDANCHOR'+(anchors.length-1)+'@@\n'; })
-    .replace(READABLE_RESULT_LINK,(_,id)=>{ refs.push(id.toLowerCase()); return '@@RDREF'+(refs.length-1)+'@@'; });
+    .replace(READABLE_MARKER_LINE,(raw,id)=>'\n'+tokenFor({kind:'anchor',id:id.toLowerCase(),raw})+'\n');
+  // Math is set aside first: a "[[result:<id>]]" inside TeX stays TeX.
   const stashed=stashMath(source);
+  const markdown=stashed.s.replace(READABLE_RESULT_LINK,(raw,id)=>tokenFor({kind:'ref',id:id.toLowerCase(),raw}));
   let html=null;
   try{
     const md=window.marked;
@@ -161,24 +165,63 @@ function readableMarkdownHtml(text,labels){
       parser.use({renderer:{html(token){ return escapeHtml(typeof token==='string'?token:String(token?.raw??token?.text??'')); }}});
       readableMarkdownParser=parser;
     }
-    if(readableMarkdownParser)html=readableMarkdownParser.parse(stashed.s);
+    if(readableMarkdownParser)html=readableMarkdownParser.parse(markdown);
   }catch(e){ html=null; }
-  if(typeof html!=='string'||!html)return '<pre>'+escapeHtml(text)+'</pre>';
-  html=sanitizeRenderedHtml(html.replace(/@@MATH(\d+)@@/g,(_,i)=>escapeHtml(stashed.slots[Number(i)]||'')));
-  const name=id=>labels instanceof Map&&labels.get(id)||id;
-  return html
-    .replace(/<p>@@RDANCHOR(\d+)@@<\/p>/g,(match,i)=>anchors[i]===undefined?match:'<p class="rd-anchor-row">'+readableAnchorHtml(anchors[i],name(anchors[i]))+'</p>')
-    .replace(/@@RDANCHOR(\d+)@@/g,(match,i)=>anchors[i]===undefined?match:readableAnchorHtml(anchors[i],name(anchors[i])))
-    .replace(/@@RDREF(\d+)@@/g,(match,i)=>refs[i]===undefined?match:readableRefHtml(refs[i],labels));
+  if(typeof html!=='string'||!html)return {html:'<pre>'+escapeHtml(text)+'</pre>',marks:[],nonce};
+  return {html:sanitizeRenderedHtml(html.replace(/@@MATH(\d+)@@/g,(_,i)=>escapeHtml(stashed.slots[Number(i)]||''))),marks,nonce};
 }
-// The result's id goes into a data attribute only (escaped), never into a DOM id.
-function readableAnchorHtml(id,label){
-  return `<span class="rd-anchor" data-rd-anchor="${escapeHtml(id)}" tabindex="-1" title="${escapeHtml(label===id?id:label+' · '+id)}">${escapeHtml(label)}</span>`;
+// Readable Markdown in `container`, with its anchor badges and result links.
+function renderReadableMarkdown(container,text,labels){
+  const {html,marks,nonce}=readableMarkdown(text);
+  container.innerHTML=html;
+  placeReadableMarks(container,marks,nonce,labels);
+}
+function readableTextNodes(node,out=[]){
+  node.childNodes.forEach(child=>{ if(child.nodeType===3)out.push(child); else readableTextNodes(child,out); });
+  return out;
+}
+// Each token's element in its place. A token in code reads as it was
+// written, in a link's text as the result's name (no button in a link), and
+// in a link's address or title as it was written.
+function placeReadableMarks(root,marks,nonce,labels){
+  if(!marks.length)return;
+  const pattern=new RegExp('@@RD'+nonce+'x(\\d+)@@','g'), name=id=>labels instanceof Map&&labels.get(id)||id;
+  readableTextNodes(root).filter(node=>node.nodeValue.includes('@@RD'+nonce)).forEach(node=>{
+    const text=node.nodeValue, parent=node.parentElement, literal=!!parent?.closest('code,pre'), inLink=!!parent?.closest('a'), pieces=[];
+    let at=0;
+    for(const match of text.matchAll(pattern)){
+      const mark=marks[Number(match[1])];
+      if(!mark)continue;
+      if(match.index>at)pieces.push(text.slice(at,match.index));
+      at=match.index+match[0].length;
+      pieces.push(literal?mark.raw:inLink?name(mark.id):mark.kind==='anchor'?readableAnchorNode(mark.id,name(mark.id)):readableRefNode(mark.id,labels));
+    }
+    if(at<text.length)pieces.push(text.slice(at));
+    node.replaceWith(...pieces);
+  });
+  // A marker line is a row of its own.
+  root.querySelectorAll('.rd-anchor').forEach(anchor=>{
+    const row=anchor.parentElement;
+    if(row?.tagName==='P'&&row.childNodes.length===1)row.classList.add('rd-anchor-row');
+  });
+  root.querySelectorAll('a').forEach(link=>['href','title'].forEach(attribute=>{
+    const value=link.getAttribute(attribute);
+    if(value?.includes('@@RD'+nonce))link.setAttribute(attribute,value.replace(pattern,(match,index)=>marks[Number(index)]?.raw??''));
+  }));
+}
+// The result's id goes into a data attribute only, never into a DOM id.
+function readableAnchorNode(id,label){
+  const badge=analyzeEl('span','rd-anchor',label);
+  badge.dataset.rdAnchor=id; badge.tabIndex=-1; badge.title=label===id?id:label+' · '+id;
+  return badge;
 }
 // A result the paper map does not list stays plain text.
-function readableRefHtml(id,labels){
-  const known=!(labels instanceof Map)||!labels.size||labels.has(id), label=labels instanceof Map&&labels.get(id)||id;
-  return known?`<button type="button" class="rd-ref" data-rd-ref="${escapeHtml(id)}" title="${escapeHtml('Show '+label+' in the readable version')}">${escapeHtml(label)}</button>`:escapeHtml(label);
+function readableRefNode(id,labels){
+  const label=labels instanceof Map&&labels.get(id)||id;
+  if(labels instanceof Map&&labels.size&&!labels.has(id))return label;
+  const button=analyzeEl('button','rd-ref',label);
+  button.type='button'; button.dataset.rdRef=id; button.title='Show '+label+' in the readable version';
+  return button;
 }
 // Part counts ({parts, faithful, issues, unchecked, …}): the preview's, else the run's summary.
 function readabilityCounts(run){
@@ -216,7 +259,7 @@ function renderReadableVersion(run,view){
   view._proofRenderKey=key;
   const previousTop=body.scrollTop;
   const doc=analyzeEl('div','md-doc analysis-doc rd-doc');
-  doc.innerHTML=readableMarkdownHtml(text,labels);
+  renderReadableMarkdown(doc,text,labels);
   markReadableBlocks(doc);
   // The document's own provenance note is its banner; a document without one gets the console's.
   if(!doc.querySelector('.rd-provenance'))doc.prepend(analyzeEl('p','rd-banner',readabilityProvenanceText(run)));
@@ -586,7 +629,7 @@ function readabilityAskItem(item,labels){
   const reply=analyzeEl('div','ask-a md-doc');
   if(running)reply.append(analyzeEl('p','ask-pending','Answering…'));
   else if(!answer.trim())reply.append(analyzeEl('p','ask-error','✗ '+(dagDetailText(item.error,300)||'No answer was written.')));
-  else reply.innerHTML=readableMarkdownHtml(answer,labels);
+  else renderReadableMarkdown(reply,answer,labels);
   li.append(reply);
   const at=item.finished_at||item.started_at, meta=[dagDetailText(item.model,80),at?fmtTs(at):''].filter(Boolean);
   if(meta.length&&!running)li.append(analyzeEl('p','ask-meta',meta.join(' · ')));
@@ -630,12 +673,23 @@ function renderReadabilityAskContext(){
 }
 // The tab a selected passage comes from, when it can be asked about.
 function readabilitySelectionView(){ return readabilityTab==='readable'||readabilityTab==='original'?readabilityTab:''; }
-// A selected passage as text, with typeset math back as its TeX ("$n^2$"),
-// so that it reads, and can be found in the readable version, as written.
+// A selected passage as it is written, so that it can be found in
+// readable.md or original.txt: none of the view's own labels (the Original's
+// line numbers, the anchor badges, the notes above the text), result links
+// as "[[result:<id>]]" and typeset math as its TeX ("$n^2$"); a formula
+// selected in part is taken whole.
 function readabilitySelectionText(selection){
   if(!selection?.rangeCount)return '';
   const box=document.createElement('div');
-  for(let index=0;index<selection.rangeCount;index++)box.append(selection.getRangeAt(index).cloneContents());
+  for(let index=0;index<selection.rangeCount;index++){
+    const range=selection.getRangeAt(index).cloneRange();
+    const start=readabilityFormulaAt(range.startContainer), end=readabilityFormulaAt(range.endContainer);
+    if(start)range.setStartBefore(start);
+    if(end)range.setEndAfter(end);
+    box.append(range.cloneContents());
+  }
+  box.querySelectorAll('.ln,.rd-anchor,.rd-banner,.analysis-live-note,.rd-pdf-note').forEach(label=>label.remove());
+  box.querySelectorAll('.rd-ref').forEach(ref=>ref.replaceWith(ref.dataset.rdRef?'[[result:'+ref.dataset.rdRef+']]':''));
   box.querySelectorAll('.katex').forEach(math=>{
     const tex=math.querySelector('annotation[encoding="application/x-tex"]')?.textContent;
     if(tex==null)return;
@@ -643,6 +697,11 @@ function readabilitySelectionText(selection){
     math.replaceWith(delimiter+tex.trim()+delimiter);
   });
   return box.textContent.replace(/\s+/g,' ').trim();
+}
+// The typeset formula (displayed or inline) that a node of a selection is in.
+function readabilityFormulaAt(node){
+  const element=node?.nodeType===1?node:node?.parentElement;
+  return element?.closest('.katex-display')||element?.closest('.katex')||null;
 }
 function askAboutSelection(text){
   readabilityAskContext={selection:String(text||'').trim().slice(0,4000),view:readabilitySelectionView()||'readable'};
@@ -702,7 +761,13 @@ function initReadabilityUi(){
     const ref=event.target.closest?.('.rd-ref');
     if(ref&&document.body.classList.contains('readability-run')){ event.preventDefault(); readabilityJumpTo(ref.dataset.rdRef); }
   });
-  // A readable version selected before this file loaded is drawn now.
-  if(runId&&lastSandboxRun?.run_id===runId&&isReadabilityRun(lastSandboxRun))applySandboxPreview(lastSandboxRun);
+  // A readable version selected before this file loaded is drawn now, and
+  // polled again: the console's status line and log of it need this file too.
+  const run=lastSandboxRun?.run_id===runId?lastSandboxRun:null;
+  if(runId&&(isReadabilityRun(run)||RUN_KIND_BY_ID.get(String(runId))==='readability')){
+    if(run)applySandboxPreview(run);
+    startPolling();
+    if(workspaceView==='dag'&&dagMode==='paper-map')refreshDagView();
+  }
 }
 if(document.getElementById('readability-tabs'))initReadabilityUi();

@@ -92,7 +92,8 @@
   all('[data-tab]').forEach(button => {
     button.addEventListener('click', () => tab(button.dataset.tab));
     button.addEventListener('keydown', event => {
-      const buttons = all('[data-tab]');
+      // Only the tabs on show (a readable version hides Lean and DAG).
+      const buttons = all('[data-tab]').filter(item => !item.hidden);
       const index = buttons.indexOf(button);
       let next;
       if (event.key === 'ArrowRight') next = (index + 1) % buttons.length;
@@ -175,7 +176,7 @@
     const source = new URL(data.source_url);
     if (source.protocol === 'https:' && !/\/shared\//i.test(source.pathname)) {
       $('rv-source').href = source.href; $('rv-source').hidden = false;
-      $('rv-source').textContent = analysis ? 'Source manuscript ↗' : 'Source problem ↗';
+      $('rv-source').textContent = analysis || readable ? 'Source manuscript ↗' : 'Source problem ↗';
     }
   } catch { /* An absent or invalid source link is simply omitted. */ }
   const agents = Array.isArray(data.agents) ? data.agents.filter(agent => agent && typeof agent === 'object') : [];
