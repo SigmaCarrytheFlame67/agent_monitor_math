@@ -76,6 +76,47 @@
       paragraph.replaceWith(row);
     }
   }
+  // readable.md split at the runner's "[part:<n>]: #" marks: the text before
+  // the first part (index null), then each part with its number.
+  function readableParts(readable) {
+    const source = text(readable).replace(/\r\n?/g, '\n'), out = [];
+    let at = 0, index = null;
+    for (const match of source.matchAll(/^\[part:(\d{1,4})\]: #$/gm)) {
+      out.push({ index, text: source.slice(at, match.index) });
+      index = Number(match[1]);
+      at = match.index + match[0].length;
+    }
+    out.push({ index, text: source.slice(at) });
+    return out;
+  }
+  // The minor points the independent check raised about each part, by part
+  // number (a part's major problems are its "⚠ Check" note in the text), with
+  // the check's suggested fix when the snapshot has one.
+  function checkNotes(data) {
+    const block = isObject(data?.readability) ? data.readability : {}, notes = new Map();
+    const words = (value, limit) => typeof value === 'string' ? value.trim().slice(0, limit) : '';
+    (Array.isArray(block.check) ? block.check : []).filter(isObject).slice(0, 400).forEach(part => {
+      if (!Number.isInteger(part.index)) return;
+      const minor = (Array.isArray(part.issues) ? part.issues : [])
+        .filter(issue => isObject(issue) && issue.severity === 'minor' && words(issue.problem, 600)).slice(0, 12);
+      if (minor.length) notes.set(part.index, minor.map(issue => ({ location: words(issue.location, 200), problem: words(issue.problem, 600), fix: words(issue.fix, 600) })));
+    });
+    return notes;
+  }
+  // A part's check notes, collapsed under it; the checker's words are text.
+  function checkNotesBox(notes) {
+    const box = node('details', 'rv-check-notes'), list = node('ul');
+    box.append(node('summary', '', `Check notes (${notes.length})`));
+    for (const note of notes) {
+      const item = node('li');
+      if (note.location && note.location !== 'unspecified') item.append(node('span', 'rv-check-where', note.location + ': '));
+      item.append(note.problem);
+      if (note.fix) item.append(node('span', 'rv-check-fix', ' Suggested fix: ' + note.fix));
+      list.append(item);
+    }
+    box.append(list, node('p', 'rv-muted', 'Points the independent model check raised when it compared this part with the original, judged not to change the meaning — a model check, not a certificate.'));
+    return box;
+  }
   // The provenance note under the title, and "⚠ Check" notes, look like what they are.
   function markBlocks(target) {
     const first = target.firstElementChild, second = first?.nextElementSibling;
@@ -162,7 +203,19 @@
     const view = parts(data);
     const labels = new Map(view.nodes.map(entry => [text(entry.id), text(entry.label || entry.id).slice(0, 160)]));
     if (view.readable.trim()) {
-      renderText(target, withAnchorTokens(view.readable));
+      // Each part is drawn on its own, so that its check notes can follow it.
+      const [head, ...rest] = readableParts(withAnchorTokens(view.readable)), notes = checkNotes(data);
+      renderText(target, head.text, { macros: view.macros });
+      for (const part of rest) {
+        const section = node('section', 'rv-rd-part');
+        renderText(section, part.text, { macros: view.macros });
+        if (notes.has(part.index)) {
+          const box = checkNotesBox(notes.get(part.index));
+          section.append(box);
+          window.AnsatzSharedText?.math?.(box, { macros: view.macros });
+        }
+        target.append(section);
+      }
       placeAnchors(target, labels);
       markBlocks(target);
     }
@@ -172,7 +225,7 @@
     sections.forEach(section => window.AnsatzSharedText?.math?.(section, { macros: view.macros }));
     return view;
   }
-  const api = { render, parts, katexMacros, withAnchorTokens, importance, sectionLabel };
+  const api = { render, parts, katexMacros, withAnchorTokens, importance, sectionLabel, readableParts, checkNotes };
   if (typeof window !== 'undefined') window.AnsatzSharedReadability = Object.freeze(api);
   if (typeof module === 'object' && module.exports) module.exports = api;
 })();

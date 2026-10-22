@@ -253,13 +253,20 @@ function renderReadableVersion(run,view){
     if(stick&&live)body.scrollTop=body.scrollHeight;
     return;
   }
-  const labels=readabilityLabels(rid), macros=readabilityMacros(run);
-  const key=JSON.stringify(['rd-readable',rid,text,macros,labels.size,readabilityCounts(run)]);
+  const labels=readabilityLabels(rid), macros=readabilityMacros(run), notes=readabilityCheckNotes(run);
+  const key=JSON.stringify(['rd-readable',rid,text,macros,labels.size,readabilityCounts(run),[...notes]]);
   if(view._proofRenderKey===key)return;
   view._proofRenderKey=key;
   const previousTop=body.scrollTop;
   const doc=analyzeEl('div','md-doc analysis-doc rd-doc');
-  renderReadableMarkdown(doc,text,labels);
+  // Each part is drawn on its own, so that its check notes can follow it.
+  readableParts(text).forEach(part=>{
+    if(part.index===null){ if(part.text.trim())renderReadableMarkdown(doc,part.text,labels); return; }
+    const box=analyzeEl('section','rd-part'); box.dataset.rdPart=String(part.index);
+    if(part.text.trim())renderReadableMarkdown(box,part.text,labels);
+    if(notes.has(part.index))box.append(readabilityCheckNotesBox(notes.get(part.index)));
+    doc.append(box);
+  });
   markReadableBlocks(doc);
   // The document's own provenance note is its banner; a document without one gets the console's.
   if(!doc.querySelector('.rd-provenance'))doc.prepend(analyzeEl('p','rd-banner',readabilityProvenanceText(run)));
@@ -278,6 +285,48 @@ function markReadableBlocks(doc){
     if(/^⚠/.test(text)){ quote.classList.add('rd-check'); quote.setAttribute('role','note'); }
     else if(/^(?:Reader['’]s note|Not checked|Not rewritten)\b/i.test(text))quote.classList.add('rd-note');
   });
+}
+// readable.md split at the runner's "[part:<n>]: #" marks (a rewrite cannot
+// write one, and the original text it repeats has them indented): the text
+// before the first part (index null), then each part with its number.
+const READABLE_PART_LINE=/^\[part:(\d{1,4})\]: #$/gm;
+function readableParts(text){
+  const source=String(text||'').replace(/\r\n?/g,'\n'), parts=[];
+  let at=0, index=null;
+  for(const match of source.matchAll(READABLE_PART_LINE)){
+    parts.push({index,text:source.slice(at,match.index)});
+    index=Number(match[1]); at=match.index+match[0].length;
+  }
+  parts.push({index,text:source.slice(at)});
+  return parts;
+}
+// The minor points the independent check raised about each part, by part
+// number (a part's major problems are its "⚠ Check" note in the text), with
+// the check's suggested fix when the record has one.
+function readabilityCheckNotes(run){
+  const notes=new Map(), parts=run?.sandbox_preview?.check;
+  (Array.isArray(parts)?parts:[]).slice(0,400).forEach(part=>{
+    if(!part||typeof part!=='object'||!Number.isInteger(part.index))return;
+    const minor=(Array.isArray(part.issues)?part.issues:[])
+      .filter(issue=>issue&&typeof issue==='object'&&issue.severity==='minor'&&dagDetailText(issue.problem,600).trim()).slice(0,12);
+    if(minor.length)notes.set(part.index,minor.map(issue=>({location:dagDetailText(issue.location,200).trim(),
+      problem:dagDetailText(issue.problem,600).trim(),fix:dagDetailText(issue.fix,600).trim()})));
+  });
+  return notes;
+}
+// A part's check notes, collapsed under it; the checker's words are text.
+function readabilityCheckNotesBox(notes){
+  const box=analyzeEl('details','rd-check-notes'), list=analyzeEl('ul');
+  box.append(analyzeEl('summary','','Check notes ('+notes.length+')'));
+  notes.forEach(note=>{
+    const item=analyzeEl('li');
+    if(note.location&&note.location!=='unspecified')item.append(analyzeEl('span','rd-check-where',note.location+': '));
+    item.append(note.problem);
+    if(note.fix)item.append(analyzeEl('span','rd-check-fix',' Suggested fix: '+note.fix));
+    list.append(item);
+  });
+  box.append(list,analyzeEl('p','rd-check-foot','Points the independent model check raised when it compared this part with the original, judged not to change the meaning — a model check, not a certificate.'));
+  return box;
 }
 
 /* ── Original ── */
@@ -688,7 +737,7 @@ function readabilitySelectionText(selection){
     if(end)range.setEndAfter(end);
     box.append(range.cloneContents());
   }
-  box.querySelectorAll('.ln,.rd-anchor,.rd-banner,.analysis-live-note,.rd-pdf-note').forEach(label=>label.remove());
+  box.querySelectorAll('.ln,.rd-anchor,.rd-banner,.analysis-live-note,.rd-pdf-note,.rd-check-notes').forEach(label=>label.remove());
   box.querySelectorAll('.rd-ref').forEach(ref=>ref.replaceWith(ref.dataset.rdRef?'[[result:'+ref.dataset.rdRef+']]':''));
   box.querySelectorAll('.katex').forEach(math=>{
     const tex=math.querySelector('annotation[encoding="application/x-tex"]')?.textContent;
