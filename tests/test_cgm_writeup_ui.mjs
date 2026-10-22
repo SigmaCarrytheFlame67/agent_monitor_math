@@ -123,7 +123,8 @@ class Elem {
     return event
   }
   focus() { this.ownerDocument.activeElement = this }
-  setSelectionRange() {}
+  setSelectionRange(start, end) { this.selection = [start, end] }
+  dispatchEvent(event) { (this.events ||= []).push(event.type + (event.bubbles ? ' (bubbles)' : '')); return true }
   querySelectorAll(selector) { return descendants(this).filter(el => matches(el, selector)) }
   querySelector(selector) { return this.querySelectorAll(selector)[0] || null }
 }
@@ -217,14 +218,17 @@ const CONSOLE_FUNCTIONS = [
   'isReadabilityRun', 'syncSandboxEditor', 'beginSandboxEdit', 'saveSandboxProof', 'finishSandboxEdit', 'applySandboxPreview', 'runWriteup',
   'writeupBody', 'proofDocShown', 'showProofDocFile', 'syncProofDocSwitch', 'chooseProofDoc', 'writeupBannerHtml', 'closureCitedLemmas',
   'renderMarkdownIntoView', 'showProofMd', 'refreshProofPreview',
+  // Make readable, and the Readability policy it follows.
+  'makeReadableSource', 'syncMakeReadable', 'makeReadable', 'dagIsCgmEngine', 'readabilityEngineEntry', 'readabilityPolicy',
+  'readabilityOffered', 'viewerIsAdmin', 'viewerIsGuest', 'readabilitySponsoredOnly',
 ]
 // The proof toolbar and the Sandbox body (with its proof.md editor) exactly as the page has them.
 const TOOLBAR = consoleHtml.slice(consoleHtml.indexOf('<div class="proof-toolbar">'), consoleHtml.indexOf('<div class="prompt-strip'))
 const SANDBOX_BODY = consoleHtml.slice(consoleHtml.indexOf('<div class="proof-body" id="proof-body">'), consoleHtml.indexOf('<div class="cite-strip'))
 
 function consolePage() {
-  const document = createDocument(TOOLBAR + SANDBOX_BODY)
-  const calls = { math: 0, coverage: 0, downloads: [], analysis: 0, fetches: [], saves: [], status: [] }
+  const document = createDocument(TOOLBAR + SANDBOX_BODY + '<textarea id="problem-text"></textarea>')
+  const calls = { math: 0, coverage: 0, downloads: [], analysis: 0, fetches: [], saves: [], status: [], left: [] }
   // proof.md on the server; its revision is "rev-<mtime>".
   const files = { proof: CLOSURE, mtime: 1 }
   const context = vm.createContext({ console, URL, document, calls, files, setTimeout, clearTimeout })
@@ -241,6 +245,10 @@ function consolePage() {
     'function applyAnalysisPreview(){ calls.analysis++; return true; }',
     'function editorStatus(message){ calls.status.push(message); }',
     'function setProofEmpty(){} function renderCitations(){} function resizeSandboxEditor(){} function showProofPdf(){}',
+    // No Readability on this page until a test lists it; leaving the run is recorded.
+    "let ENGINES=[], CURRENT_USER={id:1}, GUEST_POLICY=null, jobId='j1';",
+    "function stopPolling(){ calls.left.push('stop polling'); } function goLanding(){ calls.left.push('composer'); } function chooseMode(mode){ calls.left.push('mode '+mode); }",
+    'class Event{ constructor(type,init={}){ this.type=type; this.bubbles=!!init.bubbles; } }',
     `async function fetch(url,init){
       calls.fetches.push(url);
       if(init?.method==='POST'){
@@ -257,6 +265,7 @@ function consolePage() {
     ...['SAFE_MARKDOWN_TAGS', 'WRITEUP_BANNER', 'WRITEUP_STALE_NOTE', 'proofDocChoice'].map(constant),
     ...CONSOLE_FUNCTIONS.map(fn),
     switchWiring(),
+    sourceFrom(script.indexOf("$('make-readable-btn').onclick="), ';'),
   ].join('\n'), context)
   const $ = id => document.getElementById(id)
   const radio = doc => document.querySelector(`#proof-doc-switch [data-proof-doc="${doc}"]`)
@@ -741,4 +750,99 @@ test('the shared page shows no switch without a write-up, never for an analysis,
   for (const bad of ['<script', '<img', 'onerror', 'javascript:']) assert.ok(!html.includes(bad), `${bad} reached the page: ${html}`)
   assert.ok(html.includes('$a&lt;b$'))
   assert.equal(page.context.pwned, undefined)
+})
+
+// ── Make readable ──
+// The Readability entry of /api/engines for a viewer, as the server sends it.
+const readabilityEngine = ({ entry = {}, policy = {} } = {}) => ({
+  id: 'readability', modes: ['readability'], available: true, ...entry,
+  readability: { enabled: true, routes: ['sponsored_kimi', 'api_key'], sources: { paste_chars: 400000 }, sponsored: { available: true, remaining_today: 12 }, ...policy },
+})
+function readablePage({ engine = readabilityEngine(), user = { id: 4 }, guestPolicy = null } = {}) {
+  const page = consolePage()
+  page.context.ENGINE_FOR_TEST = [engine]
+  page.run(`ENGINES=ENGINE_FOR_TEST; CURRENT_USER=${JSON.stringify(user)}; GUEST_POLICY=${JSON.stringify(guestPolicy)};`)
+  page.button = () => page.$('make-readable-btn')
+  page.note = () => page.$('make-readable-note').textContent
+  return page
+}
+
+test('Make readable pastes the document on screen into Readability, as written, and starts nothing', () => {
+  // The button sits in the proof toolbar, hidden until a finished CGM run shows its document.
+  assert.match(TOOLBAR, /<span class="make-readable-note" id="make-readable-note" role="status" aria-live="polite"><\/span>\s*<button type="button" id="make-readable-btn" hidden title="[^"]+">¶ Make readable<\/button>/)
+  let page = readablePage(), { context, $, calls } = page
+  context.applySandboxPreview(cgmRun(writeupBlock('accepted')))
+  assert.equal(page.button().hidden, false)
+  page.button().dispatch('click')
+  // As New does: the run is left (no more polling) for the composer, now in Readability.
+  assert.deepEqual(calls.left, ['stop polling', 'composer', 'mode readability'])
+  assert.equal(page.run('runId'), null)
+  const input = $('problem-text')
+  // The written proof as the file has it (its header says how it was checked).
+  assert.equal(input.value, WRITEUP)
+  assert.deepEqual(input.events, ['input (bubbles)'])
+  assert.deepEqual(input.selection, [0, 0])
+  assert.equal(page.document.activeElement, input)
+
+  // With the verified facts on screen, proof.md.
+  page = readablePage(); ({ context, $, calls } = page)
+  context.applySandboxPreview(cgmRun(writeupBlock('accepted')))
+  context.chooseProofDoc('facts')
+  page.button().dispatch('click')
+  assert.equal($('problem-text').value, CLOSURE.trim())
+  // A run without a write-up offers its proof.md.
+  page = readablePage(); ({ context, $ } = page)
+  context.applySandboxPreview(cgmRun(undefined))
+  assert.equal(page.button().hidden, false)
+  page.button().dispatch('click')
+  assert.equal($('problem-text').value, CLOSURE.trim())
+})
+
+test('Make readable says when the document is longer than the viewer may paste, and pastes nothing', () => {
+  const page = readablePage({ engine: readabilityEngine({ policy: { sources: { paste_chars: 100 } } }), user: { id: 0, guest: true } })
+  const { context, $, calls } = page
+  context.applySandboxPreview(cgmRun(writeupBlock('accepted')))
+  page.button().dispatch('click')
+  assert.equal(page.note(), `The written proof has ${WRITEUP.length.toLocaleString('en-US')} characters: too long to paste into Readability (at most 100 for guests).`)
+  assert.deepEqual([calls.left, page.run('runId'), $('problem-text').value ?? ''], [[], 'r1', ''])
+  // The note is about that document: it goes when the other one is shown.
+  context.chooseProofDoc('facts')
+  assert.equal(page.note(), '')
+  page.button().dispatch('click')
+  assert.match(page.note(), /^The proof\.md has [\d,]+ characters: too long to paste into Readability \(at most 100 for guests\)\.$/)
+})
+
+test('Make readable is offered only for a finished CGM run, as the Readability policy allows the viewer', () => {
+  const shown = (setup, record = cgmRun(writeupBlock('accepted'))) => {
+    const page = readablePage(setup)
+    page.context.applySandboxPreview(record)
+    return !page.button().hidden
+  }
+  assert.equal(shown({}), true)
+  // Not while it runs, not for another harness, not without proof.md.
+  assert.equal(shown({}, cgmRun(writeupBlock('accepted'), { status: 'running' })), false)
+  assert.equal(shown({}, cgmRun(writeupBlock('accepted'), { status: 'failed' })), false)
+  assert.equal(shown({}, cgmRun(writeupBlock('accepted'), { engine: 'plain' })), false)
+  assert.equal(shown({}, cgmRun(undefined, {}, { has_proof_md: false })), false)
+  assert.equal(shown({}, cgmRun(writeupBlock('accepted'), { engine: 'math_harness' })), true)
+  // Only where Readability would start: offered, set up, open to this viewer.
+  assert.equal(shown({ engine: readabilityEngine({ entry: { requires_login: true } }) }), false)
+  assert.equal(shown({ engine: readabilityEngine({ policy: { enabled: false, reason: 'off' } }) }), false)
+  assert.equal(shown({ engine: readabilityEngine({ entry: { available: false } }), user: { id: 1, is_admin: true } }), false)
+  assert.equal(shown({ engine: { ...readabilityEngine(), readability: null } }), false)
+  // A guest with runs left; a viewer on sponsored Kimi K3 only while today's sponsored runs allow one.
+  assert.equal(shown({ user: { id: 0, guest: true }, guestPolicy: { runs_remaining: 2 } }), true)
+  assert.equal(shown({ user: { id: 0, guest: true }, guestPolicy: { runs_remaining: 0 } }), false)
+  assert.equal(shown({ user: { id: 0, guest: true }, engine: readabilityEngine({ policy: { sponsored: { available: true, remaining_today: 0 } } }) }), false)
+  assert.equal(shown({ engine: readabilityEngine({ policy: { routes: ['sponsored_kimi'], sponsored: { available: false } } }) }), false)
+  // A member with their own Kimi key is not held to the sponsored count.
+  assert.equal(shown({ engine: readabilityEngine({ policy: { sponsored: { available: true, remaining_today: 0 } } }) }), true)
+  // Analyses and readable versions have no proof document to paste.
+  const page = readablePage()
+  for (const engine of ['analyze', 'readability']) assert.equal(page.context.makeReadableSource({ ...cgmRun(writeupBlock('accepted')), engine }), null)
+  // Not while proof.md is open in the editor.
+  page.context.applySandboxPreview(cgmRun(writeupBlock('rejected')))
+  assert.equal(page.button().hidden, false)
+  page.context.beginSandboxEdit()
+  assert.equal(page.button().hidden, true)
 })

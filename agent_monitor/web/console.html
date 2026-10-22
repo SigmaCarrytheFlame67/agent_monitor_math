@@ -357,7 +357,7 @@ html.read-only-run .run-access-note { display: flex; }
 /* The written proof of a CGM run: a two-way switch beside the file name and a
    status banner above the write-up. Colours follow the model verifier's
    verdicts (blue accepted, amber problems); green stays reserved for Lean. */
-.proof-toolbar:has(> .proof-doc-switch:not([hidden])) { flex-wrap: wrap; row-gap: 8px; }
+.proof-toolbar:has(> .proof-doc-switch:not([hidden])), .proof-toolbar:has(> #make-readable-btn:not([hidden])) { flex-wrap: wrap; row-gap: 8px; }
 .proof-doc-switch { display: inline-flex; flex-shrink: 0; gap: 2px; padding: 2px; border: 1px solid var(--border); border-radius: 9px; background: var(--panel2); }
 .proof-doc-switch[hidden] { display: none; }
 .proof-toolbar .proof-doc-switch button { border: 0; border-radius: 7px; background: transparent; color: var(--dim); padding: 4px 10px; font-weight: 500; white-space: nowrap; }
@@ -365,6 +365,10 @@ html.read-only-run .run-access-note { display: flex; }
 .proof-toolbar .proof-doc-switch button[aria-checked="true"] { background: var(--panel); color: var(--fg); font-weight: 600; box-shadow: 0 1px 2px rgb(0 0 0 / .12); }
 .proof-toolbar .proof-doc-switch button:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
 @media (forced-colors: active) { .proof-toolbar .proof-doc-switch button[aria-checked="true"] { outline: 2px solid Highlight; } }
+/* Make readable, and why it could not paste the document shown. */
+.proof-toolbar #make-readable-btn { white-space: nowrap; }
+.make-readable-note { max-width: 320px; color: var(--err); font-size: 10.5px; line-height: 1.35; }
+.make-readable-note:empty { display: none; }
 .writeup-chip[data-status="accepted"] { color: var(--verdict-checked); }
 .writeup-chip[data-status="rejected"] { color: var(--verdict-gap); }
 .md-view .writeup-banner { margin: 0 0 14px; padding: 9px 14px; border: 1px solid var(--border); border-left: 3px solid var(--verdict-none); border-radius: 8px; background: var(--panel2); color: var(--muted); font-size: 12.5px; line-height: 1.55; }
@@ -1996,6 +2000,8 @@ body { background:var(--bg); }
                   <button type="button" role="radio" data-proof-doc="writeup" aria-checked="false" tabindex="-1">Written proof<span class="writeup-chip" id="writeup-chip"></span></button>
                   <button type="button" role="radio" data-proof-doc="facts" aria-checked="true" title="proof.md: the verifier-accepted facts, which are the proof">Verified facts</button>
                 </div>
+                <span class="make-readable-note" id="make-readable-note" role="status" aria-live="polite"></span>
+                <button type="button" id="make-readable-btn" hidden title="Paste the document shown here into Readability, which rewrites it to be easier to follow and checks each part against it">¶ Make readable</button>
                 <button id="proof-edit-btn" class="primary" disabled>✎ Edit</button>
                 <button id="proof-save-btn" class="primary" hidden>Save</button>
                 <button id="proof-done-btn" hidden>Done</button>
@@ -4518,6 +4524,7 @@ function syncSandboxEditor(){
   if(save){save.hidden=!sandboxEditing;save.disabled=sandboxSaving||(!sandboxDirty&&!sandboxConflict);save.textContent=sandboxConflict?'Overwrite':'Save';}
   if(done){done.hidden=!sandboxEditing;done.disabled=sandboxSaving;}
   syncProofDocSwitch();
+  syncMakeReadable();
 }
 function resetSandboxEditor(){
   if(sandboxSaveTimer){clearTimeout(sandboxSaveTimer);sandboxSaveTimer=null;}
@@ -5080,6 +5087,43 @@ document.querySelectorAll('#proof-doc-switch [role="radio"]').forEach(button=>{
     document.querySelector('#proof-doc-switch [aria-checked="true"]')?.focus();
   };
 });
+/* Make readable: the document a finished CGM run shows (the written proof
+   when it is on screen, else proof.md) becomes the pasted source of a new
+   readable version in the composer; nothing runs until that is started. It is
+   offered as the server's Readability policy allows this viewer, while the
+   viewer's guest runs and today's sponsored runs leave room for one. */
+function makeReadableSource(run){
+  if(!run||run.run_id!==runId||!dagIsCgmEngine(run.engine)||run.status!=='finished'||!run.sandbox_preview?.has_proof_md||sandboxEditing)return null;
+  const entry=readabilityEngineEntry(), daily=readabilityPolicy()?.sponsored;
+  if(!readabilityOffered()||!entry.available||entry.requires_login||readabilityPolicy().enabled===false)return null;
+  if(viewerIsGuest()&&Number(GUEST_POLICY?.runs_remaining)<=0)return null;
+  if(readabilitySponsoredOnly()&&daily&&(daily.available===false||Number(daily.remaining_today)<=0))return null;
+  const writeup=proofDocShown(run)==='writeup'?runWriteup(run):null, text=writeup?writeup.text:sandboxText;
+  return text.trim()?{text,name:writeup?'written proof':'proof.md'}:null;
+}
+function syncMakeReadable(){
+  const button=$('make-readable-btn'), note=$('make-readable-note'); if(!button||!note)return;
+  const source=makeReadableSource(lastSandboxRun), shown=source?runId+' '+source.name:'';
+  button.hidden=!source;
+  // A note about one document goes when another is shown.
+  if(button.dataset.shown!==shown){ button.dataset.shown=shown; note.textContent=''; }
+}
+function makeReadable(){
+  const source=makeReadableSource(lastSandboxRun); if(!source)return;
+  const limit=Number(readabilityPolicy().sources?.paste_chars)||20000;
+  if(source.text.length>limit){
+    $('make-readable-note').textContent=`The ${source.name} has ${source.text.length.toLocaleString('en-US')} characters: too long to paste into Readability (at most ${limit.toLocaleString('en-US')}${viewerIsGuest()?' for guests':''}).`;
+    return;
+  }
+  // As New does: the run is left for the composer, now in Readability.
+  runId=null; jobId=null; stopPolling(); goLanding();
+  chooseMode('readability');
+  const input=$('problem-text');
+  input.value=source.text;
+  input.dispatchEvent(new Event('input',{bubbles:true}));
+  input.focus(); input.setSelectionRange(0,0); input.scrollTop=0;
+}
+$('make-readable-btn').onclick=makeReadable;
 function writeupBannerHtml(writeup){
   const stale=writeup.fresh?'':`<p class="writeup-stale">${escapeHtml(WRITEUP_STALE_NOTE)}</p>`;
   return `<div class="writeup-banner" data-status="${escapeHtml(writeup.status)}" role="note"><p>${escapeHtml(WRITEUP_BANNER[writeup.status])}</p>${stale}</div>`;
