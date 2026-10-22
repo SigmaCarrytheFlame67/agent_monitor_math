@@ -148,6 +148,9 @@ ceilings, so an environment value can only lower them.
   pipeline (Lean and the DAGs) waits at least the run's outer watchdog, which
   follows `AGENT_MONITOR_CGM_MAX_SECONDS`, plus 300 s
   (`AGENT_MONITOR_AUTO_PIPELINE_TIMEOUT`, default 7200 s, only raises it).
+  That is a signed-in run's watchdog whatever the console's own
+  `AGENT_MONITOR_SPONSORED_KIMI` service switch; guest and sponsored runs
+  have shorter ones.
 - Every published run carries `math_harness/project/engine_receipt.json`.
   The current writer records receipt schema 3 (schema 4 for Max, below) with verification policy
   `solved-first-topological-waves-stop-on-target@1` (the first block, in the
@@ -300,6 +303,12 @@ that text alone. A rejected text may be revised and checked again.
   `AGENT_MONITOR_{KIMI,MATH_HARNESS}_TIMEOUT`, which bound the pipeline. A
   sponsored run stays within the 6600 s cap: 2400 + 900 + 300 + 1200 + 60 s
   at most.
+- Lean and the DAGs of a run that gets the round start once the run has
+  ended, as for a guest's run, not as soon as its `proof.md` is stable: the
+  round may still be calling the same Claude Code or Codex account, or the
+  sponsored pool. Until then those stages read "Waiting for the run's
+  written-proof round to end". Should the derived-views wait run out first,
+  they start from the published `proof.md` all the same.
 - Policy note for the owner: with the round on, a guest or sponsored run
   whose proof is accepted makes up to 4 more Kimi calls (16 recorded calls
   instead of 12, plus the run's shared six transport retries), counted
