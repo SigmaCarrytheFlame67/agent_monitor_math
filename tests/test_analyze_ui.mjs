@@ -87,19 +87,20 @@ function run(names, consts, prelude, body) {
 }
 const storage = `const store={};const localStorage={getItem:k=>k in store?store[k]:null,setItem:(k,v)=>{store[k]=String(v);},removeItem:k=>{delete store[k];}};`
 
-test('the mode switch is three radios; Analyze appears only when the server offers it', () => {
+test('the mode switch is four radios; Analyze and Readability appear only when the server offers them', () => {
   const out = run(
     ['formalizeChoice', 'renderFormalizeSwitch', 'setFormalizeChoice', 'engineServesProve', 'analyzeEngineEntry', 'analyzePolicy',
-      'viewerIsAdmin', 'analyzeOffered', 'runKindChoice', 'modeRadios', 'radioMode', 'chooseMode', 'nextModeRadio'],
+      'viewerIsAdmin', 'analyzeOffered', 'readabilityEngineEntry', 'readabilityPolicy', 'readabilityOffered', 'runKindOffered',
+      'runKindChoice', 'modeRadios', 'radioMode', 'chooseMode', 'nextModeRadio'],
     ['FORMALIZE_KEY', 'RUN_KIND_KEY'],
     storage + `
 let ENGINES=[], CURRENT_USER={guest:false,is_admin:false}, changed=0;
 const runKindChanged=()=>{changed++;};
-const buttons=[{formalize:'0'},{formalize:'1'},{runKind:'analyze'}].map(dataset=>({dataset,hidden:dataset.runKind==='analyze',attrs:{},tabIndex:0,setAttribute(k,v){this.attrs[k]=v;}}));
+const buttons=[{formalize:'0'},{formalize:'1'},{runKind:'analyze'},{runKind:'readability'}].map(dataset=>({dataset,hidden:!!dataset.runKind,attrs:{},tabIndex:0,setAttribute(k,v){this.attrs[k]=v;}}));
 const document={querySelectorAll:()=>buttons};`,
     `(()=>{
   const state=()=>({checked:buttons.filter(b=>b.attrs['aria-checked']==='true').map(b=>b.dataset.formalize||b.dataset.runKind),
-    tab:buttons.map(b=>b.tabIndex),hidden:buttons[2].hidden,kind:runKindChoice()});
+    tab:buttons.map(b=>b.tabIndex),hidden:[buttons[2].hidden,buttons[3].hidden],kind:runKindChoice()});
   const out={};
   store[RUN_KIND_KEY]='analyze';                       // remembered, but nothing is advertised yet
   renderFormalizeSwitch(); out.none=state();
@@ -112,16 +113,27 @@ const document={querySelectorAll:()=>buttons};`,
   chooseMode('formal'); out.formal=[state(),changed];
   out.cycle=[]; let at=buttons[1];
   for(const key of ['ArrowRight','ArrowRight','ArrowRight','ArrowLeft','End','Home']){ at=nextModeRadio(at,key); out.cycle.push(radioMode(at)); }
+  // Readability: offered once listed with its policy, after Analyze.
+  ENGINES.push({id:'readability',modes:['readability'],available:true,readability:{enabled:true}});
+  renderFormalizeSwitch(); out.readable=state();
+  chooseMode('readability'); out.readability=[state(),changed];
+  out.cycle4=[]; at=buttons[1];
+  for(const key of ['ArrowRight','ArrowRight','ArrowRight','End','Home']){ at=nextModeRadio(at,key); out.cycle4.push(radioMode(at)); }
+  ENGINES[2].modes=['prove']; out.notReadabilityMode=[readabilityOffered(),runKindChoice()];  // modes must say "readability"
   ENGINES[1].modes=['prove']; out.notAnalyzeMode=analyzeOffered();  // modes must say "analyze"
   return out;
 })()`)
-  assert.deepEqual(out.none, { checked: ['1'], tab: [-1, 0, -1], hidden: true, kind: 'prove' })
-  assert.deepEqual(out.setup, { checked: ['1'], tab: [-1, 0, -1], hidden: true, kind: 'prove' })
-  assert.deepEqual(out.admin, { checked: ['analyze'], tab: [-1, -1, 0], hidden: false, kind: 'analyze' })
-  assert.deepEqual(out.guest, { checked: ['analyze'], tab: [-1, -1, 0], hidden: false, kind: 'analyze' })
+  assert.deepEqual(out.none, { checked: ['1'], tab: [-1, 0, -1, -1], hidden: [true, true], kind: 'prove' })
+  assert.deepEqual(out.setup, { checked: ['1'], tab: [-1, 0, -1, -1], hidden: [true, true], kind: 'prove' })
+  assert.deepEqual(out.admin, { checked: ['analyze'], tab: [-1, -1, 0, -1], hidden: [false, true], kind: 'analyze' })
+  assert.deepEqual(out.guest, { checked: ['analyze'], tab: [-1, -1, 0, -1], hidden: [false, true], kind: 'analyze' })
   // Exactly one radio is checked and focusable; leaving Analyze keeps the proof output choice.
-  assert.deepEqual(out.formal, [{ checked: ['1'], tab: [-1, 0, -1], hidden: false, kind: 'prove' }, 1])
+  assert.deepEqual(out.formal, [{ checked: ['1'], tab: [-1, 0, -1, -1], hidden: [false, true], kind: 'prove' }, 1])
   assert.deepEqual(out.cycle, ['analyze', 'informal', 'formal', 'informal', 'analyze', 'informal'])
+  assert.deepEqual(out.readable, { checked: ['1'], tab: [-1, 0, -1, -1], hidden: [false, false], kind: 'prove' })
+  assert.deepEqual(out.readability, [{ checked: ['readability'], tab: [-1, -1, -1, 0], hidden: [false, false], kind: 'readability' }, 2])
+  assert.deepEqual(out.cycle4, ['analyze', 'readability', 'informal', 'readability', 'informal'])
+  assert.deepEqual(out.notReadabilityMode, [false, 'prove'])
   assert.equal(out.notAnalyzeMode, false)
 })
 
@@ -131,11 +143,14 @@ test('the composer markup keeps the old selectors and adds the Analyze controls'
   assert.match(switchMarkup, /data-formalize="0"[^>]*>Informal only</)
   assert.match(switchMarkup, /data-formalize="1"[^>]*>Informal \+ formalization</)
   assert.match(switchMarkup, /role="radio" data-run-kind="analyze" aria-checked="false" tabindex="-1" hidden/)
+  // Readability is the fourth radio, after Analyze, in the same attribute order.
+  assert.match(switchMarkup, />Analyze<\/button>\s*<button type="button" role="radio" data-run-kind="readability" aria-checked="false" tabindex="-1" hidden[^>]*>Readability<\/button>/)
   assert.match(html, /What would you like to <span id="landing-verb">prove<\/span>\?/)
   assert.match(script, /verb:'analyze'/)
   assert.match(script, /'Paste a link \(arXiv, GitHub, openai\/math, PDF\/TeX URL\) or paste a manuscript…'/)
   assert.match(html, /<input type="checkbox" id="analyze-formalize"\/><span>Also formalize main statements in Lean \(statements only\)<\/span>/)
-  assert.match(html, /id="dag-mode">\s*<button type="button" data-mode="analysis" hidden[^>]*>Manuscript<\/button>/)
+  // The Manuscript mode stays first; the Paper map follows it.
+  assert.match(html, /id="dag-mode">\s*<button type="button" data-mode="analysis" hidden[^>]*>Manuscript<\/button>\s*<button type="button" data-mode="paper-map" hidden[^>]*>Paper map<\/button>/)
   assert.match(html, /id="dag-filters" role="group" aria-label="Show results by verdict" hidden/)
 })
 
@@ -587,16 +602,22 @@ test('report math keeps |x| and < y: the report\'s Markdown escapes are undone i
 })
 
 test('a link the preview refused never starts an analysis; a lookup that may work later does not block', () => {
-  const pick = run(['analyzeLinkFromText', 'guessManuscriptFormat', 'analyzeSourceFromComposer', 'viewerIsGuest'], [],
-    `const analyzeResolveCache=new Map(); let CURRENT_USER={guest:true}; const box={value:''}; const $=()=>box;
-const initialAttachments={files:[]}; const analyzePolicy=()=>({sources:{paste_chars:20000}});`,
-    `(text,cached)=>{ box.value=text; analyzeResolveCache.clear(); if(cached)analyzeResolveCache.set(text.trim(),cached); return analyzeSourceFromComposer(); }`)
+  const pick = run(['analyzeLinkFromText', 'guessManuscriptFormat', 'analyzeSourceFromComposer', 'viewerIsGuest', 'manuscriptSourceCopy', 'manuscriptPolicy'], ['MANUSCRIPT_SOURCE_COPY'],
+    `const analyzeResolveCache=new Map(); let CURRENT_USER={guest:true}, kind='analyze'; const box={value:''}; const $=()=>box;
+const initialAttachments={files:[]}; const analyzePolicy=()=>({sources:{paste_chars:20000}}), readabilityPolicy=()=>({sources:{paste_chars:30}});
+const runKindChoice=()=>kind;`,
+    `(text,cached,mode='analyze')=>{ kind=mode; box.value=text; analyzeResolveCache.clear(); if(cached)analyzeResolveCache.set(text.trim(),cached); return analyzeSourceFromComposer(); }`)
   const link = 'https://github.com/openai/math/blob/fd4aeeb/README.md'
   assert.deepEqual(pick(link, null), { kind: 'url', url: link })
   assert.deepEqual(pick(link, { ok: false, error: 'Link one manuscript folder of openai/math (preprints/<title>)' }),
     { error: 'Link one manuscript folder of openai/math (preprints/<title>) — change the link to analyze something else.' })
   assert.deepEqual(pick(link, { ok: false, transient: true, error: 'arXiv asks for a pause' }), { kind: 'url', url: link })
   assert.deepEqual(pick(link, { ok: true, title: 'x' }), { kind: 'url', url: link })
+  // Readability reads the same source box, in its own words and with its own paste limit.
+  assert.deepEqual(pick(link, { ok: false, error: 'Not a manuscript' }, 'readability'), { error: 'Not a manuscript — change the link to read something else.' })
+  assert.deepEqual(pick('', null, 'readability'), { error: 'Paste a link, a paper or a proof, or upload files to make readable' })
+  assert.deepEqual(pick('x'.repeat(31), null, 'readability'), { error: 'Pasted manuscripts are limited to 30 characters for guests' })
+  assert.deepEqual(pick('x'.repeat(31), null, 'analyze'), { kind: 'paste', text: 'x'.repeat(31) })
   // A refused lookup marked retryable is kept out of the cache, like a 429.
   assert.match(fn('resolveAnalyzeLink'), /body\.ok===false&&body\.retryable\?\{\.\.\.body,transient:true\}:body/)
   // Starting looks the link up first when no preview came back yet.

@@ -72,6 +72,7 @@ async function page(project) {
   await settle()
   return {
     options: () => byId('project-engine').children.map(option => option.value),
+    runs: () => byId('project-runs').children,
     selected: () => byId('project-engine').value,
     note: () => byId('project-analyze-note').previous,
     choose: value => { byId('project-engine').value = value },
@@ -105,4 +106,16 @@ test('the engine list follows the project when a member joins, keeping a choice 
   assert.deepEqual(view.options(), ['kimi', 'plain', 'math_harness'])
   assert.equal(view.selected(), 'plain')
   assert.equal(view.note().hidden, false)
+})
+
+test('a project lists a readable version with its own tag and caveat', async () => {
+  const runs = [{ run_id: 'r1', run_kind: 'readability', engine: 'readability', status: 'finished', user: 1, task: '' },
+    { run_id: 'r2', run_kind: 'analyze', engine: 'analyze', status: 'finished', user: 1, task: 'Lemma 3.7' }]
+  const view = await page({ ...PROJECT, tool_free_engines: null, runs })
+  const rows = view.runs()
+  const heading = row => row.children[0].children[0].children
+  assert.equal(heading(rows[0])[0].textContent, 'Readable')
+  assert.equal(heading(rows[0])[1], 'Readable version')
+  assert.match(rows[0].children[0].children[1].textContent, /^Ansatz Readability · checked against the original by a model, not a certificate · finished/)
+  assert.equal(heading(rows[1])[0].textContent, 'Analyze')
 })

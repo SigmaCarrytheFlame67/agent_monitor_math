@@ -442,9 +442,11 @@ class CgmCopyAndControlsTests(unittest.TestCase):
     def test_modes_keep_one_button_each_and_cgm_is_the_default(self) -> None:
         start = HTML.index('id="dag-mode"')
         modes = HTML[start : HTML.index("</div>", start)]
-        for mode in ("engine", "informal", "formal", "compiler"):
+        for mode in ("analysis", "paper-map", "engine", "informal", "formal", "compiler"):
             self.assertEqual(modes.count(f'data-mode="{mode}"'), 1)
         self.assertIn('class="on" data-mode="engine"', modes)
+        # The manuscript modes (an analysis, a readable version) are shown only for their runs.
+        self.assertIn('data-mode="paper-map" hidden', modes)
         self.assertIn(">Informal · CGM</button>", modes)
         self.assertIn(">Outline</button>", modes)
         self.assertIn('id="dag-detail"', HTML)

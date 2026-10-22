@@ -1,5 +1,6 @@
 """The composer's mode switch: "Informal only / Informal + formalization" (prove)
-and, when the server offers it, "Analyze" (run_kind "analyze")."""
+and, when the server offers them, "Analyze" (run_kind "analyze") and
+"Readability" (run_kind "readability")."""
 from __future__ import annotations
 
 import json
@@ -64,13 +65,16 @@ class FormalizeSwitchTests(unittest.TestCase):
     def test_analyze_is_the_third_choice_and_starts_hidden(self) -> None:
         switch = HTML.split('id="formalize-switch"', 1)[1].split("</div>", 1)[0]
         radios = re.findall(r"<button[^>]*role=\"radio\"[^>]*>", switch)
-        self.assertEqual(len(radios), 3)
-        analyze = radios[2]
-        # Shown only once /api/engines advertises the analyze engine.
-        self.assertIn('data-run-kind="analyze"', analyze)
-        self.assertIn(" hidden", analyze)
-        self.assertIn('aria-checked="false"', analyze)
-        self.assertIn('tabindex="-1"', analyze)
+        self.assertEqual(len(radios), 4)
+        analyze, readability = radios[2], radios[3]
+        # Shown only once /api/engines advertises the analyze (readability) engine.
+        for radio, kind in ((analyze, "analyze"), (readability, "readability")):
+            self.assertIn(f'data-run-kind="{kind}"', radio)
+            self.assertIn(" hidden", radio)
+            self.assertIn('aria-checked="false"', radio)
+            self.assertIn('tabindex="-1"', radio)
+        self.assertIn(">Readability</button>", switch)
+        self.assertIn("not a certificate.", readability)
         self.assertIn('aria-label="Mode"', HTML.split('id="formalize-switch"', 1)[1].split(">", 1)[0])
         self.assertIn("const RUN_KIND_KEY='proving-console-run-kind-v1';", SCRIPT)
         composer = HTML.split('id="analyze-composer"', 1)[1].split('<div class="choice-dock">', 1)[0]
@@ -92,32 +96,66 @@ class FormalizeSwitchTests(unittest.TestCase):
         self.assertIn("request.attachments=await initialAttachments.payload()", body)
         self.assertIn("if(runKindChoice()==='analyze')return startAnalyzeRun();", SCRIPT)
 
+    def test_readability_reuses_the_source_box_with_its_own_options_and_request(self) -> None:
+        composer = HTML.split('id="analyze-composer"', 1)[1].split('<div class="choice-dock">', 1)[0]
+        audience = composer.split('id="readability-audience"', 1)[1].split("</select>", 1)[0]
+        self.assertEqual(
+            re.findall(r'<option value="([a-z]+)"(?: selected)?>([^<]+)</option>', audience),
+            [("research", "Researchers in the field"), ("graduate", "Graduate students"), ("undergraduate", "Undergraduates")],
+        )
+        # The server's default audience is chosen until the visitor picks another.
+        self.assertIn('<option value="graduate" selected>', audience)
+        self.assertIn('id="readability-focus" type="text" maxlength="2000"', composer)
+        self.assertIn('class="readability-options" id="readability-options" hidden', composer)
+        self.assertIn('id="readability-provider" hidden', composer)
+        self.assertIn(
+            "verb:'read',sub:'Paste or link a paper or proof — get a readable version that keeps every statement, "
+            "a paper map, a notation table, and answers to your questions.'",
+            SCRIPT,
+        )
+        self.assertIn("placeholder:'Paste a proof or paper, or a link (arXiv, GitHub, openai/math, PDF/TeX)…'", SCRIPT)
+        self.assertIn("kind==='readability'?'Make readable'", _js_function("syncStartButton"))
+        # A readable version is its own request: run_kind, the readability engine, one source.
+        start = SCRIPT.index("async function startReadabilityRun(")
+        body = SCRIPT[start : SCRIPT.index("\n}\n", start)]
+        self.assertIn("run_kind:'readability',engine:'readability'", body)
+        self.assertIn("readability:{audience:readabilityAudience()}", body)
+        self.assertIn("if(focus)request.readability.focus=focus;", body)
+        self.assertIn("request.source={url:source.url}", body)
+        self.assertIn("request.attachments=await initialAttachments.payload()", body)
+        self.assertNotIn("formalize", body)
+        self.assertIn("if(runKindChoice()==='readability')return startReadabilityRun();", SCRIPT)
+        # Its composer hides Analyze's options and shows its own.
+        apply = _js_function("applyRunKindComposer")
+        self.assertIn("$('analyze-composer').querySelector('.analyze-options').hidden=readability;", apply)
+        self.assertIn("$('readability-options').hidden=!readability;", apply)
+
     @unittest.skipUnless(NODE, "node is unavailable")
     def test_switch_defaults_to_formalization_and_remembers_informal_only(self) -> None:
         key = SCRIPT.split("const FORMALIZE_KEY=", 1)[1].split(";", 1)[0]
         source = "\n".join(
             _js_function(name) for name in ("formalizeChoice", "renderFormalizeSwitch", "setFormalizeChoice")
         )
-        # Without an advertised Analyze engine the switch is the old two-way one.
+        # Without an advertised Analyze or Readability engine the switch is the old two-way one.
         program = f"""
 const FORMALIZE_KEY={key};
 const store={{}};
 const localStorage={{getItem:k=>k in store?store[k]:null,setItem:(k,v)=>{{store[k]=String(v);}}}};
-const analyzeOffered=()=>false, runKindChoice=()=>'prove';
-const buttons=[{{formalize:'0'}},{{formalize:'1'}},{{runKind:'analyze'}}].map(dataset=>({{dataset,hidden:false,attrs:{{}},tabIndex:0,setAttribute(name,v){{this.attrs[name]=v;}}}}));
+const runKindOffered=()=>false, runKindChoice=()=>'prove';
+const buttons=[{{formalize:'0'}},{{formalize:'1'}},{{runKind:'analyze'}},{{runKind:'readability'}}].map(dataset=>({{dataset,hidden:false,attrs:{{}},tabIndex:0,setAttribute(name,v){{this.attrs[name]=v;}}}}));
 const document={{querySelectorAll:()=>buttons}};
 {source}
 const checked=()=>buttons.filter(b=>b.attrs['aria-checked']==='true').map(b=>b.dataset.formalize||b.dataset.runKind);
 const out=[formalizeChoice()];
-renderFormalizeSwitch(); out.push(checked(),buttons[2].hidden);
+renderFormalizeSwitch(); out.push(checked(),buttons[2].hidden,buttons[3].hidden);
 setFormalizeChoice(false); out.push(formalizeChoice(),checked(),Object.values(store));
 setFormalizeChoice(true); out.push(formalizeChoice(),checked());
 console.log(JSON.stringify(out));
 """
-        self.assertEqual(_run(program), [True, ["1"], True, False, ["0"], ["0"], True, ["1"]])
+        self.assertEqual(_run(program), [True, ["1"], True, True, False, ["0"], ["0"], True, ["1"]])
 
     @unittest.skipUnless(NODE, "node is unavailable")
-    def test_three_way_mode_keeps_the_proof_output_and_cycles_with_arrows(self) -> None:
+    def test_four_way_mode_keeps_the_proof_output_and_cycles_with_arrows(self) -> None:
         keys = "\n".join(
             SCRIPT.split(f"const {name}=", 1)[1].join([f"const {name}=", ""]).split(";", 1)[0] + ";"
             for name in ("FORMALIZE_KEY", "RUN_KIND_KEY")
@@ -126,7 +164,8 @@ console.log(JSON.stringify(out));
             _js_function(name)
             for name in (
                 "formalizeChoice", "renderFormalizeSwitch", "setFormalizeChoice", "engineServesProve",
-                "analyzeEngineEntry", "analyzePolicy", "viewerIsAdmin", "analyzeOffered", "runKindChoice",
+                "analyzeEngineEntry", "analyzePolicy", "viewerIsAdmin", "analyzeOffered",
+                "readabilityEngineEntry", "readabilityPolicy", "readabilityOffered", "runKindOffered", "runKindChoice",
                 "modeRadios", "radioMode", "chooseMode", "nextModeRadio",
             )
         )
@@ -134,33 +173,41 @@ console.log(JSON.stringify(out));
 {keys}
 const store={{}};
 const localStorage={{getItem:k=>k in store?store[k]:null,setItem:(k,v)=>{{store[k]=String(v);}}}};
-let ENGINES=[{{id:'kimi',modes:['prove']}},{{id:'analyze',modes:['analyze'],available:true,analyze:{{enabled:true}}}}];
+let ENGINES=[{{id:'kimi',modes:['prove']}},{{id:'analyze',modes:['analyze'],available:true,analyze:{{enabled:true}}}},
+  {{id:'readability',modes:['readability'],available:true,readability:{{enabled:true}}}}];
 let CURRENT_USER={{guest:true}}, changes=0;
 const runKindChanged=()=>{{changes++;}};
-const buttons=[{{formalize:'0'}},{{formalize:'1'}},{{runKind:'analyze'}}].map(dataset=>({{dataset,hidden:dataset.runKind==='analyze',attrs:{{}},tabIndex:0,setAttribute(name,v){{this.attrs[name]=v;}}}}));
+const buttons=[{{formalize:'0'}},{{formalize:'1'}},{{runKind:'analyze'}},{{runKind:'readability'}}].map(dataset=>({{dataset,hidden:!!dataset.runKind,attrs:{{}},tabIndex:0,setAttribute(name,v){{this.attrs[name]=v;}}}}));
 const document={{querySelectorAll:()=>buttons}};
 {source}
 const checked=()=>buttons.filter(b=>b.attrs['aria-checked']==='true').map(b=>b.dataset.formalize||b.dataset.runKind);
 const out={{}};
-renderFormalizeSwitch(); out.offered=[buttons[2].hidden,checked()];
+renderFormalizeSwitch(); out.offered=[buttons[2].hidden,buttons[3].hidden,checked()];
 chooseMode('analyze'); out.analyze=[runKindChoice(),checked(),formalizeChoice(),store[RUN_KIND_KEY],changes,buttons.map(b=>b.tabIndex)];
+chooseMode('readability'); out.readability=[runKindChoice(),checked(),formalizeChoice(),store[RUN_KIND_KEY],changes,buttons.map(b=>b.tabIndex)];
 chooseMode('informal'); out.informal=[runKindChoice(),checked(),formalizeChoice(),changes];
 chooseMode('formal'); out.formal=[runKindChoice(),checked(),formalizeChoice(),changes];
 out.keys=['ArrowRight','ArrowLeft','ArrowDown','ArrowUp','Home','End'].map(key=>radioMode(nextModeRadio(buttons[2],key)));
-// A saved Analyze choice falls back to Prove when the server stops offering it.
+out.wrap=radioMode(nextModeRadio(buttons[3],'ArrowRight'));
+// A saved Readability (Analyze) choice falls back to Prove when the server stops offering it.
+chooseMode('readability'); ENGINES=ENGINES.filter(e=>e.id!=='readability'); renderFormalizeSwitch();
+out.withdrawn=[runKindChoice(),buttons[2].hidden,buttons[3].hidden,checked()];
 chooseMode('analyze'); ENGINES=[{{id:'kimi',modes:['prove']}}]; renderFormalizeSwitch();
-out.withdrawn=[runKindChoice(),buttons[2].hidden,checked()];
+out.withdrawnAnalyze=[runKindChoice(),buttons[2].hidden,checked()];
 console.log(JSON.stringify(out));
 """
         out = _run(program)
-        self.assertEqual(out["offered"], [False, ["1"]])
+        self.assertEqual(out["offered"], [False, False, ["1"]])
         # Analyze: only the Analyze radio is checked; the proof output is untouched.
-        self.assertEqual(out["analyze"], ["analyze", ["analyze"], True, "analyze", 1, [-1, -1, 0]])
-        self.assertEqual(out["informal"], ["prove", ["0"], False, 2])
-        self.assertEqual(out["formal"], ["prove", ["1"], True, 2])
-        # Arrows wrap through the three visible choices; Home and End jump.
-        self.assertEqual(out["keys"], ["informal", "formal", "informal", "formal", "informal", "analyze"])
-        self.assertEqual(out["withdrawn"], ["prove", True, ["1"]])
+        self.assertEqual(out["analyze"], ["analyze", ["analyze"], True, "analyze", 1, [-1, -1, 0, -1]])
+        self.assertEqual(out["readability"], ["readability", ["readability"], True, "readability", 2, [-1, -1, -1, 0]])
+        self.assertEqual(out["informal"], ["prove", ["0"], False, 3])
+        self.assertEqual(out["formal"], ["prove", ["1"], True, 3])
+        # Arrows wrap through the four visible choices; Home and End jump.
+        self.assertEqual(out["keys"], ["readability", "formal", "readability", "formal", "informal", "readability"])
+        self.assertEqual(out["wrap"], "informal")
+        self.assertEqual(out["withdrawn"], ["prove", False, True, ["1"]])
+        self.assertEqual(out["withdrawnAnalyze"], ["prove", True, ["1"]])
 
     @unittest.skipUnless(NODE, "node is unavailable")
     def test_stages_left_off_read_as_off_not_failed(self) -> None:
