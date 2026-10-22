@@ -325,6 +325,11 @@ class ReadabilityRun(runner.ManuscriptRun):
         except (harness._BudgetExhausted, harness.MathHarnessError, ParseError):
             self.degraded.append("guide-failed")
         else:
+            if segments.get("parser") == readability_structure.PARSER_ID:
+                # A fact closure says which result is its main theorem; the lemmas are not main results.
+                mains = {node["id"] for node in nodes if node.get("main_result")}
+                guide = {**guide, "main_results": [entry for entry in guide.get("main_results") or []
+                                                   if entry.get("id") in mains]}
             self.guide = {**guide, "title": guide.get("title") or self.guide["title"]}
             self.guide_source = "model"
             self.note(f"Guide · {guide['one_line']}"[:600])
@@ -623,7 +628,7 @@ class ReadabilityRun(runner.ManuscriptRun):
                 segments: Mapping[str, Any], manuscript: Mapping[str, Any]) -> dict[str, Any]:
         self.stage("finalize")
         nodes = segments.get("nodes") or []
-        labels = {node["id"]: prompts.printed(node) for node in nodes}
+        labels = {node["id"]: prompts.printed_name(node) for node in nodes}
         refs = references.label_map(segments)
         title = str(manuscript.get("title") or "")
         if title in PLACEHOLDER_TITLES.values() and self.guide_source == "model":
@@ -863,7 +868,8 @@ def run_ask(
                         family=prompts.ASK_FAMILY))
                 parsed, reply = harness._job_result(job)
                 # Leftover LaTeX reads as in the readable version.
-                labels = {node["id"]: prompts.printed(node) for node in nodes if isinstance(node, dict) and node.get("id")}
+                labels = {node["id"]: prompts.printed_name(node) for node in nodes
+                          if isinstance(node, dict) and node.get("id")}
                 parsed["answer"] = texprose.convert(
                     references.resolve(parsed["answer"], references.label_map(segments)), labels)
                 answer.update(parsed, status="done", model=(reply.observed_model or reply.model or run.info.route.model))

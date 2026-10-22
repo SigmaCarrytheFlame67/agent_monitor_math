@@ -923,6 +923,13 @@ def test_caps_per_role_and_route(monkeypatch):
     assert limits.guests_enabled()
 
 
+def test_unnumbered_results_are_named_by_their_titles():
+    assert prompts.printed_name({"display": "Lemma", "number": "3.2", "title": "Coding"}) == "Lemma 3.2"
+    assert prompts.printed_name({"display": "Definition", "number": None, "title": "Valid diagrams"}) == (
+        "Definition (Valid diagrams)")
+    assert prompts.printed_name({"display": "Main theorem", "number": None, "title": None}) == "Main theorem"
+
+
 def test_the_prompt_pack_is_bounded_and_hashed():
     for text in prompts.all_prompts().values():
         assert 500 < len(text.encode()) <= harness.MAX_SYSTEM_PROMPT_BYTES
@@ -1093,7 +1100,9 @@ FIXTURES = ROOT / "tests" / "fixtures" / "readability"
 def test_a_pasted_fact_closure_gets_its_results_anchors_and_map(tmp_path, model):
     # Live: this closure gave "reading guide for 0 results" (no map, no anchors).
     closure = (FIXTURES / "closure_v1_even.md").read_text(encoding="utf-8")
-    fake = model()
+    # Live: the guide called every lemma a main result, and the title was the closure's "# Proof".
+    fake = model(guide=lambda _user: guide_json(title="$n^2+n$ is even", main_results=[
+        {"id": "lemma-2", "plain": "Every number is even or odd."}, {"id": "main-theorem", "plain": "n^2+n is even."}]))
     events: list[dict] = []
     req = write_request(tmp_path, source={"kind": "paste", "text": closure, "format": "md"})
     outcome = run(tmp_path, req, kimi_env(), events)
@@ -1112,6 +1121,11 @@ def test_a_pasted_fact_closure_gets_its_results_anchors_and_map(tmp_path, model)
         ("lemma-1", "main-theorem", "ref"), ("lemma-2", "main-theorem", "ref"), ("lemma-3", "main-theorem", "ref")}
     text = (tmp_path / "readability" / "readable.md").read_text()
     assert "\n\n[result:main-theorem]: #\n\n" in text and outcome["counts"]["faithful"] == 1
+    # The closure names its main theorem; the guide's title names the closure.
+    assert load(tmp_path, "guide.json")["main_results"] == [{"id": "main-theorem", "plain": "n^2+n is even."}]
+    assert "**Lemma 2.**" not in text.split("**Main results.**", 1)[1].split("**Key idea.**", 1)[0]
+    assert load(tmp_path, "receipt.json")["title"] == "$n^2+n$ is even" and paper["title"] == "$n^2+n$ is even"
+    assert text.startswith("# ") and text.splitlines()[0].endswith("is even — Readable version")
 
 
 def test_rewrites_get_the_printed_names_and_leftover_latex_is_written_out(tmp_path, model):

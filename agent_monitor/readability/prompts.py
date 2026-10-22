@@ -293,6 +293,16 @@ def printed(node: Mapping[str, Any]) -> str:
     return f"{display} {number}" if number else display
 
 
+def printed_name(node: Mapping[str, Any]) -> str:
+    """A result's name for a reader: "Lemma 3.2", or "Lemma (Coding)" when
+    the manuscript does not number it but gives it a title."""
+    name = printed(node)
+    title = " ".join(str(node.get("title") or "").split())
+    if title and not str(node.get("number") or "").strip():
+        return f"{name} ({title[:100]})"
+    return name
+
+
 def section_of(node: Mapping[str, Any]) -> str:
     """The innermost section a result sits in: "3 Proofs" (or "")."""
     sections = [entry for entry in node.get("section") or [] if isinstance(entry, Mapping)]

@@ -242,7 +242,9 @@ def segment_text(text: str, *, file: str, fmt: str) -> dict[str, Any]:
     edges, dropped = text_structure._acyclic(edges)
     if not any(node["main_result"] for node in nodes):
         text_structure._mark_main(nodes, edges)
-    return dict(document, parser=PARSER_ID, nodes=nodes, edges=edges, dropped_for_acyclicity=dropped[:50],
+    # "# Proof" is the closure's own heading, not a title: the reading guide names it.
+    title = "" if str(document.get("title") or "").strip().lower() == "proof" else document.get("title")
+    return dict(document, parser=PARSER_ID, title=title, nodes=nodes, edges=edges, dropped_for_acyclicity=dropped[:50],
                 truncated=None, warnings=warnings, stats={
                     "statements": len(nodes), "proofs_attached": len(nodes), "uses_edges": len(edges),
                     "numbered": sum(1 for node in nodes if node["number"])})

@@ -50,7 +50,7 @@ def as_copied(text: str) -> str:
 
 def test_a_numbered_closure_gives_one_result_per_fact_with_its_uses():
     document = segment(V1_EVEN)
-    assert document["parser"] == "text-1+cgm-closure" and document["title"] == "Proof"
+    assert document["parser"] == "text-1+cgm-closure" and document["title"] == ""
     assert document["warnings"] == []
     nodes = {node["id"]: node for node in document["nodes"]}
     assert list(nodes) == ["lemma-1", "lemma-2", "lemma-3", "main-theorem"]
