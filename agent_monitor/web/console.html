@@ -2009,11 +2009,13 @@ body { background:var(--bg); }
                 <button id="proof-done-btn" hidden>Done</button>
                 <button id="pdf-dl-btn" disabled>⬇ Download</button>
               </div>
-              <div class="readability-tabs" id="readability-tabs" role="tablist" aria-label="Readability views" hidden>
-                <button type="button" role="tab" data-rd-view="readable" aria-selected="true" aria-controls="md-view">Readable version</button>
-                <button type="button" role="tab" data-rd-view="original" aria-selected="false" aria-controls="md-view" tabindex="-1">Original</button>
-                <button type="button" role="tab" data-rd-view="notation" aria-selected="false" aria-controls="md-view" tabindex="-1">Notation</button>
-                <button type="button" role="tab" data-rd-view="map" aria-selected="false" aria-controls="md-view" tabindex="-1">Map</button>
+              <div class="readability-tabs" id="readability-tabs" hidden>
+                <div class="readability-tablist" role="tablist" aria-label="Readability views">
+                  <button type="button" role="tab" id="rd-tab-readable" data-rd-view="readable" aria-selected="true" aria-controls="md-view">Readable version</button>
+                  <button type="button" role="tab" id="rd-tab-original" data-rd-view="original" aria-selected="false" aria-controls="md-view" tabindex="-1">Original</button>
+                  <button type="button" role="tab" id="rd-tab-notation" data-rd-view="notation" aria-selected="false" aria-controls="md-view" tabindex="-1">Notation</button>
+                  <button type="button" role="tab" id="rd-tab-map" data-rd-view="map" aria-selected="false" aria-controls="md-view" tabindex="-1">Map</button>
+                </div>
                 <span class="readability-tab-status" id="readability-tab-status" role="status" aria-live="polite"></span>
               </div>
               <div class="prompt-strip collapsed" id="prompt-strip" style="display:none">
@@ -5725,7 +5727,10 @@ function dagPayloadForMode(payload,mode,view){
   return payload;
 }
 function dagUnavailableState(mode,payload,view,runEngine){
-  if(mode==='paper-map')return {
+  if(mode==='paper-map')return payload?.status==='ready'?{
+    status:'nothing to map',
+    html:'<div style="font-size:28px;opacity:.4">◇</div><div><strong>This manuscript has no numbered definitions or results to map.</strong><br/>The readable version is published; read it in the Sandbox.</div>',
+  }:{
     status:payload?.status==='none'?'no paper map yet':'paper map unavailable',
     html:'<div style="font-size:28px;opacity:.4">◇</div><div><strong>The Paper map appears when the readable version is published.</strong><br/>It shows the manuscript’s definitions and results and how they depend on each other; darker cards matter more to the main argument.<br/>Built from the manuscript and a reading guide written by a model — not a verification.</div>',
   };
@@ -7907,6 +7912,10 @@ function applyRunKindView(kind,rid){
   // A readable version has tabs of its own, the Ask panel instead of the chat,
   // and no Lean.
   for(const id of ['readability-tabs','ask-list','ask-compose']){ const el=$(id); if(el)el.hidden=!readability; }
+  // The view is the tabs' panel while a readable version is shown.
+  const panel=$('md-view');
+  if(panel&&readability){ panel.setAttribute('role','tabpanel'); panel.setAttribute('aria-labelledby','rd-tab-'+(typeof readabilityTab==='string'?readabilityTab:'readable')); }
+  else if(panel){ panel.removeAttribute('role'); panel.removeAttribute('aria-labelledby'); }
   $('sel-pop').textContent=readability?'Ask about this':'💬 Add to chat';
   $('analysis-stages').setAttribute('aria-label',readability?'Readability stages':'Analyze stages');
   if(readability&&workspaceView==='lean')setWorkspaceView('sandbox');

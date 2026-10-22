@@ -200,11 +200,17 @@
     section.append(node('p', 'rv-muted', 'Importance and roles come from a reading guide written by a model — not a verification.'));
     return section;
   }
+  // A result's name, as the console gives it: an unnumbered result is named
+  // by its title ("Definition (Valid diagrams)").
+  function anchorName(entry) {
+    const label = text(entry.label || entry.id).slice(0, 160), name = text(entry.title).trim().slice(0, 120);
+    return !/\d[a-z]?$/i.test(label) && name && name !== label ? `${label} (${name})` : label;
+  }
   // Renders the readable version into the proof document, with its notation
   // and paper map after it; returns the snapshot's parts.
   function render(data, { target, renderText }) {
     const view = parts(data);
-    const labels = new Map(view.nodes.map(entry => [text(entry.id), text(entry.label || entry.id).slice(0, 160)]));
+    const labels = new Map(view.nodes.map(entry => [text(entry.id), anchorName(entry)]));
     if (view.readable.trim()) {
       // Each part is drawn on its own, so that its check notes can follow it.
       const [head, ...rest] = readableParts(withAnchorTokens(view.readable)), notes = checkNotes(data);

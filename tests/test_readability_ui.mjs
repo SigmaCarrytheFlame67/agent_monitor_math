@@ -445,6 +445,26 @@ test('result markers become anchor badges: id-safe, labelled, never DOM ids; raw
   assert.match(fn('readableMarkdown'), /return \{html:sanitizeRenderedHtml\(/)
 })
 
+test('display environments in a readable version are math, as on the shared page', () => {
+  // Review: Markdown read inside \\begin{equation} dropped \\{ and \\\\ and made a heading of "=".
+  const { render } = readableRenderer()
+  const doc = 'Put\n\\begin{equation}\n E=\\{b\\in B: b\\ne 0\\},\\qquad\n =\n\\end{equation}\nand\n\\begin{align*}\n a &= 1 \\\\\n b &= 2\n\\end{align*}\nDone.'
+  const { box } = render(doc, [])
+  assert.doesNotMatch(box.innerHTML, /<h1|@@/)
+  assert.ok(box.textContent.includes('\\begin{equation}\n E=\\{b\\in B: b\\ne 0\\},\\qquad\n =\n\\end{equation}'))
+  assert.ok(box.textContent.includes('\\begin{align*}\n a &= 1 \\\\\n b &= 2\n\\end{align*}'))
+})
+
+test('a result link right after the name it names is a compact jump', () => {
+  // Review: answers read "Lemma 3.9 Lemma 3.9" (the name, then a link of that name).
+  const { render } = readableRenderer()
+  const { box } = render('By Lemma 3.9 [[result:lem:a]] and, again, [[result:lem:a]].', [['lem:a', 'Lemma 3.9']])
+  const [jump, full] = box.querySelectorAll('.rd-ref')
+  assert.deepEqual([jump.textContent, jump.getAttribute('aria-label'), jump.title, jump.dataset.rdRef],
+    ['↗', 'Show Lemma 3.9 in the readable version', 'Show Lemma 3.9 in the readable version', 'lem:a'])
+  assert.equal(full.textContent, 'Lemma 3.9')
+})
+
 test('sanitized last: a result marker or link never turns into markup in a link, math or code, and text cannot forge one', () => {
   const { render } = readableRenderer()
   const labels = [['thm:main', 'Theorem 1']]
@@ -610,7 +630,7 @@ test('a selected passage is sent as written: no line numbers or badges, result l
 
 test('questions: one in flight at a time, the one just sent shown at once, and guests see how many are left', () => {
   const ask = run(['readabilityAskRunning', 'readabilityAsks', 'readabilityAskAllowance', 'syncReadabilityAskCompose'], [], `
-const readabilityAskSent=new Map(); let readabilityAskSending=false, guest=false;
+const readabilityAskSent=new Map(); let readabilityAskSending='', guest=false;
 const els={}; const $=id=>els[id]||(els[id]={id,disabled:false,title:'',textContent:''});
 const viewerIsGuest=()=>guest, readabilityPolicy=()=>({asks:{per_run:3}});`,
   `((op,run,arg)=>{
@@ -650,7 +670,7 @@ test('asking about a passage or a result: what is sent, and where a result link 
   vm.runInContext(`
 const calls=[], posts=[], els={};
 const $=id=>els[id]||(els[id]={id,value:'',textContent:'',disabled:false,hidden:false,kids:[],focus(){ calls.push('focus '+id); },replaceChildren(...kids){ this.kids=kids; }});
-let readabilityAskContext=null, readabilityAskSending=false, readabilityTab='original', runId='r1', workspaceView='dag';
+let readabilityAskContext=null, readabilityAskSending='', readabilityTab='original', runId='r1', workspaceView='dag';
 const readabilityAskSent=new Map();
 let lastSandboxRun={run_id:'r1',run_kind:'readability',status:'finished',sandbox_preview:{has_readable:true},readability:{asks:[]}};
 let reply={ok:true,status:202,body:{ok:true,ask_id:'f00dfeed0001'}};
@@ -690,8 +710,8 @@ const state=()=>({calls:calls.splice(0),posts:posts.splice(0),context:readabilit
   assert.equal(after.posts[0][1].view, 'readable')
   assert.deepEqual([after.status, after.input, after.context.view], ['✗ Guests can ask 3 questions about a readable version (limit)', 'q', 'readable'])
   // Nothing is sent while a question is on its way, or for a run that is not a readable version.
-  step("readabilityAskSending=true"); await step('sendReadabilityAsk()')
-  step("readabilityAskSending=false; lastSandboxRun={run_id:'r1',engine:'kimi'}"); await step('sendReadabilityAsk()')
+  step("readabilityAskSending='r1'"); await step('sendReadabilityAsk()')
+  step("readabilityAskSending=''; lastSandboxRun={run_id:'r1',engine:'kimi'}"); await step('sendReadabilityAsk()')
   assert.deepEqual(state().posts, [])
   // A result link opens the Readable version at the result's anchor, found by its data attribute (never a DOM id).
   step("readabilityTab='notation'; workspaceView='dag'; readabilityJumpTo('thm:main')")
@@ -703,7 +723,8 @@ const state=()=>({calls:calls.splice(0),posts:posts.splice(0),context:readabilit
 
 test('a readable version opens on its tabs and Ask panel, with no editing, Lean or proof graphs', () => {
   const view = run(['applyRunKindView', 'syncDagModeForRun'], ['LEAN_ANALYSIS_STAGE_NAMES'], `
-const els={}; const $=id=>els[id]||(els[id]={id,hidden:false,textContent:'',placeholder:'',dataset:{},attrs:{},disabled:false,setAttribute(k,v){this.attrs[k]=String(v);}});
+const els={}; const $=id=>els[id]||(els[id]={id,hidden:false,textContent:'',placeholder:'',dataset:{},attrs:{},disabled:false,setAttribute(k,v){this.attrs[k]=String(v);},
+  getAttribute(k){ return k in this.attrs?this.attrs[k]:null; },removeAttribute(k){ delete this.attrs[k]; }});
 const bodyClasses=new Set(), modes={};
 for(const mode of ['analysis','paper-map','engine','informal','formal','compiler'])modes[mode]={hidden:mode==='analysis'||mode==='paper-map'};
 const document={body:{classList:{toggle(c,on){ if(on)bodyClasses.add(c); else bodyClasses.delete(c); }}},
@@ -714,7 +735,8 @@ const setDagMode=(mode)=>{ dagMode=mode; switched.push(mode); }, setWorkspaceVie
 const ANALYZE_CONTINUE_NOTE='analyze note', READABILITY_ASK_NOTE='Questions are answered by a model from this paper — not a certificate.';`,
   `(kind=>{ applyRunKindView(kind,'r1'); return {body:[...bodyClasses],chat:$('chat-title').textContent,proof:$('proof-title').textContent,
     shown:['readability-tabs','ask-list','ask-compose'].filter(id=>!$(id).hidden),selPop:$('sel-pop').textContent,stages:$('analysis-stages').attrs['aria-label'],
-    modes:Object.keys(modes).filter(mode=>!modes[mode].hidden),dagMode,switched:switched.splice(0),workspaceView,source:[$('analysis-source-link').hidden,$('analysis-source-toggle').hidden]}; })`)
+    modes:Object.keys(modes).filter(mode=>!modes[mode].hidden),dagMode,switched:switched.splice(0),workspaceView,source:[$('analysis-source-link').hidden,$('analysis-source-toggle').hidden],
+    panel:{...$('md-view').attrs}}; })`)
   const readable = view('readability')
   assert.deepEqual(readable.body, ['readability-run'])
   assert.equal(readable.chat, 'Ask about this paper')
@@ -726,7 +748,10 @@ const ANALYZE_CONTINUE_NOTE='analyze note', READABILITY_ASK_NOTE='Questions are 
   assert.equal(readable.dagMode, 'paper-map')
   // The Lean view a proof run had open gives way to the Sandbox.
   assert.deepEqual(readable.switched, ['view:sandbox', 'paper-map'])
+  // The view is the tabs' panel while a readable version is shown, and only then.
+  assert.deepEqual(readable.panel, { role: 'tabpanel', 'aria-labelledby': 'rd-tab-readable' })
   const proof = view('prove')
+  assert.deepEqual(proof.panel, {})
   assert.deepEqual(proof.body, [])
   assert.deepEqual(proof.shown, [])
   assert.equal(proof.selPop, '💬 Add to chat')
@@ -738,9 +763,12 @@ const ANALYZE_CONTINUE_NOTE='analyze note', READABILITY_ASK_NOTE='Questions are 
   assert.deepEqual(analysis.modes, ['analysis', 'informal', 'formal', 'compiler'])
   // What a readable version hides, and its tab strip and Ask panel, are in readability.css.
   assert.match(css, /\.readability-run #proof-edit-btn,[^{]*\.readability-run \.chat-msgs, \.readability-run \.chat-compose, \.readability-run #sess-cont,[^{]*\.readability-run \.seg-control button\[data-view="lean"\] \{ display: none !important; \}/)
-  assert.match(html, /<div class="readability-tabs" id="readability-tabs" role="tablist" aria-label="Readability views" hidden>/)
-  assert.deepEqual([...html.matchAll(/role="tab" data-rd-view="([a-z]+)"[^>]*>([^<]+)</g)].map(m => [m[1], m[2]]),
-    [['readable', 'Readable version'], ['original', 'Original'], ['notation', 'Notation'], ['map', 'Map']])
+  // The tabs are a tablist of their own; the status beside them is no tab.
+  assert.match(html, /<div class="readability-tabs" id="readability-tabs" hidden>\s*<div class="readability-tablist" role="tablist" aria-label="Readability views">/)
+  assert.match(html, /<\/div>\s*<span class="readability-tab-status" id="readability-tab-status" role="status"/)
+  // Each tab has an id the panel is labelled by.
+  assert.deepEqual([...html.matchAll(/role="tab" id="rd-tab-([a-z]+)" data-rd-view="([a-z]+)"[^>]*>([^<]+)</g)].map(m => [m[2], m[3], m[1] === m[2]]),
+    [['readable', 'Readable version', true], ['original', 'Original', true], ['notation', 'Notation', true], ['map', 'Map', true]])
   assert.match(html, /<div class="ask-compose run-change" id="ask-compose" hidden>/)
   assert.match(html, /<script id="readability-loader">\{const base=window\.__PC_BASE__\|\|""[^<]*"\/static\/readability\.css"[^<]*"\/static\/readability\.js"[^<]*<\/script>/)
 })

@@ -165,8 +165,10 @@ test('hostile text is scanned in linear time: unclosed \\[ and \\(, and a "$" be
   // Short versions still give the patterns' answers.
   for (const text of ['$' + '\\'.repeat(21), '$a\\$' + '\\'.repeat(20) + '$', 'x$' + '\\'.repeat(15) + '$y$'])
     assert.deepEqual(plain(context.stashMath(text)), legacyStashMath(text), JSON.stringify(text))
-  // readability.js has no math scanner of its own: it uses the console's.
-  assert.match(readability, /const stashed=stashMath\(source\);/)
+  // readability.js has no math scanner of its own: it uses the console's
+  // (display environments through mathSpans/mathEnvironment, then stashMath).
+  assert.match(readability, /mathSpans\(source,\['equation','align','alignat','gather'\]\.map\(name=>mathEnvironment\(source,name\)\)\)/)
+  assert.match(readability, /const stashed=stashMath\(held\+source\.slice\(at\)\);/)
   assert.doesNotMatch(readability, /\[\\s\\S\]\+\?|\(\?:\\\\\.\|/)
 })
 

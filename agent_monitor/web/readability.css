@@ -40,6 +40,7 @@
 .readability-run .seg-control button[data-view="lean"] { display: none !important; }
 .readability-tabs { display: flex; align-items: center; gap: 4px; padding: 6px 16px; border-bottom: 1px solid var(--border); background: var(--bg2); flex-shrink: 0; overflow-x: auto; }
 .readability-tabs[hidden] { display: none; }
+.readability-tablist { display: flex; align-items: center; gap: 4px; }
 .readability-tabs [role="tab"] { border: 1px solid transparent; border-radius: 999px; background: transparent; color: var(--muted); padding: 5px 12px; font: 650 12px/1.2 var(--sans); cursor: pointer; white-space: nowrap; }
 .readability-tabs [role="tab"]:hover { color: var(--fg); }
 .readability-tabs [role="tab"][aria-selected="true"] { color: var(--fg); background: var(--panel); border-color: var(--border); box-shadow: 0 1px 4px rgb(0 0 0 / .1); }
@@ -70,6 +71,7 @@
 .md-view .rd-doc p.rd-check-foot { margin: .3em 0 .1em; color: var(--dim); font-size: 11.5px; }
 .rd-ref { border: 0; background: none; padding: 0; color: var(--accent); font: inherit; font-weight: 650; cursor: pointer; text-decoration: underline; text-underline-offset: 2px; }
 .rd-ref:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 3px; }
+.rd-ref.rd-ref-jump { margin-left: 2px; text-decoration: none; font-size: .9em; }
 
 /* Notation */
 .md-view .rd-notation .rd-table { width: 100%; }
@@ -93,6 +95,9 @@
 .md-view .rd-map p.rd-map-role { margin: 2px 0 0; font-size: 12px; line-height: 1.5; color: var(--pm-text); }
 .rd-main-tag { display: inline-block; padding: 0 6px; border-radius: 999px; border: 1px solid color-mix(in srgb, var(--accent) 45%, var(--border)); color: var(--accent); font: 700 9px/1.6 var(--sans); vertical-align: 1px; }
 .rd-map-actions { display: flex; gap: 6px; }
+/* On the darkest rows the dots and the tag need more than the accent on the fill. */
+.rd-map-row.imp-4 .rd-imp, .rd-map-row.imp-5 .rd-imp { color: var(--fg); }
+.rd-map-row.imp-4 .rd-main-tag, .rd-map-row.imp-5 .rd-main-tag { background: var(--accent); border-color: var(--accent); color: var(--on-accent); }
 
 /* Ask about this paper (the right panel) */
 .ask-list { flex: 1; min-height: 0; overflow-y: auto; margin: 0; padding: 14px 16px; list-style: none; display: flex; flex-direction: column; gap: 16px; }

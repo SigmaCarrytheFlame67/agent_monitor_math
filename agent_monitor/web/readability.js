@@ -16,7 +16,8 @@ const readabilityMapCache=new Map(), readabilityMapLoads=new Map(), readabilityM
 const readabilityOriginalCache=new Map(), readabilityOriginalLoads=new Map();
 // The question being written (a selected passage or a result) and the ones
 // sent but not yet in the run's record, by run.
-let readabilityAskContext=null, readabilityAskSending=false;
+// The run whose question is on its way ('' when none).
+let readabilityAskContext=null, readabilityAskSending='';
 const readabilityAskSent=new Map();
 
 /* ── progress of a running readable version ──
@@ -72,7 +73,12 @@ function readabilityProgressView(lines,run){
 // The Sandbox preview of a readable version (applySandboxPreview's branch).
 function applyReadabilityPreview(run){
   const box=run?.sandbox_preview||{}, live=run?.status==='running', rid=String(run?.run_id||'');
-  if(readabilityTabRunId!==rid){ readabilityTabRunId=rid; readabilityTab='readable'; readabilityAskContext=null; renderReadabilityAskContext(); }
+  if(readabilityTabRunId!==rid){
+    // The Ask panel and its notes belong to the run that was shown.
+    readabilityTabRunId=rid; readabilityTab='readable'; readabilityAskContext=null; renderReadabilityAskContext();
+    for(const id of ['ask-status','readability-tab-status']){ const el=$(id); if(el)el.textContent=''; }
+    const input=$('ask-input'); if(input)input.value='';
+  }
   // Nothing in a readable version is editable in the Sandbox.
   sandboxEditing=false; sandboxText=''; sandboxRevision=String(box.revision||'missing');
   syncSandboxEditor();
@@ -104,6 +110,8 @@ function syncReadabilityTabs(){
     const on=tab.dataset.rdView===readabilityTab;
     tab.setAttribute('aria-selected',String(on)); tab.tabIndex=on?0:-1;
   });
+  const panel=$('md-view');
+  if(panel?.getAttribute('role')==='tabpanel')panel.setAttribute('aria-labelledby','rd-tab-'+readabilityTab);
 }
 function setReadabilityTab(view,{focus=false}={}){
   if(!READABILITY_TABS.includes(view))return;
@@ -154,8 +162,15 @@ function readableMarkdown(text){
   const tokenFor=mark=>{ marks.push(mark); return '@@RD'+nonce+'x'+(marks.length-1)+'@@'; };
   const source=String(text||'').replace(/\r\n?/g,'\n')
     .replace(READABLE_MARKER_LINE,(raw,id)=>'\n'+tokenFor({kind:'anchor',id:id.toLowerCase(),raw})+'\n');
-  // Math is set aside first: a "[[result:<id>]]" inside TeX stays TeX.
-  const stashed=stashMath(source);
+  // Math is set aside first: a "[[result:<id>]]" inside TeX stays TeX.  The
+  // display environments go first, as the shared page holds them: Markdown
+  // read inside one would drop its \{ and \\ and could make a heading of it.
+  const environments=[];
+  let held='', at=0;
+  for(const [start,end] of mathSpans(source,['equation','align','alignat','gather'].map(name=>mathEnvironment(source,name)))){
+    held+=source.slice(at,start)+'@@RDENV'+nonce+'x'+environments.length+'@@'; environments.push(source.slice(start,end)); at=end;
+  }
+  const stashed=stashMath(held+source.slice(at));
   const markdown=stashed.s.replace(READABLE_RESULT_LINK,(raw,id)=>tokenFor({kind:'ref',id:id.toLowerCase(),raw}));
   let html=null;
   try{
@@ -168,7 +183,9 @@ function readableMarkdown(text){
     if(readableMarkdownParser)html=readableMarkdownParser.parse(markdown);
   }catch(e){ html=null; }
   if(typeof html!=='string'||!html)return {html:'<pre>'+escapeHtml(text)+'</pre>',marks:[],nonce};
-  return {html:sanitizeRenderedHtml(html.replace(/@@MATH(\d+)@@/g,(_,i)=>escapeHtml(stashed.slots[Number(i)]||''))),marks,nonce};
+  const restored=html.replace(/@@MATH(\d+)@@/g,(_,i)=>escapeHtml(stashed.slots[Number(i)]||''))
+    .replace(new RegExp('@@RDENV'+nonce+'x(\\d+)@@','g'),(_,i)=>escapeHtml(environments[Number(i)]||''));
+  return {html:sanitizeRenderedHtml(restored),marks,nonce};
 }
 // Readable Markdown in `container`, with its anchor badges and result links.
 function renderReadableMarkdown(container,text,labels){
@@ -192,9 +209,12 @@ function placeReadableMarks(root,marks,nonce,labels){
     for(const match of text.matchAll(pattern)){
       const mark=marks[Number(match[1])];
       if(!mark)continue;
-      if(match.index>at)pieces.push(text.slice(at,match.index));
+      const before=text.slice(at,match.index);
+      if(before)pieces.push(before);
       at=match.index+match[0].length;
-      pieces.push(literal?mark.raw:inLink?name(mark.id):mark.kind==='anchor'?readableAnchorNode(mark.id,name(mark.id)):readableRefNode(mark.id,labels));
+      // "Lemma 3.9 [[result:lem]]": the name is written already, the link is a jump.
+      const named=mark.kind==='ref'&&before.trimEnd().toLowerCase().endsWith(String(name(mark.id)).toLowerCase());
+      pieces.push(literal?mark.raw:inLink?name(mark.id):mark.kind==='anchor'?readableAnchorNode(mark.id,name(mark.id)):readableRefNode(mark.id,labels,named));
     }
     if(at<text.length)pieces.push(text.slice(at));
     node.replaceWith(...pieces);
@@ -215,12 +235,14 @@ function readableAnchorNode(id,label){
   badge.dataset.rdAnchor=id; badge.tabIndex=-1; badge.title=label===id?id:label+' · '+id;
   return badge;
 }
-// A result the paper map does not list stays plain text.
-function readableRefNode(id,labels){
+// A result the paper map does not list stays plain text; right after its
+// own name the link is a compact jump.
+function readableRefNode(id,labels,named=false){
   const label=labels instanceof Map&&labels.get(id)||id;
-  if(labels instanceof Map&&labels.size&&!labels.has(id))return label;
-  const button=analyzeEl('button','rd-ref',label);
+  if(labels instanceof Map&&labels.size&&!labels.has(id))return named?'':label;
+  const button=analyzeEl('button',named?'rd-ref rd-ref-jump':'rd-ref',named?'↗':label);
   button.type='button'; button.dataset.rdRef=id; button.title='Show '+label+' in the readable version';
+  if(named)button.setAttribute('aria-label','Show '+label+' in the readable version');
   return button;
 }
 // Part counts ({parts, faithful, issues, unchecked, …}): the preview's, else the run's summary.
@@ -615,6 +637,11 @@ function renderReadabilityMap(run,view){
     return;
   }
   const nodes=(Array.isArray(graph.nodes)?graph.nodes:[]).filter(node=>node&&typeof node==='object').slice(0,400);
+  if(!nodes.length){
+    doc.append(analyzeEl('p','analysis-live-note','This manuscript has no numbered definitions or results to map.'));
+    view.replaceChildren(doc);
+    return;
+  }
   const head=analyzeEl('div','rd-map-head');
   head.append(analyzeEl('p','analysis-live-note',paperMapSizeText(nodes.length,(graph.edges||[]).length)+' · more dots, more central to the main argument.'));
   const open=analyzeEl('button','rd-map-graph','Open as a graph'); open.type='button';
@@ -708,7 +735,7 @@ function syncReadabilityAskCompose(run,asks){
   const button=$('ask-send'), hint=$('ask-hint'); if(!button||!hint)return;
   const published=!!run?.sandbox_preview?.has_readable, allowance=readabilityAskAllowance(run,asks);
   const reason=!published?(run?.status==='running'?'You can ask once the readable version is published.':'This run published no readable version to ask about.')
-    :readabilityAskSending||asks.some(readabilityAskRunning)?'One question at a time — the answer is on its way.'
+    :readabilityAskSending===String(run?.run_id||'')||asks.some(readabilityAskRunning)?'One question at a time — the answer is on its way.'
     :allowance&&allowance.left<=0?`Guests can ask ${allowance.limit} questions about a readable version — sign in to ask more.`:'';
   button.disabled=!!reason; button.title=reason;
   hint.textContent=reason||(allowance?`${allowance.left} of ${allowance.limit} guest questions left · Enter to ask`:'Enter to ask · Shift+Enter newline');
@@ -771,12 +798,12 @@ function askAboutNode(node){
 async function sendReadabilityAsk(){
   const rid=runId, run=lastSandboxRun?.run_id===rid?lastSandboxRun:null, input=$('ask-input'), status=$('ask-status');
   const question=String(input?.value||'').trim();
-  if(!rid||!isReadabilityRun(run)||!question||readabilityAskSending||$('ask-send').disabled)return;
+  if(!rid||!isReadabilityRun(run)||!question||readabilityAskSending===rid||$('ask-send').disabled)return;
   if(question.length>2000){ status.textContent='Questions are limited to 2,000 characters.'; return; }
   const context=readabilityAskContext||{};
   const request={question,selection:String(context.selection||'').slice(0,4000),view:context.view==='original'?'original':'readable'};
   if(context.node_id)request.node_id=String(context.node_id);
-  readabilityAskSending=true; status.textContent='Sending…';
+  readabilityAskSending=rid; status.textContent='Sending…';
   syncReadabilityAskCompose(run,readabilityAsks(run));
   try{
     const response=await fetch('/api/run/'+encodeURIComponent(rid)+'/readability/ask',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(request)});
@@ -789,8 +816,9 @@ async function sendReadabilityAsk(){
   }catch(err){
     if(runId===rid)status.textContent='✗ '+String(err.message||err).slice(0,300);
   }finally{
-    readabilityAskSending=false;
-    if(runId===rid&&lastSandboxRun?.run_id===rid)renderReadabilityAsks(lastSandboxRun);
+    if(readabilityAskSending===rid)readabilityAskSending='';
+    // The run shown now, which may be another one, is told where it stands.
+    if(lastSandboxRun?.run_id===runId&&isReadabilityRun(lastSandboxRun))renderReadabilityAsks(lastSandboxRun);
   }
 }
 
