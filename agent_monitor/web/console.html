@@ -357,12 +357,14 @@ html.read-only-run .run-access-note { display: flex; }
 /* The written proof of a CGM run: a two-way switch beside the file name and a
    status banner above the write-up. Colours follow the model verifier's
    verdicts (blue accepted, amber problems); green stays reserved for Lean. */
+.proof-toolbar:has(> .proof-doc-switch:not([hidden])) { flex-wrap: wrap; row-gap: 8px; }
 .proof-doc-switch { display: inline-flex; flex-shrink: 0; gap: 2px; padding: 2px; border: 1px solid var(--border); border-radius: 9px; background: var(--panel2); }
 .proof-doc-switch[hidden] { display: none; }
 .proof-toolbar .proof-doc-switch button { border: 0; border-radius: 7px; background: transparent; color: var(--dim); padding: 4px 10px; font-weight: 500; white-space: nowrap; }
 .proof-toolbar .proof-doc-switch button:hover:not(:disabled) { color: var(--fg); }
 .proof-toolbar .proof-doc-switch button[aria-checked="true"] { background: var(--panel); color: var(--fg); font-weight: 600; box-shadow: 0 1px 2px rgb(0 0 0 / .12); }
 .proof-toolbar .proof-doc-switch button:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+@media (forced-colors: active) { .proof-toolbar .proof-doc-switch button[aria-checked="true"] { outline: 2px solid Highlight; } }
 .writeup-chip[data-status="accepted"] { color: var(--verdict-checked); }
 .writeup-chip[data-status="rejected"] { color: var(--verdict-gap); }
 .md-view .writeup-banner { margin: 0 0 14px; padding: 9px 14px; border: 1px solid var(--border); border-left: 3px solid var(--verdict-none); border-radius: 8px; background: var(--panel2); color: var(--muted); font-size: 12.5px; line-height: 1.55; }
