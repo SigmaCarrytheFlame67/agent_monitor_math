@@ -21,7 +21,7 @@
     box.append(icon, node('h3', '', title), node('p', '', message));
     target.replaceChildren(box);
   };
-  let data, analysis = false, activeTab = 'sandbox', graphMode = 'engine', engineMode = 'explore', graphInstance;
+  let data, analysis = false, readable = false, activeTab = 'sandbox', graphMode = 'engine', engineMode = 'explore', graphInstance;
   const graphLabels = { outline: 'Outline', explore: 'Explore', facts: 'Facts', formal: 'Formal · Lean', compiler: 'Compiler facts', manuscript: 'Manuscript' };
   const graphDescriptions = {
     outline: 'An informal outline of the saved proof and its dependencies.',
@@ -72,6 +72,8 @@
   }
   function tab(name, focus = false) {
     if (!['sandbox', 'lean', 'monitor', 'dag'].includes(name)) return;
+    // A readable version has no Lean and no graph tabs: its paper map is in the Sandbox.
+    if (readable && (name === 'lean' || name === 'dag')) name = 'sandbox';
     activeTab = name;
     all('[data-tab]').forEach(button => {
       const selected = button.dataset.tab === name;
@@ -142,7 +144,8 @@
     return;
   }
   analysis = data.kind === 'analysis';
-  const originalTitle = data.title || (analysis ? 'Manuscript analysis' : 'Shared research run');
+  readable = data.kind === 'readability';
+  const originalTitle = data.title || (analysis ? 'Manuscript analysis' : readable ? 'Readable version' : 'Shared research run');
   const title = analysis && window.AnsatzSharedText?.manuscriptProse ? window.AnsatzSharedText.manuscriptProse(originalTitle) : originalTitle;
   document.title = title + ' · Ansätze';
   $('rv-title').textContent = title; $('rv-title').title = title;
@@ -156,8 +159,17 @@
     all('[data-graph-mode="manuscript"]').forEach(button => { button.hidden = false; });
     graphMode = 'manuscript';
   }
+  if (readable) {
+    $('rv-proof-title').textContent = 'Readable version';
+    $('rv-problem-label').textContent = 'Manuscript';
+    $('rv-tab-lean').hidden = true; $('rv-tab-dag').hidden = true;
+  }
   renderText($('rv-problem'), data.problem || 'The original task was not included in this snapshot.');
-  if (data.proof) renderText($('rv-proof-text'), data.proof);
+  // A readable version brings its notation and paper map after the text.
+  const readability = readable && window.AnsatzSharedReadability ? window.AnsatzSharedReadability.render(data, { target: $('rv-proof-text'), renderText }) : null;
+  if (readability) {
+    if (!readability.readable.trim()) empty($('rv-proof-text'), 'No saved readable version', 'The readable version was not included in this snapshot.', '∎');
+  } else if (data.proof) renderText($('rv-proof-text'), data.proof);
   else empty($('rv-proof-text'), analysis ? 'No saved analysis report' : 'No saved proof', analysis ? 'The report was not included in this snapshot.' : 'The proof document was not included in this snapshot.', '∎');
   try {
     const source = new URL(data.source_url);
@@ -168,11 +180,19 @@
   } catch { /* An absent or invalid source link is simply omitted. */ }
   const agents = Array.isArray(data.agents) ? data.agents.filter(agent => agent && typeof agent === 'object') : [];
   const fact = (label, value) => { $('rv-run-facts').append(node('dt', '', label), node('dd', '', value)); };
-  fact('Run type', analysis ? 'Analyze' : 'Prove');
+  fact('Run type', analysis ? 'Analyze' : readable ? 'Readability' : 'Prove');
   fact('Status', statusLabel(data.status) || 'Saved');
   fact('Research steps', String(agents.length));
-  fact('Graph views', `${Object.keys(graphLabels).filter(mode => graphNodes(mode).length).length} included`);
-  const shortcutModes = analysis ? ['manuscript', 'outline', 'formal', 'compiler'] : ['explore', 'facts', 'outline', 'formal', 'compiler'];
+  if (readability) fact('Paper map', `${readability.nodes.length} definitions and results`);
+  else fact('Graph views', `${Object.keys(graphLabels).filter(mode => graphNodes(mode).length).length} included`);
+  // A readable version's views are sections of its Sandbox.
+  for (const [id, label] of readability ? [['rv-notation', 'Notation'], ['rv-paper-map', 'Paper map']] : []) {
+    const button = node('button', 'rv-view-shortcut'); button.type = 'button';
+    button.append(node('strong', '', label), node('small', '', 'Below the readable version'));
+    button.addEventListener('click', () => { tab('sandbox'); $(id)?.scrollIntoView({ block: 'start', behavior: 'smooth' }); });
+    $('rv-view-shortcuts').append(button);
+  }
+  const shortcutModes = readable ? [] : analysis ? ['manuscript', 'outline', 'formal', 'compiler'] : ['explore', 'facts', 'outline', 'formal', 'compiler'];
   for (const mode of shortcutModes) {
     const button = node('button', 'rv-view-shortcut'); button.type = 'button';
     const count = graphNodes(mode).length;
@@ -182,7 +202,7 @@
   }
   const leanShortcut = node('button', 'rv-view-shortcut'); leanShortcut.type = 'button';
   leanShortcut.append(node('strong', '', analysis ? 'Lean statements' : 'Lean source'), node('small', '', data.lean_source ? 'Saved source' : 'Not included'));
-  leanShortcut.addEventListener('click', () => tab('lean')); $('rv-view-shortcuts').append(leanShortcut);
+  leanShortcut.addEventListener('click', () => tab('lean')); if (!readable) $('rv-view-shortcuts').append(leanShortcut);
   for (const [index, agent] of agents.slice(0, 4).entries()) {
     const item = node('li'); const body = node('div');
     body.append(node('strong', '', agent.label || `Research step ${index + 1}`), node('small', '', statusLabel(agent.status) || 'Recorded'));
