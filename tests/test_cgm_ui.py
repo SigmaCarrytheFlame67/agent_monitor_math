@@ -19,6 +19,8 @@ HTML = (
     Path(__file__).parents[1] / "agent_monitor" / "web" / "console.html"
 ).read_text(encoding="utf-8")
 SCRIPT = HTML.rsplit("<script>", 1)[1].split("</script>", 1)[0]
+# What the Ansatz CGM descriptions say about the written-proof round.
+WRITEUP_COPY = "by default, accepted runs end with a written proof, checked as a whole"
 NODE = shutil.which("node")
 if not NODE and Path("/home/ubuntu/.local/node24/bin/node").is_file():
     NODE = "/home/ubuntu/.local/node24/bin/node"
@@ -479,9 +481,16 @@ console.log(JSON.stringify({order,guest,loginOnlyKimi,kimi:CGM_ENGINE_COPY.kimi,
         self.assertIn("strategist → workers → independent verifier → curator", output["kimi"])
         self.assertIn("Kimi K3", output["kimi"])
         self.assertIn("own Codex, Claude Code or API route", output["mh"])
-        # An accepted run also ends with a written proof, checked as a whole.
+        # Accepted runs also end with a written proof (unless the operator turned the round off),
+        # said early enough to be read: the menu shows three lines of an Ansatz CGM description
+        # (125 to 137 characters of these in Chromium, with the console's CSS and font).
         for copy in (output["kimi"], output["mh"]):
-            self.assertIn("an accepted run ends with a written proof, checked as a whole", copy)
+            self.assertLessEqual(copy.index(WRITEUP_COPY) + len(WRITEUP_COPY), 130)
+        self.assertIn(
+            ".choice-scroll .cgm-engine .opt-desc { white-space:normal; display:-webkit-box; "
+            "-webkit-box-orient:vertical; -webkit-line-clamp:3; line-clamp:3; }",
+            HTML,
+        )
         self.assertIn("engine='kimi';", SCRIPT)
         self.assertIn("if(u.guest)engine=GUEST_POLICY?.default_engine||'kimi';", SCRIPT)
 
@@ -549,7 +558,7 @@ console.log(JSON.stringify(out));
         self.assertEqual(out["member"]["auth"], "API")
         self.assertIn("Kimi K3 included or models from your own API keys", out["member"]["copy"])
         for copy in (out["admin"]["copy"], out["member"]["copy"], out["narrowed"]["copy"]):
-            self.assertIn("an accepted run ends with a written proof, checked as a whole", copy)
+            self.assertLessEqual(copy.index(WRITEUP_COPY) + len(WRITEUP_COPY), 130)
         self.assertNotIn("Codex", out["member"]["copy"])
         # Narrowed to kimi,plain, the one entry is Kimi K3 only.
         self.assertIn("Ansatz CGM on Kimi K3", out["narrowed"]["copy"])
