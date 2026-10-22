@@ -83,6 +83,16 @@ def test_sections_quotes_ties_and_spacing():
     assert convert("One line\\\\\nnext\\quad word", {}) == "One line\nnext  word"
 
 
+def test_text_accents_and_dashes_read_as_letters():
+    assert convert('Erd\\H{o}s and L\\"owenheim--Skolem, G\\"{o}del, Tur\\\'an, \\v{C}ech, Bj\\o rn, S\\o{}ren, '
+                   'Stra\\ss e, {\\"o}, na\\"ive, \\\'{\\i}ndice', {}) == (
+        "Erdős and Löwenheim–Skolem, Gödel, Turán, Čech, Bjørn, Søren, Straße, ö, naïve, índice")
+    assert convert("pages 3--5, a---b", {}) == "pages 3–5, a—b"
+    # Markdown escapes and spaced or table dashes are no accents and no dashes.
+    for text in ("it\\'s fine", "1\\. Every item", "a -- b", "|---|---|", "$\\\"o$ and $a--b$", "\\. E"):
+        assert convert(text, {}) == text, text
+
+
 def test_math_and_unknown_environments_are_kept():
     for text in ("$\\emph{x}$ and $$\\text{a}~b$$", "\\begin{equation}\\label{x} a \\end{equation}",
                  "\\[ \\begin{cases} a \\\\ b \\end{cases} \\]", "\\begin{align*} a&=b \\\\ c&=d \\end{align*}",
@@ -104,6 +114,7 @@ def test_text_without_tex_is_unchanged():
     "\\emph{a$x$" * 20_000, "``" * 60_000, "~" * 200_000, "\\section{" * 30_000, "[[result:a]]\n" * 20_000 + "\\begin{lemma}",
     "\\begin{enumerate}[label=(" * 10_000, "\\\\" * 100_000, "\\footnote{\\emph{" * 20_000,
     " " * 100_000 + "\\x", "\t" * 100_000 + "\\par", (" " * 50 + "\\\\a") * 4_000,
+    "\\H" + " " * 100_000 + "x", "{\\'" * 50_000, "-" * 200_000 + "a", "a" + "-" * 200_000 + "a", "\\o" * 100_000,
 ])
 def test_hostile_text_takes_linear_time(hostile):
     started = time.monotonic()

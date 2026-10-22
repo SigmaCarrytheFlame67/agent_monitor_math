@@ -14,9 +14,10 @@ text, so outside math (``parse.math_spans``) :func:`convert` writes it out:
   emphasis, ``\\text``-like wrappers and ``\\url`` and ``\\href`` their
   text, and ``\\footnote{x}`` " (x)";
 * ``\\section`` and its kin become headings, ``\\paragraph`` a bold run-in;
-* TeX quotes (two backquotes, text, two apostrophes) become “text”, a tie
-  between words a space, ``\\S`` "§", ``\\ldots`` "…", and spacing
-  commands (``\\medskip``, ``\\noindent``, a line-ending ``\\\\``) go.
+* TeX quotes (two backquotes, text, two apostrophes) become “text”, text
+  accents letters ("Erd\\H{o}s": "Erdős"), "--" and "---" between words
+  dashes, a tie between words a space, ``\\S`` "§", ``\\ldots`` "…", and
+  spacing commands (``\\medskip``, ``\\noindent``, a line-ending ``\\\\``) go.
 
 Unknown environments and every other command are kept as written, and so is
 math.  Every pattern is linear in the text.
@@ -24,6 +25,7 @@ math.  Every pattern is linear in the text.
 from __future__ import annotations
 
 import re
+import unicodedata
 from typing import Callable, Mapping
 
 from agent_monitor.readability import parse
@@ -82,6 +84,36 @@ _QUAD_RE = re.compile(r"\\q?quad(?![A-Za-z])")
 # "\\" (with an optional "[2pt]") at the end of a line of prose.
 _LINE_BREAK_RE = re.compile(r"(?<![ \t])[ \t]*+\\\\(?:\[[^\[\]\n]{0,20}\])?[ \t]*+(?=\n|$)")
 _BLANK_RUN_RE = re.compile(r"\n{3,}")
+# TeX text accents as letters ("Erd\\H{o}s", "L\\"owenheim", "\\'{e}"), as the
+# console reads them in Analyze.  A symbol accent must touch its letter (a
+# Markdown escape such as "1\\. Every" is no accent), and a bare letter counts
+# only where the accent is used ("it\\'s" stays as written).
+_ACCENT_MARKS = {"'": "\u0301", "`": "\u0300", "^": "\u0302", '"': "\u0308", "~": "\u0303", "=": "\u0304",
+                 ".": "\u0307", "H": "\u030b", "c": "\u0327", "v": "\u030c", "u": "\u0306", "r": "\u030a",
+                 "k": "\u0328"}
+_BARE_ACCENTED = {"'": "aeiouyAEIOUYcnzCNZ", "`": "aeiouAEIOU", "^": "aeiouAEIOU", '"': "aeiouyAEIOUY",
+                  "~": "anoANO", "=": "aeiouAEIOU", ".": "zZeEgGcCI"}
+_LETTERS = {"o": "ø", "O": "Ø", "ss": "ß", "ae": "æ", "AE": "Æ", "oe": "œ", "OE": "Œ", "aa": "å", "AA": "Å",
+            "l": "ł", "L": "Ł"}
+_BASE = r"(\\[ij](?![A-Za-z])|[A-Za-z])"
+_ACCENT_RE = re.compile(
+    rf"(\{{)?\\(?:(?P<sym>['`^\"~=.])(?:\{{[ \t]*{_BASE}[ \t]*\}}|{_BASE})"
+    rf"|(?P<word>[Hcvurk])(?![A-Za-z])[ \t]*(?:\{{[ \t]*{_BASE}[ \t]*\}}|{_BASE}))(\}})?"
+)
+_LETTER_RE = re.compile(r"\{\\(o|O|ss|ae|AE|oe|OE|aa|AA|l|L)\}|\\(o|O|ss|ae|AE|oe|OE|aa|AA|l|L)(?:\{\}| (?=[A-Za-z]))")
+# "--" and "---" between words or numbers: an en and an em dash.
+_DASH_RE = re.compile(r"(?<=[A-Za-z0-9])(-{2,3})(?=[A-Za-z0-9])")
+
+
+def _accented(match: "re.Match[str]") -> str:
+    opened, symbol, braced, bare, word, word_braced, word_bare, closed = match.groups()
+    accent = symbol or word
+    base = braced or bare or word_braced or word_bare
+    if symbol and bare and bare not in _BARE_ACCENTED[symbol]:
+        return match.group(0)
+    letter = {"\\i": "i", "\\j": "j"}.get(base, base)
+    out = unicodedata.normalize("NFC", letter + _ACCENT_MARKS[accent])
+    return ("{" if opened and not closed else "") + out + ("}" if closed and not opened else "")
 
 
 def _emphasis(body: str, mark: str) -> str:
@@ -322,6 +354,9 @@ def _inline(work: str) -> str:
     work = _SPACING_RE.sub("", work)
     work = _PAR_RE.sub("\n\n", work)
     work = _QUAD_RE.sub(" ", work)
+    work = _ACCENT_RE.sub(_accented, work)
+    work = _LETTER_RE.sub(lambda match: _LETTERS[match.group(1) or match.group(2)], work)
+    work = _DASH_RE.sub(lambda match: "–" if len(match.group(1)) == 2 else "—", work)
     return _TIE_RE.sub(" ", work)
 
 
@@ -329,7 +364,7 @@ def convert(text: str, labels: Mapping[str, str] | None = None) -> str:
     """``text`` (Markdown with math) with its text-mode LaTeX written out as
     Markdown (see the module docstring); ``labels`` maps a result's id to its
     printed label."""
-    if "\\" not in text and "``" not in text and "~" not in text:
+    if not any(mark in text for mark in ("\\", "``", "~", "--")):
         return text
     spans = parse.math_spans(text)
     maths: list[str] = []
