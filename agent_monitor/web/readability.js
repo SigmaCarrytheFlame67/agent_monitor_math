@@ -389,7 +389,7 @@ function readabilityNotation(run){
 function readabilityTex(el,tex,macros){
   el.textContent=tex;
   if(!tex||typeof window.katex?.render!=='function')return;
-  try{ window.katex.render(tex,el,{throwOnError:false,displayMode:false,trust:false,macros:withKatexFallbacks(macros,tex),maxExpand:200}); }catch(e){ el.textContent=tex; }
+  try{ window.katex.render(katexReferenceText(tex),el,{throwOnError:false,displayMode:false,trust:false,macros:withKatexFallbacks(macros,tex),maxExpand:200}); }catch(e){ el.textContent=tex; }
 }
 function readabilityTable(headings){
   const table=analyzeEl('table','rd-table'), head=analyzeEl('thead'), row=analyzeEl('tr'), body=analyzeEl('tbody');

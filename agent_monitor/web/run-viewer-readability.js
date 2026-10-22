@@ -59,11 +59,14 @@
     const label = text(entry?.label || entry?.id).trim().slice(0, 160), name = text(entry?.title).trim().slice(0, 200);
     return name && name !== label ? label + ' · ' + name : label;
   }
+  // A symbol typeset as the page's text renderer typesets math (its stand-ins
+  // and its count of what the author's macros write), or left as text.
   function tex(element, value, macros) {
     element.textContent = value;
-    if (!value || typeof window.katex?.render !== 'function') return;
-    const all = window.AnsatzSharedText?.withKatexFallbacks?.(macros, value) || { ...macros };
-    try { window.katex.render(value, element, { throwOnError: false, displayMode: false, trust: false, macros: all, maxExpand: 200 }); }
+    const shared = window.AnsatzSharedText;
+    if (!value || typeof window.katex?.render !== 'function' || !shared) return;
+    const options = { throwOnError: false, displayMode: false, trust: false, macros: shared.withKatexFallbacks(macros, value), maxExpand: 200 };
+    try { window.katex.render(shared.katexReferenceText(value), element, options); }
     catch { element.textContent = value; }
   }
   function placeAnchors(target, labels) {

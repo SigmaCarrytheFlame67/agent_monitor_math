@@ -240,13 +240,60 @@
     // A label is dropped: its argument is taken and nothing is written.
     '\\label': '\\@firstoftwo{}{#1}',
   });
+  // The key of \ref, \eqref, \cref, \Cref, \autoref or \cite as those
+  // stand-ins print it, in text: its _ # & % ^ $ escaped (a key written with a
+  // backslash is left as it is), and \cite[note]{key} as \cite{key, note}.
+  // Every KaTeX call passes its TeX through this first.
+  function katexReferenceText(tex) {
+    const escapeKey = key => key.includes('\\') ? key : key.replace(/[_#&%$]/g, '\\$&').replace(/\^/g, '\\textasciicircum{}');
+    return String(tex).replace(/\\(ref|eqref|cref|Cref|autoref|cite)(?:\[([^[\]{}]*)\])?\{([^{}]*)\}/g, (whole, name, note, key) => {
+      if (note === undefined) return '\\' + name + '{' + escapeKey(key) + '}';
+      return name === 'cite' ? '\\cite{' + escapeKey(key) + ', ' + escapeKey(note) + '}' : whole;
+    });
+  }
   // The macros for typesetting `text`: the fallbacks, then the author's. KaTeX
   // refuses \newcommand for a name it knows, so a fallback is left out where
   // the text defines that name itself.
   function withKatexFallbacks(author, text) {
     const macros = { ...fallbackMacros };
     for (const match of String(text || '').matchAll(/\\newcommand\*?\s*(?:\{\s*)?(\\[A-Za-z]+)/g)) delete macros[match[1]];
-    return Object.assign(macros, author && typeof author === 'object' ? author : {});
+    return Object.assign(macros, countedAuthorMacros(author, text));
+  }
+  // KaTeX's maxExpand counts expansions, not what they write: three preamble
+  // macros of a few hundred characters can make one short formula typeset
+  // hundreds of thousands of symbols and hold the page for minutes. So what an
+  // author's macros write is counted as KaTeX expands them (the console's
+  // rule): in one call at most 400 characters plus 2 for each character of
+  // `text` (what is to be typeset), and 8,000 in one formula (each formula
+  // has an expander of its own); past that KaTeX shows the formula as
+  // written. A macro that writes one of its arguments more than once is left
+  // out: KaTeX copies the argument after this count.
+  function countedAuthorMacros(author, text) {
+    const counted = {};
+    if (!author || typeof author !== 'object') return counted;
+    let room = 400 + 2 * String(text || '').length, formula = null, written = 0;
+    for (const [name, body] of Object.entries(author)) {
+      const uses = typeof body === 'string' ? body.replace(/##/g, '').match(/#[1-9]/g) || [] : null;
+      if (!uses || new Set(uses).size < uses.length) continue;
+      counted[name] = expander => {
+        if (expander !== formula) { formula = expander; written = 0; }
+        room -= body.length;
+        written += body.length;
+        if (room < 0 || written > 8000) throw new window.katex.ParseError('the author’s macros write too much here');
+        return body;
+      };
+    }
+    return counted;
+  }
+
+  // The text of `target` that KaTeX has yet to typeset: formulas it typeset
+  // before (a readable version's notation symbols) are left out.
+  function untypeset(target) {
+    if (typeof target.querySelector !== 'function' || !target.querySelector('.katex')) return String(target.textContent || '');
+    const walker = document.createTreeWalker(target, NodeFilter.SHOW_TEXT);
+    let source = '';
+    for (let item; (item = walker.nextNode());) if (!item.parentElement?.closest('.katex')) source += item.data;
+    return source;
   }
 
   function math(target, options = {}) {
@@ -259,7 +306,8 @@
       }
     }
     window.renderMathInElement(target, {
-      macros: withKatexFallbacks(options.macros, target.textContent),
+      macros: withKatexFallbacks(options.macros, untypeset(target)),
+      preProcess: katexReferenceText,
       delimiters: [
         ...environments.map(name => ({ left: '\\begin{' + name + '}', right: '\\end{' + name + '}', display: true })),
         { left: '$$', right: '$$', display: true },
@@ -273,7 +321,8 @@
       trust: false,
       strict: 'ignore',
       maxSize: 20,
-      maxExpand: 1000,
+      // The console's limit where an author's macros apply.
+      maxExpand: options.macros && typeof options.macros === 'object' ? 200 : 1000,
       errorCallback: () => {},
     });
   }
@@ -303,5 +352,5 @@
     math(target, { macros: options.macros });
   }
 
-  window.AnsatzSharedText = Object.freeze({ render, math, manuscriptProse, closureCitedLemmas, withKatexFallbacks });
+  window.AnsatzSharedText = Object.freeze({ render, math, manuscriptProse, closureCitedLemmas, withKatexFallbacks, katexReferenceText });
 })();
