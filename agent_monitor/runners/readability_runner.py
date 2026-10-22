@@ -9,16 +9,21 @@ Run from a run workspace that holds ``readability/request.json`` (written by
 
 Stages (``pipeline.stage`` events, ids shared with the CGM pipeline):
 ``scaffold`` 1 Ingest (fetch or unpack the source into ``readability/source``,
-segment it as Analyze does, read it in order and split it into parts),
-``work`` 2 Guide (one call: what the manuscript shows, its roadmap, notation
-and the role of each result), ``verify`` 3 Rewrite (one call per part, in
-waves), ``curate`` 4 Check (one independent call per rewritten part; outside
-guest and sponsored runs, a part with major problems is rewritten once more
-and checked again) and ``finalize`` 5 Publish.  Outputs, under
-``readability/``: ``original.txt`` (the manuscript in reading order),
-``manuscript.json``, ``segments.json``, ``readable.md``, ``paper_map.json``,
-``notation.json``, ``guide.json``, ``check.json`` and ``receipt.json``
-(written last).  Every check is a model's judgement, never a certificate.
+segment it as Analyze does, which for Markdown and text also reads a CGM
+fact closure and result headings (``readability.structure``), read it in
+order and split it into parts), ``work`` 2 Guide (one call: what the
+manuscript shows, its roadmap, notation and the role of each result; short
+and at low effort on bounded routes), ``verify`` 3 Rewrite (one call per
+part, in waves, with the printed names of the labels it cites), ``curate`` 4
+Check (one independent call per rewritten part; outside guest and sponsored
+runs, a part with major problems is rewritten once more and checked again)
+and ``finalize`` 5 Publish (leftover LaTeX references written out, each
+part's headings under the title's).  Outputs, under ``readability/``:
+``original.txt`` (the manuscript in reading order), ``manuscript.json``,
+``segments.json``, ``readable.md``, ``paper_map.json``, ``notation.json``,
+``guide.json``, ``check.json`` and ``receipt.json`` (written last; its
+``notes`` say why a stage's first reply could not be read).  Every check is a
+model's judgement, never a certificate.
 
 The calls reuse the CGM response-only turn machinery of
 ``math_harness_runner`` and the routes of ``analyze_runner`` (which also
@@ -43,6 +48,7 @@ what exists is still published).
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 import re
@@ -62,14 +68,15 @@ if not __package__:
         sys.path.insert(0, str(repository_root))
 
 from agent_monitor import safe_fetch
-from agent_monitor.analyze import sources
+from agent_monitor.analyze import latex_structure, sources, text_structure
 from agent_monitor.analyze.prompts import utf8_len
 from agent_monitor.cgm.parsing import ParseError
 from agent_monitor.readability import ask as readability_ask
 from agent_monitor.readability import document as readability_document
 from agent_monitor.readability import limits as readability_limits
-from agent_monitor.readability import paper_map, parse, prompts, report
+from agent_monitor.readability import paper_map, parse, prompts, references, report
 from agent_monitor.readability import request as readability_request
+from agent_monitor.readability import structure as readability_structure
 from agent_monitor.runners import analyze_runner as runner
 from agent_monitor.runners import math_harness_runner as harness
 from agent_monitor.runners.analyze_runner import AnalyzeError, ConfigError, Stopped
@@ -92,6 +99,9 @@ REWRITE_CLAUDE_TIMEOUT = "1200"
 _CLAUDE_TIMEOUT_ENV = ("AGENT_MONITOR_MATH_HARNESS_CLAUDE_REWRITE_TIMEOUT",
                        "AGENT_MONITOR_MATH_HARNESS_CLAUDE_TIMEOUT", "AGENT_MONITOR_CLAUDE_TIMEOUT")
 _LOCK_BUSY = "Another readability step is running for this run; try again when it finishes"
+# A retried call's stage ("rewrite-2-retry", "guide-low") and the stage it retries.
+_RETRY_SUFFIX_RE = re.compile(r"(?:-retry)?(?:-low)?$")
+MAX_NOTES = 40
 
 
 def _json(path: Path) -> dict[str, Any] | None:
@@ -127,6 +137,33 @@ class _Outcome:
     summary: str = ""
     issues: list[dict[str, Any]] = field(default_factory=list)
     repaired: bool = False
+
+
+class _Logged:
+    """A reply parser that keeps, per stage, why the first reply it refused
+    could not be read (the parser's own message, bounded) and which reply
+    that was (its sha256, as the call log has it), so the receipt says why a
+    format reminder was sent.  A rewrite's ``lenient`` result stays
+    reachable."""
+
+    def __init__(self, parse_reply: Callable[[str], Any], stage: str,
+                 errors: dict[str, tuple[str, str]]) -> None:
+        self.parse_reply = parse_reply
+        self.stage = stage
+        self.errors = errors
+
+    def __call__(self, text: str) -> Any:
+        try:
+            return self.parse_reply(text)
+        except ParseError as exc:
+            message = "".join(char for char in " ".join(str(exc).split()) if char.isprintable())
+            self.errors.setdefault(self.stage, (hashlib.sha256(text.encode("utf-8")).hexdigest(),
+                                                message if len(message) <= 120 else message[:119] + "…"))
+            raise
+
+    @property
+    def lenient(self) -> Any:
+        return getattr(self.parse_reply, "lenient", None)
 
 
 @dataclass
@@ -176,12 +213,27 @@ class ReadabilityRun(runner.ManuscriptRun):
         self.part_chars = prompts.BOUNDED_PART_CHARS if bounded else prompts.PART_CHARS
         self.guide_bytes = prompts.BOUNDED_GUIDE_BYTES if bounded else prompts.GUIDE_BYTES
         self.summary_bytes = prompts.BOUNDED_GUIDE_SUMMARY_BYTES if bounded else prompts.GUIDE_SUMMARY_BYTES
+        self.references_bytes = prompts.BOUNDED_REFERENCES_BYTES if bounded else prompts.REFERENCES_BYTES
         self.audience = str(self.req.get("audience") or readability_request.DEFAULT_AUDIENCE)
         self.focus = str(self.req.get("focus") or "")
         self.guide: dict[str, Any] = {}
         self.guide_source = "outline"
+        # Per stage, the first reply its parser refused and why (receipt notes).
+        self.format_errors: dict[str, tuple[str, str]] = {}
 
     # -- 1 Ingest -------------------------------------------------------------
+
+    def segment_text_file(self, path: Path, file: str, fmt: str) -> dict[str, Any]:
+        """Analyze's text segmentation, which also reads a CGM fact closure
+        and Markdown result headings (``readability.structure``), in the same
+        sandboxed child."""
+        try:
+            return readability_structure.segment_sandboxed(path, self.folder / ".segments-text.json", file=file,
+                                                           fmt=fmt, cancel=self.cancel)
+        except latex_structure.SandboxCancelled:
+            raise harness.RunCancelled(f"the {self.ROUTES.run} was stopped") from None
+        except text_structure.TextStructureError as exc:
+            raise AnalyzeError(f"The source could not be segmented: {exc}") from None
 
     def read_document(self, bundle: sources.Bundle, segments: Mapping[str, Any],
                       manuscript: dict[str, Any]) -> readability_document.Document:
@@ -250,16 +302,19 @@ class ReadabilityRun(runner.ManuscriptRun):
                                               abstract=str(segments.get("abstract") or ""),
                                               intro=str(segments.get("intro") or ""), headings=headings[:80],
                                               limit=manuscript_limit)
+        bounded = self.info.bounded
         user = prompts.guide_prompt(audience=self.audience, focus=self.focus,
-                                    results=prompts.results_list(nodes, results_limit), manuscript=text)
+                                    results=prompts.results_list(nodes, results_limit), manuscript=text,
+                                    bounded=bounded)
         ids = [node["id"] for node in nodes]
         try:
             job = harness._run_single(
                 self.ctx, "guide", reserve=planned,
                 work=lambda turn: harness._call_and_parse(
                     self.ctx, turn, stage="guide", system=prompts.READABLE_GUIDE_SYSTEM, user=user,
-                    limit=prompts.GUIDE_REPLY_BYTES, parse=partial(parse.parse_guide, node_ids=ids),
-                    family=prompts.GUIDE_FAMILY))
+                    limit=prompts.GUIDE_REPLY_BYTES,
+                    parse=_Logged(partial(parse.parse_guide, node_ids=ids), "guide", self.format_errors),
+                    family=prompts.BOUNDED_GUIDE_FAMILY if bounded else prompts.GUIDE_FAMILY))
             guide, _reply = harness._job_result(job)
         except harness.RunCancelled:
             raise
@@ -386,15 +441,18 @@ class ReadabilityRun(runner.ManuscriptRun):
 
     def rewrite_call(self, outcome: _Outcome, *, document: readability_document.Document,
                      by_id: Mapping[str, Mapping[str, Any]], macros: Mapping[str, str], total: int,
-                     math_fidelity: str | None) -> _Call:
+                     math_fidelity: str | None, refs: Mapping[str, tuple[str, str]]) -> _Call:
         part = outcome.part
         text = part.text(document)
+        stage = f"rewrite-{part.index}"
         user = prompts.rewrite_prompt(audience=self.audience, focus=self.focus,
                                       guide=self.guide_text(macros, text),
                                       results=[by_id[node_id] for node_id in part.nodes if node_id in by_id],
-                                      part=text, index=part.index, total=total, math_fidelity=math_fidelity)
-        return _Call(outcome, f"rewrite-{part.index}", prompts.READABLE_REWRITE_SYSTEM, user,
-                     parse.RewriteParser(part.nodes), prompts.REWRITE_FAMILY, prompts.REWRITE_REPLY_BYTES)
+                                      part=text, index=part.index, total=total, math_fidelity=math_fidelity,
+                                      references=references.prompt_block(refs, text, self.references_bytes))
+        return _Call(outcome, stage, prompts.READABLE_REWRITE_SYSTEM, user,
+                     _Logged(parse.RewriteParser(part.nodes), stage, self.format_errors), prompts.REWRITE_FAMILY,
+                     prompts.REWRITE_REPLY_BYTES)
 
     def rewrite(self, outcomes: list[_Outcome], calls: list[_Call], *, total: int) -> None:
         self.stage("verify", f"rewriting {len(calls)} of {total} part{'s' if total != 1 else ''}")
@@ -421,8 +479,9 @@ class ReadabilityRun(runner.ManuscriptRun):
         if utf8_len(user) > prompts.MAX_PROMPT_BYTES:
             return None
         stage = f"{'recheck' if recheck else 'check'}-{outcome.part.index}"
-        return _Call(outcome, stage, prompts.READABLE_CHECK_SYSTEM, user, parse.parse_check,
-                     prompts.CHECK_FAMILY, prompts.CHECK_REPLY_BYTES)
+        return _Call(outcome, stage, prompts.READABLE_CHECK_SYSTEM, user,
+                     _Logged(parse.parse_check, stage, self.format_errors), prompts.CHECK_FAMILY,
+                     prompts.CHECK_REPLY_BYTES)
 
     def check(self, outcomes: list[_Outcome], *, document: readability_document.Document, total: int,
               math_fidelity: str | None) -> None:
@@ -467,8 +526,9 @@ class ReadabilityRun(runner.ManuscriptRun):
             first = rewrite_calls[outcome.part.index]
             user = prompts.repair_prompt(rewrite=first.user, previous=outcome.markdown,
                                          issues=[issue for issue in outcome.issues if issue["severity"] == "major"])
-            repairs.append(_Call(_Outcome(outcome.part), f"repair-{outcome.part.index}",
-                                 prompts.READABLE_REWRITE_SYSTEM, user, parse.RewriteParser(outcome.part.nodes),
+            stage = f"repair-{outcome.part.index}"
+            repairs.append(_Call(_Outcome(outcome.part), stage, prompts.READABLE_REWRITE_SYSTEM, user,
+                                 _Logged(parse.RewriteParser(outcome.part.nodes), stage, self.format_errors),
                                  prompts.REPAIR_FAMILY, prompts.REWRITE_REPLY_BYTES))
         self.run_calls(repairs, follow_up=1, doing="Repair")
         rechecks = []
@@ -506,6 +566,30 @@ class ReadabilityRun(runner.ManuscriptRun):
             "kept": len(outcomes) - len(statuses),
         }
 
+    def notes(self) -> list[str]:
+        """Why the first reply of a stage could not be read, in the order of
+        the calls: the parser's message when its parser refused that reply,
+        or, when a format reminder followed a reply refused before it was
+        parsed (too long, or tool-call markup), that it was."""
+        first: dict[str, str | None] = {}  # the reply each stage read first
+        reminded: set[str] = set()
+        for record in self.ctx.calls:
+            stage = str(record.get("stage") or "")
+            base = _RETRY_SUFFIX_RE.sub("", stage)
+            if "-retry" in stage[len(base):]:
+                reminded.add(base)
+            else:
+                # After an empty reply, its low-effort retry's is the one read.
+                first[base] = record.get("response_sha256")
+        notes = []
+        for base, reply in first.items():
+            logged = self.format_errors.get(base)
+            if logged is not None and logged[0] == reply:
+                notes.append(f"{base}: {logged[1]}")
+            elif base in reminded:
+                notes.append(f"{base}: the reply was refused before it was read (too long, or tool-call markup)")
+        return notes[:MAX_NOTES]
+
     def receipt(self, segments: Mapping[str, Any], manuscript: Mapping[str, Any],
                 counts: Mapping[str, int]) -> dict[str, Any]:
         calls = self.ctx.calls
@@ -530,6 +614,7 @@ class ReadabilityRun(runner.ManuscriptRun):
             "guide": self.guide_source,
             "stopped": self.stopped,
             "degraded": sorted(set(self.degraded)),
+            "notes": self.notes(),
             "parts": dict(counts),
         }
 
@@ -538,6 +623,7 @@ class ReadabilityRun(runner.ManuscriptRun):
         self.stage("finalize")
         nodes = segments.get("nodes") or []
         labels = {node["id"]: prompts.printed(node) for node in nodes}
+        refs = references.label_map(segments)
         title = str(manuscript.get("title") or self.guide.get("title") or "")
         counts = self.counts(outcomes)
         model_guide = self.guide if self.guide_source == "model" else None
@@ -562,7 +648,8 @@ class ReadabilityRun(runner.ManuscriptRun):
                              audience=self.audience, guide=self.guide, parts=parts,
                              originals={outcome.part.index: outcome.part.text(document) for outcome in outcomes
                                         if outcome.status == "not-rewritten"},
-                             labels=labels, counts=counts, math_fidelity=segments.get("math_fidelity"))
+                             labels=labels, counts=counts, math_fidelity=segments.get("math_fidelity"),
+                             references=refs)
         written = {
             "readability/readable.md": text.encode("utf-8"),
             "readability/paper_map.json": paper_map.build(segments, title=title, parts=part_of, guide=model_guide),
@@ -582,7 +669,7 @@ class ReadabilityRun(runner.ManuscriptRun):
         runner._write_json(self.folder / "receipt.json", receipt)
         paths = [*written, "readability/receipt.json"]
         self.emit({"type": "item.completed", "item": {"type": "file_change", "changes": [{"path": path} for path in paths]}})
-        glance = report.at_a_glance(self.guide, labels)
+        glance = report.at_a_glance(self.guide, labels, refs)
         status = (f"{counts['rewritten']} of {counts['total']} parts rewritten · {counts['faithful']} faithful, "
                   f"{counts['issues']} with issues, {counts['unchecked']} unchecked · checked by a model, not a certificate")
         self.emit({"type": "item.completed", "item": {
@@ -618,10 +705,11 @@ class ReadabilityRun(runner.ManuscriptRun):
         by_id = {node["id"]: node for node in segments.get("nodes") or []}
         macros = segments.get("macros") or {}
         fidelity = segments.get("math_fidelity")
+        refs = references.label_map(segments)
         try:
             self.run_guide(segments, manuscript, document, parts, planned=2 * len(todo))
             calls = [self.rewrite_call(outcome, document=document, by_id=by_id, macros=macros, total=len(parts),
-                                       math_fidelity=fidelity) for outcome in todo]
+                                       math_fidelity=fidelity, refs=refs) for outcome in todo]
             self.rewrite(outcomes, calls, total=len(parts))
             if not self.stopped:
                 self.check(outcomes, document=document, total=len(parts), math_fidelity=fidelity)
@@ -766,6 +854,8 @@ def run_ask(
                         limit=prompts.ASK_REPLY_BYTES, parse=partial(parse.parse_answer, node_ids=ids),
                         family=prompts.ASK_FAMILY))
                 parsed, reply = harness._job_result(job)
+                # Leftover LaTeX references read as in the readable version.
+                parsed["answer"] = references.resolve(parsed["answer"], references.label_map(segments))
                 answer.update(parsed, status="done", model=(reply.observed_model or reply.model or run.info.route.model))
             except harness.RunCancelled:
                 raise Stopped("The question was stopped; nothing was answered") from None

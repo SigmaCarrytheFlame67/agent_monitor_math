@@ -86,9 +86,10 @@ def _readable(source, **extra):
     return {"run_kind": "readability", "source": source, **extra}
 
 
-def _finished_run(run_id: str, owner_id, monkeypatch, *, text: str = MARKED_PAPER, **fields) -> Path:
+def _finished_run(run_id: str, owner_id, monkeypatch, *, text: str = MARKED_PAPER, model: FakeModel | None = None,
+                  **fields) -> Path:
     """A readability run made in-process by the real runner (scripted model)."""
-    monkeypatch.setattr(harness, "api_chat", FakeModel())
+    monkeypatch.setattr(harness, "api_chat", model or FakeModel())
     workspace = jobs.workspace_dir(run_id)
     readability_request.write(workspace, source={"kind": "paste", "text": text}, caps={}, audience="graduate",
                               focus="", role="member", route="api_key", model="kimi-k3",
@@ -411,6 +412,24 @@ def test_the_run_view_shows_the_readable_version_and_its_companions(readability_
     assert preview["notation"]["rows"][0]["symbol"] == "\\Z" and preview["macros"] == {"\\Z": "\\mathbb{Z}"}
     # The owner reads the reading-order text through the workspace file API.
     assert SOURCE_MARKER in original["content"]
+
+
+def test_a_faithful_parts_minor_issues_are_its_check_notes(readability_console, monkeypatch):
+    minor = {"severity": "minor", "location": "Lemma 2.2, added remark",
+             "problem": "the added explanation says the tags increase strictly along R", "fix": "say weakly"}
+    model = FakeModel(check=lambda _user: check_json("faithful", [minor]))
+    with running_server() as port:
+        user, cookie = _member(port)
+        workspace = _finished_run("readability_notes_1", user["id"], monkeypatch, model=model)
+        _s, run = _get(port, "/api/run/readability_notes_1", cookie)
+    part = run["sandbox_preview"]["check"][0]
+    assert part["index"] == 1 and part["status"] == "faithful"
+    # Every issue with its severity: the minor ones are the part's check notes.
+    assert part["issues"] == [minor]
+    # They are not marked in the readable version (only major problems are).
+    assert "⚠ **Check:**" not in (workspace / "readability" / "readable.md").read_text()
+    share = run_sharing.snapshot("readability_notes_1", jobs._load_run_record("readability_notes_1"))
+    assert share["readability"]["check"][0]["issues"] == [minor]
 
 
 def test_while_running_the_preview_is_the_progress_without_model_output(readability_console, monkeypatch):

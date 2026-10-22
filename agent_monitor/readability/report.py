@@ -19,15 +19,22 @@ rewritten says so.  Manuscript and model text in the title, the provenance,
 "At a glance" and the check notes carry no links (URLs removed, link syntax
 broken up, as in ``analyze.report``); the console escapes raw HTML itself and
 typesets the math, which HTML escaping here would garble.
+
+A rewritten part (and "At a glance") has its leftover LaTeX references,
+citations and labels written out (:mod:`.references`), and its headings
+shifted so that its top one is "##": "#" is the document's title.
 """
 from __future__ import annotations
 
+import bisect
 import re
 from typing import Any, Mapping, Sequence
 
 from agent_monitor.analyze.report import _LINK_RE, _LINK_SYNTAX_RE, ROUTE_TEXT
 from agent_monitor.analyze.titles import plain_title
+from agent_monitor.readability import parse
 from agent_monitor.readability.prompts import AUDIENCE_LABELS, MARKER_RE
+from agent_monitor.readability.references import resolve
 
 STATUSES = ("faithful", "issues", "unchecked", "not-rewritten")
 # What the console and a shared link show of ``readable.md``, in characters.
@@ -44,6 +51,7 @@ _NOT_SHARED = "*The original text of this part is not included in shared links.*
 # A line of the manuscript that looks like one of these marks is indented,
 # so that it marks nothing (in a share, say).
 _MARK_LIKE_RE = re.compile(r"(?m)^(?=\[(?:part|result|original|original-end):)")
+_HEADING_RE = re.compile(r"(?m)^( {0,3})(#{1,6})(?=[ \t]|$)")
 
 
 def _line(value: object, limit: int) -> str:
@@ -65,6 +73,31 @@ def anchors(markdown: str) -> str:
     definitions on their own lines."""
     text = MARKER_RE.sub(lambda match: "\n\n" + result_marker(match.group(1).lower()) + "\n\n", markdown)
     return _BLANK_RUN_RE.sub("\n\n", text).strip("\n")
+
+
+def normalize_headings(markdown: str) -> str:
+    """A rewritten part with its headings shifted together so that the top
+    one is "##" (never "#", the document's title; at most "######").  A
+    line in math is not a heading."""
+    spans = parse.math_spans(markdown)
+    starts = [start for start, _end in spans]
+
+    def in_math(offset: int) -> bool:
+        index = bisect.bisect_right(starts, offset) - 1
+        return index >= 0 and offset < spans[index][1]
+
+    headings = [match for match in _HEADING_RE.finditer(markdown) if not in_math(match.start(2))]
+    if not headings:
+        return markdown
+    shift = 2 - min(len(match.group(2)) for match in headings)
+    if not shift:
+        return markdown
+    pieces, cursor = [], 0
+    for match in headings:
+        level = min(6, max(2, len(match.group(2)) + shift))
+        pieces += [markdown[cursor:match.start(2)], "#" * level]
+        cursor = match.end(2)
+    return "".join(pieces) + markdown[cursor:]
 
 
 def without_original(text: str) -> str:
@@ -117,24 +150,32 @@ def provenance(*, model: str, route: str, audience: str, counts: Mapping[str, in
     return text
 
 
-def at_a_glance(guide: Mapping[str, Any], labels: Mapping[str, str]) -> str:
-    """The "At a glance" section from the guide (empty parts are left out)."""
+def at_a_glance(guide: Mapping[str, Any], labels: Mapping[str, str],
+                references: Mapping[str, tuple[str, str]] | None = None) -> str:
+    """The "At a glance" section from the guide (empty parts are left out);
+    ``references`` (``references.label_map``) writes out leftover LaTeX
+    references."""
+    refs = references or {}
+
+    def line(value: object, limit: int) -> str:
+        return _line(resolve(str(value or ""), refs), limit)
+
     out = ["## At a glance"]
     if guide.get("one_line"):
-        out.append(f"**What it shows.** {_line(guide['one_line'], 600)}")
+        out.append(f"**What it shows.** {line(guide['one_line'], 600)}")
     mains = []
     for entry in guide.get("main_results") or []:
         label = labels.get(entry.get("id") or "", "")
-        mains.append(f"- {'**' + _line(label, 120) + '.** ' if label else ''}{_line(entry.get('plain'), 800)}")
+        mains.append(f"- {'**' + _line(label, 120) + '.** ' if label else ''}{line(entry.get('plain'), 800)}")
     if mains:
         out.append("**Main results.**\n\n" + "\n".join(mains))
     if guide.get("key_idea"):
-        out.append(f"**Key idea.** {_line(guide['key_idea'], 1500)}")
+        out.append(f"**Key idea.** {line(guide['key_idea'], 1500)}")
     if guide.get("roadmap"):
-        out.append("**Roadmap.**\n\n" + "\n".join(f"{index}. {_line(step, 400)}"
+        out.append("**Roadmap.**\n\n" + "\n".join(f"{index}. {line(step, 400)}"
                                                   for index, step in enumerate(guide["roadmap"], 1)))
     if guide.get("reader_notes"):
-        out.append("**Before you start.**\n\n" + "\n".join(f"- {_line(note, 400)}" for note in guide["reader_notes"]))
+        out.append("**Before you start.**\n\n" + "\n".join(f"- {line(note, 400)}" for note in guide["reader_notes"]))
     return "\n\n".join(out) if len(out) > 1 else ""
 
 
@@ -156,7 +197,7 @@ def _check_block(part: Mapping[str, Any], labels: Mapping[str, str]) -> str:
 
 
 def render_part(part: Mapping[str, Any], *, labels: Mapping[str, str], original: str,
-                original_room: list[int]) -> str:
+                original_room: list[int], references: Mapping[str, tuple[str, str]] | None = None) -> str:
     """One part of ``readable.md``; ``original_room`` is the original text
     still allowed (shared across the parts, decremented here)."""
     index = int(part["index"])
@@ -169,7 +210,8 @@ def render_part(part: Mapping[str, Any], *, labels: Mapping[str, str], original:
         if status == "unchecked":
             out.append(f"> **Not checked** ({_line(part.get('reason') or 'no check', 300)}): no model compared "
                        "this part with the original.")
-        out.append(anchors(str(part.get("markdown") or "")))
+        markdown = resolve(str(part.get("markdown") or ""), references or {})
+        out.append(anchors(normalize_headings(markdown)))
         return "\n\n".join(out)
     if part.get("kind") == "references":
         out.append("## References")
@@ -200,18 +242,20 @@ def render(
     labels: Mapping[str, str],
     counts: Mapping[str, int],
     math_fidelity: str | None = None,
+    references: Mapping[str, tuple[str, str]] | None = None,
 ) -> str:
     """The readable version (see the module docstring); ``originals`` maps a
     part's index to its original text, ``labels`` a result id to its printed
-    label."""
+    label, ``references`` a LaTeX label to its printed name and number
+    (``references.label_map``)."""
     heading = _line(plain_title(title) or "Untitled manuscript", 300)
     blocks = [f"# {heading} — Readable version", provenance(model=model, route=route, audience=audience,
                                                                 counts=counts, math_fidelity=math_fidelity)]
-    glance = at_a_glance(guide, labels)
+    glance = at_a_glance(guide, labels, references)
     if glance:
         blocks.append(glance)
     room = [ORIGINAL_CHARS]
     for part in parts:
         blocks.append(render_part(part, labels=labels, original=originals.get(int(part["index"]), ""),
-                                  original_room=room))
+                                  original_room=room, references=references))
     return "\n\n".join(block.strip("\n") for block in blocks if block.strip()) + "\n"
