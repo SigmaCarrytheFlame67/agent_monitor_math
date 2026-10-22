@@ -6,9 +6,9 @@ The console writes ``readability/asks/<ask_id>.json`` (:func:`write_request`:
 answers with one model call and writes ``<ask_id>.reply.json``
 (``{answer, refs, model, usage, created_at, status}``; the file name avoids
 the words that ``jobs._promote_proof_artifact`` looks for).  The context of the
-question is the part that holds the selected passage (looked up in the
-readable version, then in the original), else the part of the selected
-result, else the guide alone.
+question is the part that holds the selected passage (looked up in the view
+it was selected in, then in the other, as :func:`comparable` compares
+them), else the part of the selected result, else the guide alone.
 """
 from __future__ import annotations
 
@@ -30,6 +30,19 @@ MAX_QUESTION_CHARS = 2_000
 MAX_SELECTION_CHARS = 4_000
 _PART_RE = re.compile(r"(?m)^\[part:(\d+)\]: #$")
 _LOOKUP_CHARS = 300
+# What a passage selected in the readable version no longer shows
+# (``comparable``): the invisible mark lines of readable.md and the fences
+# around an original part, the quote, heading and list markers that open a
+# line, result links, math delimiters, backslash escapes, and emphasis, code
+# and table marks.
+_MARK_LINE_RE = re.compile(r"(?m)^(?:\[(?:part|result|original|original-end):[^\]\n]*\]: #"
+                           r"|[ \t]{0,3}(?:~{3,}|`{3,})[^\n]*)[ \t]*$")
+_LINE_MARKS_RE = re.compile(r"(?m)^[ \t]*+(?:>[ \t]*+)*+(?:#{1,6}[ \t]++|(?:[-*+]|\d{1,9}[.)])[ \t]++)?")
+_RESULT_LINK_RE = re.compile(r"\[\[\s*result\s*:[^\]\n]{0,100}\]\]")
+_MATH_DELIMITER_RE = re.compile(r"\$|\\[()\[\]]")
+_ESCAPE_RE = re.compile(r"\\(?=[!-/:-@\[-`{-~])")
+_MARKUP_RE = re.compile(r"[*_`|]+")
+_SPACE_RE = re.compile(r"\s+")
 
 
 class AskError(ValueError):
@@ -130,19 +143,37 @@ def readable_parts(readable: str) -> dict[int, str]:
             for position, mark in enumerate(marks)}
 
 
-def _squash(text: str) -> str:
-    return " ".join(text.split())
+def comparable(text: str, *, markdown: bool = True) -> str:
+    """``text`` as a selected passage compares with it, the same on both
+    sides.  The console sends a passage on one line, without the marks the
+    readable version renders away (anchor, part and fence lines, quote,
+    heading and list markers, emphasis, code ticks, table bars, backslash
+    escapes) and with typeset math as ``$tex$``; so for ``markdown`` text
+    those marks and every math delimiter are dropped.  Whitespace is always
+    dropped (the Original view shows plain lines as they are); case
+    counts."""
+    if markdown:
+        text = _MARK_LINE_RE.sub("", text)
+        text = _LINE_MARKS_RE.sub("", text)
+        text = _RESULT_LINK_RE.sub("", text)
+        text = _MATH_DELIMITER_RE.sub("", text)
+        text = _ESCAPE_RE.sub("", text)
+        text = _MARKUP_RE.sub("", text)
+    return _SPACE_RE.sub("", text)
 
 
-def part_of(selection: str, *, readable: Mapping[int, str], original: Mapping[int, str]) -> int | None:
-    """The part whose text holds the start of ``selection`` (whitespace
-    ignored): in the readable version first, then in the original."""
-    needle = _squash(selection)[:_LOOKUP_CHARS]
-    if len(needle) < 3:
-        return None
-    for texts in (readable, original):
+def part_of(selection: str, *, readable: Mapping[int, str], original: Mapping[int, str],
+            view: str = "readable") -> int | None:
+    """The part whose text holds the start of ``selection`` (compared as
+    :func:`comparable` says): in the view it was selected in first, then in
+    the other one."""
+    searches = [(readable, True), (original, False)]
+    for texts, markdown in (searches[::-1] if view == "original" else searches):
+        needle = comparable(selection, markdown=markdown)[:_LOOKUP_CHARS]
+        if len(needle) < 3:
+            continue
         for index, text in sorted(texts.items()):
-            if needle in _squash(text):
+            if needle in comparable(text, markdown=markdown):
                 return index
     return None
 
@@ -164,7 +195,8 @@ def context(
         int(part["index"]): "\n".join(original_lines[max(0, part["lines"][0] - 1):part["lines"][1]])
         for part in parts if isinstance(part.get("lines"), list) and len(part["lines"]) == 2
     }
-    index = part_of(ask.get("selection") or "", readable=readable_by_part, original=original_by_part)
+    index = part_of(ask.get("selection") or "", readable=readable_by_part, original=original_by_part,
+                    view=str(ask.get("view") or "readable"))
     if index is None and ask.get("node_id"):
         index = node_parts.get(ask["node_id"])
     if index is None:

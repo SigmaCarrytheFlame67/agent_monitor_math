@@ -886,7 +886,7 @@ def test_the_prompt_pack_is_bounded_and_hashed():
         assert 500 < len(text.encode()) <= harness.MAX_SYSTEM_PROMPT_BYTES
         assert "tool" not in text.replace("You have no\ntools", "").replace("You have no tools", "").replace(
             "pseudo-tool", "")
-    assert prompts.PROMPT_PACK_VERSION == "readability-prompts@1"
+    assert prompts.PROMPT_PACK_VERSION == "readability-prompts@2"
     assert re.fullmatch(r"[0-9a-f]{64}", prompts.PROMPT_PACK_SHA256)
     assert prompts.PROMPT_PACK_SHA256 == prompts.prompt_pack_sha256()
 
@@ -1039,3 +1039,151 @@ def test_a_shared_link_drops_an_original_block_cut_short():
     shared = report.without_original(text)
     assert "SECRET-ORIGINAL" not in shared and "Rewritten." in shared
     assert shared.endswith("*The original text of this part is not included in shared links.*\n")
+
+
+# ---------------------------------------------------------------------------
+# fact closures, references, headings, bounded guides, questions, notes
+# ---------------------------------------------------------------------------
+
+FIXTURES = ROOT / "tests" / "fixtures" / "readability"
+
+
+def test_a_pasted_fact_closure_gets_its_results_anchors_and_map(tmp_path, model):
+    # Live: this closure gave "reading guide for 0 results" (no map, no anchors).
+    closure = (FIXTURES / "closure_v1_even.md").read_text(encoding="utf-8")
+    fake = model()
+    events: list[dict] = []
+    req = write_request(tmp_path, source={"kind": "paste", "text": closure, "format": "md"})
+    outcome = run(tmp_path, req, kimi_env(), events)
+    notes = [event["item"]["text"] for event in events
+             if event.get("type") == "item.completed" and event["item"]["type"] == "reasoning"]
+    assert "Readability · 2 Guide · reading guide for 4 results" in notes
+    assert load(tmp_path, "segments.json")["parser"] == "text-1+cgm-closure"
+    rewrite = next(call["user"] for call in fake.calls if call["kind"] == "rewrite")
+    assert listed(rewrite) == ["lemma-1", "lemma-2", "lemma-3", "main-theorem"]
+    assert "[lemma-2] lemma · Lemma 2: For every natural number n" in fake.calls[0]["user"]
+    paper = load(tmp_path, "paper_map.json")
+    assert [(node["id"], node["label"], node["main"], node["importance"]) for node in paper["nodes"]] == [
+        ("lemma-1", "Lemma 1", False, 4), ("lemma-2", "Lemma 2", False, 4), ("lemma-3", "Lemma 3", False, 4),
+        ("main-theorem", "Main theorem", True, 5)]
+    assert {(edge["from"], edge["to"], edge["provenance"]) for edge in paper["edges"]} >= {
+        ("lemma-1", "main-theorem", "ref"), ("lemma-2", "main-theorem", "ref"), ("lemma-3", "main-theorem", "ref")}
+    text = (tmp_path / "readability" / "readable.md").read_text()
+    assert "\n\n[result:main-theorem]: #\n\n" in text and outcome["counts"]["faithful"] == 1
+
+
+def test_rewrites_get_the_printed_names_and_leftover_latex_is_written_out(tmp_path, model):
+    leftover = ("=== READABLE ===\n# Proof\n\nBy Lemma~\\ref{lem:rep} and Theorem $\\ref{thm:main}$, see "
+                "\\cite[p.~3]{a}.\\label{lem:x}\n\n[[result:thm:main]]\n[[result:lem:rep]]\n[[result:lem:sum]]\n"
+                "Done, by \\eqref{lem:sum} and \\ref{fig:9}.\n=== END ===")
+    verdicts = iter([check_json("unfaithful", [MAJOR]), check_json("faithful")])
+    fake = model(rewrite=lambda _user: leftover, check=lambda _user: next(verdicts))
+    run(tmp_path, write_request(tmp_path), kimi_env())
+    rewrite, repair = [call["user"] for call in fake.calls if call["kind"] == "rewrite"]
+    references_block = ("<REFERENCES>\nthm:main -> Theorem 1.1\nlem:rep -> Lemma 2.1\nlem:sum -> Lemma 2.2\n"
+                        "</REFERENCES>")
+    assert references_block in rewrite and references_block in repair
+    text = (tmp_path / "readability" / "readable.md").read_text()
+    assert ("## Proof\n\nBy Lemma 2.1 and Theorem 1.1, see [a, p. 3].\n\n[result:thm:main]: #" in text)
+    assert "Done, by (2.2) and [fig:9]." in text
+    for raw in ("\\ref", "\\cite", "\\label", "\\eqref", "\n# Proof"):
+        assert raw not in text, raw
+    # The check compared the rewrite as the model wrote it.
+    check = next(call["user"] for call in fake.calls if call["kind"] == "check")
+    assert "Lemma~\\ref{lem:rep}" in check
+
+
+def test_an_answer_reads_references_as_printed(tmp_path, model):
+    model(ask=lambda _user: "By \\ref{lem:sum} (see [[result:lem:sum]]) and \\cite{a}.")
+    run(tmp_path, write_request(tmp_path), kimi_env())
+    ask.write_request(tmp_path, "eeeeeeeeeeee", {"question": "Why?"})
+    answer = runner.run_ask(tmp_path, "eeeeeeeeeeee", route_env=kimi_env())
+    assert answer["answer"] == "By Lemma 2.2 (see [[result:lem:sum]]) and [a]." and answer["refs"] == ["lem:sum"]
+
+
+def test_a_bounded_route_asks_for_a_short_guide_at_low_effort(tmp_path, model):
+    fake = model()
+    run(tmp_path / "guest", write_request(tmp_path / "guest", role="guest"), kimi_env(AGENT_MONITOR_GUEST="1"))
+    guide = next(call for call in fake.calls if call["kind"] == "guide")
+    assert guide["effort"] == "low" and prompts.BOUNDED_GUIDE_NOTE in guide["user"]
+    assert "at most 40 \"notation\" entries" in guide["user"] and "under about 2,500 words" in guide["user"]
+    fake.calls.clear()
+    run(tmp_path / "admin", write_request(tmp_path / "admin"), kimi_env())
+    guide = next(call for call in fake.calls if call["kind"] == "guide")
+    assert guide["effort"] == "high" and prompts.BOUNDED_GUIDE_NOTE not in guide["user"]
+    assert "Write all mathematics in LaTeX between $...$" in prompts.READABLE_GUIDE_SYSTEM
+    assert "Escape every backslash" in prompts.READABLE_GUIDE_SYSTEM
+
+
+@pytest.mark.parametrize(("selection", "view", "part"), [
+    # As the console sends a passage of the readable version: one line,
+    # without marks, typeset math as $tex$.
+    ("Reader's note: the step uses $a<b$. Plan. We show $$2a + 2b = 2(a + b)$$ and $k \\in \\Z$ holds.",
+     "readable", 2),
+    ("First item with bold. Second item. Lemma 2.2. Every sum", "readable", 2),
+    ("Check: the independent check found", "readable", 2),
+    ("A heading Result text and more text.", "readable", 1),
+    # The Original view shows plain lines as they are.
+    ("1. Let $x$ be even. > 2. Then", "original", 2),
+    ("Plan. We show", "original", 2),
+    # Case counts; and a passage that is nowhere.
+    ("reader's NOTE: the step uses", "readable", None),
+    ("Nowhere in this manuscript", "readable", None),
+])
+def test_a_selected_passage_is_found_across_markdown_marks(selection, view, part):
+    readable = {
+        1: "## A heading\n\nResult text and *more* text.",
+        2: ("> ⚠ **Check:** the independent check found a problem.\n\n"
+            "> **Reader's note:** the step uses $a<b$.\n\n*Plan.* We show $$\n2a + 2b = 2(a + b)\n$$ and "
+            "\\(k \\in \\Z\\) holds.\n\n- First item with **bold**.\n- Second item.\n\n[result:lem:sum]: #\n\n"
+            "**Lemma 2.2.** Every sum"),
+    }
+    original = {1: "\\section{Intro}\nResult text.", 2: "1. Let $x$ be even.\n> 2. Then\n*Plan.* We show"}
+    assert ask.part_of(selection, readable=readable, original=original, view=view) == part
+
+
+def test_a_question_about_a_passage_across_marks_gets_its_part(tmp_path, model):
+    fake = model()
+    run(tmp_path, write_request(tmp_path), kimi_env())
+    # The default rewrite: an anchor line and a bold label between the words.
+    ask.write_request(tmp_path, "ffffffffffff", {"question": "Why?", "view": "readable",
+                                                 "selection": "This part explains the argument. Result thm:main. "
+                                                              "Restated. Result lem:rep."})
+    assert runner.run_ask(tmp_path, "ffffffffffff", route_env=kimi_env())["part"] == 1
+    assert "READABLE VERSION, part 1 (Introduction)" in fake.calls[-1]["user"]
+
+
+def test_the_receipt_says_why_a_format_reminder_was_sent(tmp_path, model):
+    guides = iter(["Here is a guide, no JSON.", guide_json()])
+    checks = iter(['{"tool_calls": []}', check_json()])
+    model(guide=lambda _user: next(guides), check=lambda _user: next(checks),
+          rewrite=lambda user: readable(user, skip=("lem:sum",)))
+    run(tmp_path, write_request(tmp_path), kimi_env())
+    receipt = load(tmp_path, "receipt.json")
+    assert [entry["stage"] for entry in receipt["call_log"]] == [
+        "guide", "guide-retry", "rewrite-1", "rewrite-1-retry", "check-1", "check-1-retry"]
+    assert receipt["notes"] == [
+        "guide: no JSON object with 'one_line'",
+        "rewrite-1: the [[result:<id>]] line is missing for lem:sum; write it once, on its own line, before each "
+        "listed result",
+        "check-1: the reply was refused before it was read (too long, or tool-call markup)",
+    ]
+    assert receipt["guide"] == "model" and "Here is a guide" not in json.dumps(receipt)
+    assert all(len(note.split(": ", 1)[1]) <= 120 for note in receipt["notes"])
+    # A clean run has no notes.
+    model()
+    run(tmp_path / "clean", write_request(tmp_path / "clean"), kimi_env())
+    assert load(tmp_path / "clean", "receipt.json")["notes"] == []
+
+
+def test_a_long_parse_error_is_cut_in_the_notes():
+    errors: dict[str, str] = {}
+
+    def refuse(_text):
+        raise parse.ParseError("x" * 300 + "\x00\x1b tail")
+
+    logged = runner._Logged(refuse, "rewrite-3", errors)
+    for _attempt in range(2):
+        with pytest.raises(parse.ParseError):
+            logged("reply")
+    assert errors == {"rewrite-3": "x" * 119 + "…"} and logged.lenient is None

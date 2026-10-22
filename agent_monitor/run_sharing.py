@@ -340,7 +340,8 @@ def _readability_snapshot(data, read):
         if isinstance(part, dict) and isinstance(part.get('index'), int):
             parts.append({'index': part['index'], 'title': _text(part.get('title'), 200),
                           'status': _text(part.get('status'), 20),
-                          'issues': [{key: _text(issue.get(key), 600) for key in ('severity', 'location', 'problem')}
+                          'issues': [{key: _text(issue.get(key), 600)
+                                      for key in ('severity', 'location', 'problem', 'fix')}
                                      for issue in _items(part.get('issues'), 12) if isinstance(issue, dict)]})
     counts = {key: summary.get(key) for key in ('parts', 'rewritten', 'faithful', 'issues', 'unchecked', 'not_rewritten')
               if isinstance(summary.get(key), int)}

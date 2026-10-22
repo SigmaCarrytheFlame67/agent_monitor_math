@@ -649,17 +649,33 @@ the listing, with a per-viewer `readability` policy).
   included file that is a document of its own, such as a subfile or a
   standalone figure, gives its body only, and text after an
   `\end{document}` is left out with a warning in `manuscript.json`, as is
-  any result the parser found outside the text that was read), 2 Guide
-  (one call: what the manuscript shows, its key idea, roadmap, notation and
-  terms, the role and importance of each result; a guide that fails becomes a
-  deterministic outline), 3 Rewrite (one call per part, in waves; parts
+  any result the parser found outside the text that was read; Markdown and
+  text are segmented as Analyze does, in the same sandboxed child, and also
+  read a CGM run's verified fact closure (`proof.md` in any of its
+  renderings, also as copied from the console: one result per lemma and the
+  main theorem, dependencies from its **Uses:** lines, parser
+  `text-1+cgm-closure`) and Markdown headings that name a result
+  ("## Theorem 2.1", "### Lemma L2"); a text that is not clearly a closure
+  is never read as one), 2 Guide (one call: what the manuscript shows, its
+  key idea, roadmap, notation and terms, the role and importance of each
+  result, with its mathematics in `$...$`; on guest and sponsored runs it
+  runs at low effort and is asked to stay short; a guide that fails becomes
+  a deterministic outline), 3 Rewrite (one call per part, in waves; parts
   follow top-level sections, and the pages of a PDF fill each part in turn,
   at most 30,000 characters of source, 12,000 on guest and sponsored runs;
-  the bibliography is never rewritten), 4 Check
+  the bibliography is never rewritten; each rewrite gets the printed name
+  of every label its part cites, `<REFERENCES>`), 4 Check
   (one independent call per rewritten part; outside guest and sponsored
   runs, a part with major problems is rewritten once more and checked
   again), 5 Publish (`readable.md`, `paper_map.json`, `notation.json`,
-  `guide.json`, `check.json`, and `receipt.json` written last).
+  `guide.json`, `check.json`, and `receipt.json` written last). In
+  `readable.md` (and in answers) leftover LaTeX is written out: `\ref`,
+  `\eqref`, `\cref`, `\Cref`, `\autoref` and `\pageref` become the printed
+  name ("Section 3", or the label in brackets when the manuscript does not
+  number it), `\cite[x]{a,b}` becomes "[a, b, x]" and `\label` is dropped;
+  each part's headings are shifted so that its top one is `##`. The
+  receipt's `notes` say why the first reply of a stage could not be read
+  (the parser's message), which is what its format reminder answered.
 - **Budget.** The plan keeps a check for every part it rewrites: parts past
   the part cap or the call budget are not rewritten, and `readable.md` shows
   them in their original form, marked; nothing is dropped silently. A
@@ -687,7 +703,9 @@ the listing, with a per-viewer `readability` policy).
   and compilation (`/pdf`, `final.pdf`, `final_latex`) are refused.
 - **HTTP API.** `GET /api/run/<id>` carries `sandbox_preview` with
   `kind: "readability"` (the readable version, or the progress notes while
-  it runs, the parts and their checks, notation, macros, `original_path`;
+  it runs, the parts and their checks — `check[].issues[]` is `{severity,
+  location, problem, fix}`: the major issues are also marked in the text,
+  the minor ones are the part's check notes — notation, macros, `original_path`;
   at most 400,000 characters of the readable version, cut before a part
   with a note saying so, as in a shared link).
   `GET /api/run/<id>/proof_graph?kind=paper-map` returns the paper map
@@ -703,8 +721,10 @@ the listing, with a per-viewer `readability` policy).
   node_id?}` answers in the background (202 `{ask_id}`) with one call
   (stage `ask`) on the run's own route: `readability_runner.py --ask <id>`
   reads `readability/asks/<id>.json` and writes `<id>.reply.json`. The
-  context is the part holding the selected passage (else the selected
-  result's part, else the guide alone). One question at a time per run;
+  context is the part holding the selected passage (looked up in the view
+  it was selected in, then the other, ignoring Markdown marks, math
+  delimiters and whitespace; else the selected result's part, else the
+  guide alone). One question at a time per run;
   guests 3 per run and 6 per hour (12 per client network), members 30 per
   hour, administrators 120. Answers, like rewrites, are refused when they
   carry raw HTML outside math.

@@ -14,8 +14,12 @@ Modules:
 * :mod:`.prompts` — the four system prompts, their pack hash and the prompt
   builders;
 * :mod:`.parse` — strict, fail-closed parsing of the model replies;
+* :mod:`.structure` — the results of a Markdown or text manuscript (a CGM
+  fact closure, result headings);
 * :mod:`.document` — the manuscript in reading order, split into parts;
 * :mod:`.paper_map` — the paper map (results and dependencies) and notation;
+* :mod:`.references` — the printed names of labels, and LaTeX references
+  written out;
 * :mod:`.report` — ``readable.md``;
 * :mod:`.ask` — questions about a finished run;
 * :mod:`.record` — the ``run["readability"]`` block of a run record.

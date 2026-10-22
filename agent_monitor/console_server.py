@@ -1880,7 +1880,9 @@ def _readability_preview(run_id: str, data: dict) -> dict:
                 "reason": str(part.get("reason") or "")[:400],
                 "lines": [int(value) for value in (part.get("lines") or [])[:2] if isinstance(value, int)],
                 "repaired": part.get("repaired") is True,
-                "issues": [{key: str(issue.get(key) or "")[:600] for key in ("severity", "location", "problem")}
+                # Every issue the check found: the major ones are also marked
+                # in the text, the minor ones are the part's check notes.
+                "issues": [{key: str(issue.get(key) or "")[:600] for key in ("severity", "location", "problem", "fix")}
                            for issue in (part.get("issues") or [])[:12] if isinstance(issue, dict)],
                 "missing": [str(node)[:80] for node in (part.get("missing") or [])[:40]],
             })

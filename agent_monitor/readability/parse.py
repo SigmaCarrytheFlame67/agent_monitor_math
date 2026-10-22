@@ -211,6 +211,20 @@ def _without_math(text: str) -> str:
     return text
 
 
+def math_spans(text: str) -> list[tuple[int, int]]:
+    """Where the math of ``text`` is, as the console sets it aside: the
+    outermost spans, in order."""
+    spans = []
+    for pattern in _MATH_RES:
+        spans.extend(match.span() for match in pattern.finditer(text))
+        text = pattern.sub(lambda match: _NOT_NEWLINE_RE.sub(" ", match.group(0)), text)
+    outermost: list[tuple[int, int]] = []
+    for start, end in sorted(spans):
+        if not outermost or start >= outermost[-1][1]:
+            outermost.append((start, end))
+    return outermost
+
+
 def _plain_markdown(body: str, what: str) -> None:
     if _FENCE_RE.search(body):
         raise ParseError(f"code fences are not allowed in {what}")
