@@ -11,8 +11,9 @@ from collections.abc import Mapping, MutableMapping
 # specific run is allowed to receive.
 _CONTROL_PLANE_ENV_NAMES = frozenset(
     {
-        # Optional GitHub token for Analyze source fetches: only the Analyze
-        # runner may receive it (jobs.py adds it to that run explicitly).
+        # Optional GitHub token for manuscript source fetches: only the
+        # Analyze and Readability runners may receive it (jobs.py adds it to
+        # those runs explicitly).
         "AGENT_MONITOR_ANALYZE_GITHUB_TOKEN",
         "AGENT_MONITOR_BASE_PATH",
         "AGENT_MONITOR_DATA_ENCRYPTION_KEY",

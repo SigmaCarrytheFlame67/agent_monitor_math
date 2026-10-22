@@ -28,10 +28,11 @@ def _executable(path: Path) -> Path:
 
 class ClaudeOpenClawRegistryTests(unittest.TestCase):
     def test_only_genuine_adapters_are_exposed_in_claude_matrix(self) -> None:
-        # Ansatz Analyze uses math_harness's response-only Claude Code transport.
+        # Ansatz Analyze and Ansatz Readability use math_harness's
+        # response-only Claude Code transport.
         compatible = {
             "claude", "improof", "math_harness", "openclaw", "deepagents", "plain", "metaharness",
-            "analyze",
+            "analyze", "readability",
         }
         self.assertEqual(
             set(engines_registry.CLAUDE_SUBSCRIPTION_ENGINES), compatible

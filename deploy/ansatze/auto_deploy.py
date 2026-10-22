@@ -100,9 +100,10 @@ def read_json(path: Path, limit: int = 20_000_000) -> dict:
 def record_busy(record: dict) -> bool:
     if str(record.get("status", "")).lower() in ACTIVE:
         return True
-    # A completed analysis can have a running recheck, and a Lean result can
-    # have a still-running harness. Do not inspect proof text or user settings.
-    for name in ("recheck", "harness", "analyze"):
+    # A completed analysis can have a running recheck, a readability run a
+    # question being answered, and a Lean result a still-running harness. Do
+    # not inspect proof text or user settings.
+    for name in ("recheck", "harness", "analyze", "readability", "ask"):
         child = record.get(name)
         if isinstance(child, dict) and record_busy(child):
             return True

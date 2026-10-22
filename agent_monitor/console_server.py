@@ -250,10 +250,11 @@ PUBLIC_MODE = os.environ.get("AGENT_MONITOR_PUBLIC", "").strip().lower() in {
 
 # Only the single remote API call baseline is guest-eligible. Local agent and
 # harness engines do not provide an operating-system isolation boundary.
-# Ansatz Analyze is tool-free too; guests get it behind its own switch
-# (AGENT_MONITOR_ANALYZE_GUESTS), not through AGENT_MONITOR_GUEST_ENGINES.
+# Ansatz Analyze and Ansatz Readability are tool-free too; guests get them
+# behind their own switches (AGENT_MONITOR_ANALYZE_GUESTS,
+# AGENT_MONITOR_READABILITY_GUESTS), not through AGENT_MONITOR_GUEST_ENGINES.
 GUEST_PROOF_ENGINES = frozenset({"kimi", "plain"})
-GUEST_ELIGIBLE_ENGINES = GUEST_PROOF_ENGINES | {"analyze"}
+GUEST_ELIGIBLE_ENGINES = GUEST_PROOF_ENGINES | {"analyze", "readability"}
 GUEST_DEFAULT_ENGINES = GUEST_PROOF_ENGINES
 # One Analyze per guest session per hour (and a few per client network);
 # guest analyses also count against the guest run limits above.
@@ -269,6 +270,14 @@ GUEST_RECHECKS_PER_HOUR = 2
 GUEST_RECHECKS_PER_CLIENT_PER_HOUR = 4
 _GUEST_RECHECK_WINDOWS: dict[int, deque[float]] = {}
 _GUEST_RECHECK_CLIENT_WINDOWS: dict[str, deque[float]] = {}
+# One readability run per guest session per hour (and a few per client
+# network), on top of the guest run limits, as for Analyze.
+GUEST_READABILITY_RUNS_PER_HOUR = 1
+GUEST_READABILITY_RUNS_PER_CLIENT_PER_HOUR = 3
+_GUEST_READABILITY_WINDOWS: dict[int, deque[float]] = {}
+_GUEST_READABILITY_CLIENT_WINDOWS: dict[str, deque[float]] = {}
+# Questions about readability runs per account and hour (readability_runs.ASKS_PER_HOUR).
+_READABILITY_ASK_WINDOWS: dict[int, deque[float]] = {}
 # Link previews (POST /api/analyze/resolve) fetch metadata from arXiv/GitHub.
 ANALYZE_RESOLVES_PER_HOUR = {"guest": 10, "member": 30, "admin": 120}
 GUEST_ANALYZE_RESOLVES_PER_CLIENT_PER_HOUR = 20
@@ -394,11 +403,14 @@ def guest_engine_allowlist() -> frozenset[str]:
         allowed.discard("plain")
     if os.environ.get("KIMI_PROOF_CMD", "").strip():
         allowed.discard("kimi")
-    from agent_monitor import analyze_runs
+    from agent_monitor import analyze_runs, readability_runs
 
-    # Analyze follows its own switches (and an ANALYZE_CMD override removes it).
+    # Analyze and Readability follow their own switches (and an ANALYZE_CMD
+    # or READABILITY_CMD override removes one).
     if analyze_runs.guests_enabled():
         allowed.add("analyze")
+    if readability_runs.guests_enabled():
+        allowed.add("readability")
     return frozenset(allowed)
 
 
@@ -494,6 +506,7 @@ def guest_policy(user: dict | None = None) -> dict[str, Any]:
         "custom_provider_base": False,
         "attachments": research_attachments.guest_policy(),
         "analyze": _guest_analyze_summary(),
+        "readability": _guest_readability_summary(),
     }
 
 
@@ -514,6 +527,25 @@ def _guest_analyze_summary() -> dict[str, Any]:
     }
 
 
+def _guest_readability_summary() -> dict[str, Any]:
+    """What a guest may make readable (the engine listing has the full policy)."""
+    from agent_monitor import analyze_runs, readability_runs
+
+    enabled = readability_runs.guests_enabled()
+    return {
+        "enabled": enabled,
+        "runs_per_hour": GUEST_READABILITY_RUNS_PER_HOUR,
+        "links": sorted(analyze_runs.GUEST_CONNECTORS),
+        "paste_chars": analyze_runs.GUEST_PASTE_CHARS,
+        "caps": (
+            readability_runs._caps_view(readability_runs.effective_caps("guest", sponsored=True))
+            if enabled else None
+        ),
+        "asks_per_run": readability_runs.GUEST_ASKS_PER_RUN,
+        "asks_per_hour": readability_runs.GUEST_ASKS_PER_HOUR,
+    }
+
+
 def _guest_lean_repairs() -> int:
     from agent_monitor import lean_verify
 
@@ -531,37 +563,105 @@ def _window_full(window: deque[float] | None, limit: int, now: float, span: floa
     return 0
 
 
-def _guest_analyze_capacity(user_id: int, client: str | None, *, reserve: bool) -> tuple[str | None, int]:
-    """One Analyze per guest session per hour, a few per client network."""
+def _guest_mode_capacity(
+    windows: dict[int, deque[float]],
+    client_windows: dict[str, deque[float]],
+    user_id: int,
+    client: str | None,
+    *,
+    per_hour: int,
+    per_client: int,
+    refusals: tuple[str, str],
+    reserve: bool,
+) -> tuple[str | None, int]:
+    """A manuscript mode's guest starts: ``per_hour`` per guest session and
+    ``per_client`` per client network each hour (``refusals``: the session's
+    and the network's message)."""
     now = time.monotonic()
     with _ANALYZE_LOCK:
-        _prune_windows(_GUEST_ANALYZE_WINDOWS, now - 3600.0)
-        _prune_windows(_GUEST_ANALYZE_CLIENT_WINDOWS, now - 3600.0)
-        retry = _window_full(_GUEST_ANALYZE_WINDOWS.get(user_id), GUEST_ANALYZE_RUNS_PER_HOUR, now, 3600.0)
+        _prune_windows(windows, now - 3600.0)
+        _prune_windows(client_windows, now - 3600.0)
+        retry = _window_full(windows.get(user_id), per_hour, now, 3600.0)
         if retry:
-            return "Guests can start one analysis per hour; sign in for more", retry
+            return refusals[0], retry
         if client is not None:
-            retry = _window_full(_GUEST_ANALYZE_CLIENT_WINDOWS.get(client),
-                                 GUEST_ANALYZE_RUNS_PER_CLIENT_PER_HOUR, now, 3600.0)
+            retry = _window_full(client_windows.get(client), per_client, now, 3600.0)
             if retry:
-                return "Too many guest analyses from your network this hour; please try again later", retry
+                return refusals[1], retry
         if reserve:
-            _GUEST_ANALYZE_WINDOWS.setdefault(user_id, deque()).append(now)
+            windows.setdefault(user_id, deque()).append(now)
             if client is not None:
-                _GUEST_ANALYZE_CLIENT_WINDOWS.setdefault(client, deque()).append(now)
+                client_windows.setdefault(client, deque()).append(now)
     return None, 0
+
+
+def _release_guest_mode(windows: dict[int, deque[float]], client_windows: dict[str, deque[float]],
+                        user_id: int, client: str | None) -> None:
+    """Return the newest guest start of a mode when the request started nothing."""
+    with _ANALYZE_LOCK:
+        window = windows.get(user_id)
+        if window:
+            window.pop()
+        if client is not None:
+            client_window = client_windows.get(client)
+            if client_window:
+                client_window.pop()
+
+
+def _guest_analyze_capacity(user_id: int, client: str | None, *, reserve: bool) -> tuple[str | None, int]:
+    """One Analyze per guest session per hour, a few per client network."""
+    return _guest_mode_capacity(
+        _GUEST_ANALYZE_WINDOWS, _GUEST_ANALYZE_CLIENT_WINDOWS, user_id, client,
+        per_hour=GUEST_ANALYZE_RUNS_PER_HOUR, per_client=GUEST_ANALYZE_RUNS_PER_CLIENT_PER_HOUR,
+        refusals=("Guests can start one analysis per hour; sign in for more",
+                  "Too many guest analyses from your network this hour; please try again later"),
+        reserve=reserve,
+    )
 
 
 def _release_guest_analyze(user_id: int, client: str | None) -> None:
     """Return the newest guest Analyze start when the request started nothing."""
+    _release_guest_mode(_GUEST_ANALYZE_WINDOWS, _GUEST_ANALYZE_CLIENT_WINDOWS, user_id, client)
+
+
+def _guest_readability_capacity(user_id: int, client: str | None, *, reserve: bool) -> tuple[str | None, int]:
+    """One readability run per guest session per hour, a few per client network."""
+    return _guest_mode_capacity(
+        _GUEST_READABILITY_WINDOWS, _GUEST_READABILITY_CLIENT_WINDOWS, user_id, client,
+        per_hour=GUEST_READABILITY_RUNS_PER_HOUR, per_client=GUEST_READABILITY_RUNS_PER_CLIENT_PER_HOUR,
+        refusals=("Guests can start one readability run per hour; sign in for more",
+                  "Too many guest readability runs from your network this hour; please try again later"),
+        reserve=reserve,
+    )
+
+
+def _release_guest_readability(user_id: int, client: str | None) -> None:
+    _release_guest_mode(_GUEST_READABILITY_WINDOWS, _GUEST_READABILITY_CLIENT_WINDOWS, user_id, client)
+
+
+def _reserve_readability_ask(user: dict[str, Any]) -> tuple[str | None, int]:
+    """Questions about readability runs per account and hour, by role."""
+    from agent_monitor import analyze_runs, readability_runs
+
+    role = analyze_runs.role_of(user)
+    limit = readability_runs.ASKS_PER_HOUR.get(role, readability_runs.GUEST_ASKS_PER_HOUR)
+    now = time.monotonic()
+    user_id = int(user.get("id") or 0)
     with _ANALYZE_LOCK:
-        window = _GUEST_ANALYZE_WINDOWS.get(user_id)
+        _prune_windows(_READABILITY_ASK_WINDOWS, now - 3600.0)
+        retry = _window_full(_READABILITY_ASK_WINDOWS.get(user_id), limit, now, 3600.0)
+        if retry:
+            return f"You can ask {limit} questions per hour; please try again later", retry
+        _READABILITY_ASK_WINDOWS.setdefault(user_id, deque()).append(now)
+    return None, 0
+
+
+def _release_readability_ask(user: dict[str, Any]) -> None:
+    """Return the newest question when the request sent nothing."""
+    with _ANALYZE_LOCK:
+        window = _READABILITY_ASK_WINDOWS.get(int(user.get("id") or 0))
         if window:
             window.pop()
-        if client is not None:
-            client_window = _GUEST_ANALYZE_CLIENT_WINDOWS.get(client)
-            if client_window:
-                client_window.pop()
 
 
 def _reserve_guest_recheck(user_id: int, client: str | None) -> tuple[str | None, int]:
@@ -627,6 +727,13 @@ def analyze_policy(user: dict | None) -> dict[str, Any]:
     from agent_monitor import analyze_runs
 
     return analyze_runs.viewer_policy(user, guest_runs_per_hour=GUEST_ANALYZE_RUNS_PER_HOUR)
+
+
+def readability_policy(user: dict | None) -> dict[str, Any]:
+    """The viewer's Readability policy (engine listing)."""
+    from agent_monitor import readability_runs
+
+    return readability_runs.viewer_policy(user, guest_runs_per_hour=GUEST_READABILITY_RUNS_PER_HOUR)
 
 
 def _guest_run_capacity_error(user_id: int, client: str | None = None) -> str | None:
@@ -1088,6 +1195,7 @@ def _bootstrap_guest_pipeline(
     if (
         state is not None
         or not user.get("guest")
+        or auto_pipeline.is_readability_run(run_record)
         or not run_record.get("guest")
         or run_record.get("owner_id") != user.get("id")
         or str(run_record.get("status") or "").lower() != "finished"
@@ -1537,6 +1645,13 @@ _ANALYZE_NOW_CHECKING = "Check · now checking "
 ANALYZE_PROGRESS_LINES = 600
 
 
+# The Readability runner's notes start with "Readability · "; a bare call
+# stage after it ("guide", "rewrite-3", "check-2-retry-low") marks a call.
+_READABILITY_NOTE_PREFIX = "Readability · "
+_READABILITY_CALL_RE = re.compile(r"(?:guide|ask|(?:rewrite|check|repair|recheck)-\d+)(?:-retry)?(?:-low)?")
+_READABILITY_NOW_WORKING = " · now working on "
+
+
 def _analysis_progress_text(data: dict) -> str:
     """The live Sandbox of an Analyze run: the runner's progress notes and its
     public error messages, one per line, without the ``Analyze · `` prefix.
@@ -1544,6 +1659,22 @@ def _analysis_progress_text(data: dict) -> str:
     Never a verifier's or paper map's raw JSON reply, a model-call marker or
     the process log (the session summary node): those are model output and
     plumbing, shown in the Monitor and the process log only."""
+    return _progress_text(data, prefix=_ANALYZE_NOTE_PREFIX, call_re=_ANALYZE_CALL_RE,
+                          in_flight=lambda line: line.startswith(_ANALYZE_NOW_CHECKING))
+
+
+def _readability_progress_text(data: dict) -> str:
+    """The live Sandbox of a readability run, as for an analysis: its notes
+    without the ``Readability · `` prefix (a note may quote a bounded piece
+    of a parsed reply, as Analyze's do), never a raw reply or a call marker."""
+    return _progress_text(data, prefix=_READABILITY_NOTE_PREFIX, call_re=_READABILITY_CALL_RE,
+                          in_flight=lambda line: _READABILITY_NOW_WORKING in line)
+
+
+def _progress_text(data: dict, *, prefix: str, call_re: re.Pattern, in_flight) -> str:
+    """A manuscript runner's progress notes (``prefix`` removed, call markers
+    dropped) and public error messages; an ``in_flight`` line ("now
+    checking …") only while it is the last one."""
     lines: list[str] = []
     for agent in data.get("agents") or []:
         if not isinstance(agent, dict):
@@ -1551,9 +1682,9 @@ def _analysis_progress_text(data: dict) -> str:
         output = str(agent.get("output") or "").strip()
         if not output:
             continue
-        if output.startswith(_ANALYZE_NOTE_PREFIX):
-            note = " ".join(output[len(_ANALYZE_NOTE_PREFIX):].split())
-            if note and not _ANALYZE_CALL_RE.fullmatch(note):
+        if output.startswith(prefix):
+            note = " ".join(output[len(prefix):].split())
+            if note and not call_re.fullmatch(note):
                 lines.append(note[:600])
         elif str(agent.get("stage_name") or "").endswith("(error)"):
             # The runner's terminal error ("The source could not be used: …").
@@ -1565,8 +1696,7 @@ def _analysis_progress_text(data: dict) -> str:
         if error:
             lines.append(error[:600])
     # "Now checking …" matters only for the checks still in flight (the last line).
-    lines = [line for index, line in enumerate(lines)
-             if not line.startswith(_ANALYZE_NOW_CHECKING) or index == len(lines) - 1]
+    lines = [line for index, line in enumerate(lines) if not in_flight(line) or index == len(lines) - 1]
     return "\n".join(lines[-ANALYZE_PROGRESS_LINES:])
 
 
@@ -1621,17 +1751,117 @@ def _analysis_preview(run_id: str, data: dict) -> dict:
     }
 
 
+def _json_file(path: Path | None, limit: int = 4_000_000) -> dict:
+    """A small JSON object of a run workspace (``{}`` when unreadable)."""
+    try:
+        if path is None or path.is_symlink() or not path.is_file() or path.stat().st_size > limit:
+            return {}
+        value = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+    return value if isinstance(value, dict) else {}
+
+
+def _readability_preview(run_id: str, data: dict) -> dict:
+    """The Sandbox of a readability run: ``readability/readable.md`` (live
+    progress until it exists), with what the views beside it need: whether
+    the original text is there, the notation (at most 300 rows), the parts
+    and their checks, and the author's macros.  Never anything under
+    ``readability/source/``: the owner opens the stored source file through
+    ``source_file`` (/api/workspace/<id>/file) and the reading-order text
+    through ``original_path``."""
+    from agent_monitor.readability import paper_map, report
+
+    readable = ""
+    revision = "missing"
+    mtime = 0.0
+    source_file = None
+    original_available = False
+    notation = None
+    macros: dict = {}
+    parts: list[dict] = []
+    ws = _workspace_for_run(run_id)
+    if ws:
+        path = _workspace_target(ws, "readability/readable.md")
+        if path is not None and path.is_file():
+            try:
+                with path.open("rb") as handle:
+                    readable = report.clip(handle.read(report.VIEW_BYTES).decode("utf-8", errors="replace"))
+                revision = _file_revision(path)
+                mtime = path.stat().st_mtime
+            except OSError:
+                readable = ""
+        original = _workspace_target(ws, "readability/original.txt")
+        original_available = original is not None and original.is_file()
+        manuscript = _json_file(_workspace_target(ws, "readability/manuscript.json"))
+        root_file = manuscript.get("root_file")
+        if isinstance(root_file, str) and root_file and ".." not in root_file.split("/"):
+            candidate = _workspace_target(ws, f"readability/source/{root_file}")
+            if candidate is not None and candidate.is_file():
+                source_file = f"readability/source/{root_file}"
+        raw_macros = manuscript.get("macros") if isinstance(manuscript.get("macros"), dict) else {}
+        macros = {str(name)[:80]: str(body)[:400] for name, body in list(raw_macros.items())[:400]
+                  if str(name).startswith("\\")}
+        notation = paper_map.load_notation(ws, rows=300)
+        check = _json_file(_workspace_target(ws, "readability/check.json"))
+        for part in (check.get("parts") or [])[:400]:
+            if not isinstance(part, dict) or not isinstance(part.get("index"), int):
+                continue
+            parts.append({
+                "index": part["index"],
+                "title": str(part.get("title") or "")[:200],
+                "kind": "references" if part.get("kind") == "references" else "text",
+                "status": str(part.get("status") or "")[:20],
+                "reason": str(part.get("reason") or "")[:400],
+                "lines": [int(value) for value in (part.get("lines") or [])[:2] if isinstance(value, int)],
+                "repaired": part.get("repaired") is True,
+                "issues": [{key: str(issue.get(key) or "")[:600] for key in ("severity", "location", "problem")}
+                           for issue in (part.get("issues") or [])[:12] if isinstance(issue, dict)],
+                "missing": [str(node)[:80] for node in (part.get("missing") or [])[:40]],
+            })
+    block = data.get("readability") if isinstance(data.get("readability"), dict) else {}
+    source = block.get("source") if isinstance(block.get("source"), dict) else {}
+    summary = block.get("summary") if isinstance(block.get("summary"), dict) else {}
+    live = "" if readable else _readability_progress_text(data)
+    return {
+        "kind": "readability",
+        "text": readable or live,
+        "source": "readability/readable.md" if readable else ("live" if live else ""),
+        "has_readable": bool(readable),
+        "has_proof_md": False,
+        "has_proof_tex": False,
+        "editable": False,
+        "revision": revision,
+        "mtime": mtime,
+        "original_available": original_available,
+        "original_path": "readability/original.txt" if original_available else None,
+        "source_url": _https_link(source.get("resolved_url") or source.get("input_url")),
+        "source_file": source_file,
+        "title": str(source.get("title") or "")[:300],
+        "audience": str(block.get("audience") or ""),
+        "math_fidelity": source.get("math_fidelity"),
+        "parts": {key: int(summary.get(key) or 0)
+                  for key in ("parts", "rewritten", "faithful", "issues", "unchecked", "not_rewritten")},
+        "check": parts,
+        "notation": notation or {"rows": [], "terms": [], "macros_used": []},
+        "macros": macros,
+    }
+
+
 def _sandbox_preview(run_id: str, data: dict | None) -> dict:
     """Proof.md if it exists, otherwise the latest non-tool agent writes.
 
     The sandbox tab used to wait for a separate /files round-trip and stayed
     blank for the whole run. Folding the draft into /api/run makes preview
     follow the same payload the HITL panel already uses.  An Analyze run
-    previews its report instead (it has no proof).
+    previews its report instead (it has no proof), and a readability run its
+    readable version.
     """
     data = data or {}
-    from agent_monitor import analyze_runs
+    from agent_monitor import analyze_runs, readability_runs
 
+    if readability_runs.is_readability_record(data):
+        return _readability_preview(run_id, data)
     if analyze_runs.is_analyze_record(data):
         return _analysis_preview(run_id, data)
     proof_md = ""
@@ -1690,6 +1920,33 @@ def _refresh_analyze_block(data: dict, ws: Path | None) -> None:
             if block.get(key):
                 fresh[key] = block[key]
         data["analyze"] = fresh
+
+
+def _refresh_readability_block(data: dict, ws: Path | None) -> None:
+    """A readability record shows ``run["readability"]``.  A finished run
+    whose stored block lacks its summary (written before a restart, say) is
+    completed from the workspace, keeping its questions; a running one is
+    left as stored."""
+    from agent_monitor import readability_runs
+
+    if not readability_runs.is_readability_record(data):
+        return
+    data["run_kind"] = "readability"
+    block = data.get("readability") if isinstance(data.get("readability"), dict) else {}
+    data["readability"] = block
+    if ws is None or block.get("summary") or str(data.get("status") or "") == "running":
+        return
+    from agent_monitor.readability import record as readability_record
+
+    try:
+        fresh = readability_record.run_block(ws)
+    except Exception:  # noqa: BLE001 - the stored block stays
+        fresh = None
+    if fresh:
+        for key in ("ask", "asks", "asks_started", "ask_usage"):
+            if block.get(key):
+                fresh[key] = block[key]
+        data["readability"] = fresh
 
 
 def _list_workspace_files(ws: Path) -> list[dict]:
@@ -2056,15 +2313,19 @@ class Handler(RunSharingMixin, ProjectsMixin, ResearchMixin, BaseHTTPRequestHand
         if self._deny_member(user, "Server-side compilation"):
             return True
         record = _run_record_for(run_id) or {}
-        from agent_monitor import analyze_runs
+        from agent_monitor import analyze_runs, readability_runs
 
-        if analyze_runs.is_analyze_record(record):
+        if analyze_runs.is_manuscript_record(record):
             self._send(
                 403,
                 json.dumps(
                     {
                         "ok": False,
-                        "error": "Analyze runs are never compiled: their TeX is a third-party manuscript",
+                        "error": (
+                            readability_runs.COMPILE_REFUSAL
+                            if readability_runs.is_readability_record(record)
+                            else "Analyze runs are never compiled: their TeX is a third-party manuscript"
+                        ),
                     }
                 ),
                 headers={"Cache-Control": "no-store"},
@@ -2135,10 +2396,15 @@ class Handler(RunSharingMixin, ProjectsMixin, ResearchMixin, BaseHTTPRequestHand
         self._send(status, json.dumps({"error": str(exc)}, ensure_ascii=False), headers=headers)
 
     def _refuse_analyze_continuation(self, run_id: str) -> bool:
-        """Continue and chat do not apply to an analysis (400, plain message)."""
-        from agent_monitor import analyze_runs
+        """Continue and chat do not apply to a manuscript run (an analysis or
+        a readability run; 400, plain message)."""
+        from agent_monitor import analyze_runs, readability_runs
 
-        if analyze_runs.is_analyze_record(_run_record_for(run_id)):
+        record = _run_record_for(run_id)
+        if readability_runs.is_readability_record(record):
+            self._send(400, json.dumps({"error": readability_runs.CONTINUE_REFUSAL}))
+            return True
+        if analyze_runs.is_analyze_record(record):
             self._send(400, json.dumps({"error": analyze_runs.CONTINUE_REFUSAL}))
             return True
         return False
@@ -2261,11 +2527,204 @@ class Handler(RunSharingMixin, ProjectsMixin, ResearchMixin, BaseHTTPRequestHand
             return
         self._send(200, json.dumps(job))
 
+    def _start_readability_run(self, body: dict, user: dict) -> None:
+        """``POST /api/runs`` with ``run_kind: "readability"``.
+
+        As for an analysis: validation by role first (plain 400s), then the
+        sponsored capacity (429) and the guest and member run admission, then
+        ``start_job``.
+        """
+        from agent_monitor import readability_runs
+        from agent_monitor.analyze_runs import AnalyzeRequestError
+
+        guest = bool(user.get("guest"))
+        requested_model = body.get("model") or None
+        try:
+            refusal = readability_runs.availability_error(user)
+            if refusal is not None:
+                raise refusal
+            readability_runs.normalize_request(body, user)
+            if requested_model is not None and not isinstance(requested_model, str):
+                raise AnalyzeRequestError("model must be text")
+            if guest:
+                from agent_monitor.settings import validate_guest_model
+
+                if requested_model is not None:
+                    try:
+                        requested_model = validate_guest_model(requested_model)
+                    except ValueError as exc:
+                        raise AnalyzeRequestError(str(exc)) from None
+                from agent_monitor import analyze_runs
+
+                capacity = analyze_runs.GATE.capacity_error(guest=True, messages=readability_runs.GATE_MESSAGES)
+                if capacity is not None:
+                    raise capacity
+        except AnalyzeRequestError as exc:
+            self._send_analyze_error(exc)
+            return
+
+        def start() -> dict:
+            return research_projects.start_run(
+                body.get("project_id"),
+                user["id"],
+                body.get("project_task"),
+                # A readability run never receives the project's document, so
+                # the tool-free rule for project proofs does not apply.
+                lambda _tool_free: job_manager.start_job(
+                    engine="readability",
+                    run_kind="readability",
+                    source=body.get("source"),
+                    readability=body.get("readability"),
+                    attachments=body.get("attachments"),
+                    formalize=False,
+                    model=requested_model,
+                    user=user,
+                    use_subagents=False,
+                    auth_route=(str(body.get("auth_route") or "").strip() or None),
+                    reasoning_effort=(str(body.get("reasoning_effort") or "").strip() or None),
+                    speed_mode=(str(body.get("speed_mode") or "").strip() or None),
+                ),
+            )
+
+        try:
+            if guest:
+                from agent_monitor.auth import release_guest_run, reserve_guest_run
+
+                user_id = int(user["id"])
+                client = self._guest_client_key()
+                with _GUEST_RUN_START_LOCK:
+                    error, retry_after = _guest_readability_capacity(user_id, client, reserve=False)
+                    if error:
+                        self._send(429, json.dumps({"error": error}), headers={"Retry-After": str(retry_after)})
+                        return
+                    capacity_error, retry_after = _reserve_guest_run_slot(user_id, client)
+                    if capacity_error:
+                        self._send(
+                            429,
+                            json.dumps({"error": capacity_error, "guest_policy": guest_policy(user),
+                                        "login_required": guest_policy(user)["login_required"]}),
+                            headers={"Retry-After": str(retry_after)},
+                        )
+                        return
+                    if not reserve_guest_run(user_id, guest_runs_per_session(),
+                                             previous_runs=job_manager.persisted_run_count(user_id)):
+                        _release_guest_run_slot(user_id, client)
+                        self._send(403, json.dumps({"error": "Guest limit reached. Sign in to continue",
+                                                   "login_required": True, "guest_policy": guest_policy(user)}))
+                        return
+                    _guest_readability_capacity(user_id, client, reserve=True)
+                    try:
+                        job = start()
+                    except Exception:
+                        release_guest_run(user_id)
+                        _release_guest_readability(user_id, client)
+                        _release_guest_run_slot(user_id, client)
+                        raise
+                    if client is not None and job.get("run_id"):
+                        _GUEST_RUN_CLIENTS[str(job["run_id"])] = client
+                    job = {**job, "guest_policy": guest_policy(user)}
+            else:
+                member_error = account_policy.member_run_error(
+                    user, "readability", model=requested_model, auth_route=body.get("auth_route")
+                )
+                if member_error:
+                    self._send(403, json.dumps({
+                        "error": member_error,
+                        "allowed_engines": sorted(account_policy.member_engine_allowlist()),
+                    }))
+                    return
+                if not self._admit_member_run(user):
+                    return
+                try:
+                    job = start()
+                except Exception:
+                    self._release_member_run(user)
+                    raise
+        except AnalyzeRequestError as exc:
+            self._send_analyze_error(exc)
+            return
+        except Exception as exc:  # noqa: BLE001
+            self._send(400, json.dumps({"error": str(exc)}, ensure_ascii=False))
+            return
+        self._send(200, json.dumps(job))
+
+    def _start_readability_ask(self, rid: str, body: dict, user: dict) -> None:
+        """``POST /api/run/<id>/readability/ask {question, selection?, view?,
+        node_id?}`` (the run's owner or the operator): 202 ``{ask_id}``; the
+        answer lands in ``run["readability"]["asks"]``."""
+        from agent_monitor import readability_runs
+        from agent_monitor.analyze_runs import AnalyzeRequestError
+
+        record = _run_record_for(rid)
+        if not readability_runs.is_readability_record(record):
+            self._send(400, json.dumps({"error": "Only readability runs answer questions about a paper"}))
+            return
+        if user.get("guest") and job_manager.ask_count(record) >= readability_runs.GUEST_ASKS_PER_RUN:
+            self._send(403, json.dumps({
+                "error": readability_runs.GUEST_ASK_LIMIT_MESSAGE.format(limit=readability_runs.GUEST_ASKS_PER_RUN),
+                "login_required": True,
+            }))
+            return
+        error, retry_after = _reserve_readability_ask(user)
+        if error:
+            self._send(429, json.dumps({"error": error}), headers={"Retry-After": str(retry_after)})
+            return
+        try:
+            result = job_manager.start_readability_ask(rid, body if isinstance(body, dict) else {}, user=user)
+        except AnalyzeRequestError as exc:
+            _release_readability_ask(user)
+            self._send_analyze_error(exc)
+            return
+        except FileNotFoundError:
+            _release_readability_ask(user)
+            self._send(404, json.dumps({"error": "run not found"}))
+            return
+        except ValueError as exc:
+            _release_readability_ask(user)
+            self._send(400, json.dumps({"error": str(exc)}, ensure_ascii=False))
+            return
+        except Exception as exc:  # noqa: BLE001
+            _release_readability_ask(user)
+            self._send(500, json.dumps({"error": f"The question could not be sent: {exc}"}, ensure_ascii=False))
+            return
+        self._send(202, json.dumps(result, ensure_ascii=False))
+
+    def _paper_map_payload(self, rid: str, ws: Path) -> dict:
+        """``kind=paper-map``: a readability run's paper map (deterministic,
+        sanitized and bounded; no model call)."""
+        from agent_monitor.readability import paper_map
+
+        graph = paper_map.load(ws)
+        if graph is None:
+            return {"status": "none", "kind": "paper-map"}
+        block = (_run_record_for(rid) or {}).get("readability")
+        summary = (block or {}).get("summary") if isinstance(block, dict) else None
+        return {
+            "status": "ready",
+            "kind": "paper-map",
+            "schema": graph["schema"],
+            "source": "readability/paper_map.json",
+            "certificate": False,
+            "basis": "manuscript structure (labels and references) with a model's reading guide; not a certificate",
+            "summary": {
+                "nodes": len(graph["nodes"]),
+                "edges": len(graph["edges"]),
+                "main_results": [node["id"] for node in graph["nodes"] if node["main"]],
+                "parts": summary if isinstance(summary, dict) else None,
+            },
+            "graph": {"title": graph["title"], "nodes": graph["nodes"], "edges": graph["edges"]},
+            "macros": graph["macros"],
+        }
+
     def _resolve_analyze_link(self, body: dict, user: dict) -> None:
-        """``POST /api/analyze/resolve {url}``: metadata only, at most 10 s."""
-        from agent_monitor import analyze_runs
+        """``POST /api/analyze/resolve {url}``: metadata only, at most 10 s.
+        Shared by the Analyze and Readability source boxes: open while either
+        mode is."""
+        from agent_monitor import analyze_runs, readability_runs
 
         refusal = analyze_runs.availability_error(user)
+        if refusal is not None and readability_runs.availability_error(user) is None:
+            refusal = None
         if refusal is not None:
             self._send_analyze_error(refusal)
             return
@@ -2720,11 +3179,14 @@ class Handler(RunSharingMixin, ProjectsMixin, ResearchMixin, BaseHTTPRequestHand
                 # Local harnesses are administrator-only; the rest bill an API
                 # key (the CGM harness only the member's own, never Kimi K3).
                 engines = [account_policy.member_engine_view(engine) for engine in engines]
-            # The Analyze engine carries this viewer's Analyze policy, so the
-            # browser offers the mode only as this server accepts it.
+            # The Analyze and Readability engines carry this viewer's policy
+            # for their mode, so the browser offers a mode only as this
+            # server accepts it.
             engines = [
                 {**engine, "analyze": analyze_policy(user)}
                 if engine.get("id") == "analyze"
+                else {**engine, "readability": readability_policy(user)}
+                if engine.get("id") == "readability"
                 else engine
                 for engine in engines
             ]
@@ -2881,15 +3343,21 @@ class Handler(RunSharingMixin, ProjectsMixin, ResearchMixin, BaseHTTPRequestHand
                 self._send(404, json.dumps({"error": "run not found"}))
                 return
             kind = (qs.get("kind") or ["informal"])[0].strip().lower()
-            if kind not in {"informal", "formal", "engine", "analysis"}:
+            if kind not in {"informal", "formal", "engine", "analysis", "paper-map"}:
                 kind = "informal"
-            from agent_monitor import analyze_runs
+            from agent_monitor import analyze_runs, readability_runs
 
             if analyze_runs.is_analyze_record(_run_record_for(rid)) and kind in {"informal", "analysis"}:
                 self._send(200, json.dumps(self._analysis_graph_payload(rid, ws, kind), ensure_ascii=False))
                 return
             if kind == "analysis":
                 self._send(400, json.dumps({"error": "This run has no manuscript analysis"}))
+                return
+            if kind == "paper-map":
+                if not readability_runs.is_readability_record(_run_record_for(rid)):
+                    self._send(400, json.dumps({"error": "This run has no paper map"}))
+                    return
+                self._send(200, json.dumps(self._paper_map_payload(rid, ws), ensure_ascii=False))
                 return
             try:
                 if kind == "engine":
@@ -3394,6 +3862,17 @@ class Handler(RunSharingMixin, ProjectsMixin, ResearchMixin, BaseHTTPRequestHand
             self._start_analysis_recheck(rid, body, user)
             return
 
+        if path.startswith("/api/run/") and path.endswith("/readability/ask"):
+            rid = path.removeprefix("/api/run/").removesuffix("/readability/ask")
+            if not rid or "/" in rid or not self._owns_run(rid, user):
+                self._send(404, json.dumps({"error": "run not found"}))
+                return
+            # Project members may read the questions and answers, not ask.
+            if self._deny_run_change(rid, user, "ask about it"):
+                return
+            self._start_readability_ask(rid, body, user)
+            return
+
         if path.startswith("/api/library/tools/") and path.endswith("/run"):
             if self._deny_guest(user, "trusted library tools"):
                 return
@@ -3433,9 +3912,13 @@ class Handler(RunSharingMixin, ProjectsMixin, ResearchMixin, BaseHTTPRequestHand
             if rel != "proof.md":
                 self._send(400, json.dumps({"error": "Only proof.md is editable in Sandbox"}))
                 return
-            from agent_monitor import analyze_runs
+            from agent_monitor import analyze_runs, readability_runs
 
-            if analyze_runs.is_analyze_record(_run_record_for(run_id)):
+            record = _run_record_for(run_id)
+            if readability_runs.is_readability_record(record):
+                self._send(400, json.dumps({"error": readability_runs.EDIT_REFUSAL}))
+                return
+            if analyze_runs.is_analyze_record(record):
                 self._send(400, json.dumps({
                     "error": "An analysis has no editable proof; its report is generated from the manuscript checks",
                 }))
@@ -3515,8 +3998,19 @@ class Handler(RunSharingMixin, ProjectsMixin, ResearchMixin, BaseHTTPRequestHand
             run_record = _derived_record_for(rid)
             kind = str(body.get("kind") or "informal").strip().lower()
             model = str(body.get("model") or "").strip() or None
-            from agent_monitor import analyze_runs
+            from agent_monitor import analyze_runs, readability_runs
 
+            if readability_runs.is_readability_record(run_record) and kind != "engine":
+                # The paper map is deterministic: a refresh never spends a
+                # model call, and no proof DAG is drawn from a rewrite.
+                if kind != "paper-map":
+                    self._send(400, json.dumps({"error": "A readability run has a paper map, not a proof DAG"}))
+                    return
+                self._send(200, json.dumps(self._paper_map_payload(rid, ws), ensure_ascii=False))
+                return
+            if kind == "paper-map":
+                self._send(400, json.dumps({"error": "This run has no paper map"}))
+                return
             if analyze_runs.is_analyze_record(run_record) and kind in {"informal", "analysis"}:
                 # The manuscript structure is deterministic: a refresh never
                 # spends a model call (or a guest's derived action).
@@ -3615,9 +4109,13 @@ class Handler(RunSharingMixin, ProjectsMixin, ResearchMixin, BaseHTTPRequestHand
             ):
                 return
             analysis_lean = None
-            from agent_monitor import analyze_runs
+            from agent_monitor import analyze_runs, readability_runs
 
             run_record = _run_record_for(rid)
+            if readability_runs.is_readability_record(run_record):
+                # A rewrite of someone's manuscript is not a proof to formalize.
+                self._send(400, json.dumps({"error": "Readability runs have no proof to formalize in Lean"}))
+                return
             if action not in {"compile", "check", "stop_harness"}:
                 # Model work on a member's run billed to a subscription or Max
                 # (started before subscriptions became administrator-only)
@@ -3705,12 +4203,24 @@ class Handler(RunSharingMixin, ProjectsMixin, ResearchMixin, BaseHTTPRequestHand
             if run_kind == "analyze":
                 self._start_analyze_run(body, user)
                 return
+            if run_kind == "readability":
+                self._start_readability_run(body, user)
+                return
             engine = str(body.get("engine") or ("kimi" if user.get("guest") else "")).lower()
             if engine == "analyze":
                 self._send(
                     400,
                     json.dumps({
                         "error": "Ansatz Analyze runs in the Analyze mode; reload the console and choose Analyze",
+                    }),
+                )
+                return
+            if engine == "readability":
+                self._send(
+                    400,
+                    json.dumps({
+                        "error": "Ansatz Readability runs in the Readability mode; reload the console and choose "
+                                 "Readability",
                     }),
                 )
                 return
@@ -4472,6 +4982,7 @@ class Handler(RunSharingMixin, ProjectsMixin, ResearchMixin, BaseHTTPRequestHand
                 data["problems"] = job_manager.ensure_problems(data, run_id)
                 ws = _workspace_for_run(run_id)
                 _refresh_analyze_block(data, ws)
+                _refresh_readability_block(data, ws)
                 data["sandbox_preview"] = _sandbox_preview(run_id, data)
                 if ws:
                     from agent_monitor import auto_pipeline, lean_verify, proof_bridge
