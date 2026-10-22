@@ -12,19 +12,18 @@
     if (value != null) element.textContent = text(value);
     return element;
   };
-  // The text in "readable" (or "proof"); notation and paper map at the top
-  // level or in the snapshot's "readability" block.
+  // The readable text is the snapshot's "proof"; its paper map and notation
+  // are in the "readability" block.
   function parts(data) {
     const block = isObject(data?.readability) ? data.readability : {};
-    const notation = data?.notation ?? block.notation ?? {};
-    const map = isObject(data?.paper_map ?? block.paper_map) ? data?.paper_map ?? block.paper_map : {};
+    const notation = isObject(block.notation) ? block.notation : {}, map = isObject(block.paper_map) ? block.paper_map : {};
     return {
-      readable: text(data?.readable ?? block.readable ?? data?.proof),
-      rows: (Array.isArray(notation) ? notation : Array.isArray(notation?.rows) ? notation.rows : []).filter(isObject).slice(0, 300),
-      terms: (Array.isArray(notation?.terms) ? notation.terms : []).filter(isObject).slice(0, 200),
+      readable: text(data?.proof),
+      rows: (Array.isArray(notation.rows) ? notation.rows : []).filter(isObject).slice(0, 300),
+      terms: (Array.isArray(notation.terms) ? notation.terms : []).filter(isObject).slice(0, 200),
       nodes: (Array.isArray(map.nodes) ? map.nodes : []).filter(isObject).slice(0, 400),
       edges: Array.isArray(map.edges) ? map.edges.length : 0,
-      macros: katexMacros(data?.macros ?? map.macros ?? block.macros),
+      macros: katexMacros(map.macros),
     };
   }
   // Author macros as the console filters them: plain names, bounded bodies,
@@ -124,7 +123,7 @@
       section.append(node('p', 'rv-muted', 'No paper map was included in this snapshot.'));
       return section;
     }
-    section.append(node('p', 'rv-muted', `${view.nodes.length} definitions and results · ${view.edges} dependencies · more dots, more central to the main argument.`));
+    section.append(node('p', 'rv-muted', `${view.nodes.length} statement${view.nodes.length === 1 ? '' : 's'} · ${view.edges} ${view.edges === 1 ? 'dependency' : 'dependencies'} · more dots, more central to the main argument.`));
     const groups = new Map();
     for (const entry of view.nodes) {
       const name = sectionLabel(entry.section) || 'Other results';

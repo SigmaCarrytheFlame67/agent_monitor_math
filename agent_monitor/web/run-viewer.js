@@ -183,7 +183,7 @@
   fact('Run type', analysis ? 'Analyze' : readable ? 'Readability' : 'Prove');
   fact('Status', statusLabel(data.status) || 'Saved');
   fact('Research steps', String(agents.length));
-  if (readability) fact('Paper map', `${readability.nodes.length} definitions and results`);
+  if (readability) fact('Paper map', `${readability.nodes.length} ${readability.nodes.length === 1 ? 'statement' : 'statements'}`);
   else fact('Graph views', `${Object.keys(graphLabels).filter(mode => graphNodes(mode).length).length} included`);
   // A readable version's views are sections of its Sandbox.
   for (const [id, label] of readability ? [['rv-notation', 'Notation'], ['rv-paper-map', 'Paper map']] : []) {

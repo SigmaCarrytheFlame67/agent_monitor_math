@@ -420,9 +420,13 @@ function paperMapLegendHtml(){
     +sep+item('ln pm-ln','used in a proof')+item('ln pm-ln dash','used in a statement')
     +sep+'<span class="lg note">Arrows point from a result to the results that use it · importance from a reading guide written by a model — not a verification</span>';
 }
+// "3 statements · 1 dependency": how big a paper map is.
+function paperMapSizeText(nodes,edges){
+  return `${nodes} statement${nodes===1?'':'s'} · ${edges} ${edges===1?'dependency':'dependencies'}`;
+}
 function paperMapStatusText(d){
   const graph=d?.graph||{}, title=dagDetailText(graph.title||d?.title,120).trim();
-  return ['Paper map',title,(graph.nodes||[]).length+' definitions and results',(graph.edges||[]).length+' dependencies'].filter(Boolean).join(' · ');
+  return ['Paper map',title,paperMapSizeText((graph.nodes||[]).length,(graph.edges||[]).length)].filter(Boolean).join(' · ');
 }
 function paperMapActions(node){
   const row=analyzeEl('div','analysis-action-row');
@@ -516,7 +520,7 @@ function renderReadabilityMap(run,view){
   }
   const nodes=(Array.isArray(graph.nodes)?graph.nodes:[]).filter(node=>node&&typeof node==='object').slice(0,400);
   const head=analyzeEl('div','rd-map-head');
-  head.append(analyzeEl('p','analysis-live-note',`${nodes.length} definitions and results · ${(graph.edges||[]).length} dependencies · more dots, more central to the main argument.`));
+  head.append(analyzeEl('p','analysis-live-note',paperMapSizeText(nodes.length,(graph.edges||[]).length)+' · more dots, more central to the main argument.'));
   const open=analyzeEl('button','rd-map-graph','Open as a graph'); open.type='button';
   open.onclick=()=>{ if(dagMode!=='paper-map')setDagMode('paper-map',{refresh:false}); setWorkspaceView('dag'); };
   head.append(open); doc.append(head);
@@ -626,6 +630,20 @@ function renderReadabilityAskContext(){
 }
 // The tab a selected passage comes from, when it can be asked about.
 function readabilitySelectionView(){ return readabilityTab==='readable'||readabilityTab==='original'?readabilityTab:''; }
+// A selected passage as text, with typeset math back as its TeX ("$n^2$"),
+// so that it reads, and can be found in the readable version, as written.
+function readabilitySelectionText(selection){
+  if(!selection?.rangeCount)return '';
+  const box=document.createElement('div');
+  for(let index=0;index<selection.rangeCount;index++)box.append(selection.getRangeAt(index).cloneContents());
+  box.querySelectorAll('.katex').forEach(math=>{
+    const tex=math.querySelector('annotation[encoding="application/x-tex"]')?.textContent;
+    if(tex==null)return;
+    const delimiter=math.closest('.katex-display')?'$$':'$';
+    math.replaceWith(delimiter+tex.trim()+delimiter);
+  });
+  return box.textContent.replace(/\s+/g,' ').trim();
+}
 function askAboutSelection(text){
   readabilityAskContext={selection:String(text||'').trim().slice(0,4000),view:readabilitySelectionView()||'readable'};
   window.getSelection()?.removeAllRanges();

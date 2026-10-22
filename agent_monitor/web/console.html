@@ -6751,7 +6751,7 @@ document.addEventListener('mouseup',e=>{
     // A readable version asks about passages of its Readable and Original tabs.
     const askable=!document.body.classList.contains('readability-run')||!!readabilitySelectionView();
     if(text&&inPdf&&askable){
-      selText=text;
+      selText=document.body.classList.contains('readability-run')?readabilitySelectionText(sel)||text:text;
       const rect=sel.getRangeAt(0).getBoundingClientRect();
       selPop.style.display='flex';
       const scale=parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--console-scale'))||1;
