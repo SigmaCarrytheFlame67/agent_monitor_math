@@ -12,6 +12,7 @@ import tempfile
 import threading
 import time
 import unittest
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
@@ -25,6 +26,7 @@ from agent_monitor.cgm import schema as cgm_schema
 from agent_monitor.cgm import writeup as cgm_writeup
 from agent_monitor.runners import math_harness_runner as runner
 
+from tests.test_ansatz_cgm_wiring import _cgm_reply_for
 from tests.test_cgm_max import _Providers, _run_max
 from tests.test_cgm_pipeline import CURATOR, CURATOR_ANY, OK, PROBLEM, STRATEGY, WORKER
 from tests.test_math_harness_runner import (
@@ -1345,44 +1347,285 @@ class WriteupJobsTests(unittest.TestCase):
         self.assertLess(lifetimes["0"], bound)
 
 
+# The proof.md of a live accepted run (cgm-runs/wu-even-kimi-20261022T112750,
+# abridged), published before its written-proof round.
+LIVE_PROOF = """# Proof
+
+This proof is the verified fact closure of the target theorem. Each lemma and the main theorem were accepted one at a time by an independent, response-only model verifier that saw only that statement, its proof, and the statements of the facts it cites. Model-verifier acceptance is not a Lean or other formal certificate.
+
+## Lemma L2 · fact 941ea68438409973
+
+**Uses:** none.
+
+**Statement.**
+
+Let k be a natural number (where natural numbers are 0, 1, 2, ...). Set n = 2k. Then n^2 + n = 2(2k^2 + k), and 2k^2 + k is a natural number.
+
+**Proof.**
+
+Compute using distributivity and commutativity of natural number arithmetic:
+n^2 + n = (2k)^2 + 2k = 4k^2 + 2k = 2(2k^2) + 2(k) = 2(2k^2 + k).
+Since natural numbers are closed under multiplication and addition, 2k^2 + k is a natural number.
+
+## Main theorem · fact 944c01fafffbe05d
+
+**Uses:** Lemma L1 (fact 95f39a5498b2ebea), Lemma L2 (fact 941ea68438409973), Lemma L3 (fact 5b5cf4f3d4ade698).
+
+**Statement.**
+
+Prove that for every natural number n, n^2 + n is even.
+"""
+
+
+class WriteupDerivedViewsTests(unittest.TestCase):
+    """Lean and the DAGs of a signed-in CGM run wait for its written-proof
+    round, which runs on the same account (or sponsored pool), to end."""
+
+    SWITCHES = {"AGENT_MONITOR_CGM_WRITEUP": "1", "AGENT_MONITOR_CGM_WRITEUP_GUESTS": "1"}
+
+    def _workspace(self) -> Path:
+        workspace = Path(self.enterContext(tempfile.TemporaryDirectory()))
+        (workspace / "proof.md").write_text(LIVE_PROOF, encoding="utf-8")
+        return workspace
+
+    def _wait(
+        self, statuses: list[str], *, service: dict[str, str] | None = None, timeout: float = 30, **record
+    ) -> tuple[str, dict, list[str]]:
+        """_wait_for_source on the published proof while the run's record
+        reads ``statuses`` in turn (the last one stays): the signature and
+        record it returns, and the statuses it read."""
+        from agent_monitor import auto_pipeline
+
+        workspace = self._workspace()
+        read: list[str] = []
+
+        def run_record(_run_id: str) -> dict:
+            read.append(statuses[min(len(read), len(statuses) - 1)])
+            return {"run_id": "cgm-run", "engine": "math_harness", "status": read[-1], **record}
+
+        with (
+            patch.dict(os.environ, {**self.SWITCHES, **(service or {})}, clear=True),
+            patch.object(auto_pipeline, "_run_record", side_effect=run_record),
+        ):
+            sig, final = auto_pipeline._wait_for_source("cgm-run", workspace, timeout=timeout, stable_for=0)
+        return sig, final, read
+
+    def test_derived_views_start_once_the_run_has_ended(self) -> None:
+        sig, final, read = self._wait(["running", "running", "finished"])
+        self.assertTrue(sig.startswith("proof.md:"))
+        self.assertEqual((final["status"], read), ("finished", ["running", "running", "finished"]))
+
+    def test_the_round_is_awaited_on_every_route_that_gets_it(self) -> None:
+        cases = (
+            ({}, {"engine": "kimi"}),
+            ({}, {"credential_source": "sponsored_kimi"}),
+            # The console's sponsored service switch is no signed-in run's
+            # route: an administrator's run still gets the round.
+            ({"AGENT_MONITOR_SPONSORED_KIMI": "1", "AGENT_MONITOR_CGM_WRITEUP_GUESTS": "0"}, {}),
+        )
+        for service, record in cases:
+            with self.subTest(service=service, record=record):
+                _sig, final, read = self._wait(["running", "finished"], service=service, **record)
+                self.assertEqual((final["status"], read), ("finished", ["running", "finished"]))
+
+    def test_without_the_round_they_start_from_the_stable_proof_as_before(self) -> None:
+        cases = (
+            ({"AGENT_MONITOR_CGM_WRITEUP": "0"}, {}),
+            ({"AGENT_MONITOR_CGM_WRITEUP_GUESTS": "0"}, {"credential_source": "sponsored_kimi"}),
+            ({}, {"engine": "codex"}),
+        )
+        for service, record in cases:
+            with self.subTest(service=service, record=record):
+                sig, final, read = self._wait(["running", "finished"], service=service, **record)
+                self.assertTrue(sig.startswith("proof.md:"))
+                self.assertEqual((final["status"], read), ("running", ["running"]))
+
+    def test_the_wait_ends_with_its_budget_and_the_proof_is_still_derived(self) -> None:
+        started = time.monotonic()
+        sig, final, _read = self._wait(["running"], timeout=1)
+        self.assertTrue(sig.startswith("proof.md:"))
+        self.assertEqual(final["status"], "running")
+        self.assertLess(time.monotonic() - started, 10)
+        # A guest's run is derived only once it has ended, as before.
+        sig, _final, _read = self._wait(["running"], timeout=1, guest=True)
+        self.assertEqual(sig, "")
+
+    def test_the_pipeline_derives_nothing_while_the_round_runs(self) -> None:
+        from agent_monitor import auto_pipeline
+
+        workspace = self._workspace()
+        auto_pipeline._write_state(workspace, {"status": "running", "stages": {
+            "informal_dag": {"status": "waiting", "detail": "Waiting for a proof draft"},
+            "lean": {"status": "waiting", "detail": "Waiting for a proof draft"},
+            "formal_dag": {"status": "waiting", "detail": "Waiting for Proof.lean"},
+        }})
+        ends = time.monotonic() + 2
+        batches: list[tuple[str, dict]] = []
+
+        def run_record(_run_id: str) -> dict:
+            status = "running" if time.monotonic() < ends else "finished"
+            return {"run_id": "cgm-run", "engine": "math_harness", "status": status,
+                    "auth_route": "claude_subscription"}
+
+        def run_batch(workspace: Path, record: dict, *_args, **_kwargs) -> None:
+            stages = auto_pipeline.load_state(workspace)["stages"]
+            batches.append((record["status"], {name: stage["detail"] for name, stage in stages.items()}))
+
+        with (
+            patch.dict(os.environ, self.SWITCHES, clear=True),
+            patch.object(auto_pipeline, "_run_record", side_effect=run_record),
+            patch.object(auto_pipeline, "_run_user", return_value={"id": 1}),
+            patch.object(auto_pipeline, "_run_batch", side_effect=run_batch),
+        ):
+            auto_pipeline._run("cgm-run", workspace, 1, "opus", "math_harness")
+        # Lean and the DAGs started once the run had ended; meanwhile the
+        # stages that read the proof said what they waited for.
+        waiting = "Waiting for the run's written-proof round to end"
+        self.assertEqual(batches, [("finished", {
+            "informal_dag": waiting, "lean": waiting, "formal_dag": "Waiting for Proof.lean",
+        })])
+        state = auto_pipeline.load_state(workspace)
+        self.assertTrue(state["source_signature"].startswith("proof.md:"))
+        self.assertIn("finished_at", state)
+
+    def test_the_wait_covers_the_round_whatever_the_sponsored_service_switch(self) -> None:
+        from agent_monitor import auto_pipeline, cgm_max
+
+        # The console turns the sponsored service on with this variable
+        # (deploy/ansatze/agent-monitor.service); a signed-in run's runner
+        # never inherits it, so its watchdog includes the full round.
+        service = {"AGENT_MONITOR_SPONSORED_KIMI": "1"}
+        with patch.dict(os.environ, service, clear=True):
+            for engine in ("math_harness", "kimi"):
+                with self.subTest(engine=engine):
+                    watchdog = jobs._cli_timeout_seconds(engine, {"AGENT_MONITOR_CGM_WRITEUP": "1"})
+                    self.assertEqual(watchdog, 5_400 + 300 + 300 + 1_860)
+                    self.assertEqual(auto_pipeline.cgm_run_wait_seconds(engine), watchdog + 300)
+        with patch.dict(os.environ, {**service, "AGENT_MONITOR_CGM_WRITEUP_GUESTS": "0"}, clear=True):
+            self.assertEqual(auto_pipeline.max_run_wait_seconds(), cgm_max.RUN_SECONDS + 3_660 + 600)
+
+
 # A CGM runner double.  "publish": it writes proof.md and then its receipt (a
 # new file, last, as the runner does), holds its written-proof round until
 # SIGTERM, then reports and exits 0.  "hold": it is stopped before publishing
-# anything and exits 143, as the runner does.
+# anything and exits 143, as the runner does.  "call": it waits on a model
+# call, a process in a session of its own (as Claude Code and Codex calls
+# are) on a daemon thread, looking for a stop first, every 0.2 s and once the
+# call has ended, as the runner's coordinator does; a call that ends before
+# any stop request reads to it as a failed curator call, so it publishes
+# without it, and after one it exits 143 without waiting for the call.  The
+# second argument is how it takes SIGTERM: at once ("report"), after winding
+# down for 3 s ("linger") or not at all ("deaf").  It writes how many SIGTERMs
+# it took to "sigterms" when it exits.
 _RUNNER_DOUBLE = r"""
-import json, os, signal, sys, time
+import atexit, json, os, signal, subprocess, sys, threading, time
 from pathlib import Path
 
+mode, on_stop = sys.argv[1], sys.argv[2]
 stopped = []
-signal.signal(signal.SIGTERM, lambda *_: stopped.append(True))
+signal.signal(signal.SIGTERM, signal.SIG_IGN if on_stop == "deaf" else lambda *_: stopped.append(True))
+atexit.register(lambda: Path("sigterms").write_text(str(len(stopped))))
+Path("pid").write_text(str(os.getpid()))
 
 
 def emit(item):
     print(json.dumps({"type": "item.completed", "item": item}), flush=True)
 
 
-publish = sys.argv[1] == "publish"
-if publish:
+def publish():
     Path("proof.md").write_text("# Proof\n\n" + "Both are even, so their sum is even. " * 20)
     project = Path("math_harness/project")
     project.mkdir(parents=True, exist_ok=True)
     (project / ".engine_receipt.json.tmp").write_text("{}")
     os.replace(project / ".engine_receipt.json.tmp", project / "engine_receipt.json")
+
+
+def stopped_before_publication():
+    emit({"type": "error", "message": "the Math Harness run was stopped", "terminal": True})
+    sys.exit(143)
+
+
+if mode == "call":
+    call = subprocess.Popen(
+        [sys.executable, "-c", "import time; time.sleep(60)"],
+        stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+        start_new_session=True,
+    )
+    Path("call").write_text(str(call.pid))
+    ended = threading.Event()
+    threading.Thread(target=lambda: (call.wait(), ended.set()), daemon=True).start()
+    Path("held").write_text("")
+    while not stopped and not ended.wait(0.2):
+        pass
+    if stopped:
+        stopped_before_publication()
+    publish()
+    emit({"type": "agent_message", "text": "Math Harness completed · curator unavailable"})
+    sys.exit(0)
+if mode == "publish":
+    publish()
     emit({"type": "reasoning", "text": "Math Harness · Write-up · writing one proof"})
 Path("held").write_text("")
 deadline = time.monotonic() + 60
 while not stopped and time.monotonic() < deadline:
     time.sleep(0.02)
-if not publish:
-    emit({"type": "error", "message": "the Math Harness run was stopped", "terminal": True})
-    sys.exit(143)
+if on_stop == "linger":
+    time.sleep(3)
+if mode == "hold":
+    stopped_before_publication()
 emit({"type": "file_change", "changes": [{"path": "proof.md"}]})
 emit({"type": "agent_message", "text": "Math Harness completed · accepted\nWritten proof: not written"})
 """
 
 
+class _ScriptedBroker(BaseHTTPRequestHandler):
+    """A loopback sponsored broker: it answers the calls of an accepted CGM
+    run and holds each call whose system prompt starts with ``server.hold``."""
+
+    def log_message(self, *_args):  # pragma: no cover - silence
+        return
+
+    def do_POST(self):  # noqa: N802
+        payload = json.loads(self.rfile.read(int(self.headers.get("Content-Length") or 0)))
+        system = next(
+            (m.get("content") or "" for m in payload.get("messages") or [] if m.get("role") == "system"), ""
+        )
+        if system.startswith(self.server.hold):
+            self.server.holding.set()
+            self.server.release.wait(30)
+            status, body = 503, b'{"error":{"message":"held"}}'
+        else:
+            status, body = 200, json.dumps({
+                "model": "kimi-k3",
+                "choices": [{"message": {"role": "assistant", "content": _cgm_reply_for(payload)}}],
+                "usage": {"prompt_tokens": 5, "completion_tokens": 7, "total_tokens": 12},
+            }).encode("utf-8")
+        try:
+            self.send_response(status)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+        except OSError:
+            pass
+
+
+def _assert_gone(pid: int) -> None:
+    """``pid`` has exited and been reaped (no process, no zombie left)."""
+    deadline = time.monotonic() + 5
+    while True:
+        try:
+            os.kill(pid, 0)
+        except ProcessLookupError:
+            return
+        if time.monotonic() > deadline:
+            raise AssertionError(f"process {pid} is still there")
+        time.sleep(0.05)
+
+
 class WriteupStopTests(unittest.TestCase):
-    """Stop or the watchdog in the written-proof round ends only the round."""
+    """Stop or the watchdog in the written-proof round ends only the round;
+    before publication they stop (or fail) the run, promptly and for good."""
 
     def _workspace(self, run_id: str, job_id: str) -> Path:
         root = Path(self.enterContext(tempfile.TemporaryDirectory()))
@@ -1398,10 +1641,21 @@ class WriteupStopTests(unittest.TestCase):
         jobs._stop_event(run_id).clear()
         return workspace
 
-    def _engine(self, mode: str, *, stop: bool, timeout: int | None = None) -> dict:
-        run_id = f"math_harness_writeup_{mode}_{'stop' if stop else 'watchdog'}"
-        workspace = self._workspace(run_id, f"job-{run_id}")
-        command = [sys.executable, "-c", _RUNNER_DOUBLE, mode]
+    def _engine(
+        self,
+        mode: str,
+        *,
+        stop: bool,
+        timeout: int | None = None,
+        on_stop: str = "report",
+        while_stopping=None,
+    ) -> dict:
+        """Run the runner double; Stop it once it holds (else its watchdog
+        may).  ``while_stopping(run_id)`` runs right after the Stop; the
+        seconds from the Stop to the worker's return are ``self.wind_down``."""
+        run_id = self.run_id = f"math_harness_writeup_{mode}_{on_stop}_{'stop' if stop else 'watchdog'}"
+        workspace = self.workspace = self._workspace(run_id, f"job-{run_id}")
+        command = [sys.executable, "-c", _RUNNER_DOUBLE, mode, on_stop]
         self.enterContext(patch("agent_monitor.engines_registry.build_cli_command", return_value=command))
         self.enterContext(patch("agent_monitor.agent_config.persona_preamble", return_value=""))
         if timeout is not None:
@@ -1421,6 +1675,7 @@ class WriteupStopTests(unittest.TestCase):
 
         thread = threading.Thread(target=engine)
         thread.start()
+        stopped_at = time.monotonic()
         try:
             deadline = time.monotonic() + 30
             while not (workspace / "held").exists() and time.monotonic() < deadline:
@@ -1429,9 +1684,13 @@ class WriteupStopTests(unittest.TestCase):
             if stop:
                 # A CGM runner gets SIGTERM, which it survives to report.
                 self.assertEqual(jobs.stop_run(run_id)["status"], "stopped")
+                stopped_at = time.monotonic()
+                if while_stopping is not None:
+                    while_stopping(run_id)
         finally:
             thread.join(timeout=60)
         self.assertFalse(thread.is_alive())
+        self.wind_down = time.monotonic() - stopped_at
         return outcome["run"]
 
     def test_a_stop_in_the_round_leaves_the_published_run_finished(self) -> None:
@@ -1448,6 +1707,181 @@ class WriteupStopTests(unittest.TestCase):
         run = self._engine("hold", stop=True)
         self.assertEqual(run["status"], "stopped")
         self.assertFalse(jobs._published_before_stop(run))
+        # The worker returns once the runner has exited, not after the settle.
+        self.assertLess(self.wind_down, 10)
+        _assert_gone(int((self.workspace / "pid").read_text()))
+
+    def test_the_record_reads_stopped_while_the_runner_winds_down(self) -> None:
+        seen: list[str] = []
+
+        def while_stopping(run_id: str) -> None:
+            # The double winds down for 3 s after its SIGTERM.  A progress
+            # write may cross stop_run's, but by now the worker has seen the
+            # stop and the record reads "stopped" again.
+            time.sleep(1.5)
+            seen.append(jobs._load_run_record(run_id)["status"])
+            os.kill(int((self.workspace / "pid").read_text()), 0)  # still winding down
+
+        run = self._engine("hold", stop=True, on_stop="linger", while_stopping=while_stopping)
+        self.assertEqual((seen, run["status"]), (["stopped"], "stopped"))
+        self.assertLess(self.wind_down, 10)
+
+    def test_a_runner_deaf_to_stop_is_killed_after_the_settle(self) -> None:
+        self.enterContext(patch.object(jobs, "_RUNNER_SETTLE_SECONDS", 1))
+        for mode, status in (("hold", "stopped"), ("publish", "finished")):
+            with self.subTest(mode=mode):
+                run = self._engine(mode, stop=True, on_stop="deaf")
+                self.assertEqual(run["status"], status)
+                self.assertEqual(jobs._published_before_stop(run), mode == "publish")
+                self.assertLess(self.wind_down, 10)
+                # Killed and reaped: no runner (or zombie) is left behind.
+                _assert_gone(int((self.workspace / "pid").read_text()))
+
+    def test_stop_reaches_the_runner_before_its_model_call(self) -> None:
+        # Signalled first, the call would end as a provider failure the
+        # runner carries on from, publishing after the user's Stop.
+        run = self._engine("call", stop=True)
+        self.assertEqual(run["status"], "stopped")
+        self.assertFalse((self.workspace / RECEIPT).exists())
+        _assert_gone(int((self.workspace / "call").read_text()))
+
+    def test_the_watchdog_reaches_the_runner_before_its_model_call(self) -> None:
+        run = self._engine("call", stop=False, timeout=2)
+        self.assertEqual(run["status"], "failed")
+        self.assertIn("timed out after 2s", run["error"])
+        self.assertFalse((self.workspace / RECEIPT).exists())
+        _assert_gone(int((self.workspace / "call").read_text()))
+
+    def test_no_model_call_outlives_a_runner_that_exits_at_once(self) -> None:
+        # Signalled, the runner exits within a poll without waiting for its
+        # call, which then belongs to no runner.  However long the console
+        # takes to list the call (busy elsewhere), it is listed before the
+        # runner is signalled, and ended.
+        import psutil
+
+        listing = psutil.Process.children
+
+        def slow_listing(process, *args, **kwargs):
+            time.sleep(0.5)
+            return listing(process, *args, **kwargs)
+
+        self.enterContext(patch.object(psutil.Process, "children", slow_listing))
+        for stop, status in ((True, "stopped"), (False, "failed")):
+            with self.subTest(stop=stop):
+                run = self._engine("call", stop=stop, timeout=None if stop else 2)
+                self.assertEqual(run["status"], status)
+                self.assertEqual((self.workspace / "sigterms").read_text(), "1")
+                self.assertFalse((self.workspace / RECEIPT).exists())
+                _assert_gone(int((self.workspace / "call").read_text()))
+
+    def test_a_repeated_stop_signals_the_runner_no_more(self) -> None:
+        # A double click, or a second tab: Stop again while the first request
+        # signals the runner, and once more while the runner winds down (3 s).
+        # It takes one SIGTERM and is never killed, so a published run still
+        # reports.
+        signal_runner = jobs._stop_cgm_runner
+        for mode, status in (("publish", "finished"), ("hold", "stopped")):
+            with self.subTest(mode=mode):
+                answers: list[str] = []
+                nested: list[bool] = []
+
+                def stop_cgm_runner(proc) -> None:
+                    if not nested:
+                        nested.append(True)
+                        answers.append(jobs.stop_run(self.run_id)["status"])
+                    signal_runner(proc)
+
+                def while_stopping(run_id: str) -> None:
+                    time.sleep(1)
+                    answers.append(jobs.stop_run(run_id)["status"])
+
+                with patch.object(jobs, "_stop_cgm_runner", stop_cgm_runner):
+                    run = self._engine(mode, stop=True, on_stop="linger", while_stopping=while_stopping)
+                sigterms = self.workspace / "sigterms"
+                self.assertEqual(sigterms.read_text() if sigterms.exists() else "killed", "1")
+                self.assertEqual(run["status"], status)
+                self.assertEqual(jobs._published_before_stop(run), mode == "publish")
+                if mode == "publish":
+                    self.assertIn("Written proof: not written", json.dumps(run["agents"]))
+                # The first request records the stop, once.
+                self.assertEqual(answers, ["stopped", "stopped"])
+                stops = [m for m in jobs.list_chat(self.run_id) if m["content"] == "Run stopped by user."]
+                self.assertEqual(len(stops), 1)
+
+    def _real_run(self, name: str, hold: str) -> dict:
+        """The Kimi runner itself on a sponsored route to a scripted loopback
+        broker, stopped once the broker holds a call whose system prompt
+        starts with ``hold``.  ``self.held`` is the run's status, and whether
+        proof.md existed, while the call was held."""
+        server = ThreadingHTTPServer(("127.0.0.1", 0), _ScriptedBroker)
+        server.daemon_threads = True
+        server.hold, server.holding, server.release = hold, threading.Event(), threading.Event()
+        threading.Thread(target=server.serve_forever, kwargs={"poll_interval": 0.1}, daemon=True).start()
+        self.addCleanup(server.server_close)
+        self.addCleanup(server.shutdown)
+        self.addCleanup(server.release.set)
+        run_id = f"kimi_writeup_real_{name}"
+        workspace = self.workspace = self._workspace(run_id, f"job-{run_id}")
+        (workspace / "problem.txt").write_text(
+            "Prove that the sum of two even integers is even.", encoding="utf-8"
+        )
+        command = [sys.executable, "-u", str(REPO / "agent_monitor" / "runners" / "kimi_runner.py"), "Prove it."]
+        self.enterContext(patch("agent_monitor.engines_registry.build_cli_command", return_value=command))
+        self.enterContext(patch("agent_monitor.agent_config.persona_preamble", return_value=""))
+        self.enterContext(
+            patch.dict(os.environ, {"AGENT_MONITOR_CGM_WRITEUP": "1", "AGENT_MONITOR_CGM_WRITEUP_GUESTS": "1"})
+        )
+        extra_env = {
+            "AGENT_MONITOR_SPONSORED_KIMI": "1",
+            "AGENT_MONITOR_MAX_OUTPUT_TOKENS": "8192",
+            "KIMI_API_KEY": "sponsored-loopback-token-" + "x" * 24,
+            "KIMI_API_BASE": f"http://127.0.0.1:{server.server_address[1]}/internal/v1",
+        }
+        outcome: dict[str, dict] = {}
+
+        def engine() -> None:
+            outcome["run"] = jobs._run_cli_engine(
+                run_id=run_id, engine="kimi", problem_id="p", problem_text="Prove it.",
+                started=time.time(), workspace=workspace, extra_env=extra_env,
+            )
+
+        thread = threading.Thread(target=engine)
+        thread.start()
+        stopped_at = time.monotonic()
+        try:
+            self.assertTrue(server.holding.wait(60), "the runner never reached the held call")
+            self.held = (jobs._load_run_record(run_id)["status"], (workspace / "proof.md").exists())
+            self.assertEqual(jobs.stop_run(run_id)["status"], "stopped")
+            stopped_at = time.monotonic()
+        finally:
+            thread.join(timeout=60)
+        self.assertFalse(thread.is_alive())
+        self.wind_down = time.monotonic() - stopped_at
+        return outcome["run"]
+
+    def test_the_runner_stopped_in_its_round_is_recorded_finished(self) -> None:
+        run = self._real_run("round", cgm_writeup.WRITEUP_SYSTEM)
+        # In its round the proof is published, and the run is running until
+        # the runner exits.
+        self.assertEqual(self.held, ("running", True))
+        self.assertEqual((run["status"], run["error"]), ("finished", None))
+        self.assertTrue(jobs._published_before_stop(run))
+        self.assertLess(self.wind_down, 20)
+        log = json.dumps(run["agents"])
+        self.assertIn("only the written-proof round was cut short", log)
+        self.assertIn("Written proof: not written", log)
+        self.assertEqual(_receipt(self.workspace)["verdict"], "accepted")
+        self.assertFalse((self.workspace / "writeup.md").exists())
+
+    def test_the_runner_stopped_before_publication_is_recorded_stopped(self) -> None:
+        run = self._real_run("workers", cgm_prompts.WORKER_SYSTEM)
+        self.assertEqual(self.held, ("running", False))
+        self.assertEqual(run["status"], "stopped")
+        self.assertFalse(jobs._published_before_stop(run))
+        self.assertLess(self.wind_down, 20)
+        self.assertIn("nothing was published", json.dumps(run["agents"]))
+        self.assertFalse((self.workspace / "proof.md").exists())
+        self.assertFalse((self.workspace / RECEIPT).exists())
 
     def test_the_watchdog_in_the_round_keeps_the_published_run(self) -> None:
         run = self._engine("publish", stop=False, timeout=2)

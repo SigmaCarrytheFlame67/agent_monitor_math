@@ -1,6 +1,7 @@
 """Cleanup for harnesses whose native CLI children create new sessions."""
 from __future__ import annotations
 
+from collections.abc import Callable
 import os
 from pathlib import Path
 import signal
@@ -15,13 +16,15 @@ def _process_stat(pid: int) -> tuple[int, str, str] | None:
         return None
 
 
-def _terminate_linux_descendants(pid: int, *, force: bool) -> None:
+def _terminate_linux_descendants(
+    pid: int, *, force: bool, signal_wrapper: Callable[[], None] | None = None
+) -> None:
     """stdlib fallback for isolated engine environments without psutil."""
     try:
         snapshot = {int(p.name): _process_stat(int(p.name))
                     for p in Path('/proc').iterdir() if p.name.isdigit()}
     except OSError:
-        return
+        snapshot = {}
     descendants: dict[int, tuple[int, str, str]] = {}
     pending = {pid}
     while pending:
@@ -29,10 +32,17 @@ def _terminate_linux_descendants(pid: int, *, force: bool) -> None:
                  if stat and stat[0] in pending and p not in descendants and p != pid}
         descendants.update(found)
         pending = set(found)
+    if signal_wrapper is not None:
+        signal_wrapper()
+
+    def alive(child: int, original: tuple[int, str, str]) -> bool:
+        # The same process (by start time) and not yet a zombie, wherever it
+        # was reparented once the wrapper exited.
+        current = _process_stat(child)
+        return current is not None and current[1] == original[1] and current[2] != 'Z'
 
     def send(child: int, original: tuple[int, str, str], sig: int) -> bool:
-        current = _process_stat(child)
-        if current is None or current[1] != original[1] or current[2] == 'Z':
+        if not alive(child, original):
             return False
         try:
             os.kill(child, sig)
@@ -45,30 +55,39 @@ def _terminate_linux_descendants(pid: int, *, force: bool) -> None:
     if descendants and not force:
         deadline = time.monotonic() + 1
         while time.monotonic() < deadline:
-            if not any(_process_stat(p) == original for p, original in descendants.items()):
+            if not any(alive(p, original) for p, original in descendants.items()):
                 break
             time.sleep(.02)
         for child, original in descendants.items():
             send(child, original, signal.SIGKILL)
 
 
-def terminate_descendants(pid: int, *, force: bool = True) -> None:
+def terminate_descendants(
+    pid: int, *, force: bool = True, signal_wrapper: Callable[[], None] | None = None
+) -> None:
     """Capture descendants before killing the wrapper and losing ancestry.
 
     Signal individual processes: their process groups may be shared with a
     service, or deliberately detached from the registered runner's group.
     psutil checks process identity before signaling, protecting against PID
     reuse. A graceful request has a bounded grace period for stubborn tools.
+
+    ``signal_wrapper`` (which must not raise) runs between the capture and
+    the first signal, for a wrapper that must learn of a stop before its
+    children fail: once signalled it may exit at once, without waiting for
+    them, and they are still found.
     """
     try:
         import psutil
     except ImportError:
-        _terminate_linux_descendants(pid, force=force)
+        _terminate_linux_descendants(pid, force=force, signal_wrapper=signal_wrapper)
         return
     try:
         children = psutil.Process(pid).children(recursive=True)
     except psutil.Error:
-        return
+        children = []
+    if signal_wrapper is not None:
+        signal_wrapper()
     for child in reversed(children):
         try:
             child.kill() if force else child.terminate()

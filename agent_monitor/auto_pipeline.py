@@ -1,9 +1,11 @@
 """Background orchestration for the proof, Lean, and DAG views.
 
 The engine owns the informal proof. As soon as a stable draft exists, the
-informal DAG and Lean translation start in parallel. The formal DAG follows
-Lean because it necessarily consumes Proof.lean. State is persisted in the
-run workspace so the browser can reconnect without owning the work.
+informal DAG and Lean translation start in parallel (for a guest's run, and
+for an Ansatz CGM run whose written-proof round follows its proof, once the
+run has ended). The formal DAG follows Lean because it necessarily consumes
+Proof.lean. State is persisted in the run workspace so the browser can
+reconnect without owning the work.
 """
 from __future__ import annotations
 
@@ -405,6 +407,51 @@ def _source_signature(workspace: Path, run_record: dict[str, Any] | None) -> str
     return ""
 
 
+def _cgm_runner_env(run_record: dict[str, Any] | None = None) -> dict[str, str]:
+    """The environment a CGM runner of this console starts from: the
+    console's own, without its provider routes (jobs._run_cli_engine starts
+    from subprocess_env.child_process_env, so the console's sponsored service
+    switch is no run's route), plus the guest or sponsored route of
+    ``run_record``."""
+    from agent_monitor.subprocess_env import child_process_env
+
+    env = child_process_env()
+    if (run_record or {}).get("guest"):
+        env["AGENT_MONITOR_GUEST"] = "1"
+    if (run_record or {}).get("credential_source") == "sponsored_kimi":
+        env["AGENT_MONITOR_SPONSORED_KIMI"] = "1"
+    return env
+
+
+def _writeup_follows_proof(run_record: dict[str, Any] | None) -> bool:
+    """Whether a written-proof round may follow this run's proof.md.
+
+    An accepted Ansatz CGM run publishes proof.md and then, with the round
+    on (jobs._apply_cgm_writeup_env decides it for the run), writes and
+    checks writeup.md on the same Claude Code or Codex account, or the
+    sponsored pool, until the run ends.
+    """
+    from agent_monitor.jobs import _CGM_ENGINES, _apply_cgm_writeup_env
+
+    engine = str((run_record or {}).get("engine") or "")
+    if engine not in _CGM_ENGINES:
+        return False
+    env = _cgm_runner_env(run_record)
+    _apply_cgm_writeup_env(env, engine=engine)
+    return env.get("AGENT_MONITOR_CGM_WRITEUP") == "1"
+
+
+def _note_writeup_wait(workspace: Path) -> None:
+    """Say why the stages that read the proof still wait once it exists."""
+    def update(state: dict[str, Any]) -> None:
+        for name in ("informal_dag", "lean"):
+            stage = (state.get("stages") or {}).get(name)
+            if isinstance(stage, dict) and stage.get("status") == "waiting":
+                stage["detail"] = "Waiting for the run's written-proof round to end"
+
+    _mutate(workspace, update)
+
+
 def _wait_for_source(
     run_id: str,
     workspace: Path,
@@ -415,6 +462,8 @@ def _wait_for_source(
     deadline = time.monotonic() + timeout
     last_sig = ""
     stable_since = time.monotonic()
+    stable = after_writeup = noted = False
+    record: dict[str, Any] | None = None
     while time.monotonic() < deadline:
         record = _run_record(run_id)
         sig = _source_signature(workspace, record)
@@ -424,13 +473,25 @@ def _wait_for_source(
         terminal = str((record or {}).get("status") or "") in _TERMINAL
         # Guest Kimi writes drafts during its proof stages. Derive the final
         # artifact once, after the proof run ends, to bound sponsored work and
-        # avoid competing with its in-flight provider request.
-        ready = terminal or not bool((record or {}).get("guest"))
-        if ready and sig and time.monotonic() - stable_since >= stable_for:
+        # avoid competing with its in-flight provider request.  Likewise for
+        # a CGM run's written-proof round, which follows its proof.md on the
+        # same account (or sponsored pool) that derived calls would use.
+        guest = bool((record or {}).get("guest"))
+        after_writeup = not guest and _writeup_follows_proof(record)
+        ready = terminal or not (guest or after_writeup)
+        stable = bool(sig) and time.monotonic() - stable_since >= stable_for
+        if ready and stable:
             return sig, record
         if terminal and not sig:
             return "", record
+        if after_writeup and stable and not noted:
+            _note_writeup_wait(workspace)
+            noted = True
         time.sleep(0.5)
+    if after_writeup and stable:
+        # The wait is over but the run has not ended: its published proof is
+        # derived all the same, as without the round.
+        return last_sig, record
     return "", _run_record(run_id)
 
 
@@ -1345,7 +1406,7 @@ def max_run_wait_seconds() -> float:
     from agent_monitor import cgm_max
     from agent_monitor.jobs import _apply_cgm_writeup_env, _cgm_writeup_allowance
 
-    env = {**os.environ, cgm_max.ROUTE_MODE_ENV: "max"}
+    env = {**_cgm_runner_env(), cgm_max.ROUTE_MODE_ENV: "max"}
     _apply_cgm_writeup_env(env, engine=cgm_max.ENGINE)
     return float(cgm_max.RUN_SECONDS + _cgm_writeup_allowance(env) + 300 + 300)
 
@@ -1355,12 +1416,12 @@ def cgm_run_wait_seconds(engine: str) -> float:
     its outer watchdog under the console's budgets (its written-proof round
     included), and the record write.
 
-    The run's own environment only lowers that bound (guest and sponsored
-    profiles), so the console's environment gives an upper bound.
+    A guest or sponsored run's own environment only lowers that bound (their
+    profiles), so a signed-in run's environment gives an upper bound.
     """
     from agent_monitor.jobs import _apply_cgm_writeup_env, _cli_timeout_seconds
 
-    env = dict(os.environ)
+    env = _cgm_runner_env()
     _apply_cgm_writeup_env(env, engine=engine)
     return float(_cli_timeout_seconds(engine, env) + 300)
 

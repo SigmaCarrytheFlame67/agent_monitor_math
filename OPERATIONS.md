@@ -140,13 +140,17 @@ ceilings, so an environment value can only lower them.
 - A problem statement may be at most 44,000 bytes of UTF-8 text; larger ones
   are refused before a run slot or a sponsored credential is used.
 - Calls still in flight 15 s after `AGENT_MONITOR_CGM_MAX_SECONDS` are
-  abandoned. Stop sends SIGTERM: the runner abandons its in-flight calls,
-  publishes nothing and exits 143 (`kimi` and `math_harness` alike); any
-  other failure exits 1.
+  abandoned. Stop sends SIGTERM: the runner abandons its in-flight calls
+  (the console then ends their Claude Code or Codex processes), publishes
+  nothing and exits 143 (`kimi` and `math_harness` alike); any other
+  failure exits 1.
 - A run writes `proof.md` only when it publishes, so the derived-views
   pipeline (Lean and the DAGs) waits at least the run's outer watchdog, which
   follows `AGENT_MONITOR_CGM_MAX_SECONDS`, plus 300 s
   (`AGENT_MONITOR_AUTO_PIPELINE_TIMEOUT`, default 7200 s, only raises it).
+  That is a signed-in run's watchdog whatever the console's own
+  `AGENT_MONITOR_SPONSORED_KIMI` service switch; guest and sponsored runs
+  have shorter ones.
 - Every published run carries `math_harness/project/engine_receipt.json`.
   The current writer records receipt schema 3 (schema 4 for Max, below) with verification policy
   `solved-first-topological-waves-stop-on-target@1` (the first block, in the
@@ -271,10 +275,12 @@ that text alone. A rejected text may be revised and checked again.
   published; after it, the runner records the write-up as far as it got,
   reports and exits 0, and the console records the run as finished (a
   receipt written during the run is the evidence) without starting queued
-  follow-ups. The watchdog firing during the round likewise leaves the run
-  finished. A server restart during the round marks the run interrupted, as
-  for any running run: its `proof.md` and receipt stay published and attest,
-  and the write-up may be missing or not checked.
+  follow-ups. Stop pressed again meanwhile sends nothing more; a runner that
+  has not exited 30 s after the first is killed. The watchdog firing during
+  the round likewise leaves the run finished. A server restart during the
+  round marks the run interrupted, as for any running run: its `proof.md`
+  and receipt stay published and attest, and the write-up may be missing or
+  not checked.
 - The console decides per run: `AGENT_MONITOR_CGM_WRITEUP` (default on; `0`
   turns the round off for every CGM run) and
   `AGENT_MONITOR_CGM_WRITEUP_GUESTS` (default on; `0` turns it off for guest
@@ -297,6 +303,12 @@ that text alone. A rejected text may be revised and checked again.
   `AGENT_MONITOR_{KIMI,MATH_HARNESS}_TIMEOUT`, which bound the pipeline. A
   sponsored run stays within the 6600 s cap: 2400 + 900 + 300 + 1200 + 60 s
   at most.
+- Lean and the DAGs of a run that gets the round start once the run has
+  ended, as for a guest's run, not as soon as its `proof.md` is stable: the
+  round may still be calling the same Claude Code or Codex account, or the
+  sponsored pool. Until then those stages read "Waiting for the run's
+  written-proof round to end". Should the derived-views wait run out first,
+  they start from the published `proof.md` all the same.
 - Policy note for the owner: with the round on, a guest or sponsored run
   whose proof is accepted makes up to 4 more Kimi calls (16 recorded calls
   instead of 12, plus the run's shared six transport retries), counted
