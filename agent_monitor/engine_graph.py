@@ -13,7 +13,8 @@ Two runner generations are recognized, both fail-closed:
   (strategist, workers, per-lemma independent verifier, repair, curator) with a
   multi-lemma fact DAG and a CGM exploring graph whose memory files are bound
   by hash in the receipt.  Attestation additionally requires ``proof.md`` to
-  equal ``agent_monitor.cgm.render_verified_closure`` of the target closure.
+  equal ``agent_monitor.cgm.render_verified_closure`` of the target closure,
+  in the rendering the receipt names (``verified-closure@1`` or ``@2``).
 
 Model-verifier acceptance is never a Lean certificate: every artifact carries
 ``certificate: false`` and ``lean_verified: false``.
@@ -959,7 +960,9 @@ def _cgm_receipt_is_valid(receipt: dict[str, Any]) -> bool:
             not isinstance(target, str)
             or _FACT_ID_RE.fullmatch(target) is None
             or not _is_sha256(receipt["target_sha256"])
-            or receipt["proof_rendering"] != _cgm_schema.PROOF_RENDERING_VERIFIED
+            or not isinstance(receipt["proof_rendering"], str)
+            or receipt["proof_rendering"]
+            not in _cgm_schema.ACCEPTED_PROOF_RENDERINGS[version]
         ):
             return False
     elif verdict == "unattested":
@@ -1233,8 +1236,11 @@ def _receipt_provenance_v2(
             {fact_id: {"predecessors": fact.predecessors} for fact_id, fact in facts.items()},
             target_id,
         )
+        # The rendering the receipt names, re-rendered from the fact files.
         rendered = _cgm_closure.render_verified_closure(
-            [_fact_mapping(fact) for fact in facts.values()], target_id
+            [_fact_mapping(fact) for fact in facts.values()],
+            target_id,
+            labels=_proof_labels(receipt),
         )
     except _cgm_closure.ClosureError:
         return invalid
@@ -1246,6 +1252,17 @@ def _receipt_provenance_v2(
     ):
         return invalid
     return {"attestation": "harness-gate-receipt", "receipt_status": "verifier-correct", **common}
+
+
+def _proof_labels(receipt: Mapping[str, Any]) -> dict[str, str] | None:
+    """The labels an accepted ``verified-closure@2`` proof.md names its lemmas
+    by (``{fact_id: label}`` from the receipt); ``None`` for @1, whose lemmas
+    are numbered."""
+    if receipt["proof_rendering"] != _cgm_schema.PROOF_RENDERING_VERIFIED_V2:
+        return None
+    return {
+        item["fact_id"]: item["label"] for item in receipt["facts"] if not item["is_target"]
+    }
 
 
 def _fact_mapping(fact: _Fact) -> dict[str, Any]:
@@ -1546,18 +1563,42 @@ def load_fact_dag(workspace: Path) -> list[dict[str, Any]] | None:
     ]
 
 
+def load_proof_labels(workspace: Path) -> dict[str, str] | None:
+    """The labels the run's ``proof.md`` names its lemmas by, if any.
+
+    ``{fact_id: label}`` for every lemma when the run's valid CGM receipt
+    records the ``verified-closure@2`` rendering ("Lemma L1"); ``None`` when
+    it records @1 (lemmas numbered "Lemma 1", "Lemma 2", ... in topological
+    order) or the run has no valid receipt.  Pass it to
+    ``render_fact_closure`` to reproduce the published rendering.  Never
+    invokes a model and never writes.
+    """
+    try:
+        project = _read_fact_project(Path(workspace))
+    except EngineGraphError:
+        return None
+    if project is None or project.receipt is None:
+        return None
+    return _proof_labels(project.receipt)
+
+
 def render_fact_closure(
-    facts: Sequence[Mapping[str, Any]], target_id: str
+    facts: Sequence[Mapping[str, Any]],
+    target_id: str,
+    *,
+    labels: Mapping[str, str] | None = None,
 ) -> str:
     """Pure deterministic rendering of a target's verified closure.
 
     ``facts`` may be ``load_fact_dag`` items (or any mappings with
-    ``fact_id``, ``statement``, ``proof`` and ``predecessors``).  This is the
-    exact rendering the CGM runner publishes as ``proof.md`` and that
-    attestation recomputes.  Raises ``EngineGraphError`` for a malformed DAG.
+    ``fact_id``, ``statement``, ``proof`` and ``predecessors``).  With the
+    run's ``load_proof_labels`` this is the exact rendering the CGM runner
+    published as ``proof.md`` and that attestation recomputes (``None``:
+    ``verified-closure@1``; labels: ``verified-closure@2``).  Raises
+    ``EngineGraphError`` for a malformed DAG or unusable labels.
     """
     try:
-        return _cgm_closure.render_verified_closure(facts, target_id)
+        return _cgm_closure.render_verified_closure(facts, target_id, labels=labels)
     except _cgm_closure.ClosureError as exc:
         raise EngineGraphError(str(exc)) from exc
 

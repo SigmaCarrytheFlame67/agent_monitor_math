@@ -1196,6 +1196,10 @@ class CgmReceiptSchemaVersionTests(unittest.TestCase):
                     "bumped without schema-3 fields": lambda r: r.update(schema_version=3),
                     "unknown schema": lambda r: r.update(schema_version=4),
                     "boolean schema": lambda r: r.update(schema_version=True),
+                    # Only the schema-3 and schema-4 writers name lemmas by label.
+                    "labelled rendering on schema 2": lambda r: r.update(
+                        proof_rendering=cgm_schema.PROOF_RENDERING_VERIFIED_V2
+                    ),
                 }
                 for label, mutate in mutations.items():
                     changed = json.loads(json.dumps(receipt))
@@ -1222,6 +1226,37 @@ class CgmReceiptSchemaVersionTests(unittest.TestCase):
                 self.assertIsNone(self._validate(changed))
         changed = json.loads(json.dumps(upgraded))
         changed["workflow"]["budgets"].pop("concurrency")
+        self.assertIsNone(self._validate(changed))
+
+    def test_schema_three_accepts_both_closure_renderings(self) -> None:
+        from agent_monitor.cgm import schema as cgm_schema
+
+        accepted = next(r for r in self._schema_two_receipts() if r["verdict"] == "accepted")
+        upgraded = json.loads(json.dumps(accepted))
+        upgraded["schema_version"] = 3
+        upgraded["workflow"]["call_order"] = cgm_schema.CALL_ORDER
+        upgraded["workflow"]["verification_policy"] = cgm_schema.VERIFICATION_POLICY
+        upgraded["workflow"]["budgets"]["concurrency"] = 3
+        for rendering in (
+            cgm_schema.PROOF_RENDERING_VERIFIED,
+            cgm_schema.PROOF_RENDERING_VERIFIED_V2,
+        ):
+            with self.subTest(rendering=rendering):
+                upgraded["proof_rendering"] = rendering
+                self.assertIsNotNone(self._validate(upgraded))
+        for rendering in (
+            cgm_schema.PROOF_RENDERING_UNVERIFIED,
+            "verified-closure@3",
+            "",
+            None,
+            ["verified-closure@2"],
+        ):
+            with self.subTest(rendering=rendering):
+                upgraded["proof_rendering"] = rendering
+                self.assertIsNone(self._validate(upgraded))
+        unattested = next(r for r in self._schema_two_receipts() if r["verdict"] == "unattested")
+        changed = json.loads(json.dumps(unattested))
+        changed["proof_rendering"] = cgm_schema.PROOF_RENDERING_VERIFIED_V2
         self.assertIsNone(self._validate(changed))
 
     def test_schema_three_policies(self) -> None:

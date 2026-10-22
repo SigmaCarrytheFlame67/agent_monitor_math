@@ -13,6 +13,7 @@ and a fixed timestamp, and 'live-oddsum-kimi-k3' is a real kimi-k3 run.
 """
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import random
@@ -30,6 +31,7 @@ from typing import Any, Callable
 from unittest.mock import patch
 
 from agent_monitor import engine_graph, kimi_k3
+from agent_monitor.cgm import closure as cgm_closure
 from agent_monitor.cgm import prompts as cgm_prompts
 from agent_monitor.cgm import schema as cgm_schema
 from agent_monitor.runners import math_harness_runner as runner
@@ -497,6 +499,19 @@ def _load_fixture() -> dict[str, Any]:
     return json.loads(FIXTURE.read_text(encoding="utf-8"))
 
 
+def _labelled_closure(files: dict[str, str]) -> str:
+    """The verified-closure@2 proof.md of a stored accepted generation: its
+    fact files rendered with its receipt's worker labels."""
+    receipt = _receipt(files)
+    facts = []
+    for path, text in files.items():
+        if path.startswith("math_harness/project/fact_graph/facts/"):
+            fact_id = Path(path).stem
+            facts.append(engine_graph._fact_mapping(engine_graph._parse_fact(text.encode(), fact_id, path)))
+    labels = {item["fact_id"]: item["label"] for item in receipt["facts"] if not item["is_target"]}
+    return cgm_closure.render_verified_closure(facts, receipt["target_fact_id"], labels=labels)
+
+
 class PhaseOneCompatibilityTests(unittest.TestCase):
     """Artifacts written before the concurrency change keep their attestation."""
 
@@ -564,10 +579,29 @@ class PhaseOneCompatibilityTests(unittest.TestCase):
         concurrency: int,
     ) -> None:
         self.assertEqual(set(files), set(old["files"]))
-        for path, text in files.items():
-            if path != RECEIPT:
-                self.assertEqual(text, old["files"][path], path)
         new_receipt, old_receipt = _receipt(files), _receipt(old["files"])
+        # An accepted proof.md now names its lemmas by their labels
+        # (verified-closure@2): the @2 rendering of the very same fact files
+        # with the phase-1 receipt's labels.  Its hash, its rendering id and
+        # the result's proof text follow; every other byte is phase 1's.
+        accepted = old_receipt["verdict"] == "accepted"
+        expected_proof = _labelled_closure(old["files"]) if accepted else old["files"]["proof.md"]
+        for path, text in files.items():
+            if path not in {RECEIPT, "proof.md"}:
+                self.assertEqual(text, old["files"][path], path)
+        self.assertEqual(files["proof.md"], expected_proof)
+        expected_result = dict(old["result"])
+        if accepted:
+            self.assertEqual(old_receipt["proof_rendering"], cgm_schema.PROOF_RENDERING_VERIFIED)
+            self.assertEqual(new_receipt["proof_rendering"], cgm_schema.PROOF_RENDERING_VERIFIED_V2)
+            self.assertEqual(
+                new_receipt["proof_sha256"],
+                hashlib.sha256(expected_proof.encode("utf-8")).hexdigest(),
+            )
+            for receipt in (new_receipt, old_receipt):
+                receipt.pop("proof_rendering")
+                receipt.pop("proof_sha256")
+            expected_result["proof_text"] = expected_proof
         # Exactly the schema-3 fields differ; calls (in order), verdicts,
         # counts, retries and degradations are identical.
         self.assertEqual(new_receipt["schema_version"], 3)
@@ -586,7 +620,7 @@ class PhaseOneCompatibilityTests(unittest.TestCase):
             for key in ("call_order", "verification_policy", "budgets"):
                 receipt["workflow"].pop(key, None)
         self.assertEqual(new_receipt, old_receipt)
-        self.assertEqual(result, old["result"])
+        self.assertEqual(result, expected_result)
 
     def test_new_writer_reproduces_phase_one_artifacts_at_any_concurrency(self) -> None:
         fixture = _load_fixture()

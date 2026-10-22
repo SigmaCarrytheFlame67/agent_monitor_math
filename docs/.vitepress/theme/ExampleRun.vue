@@ -38,6 +38,9 @@ function why(plan) {
   return ''
 }
 const verdictName = name => name === 'THEOREM' ? 'Theorem' : name
+// A cited lemma's short name: a numbered "Lemma 1" reads "L1"; a lemma named
+// by the prover's label ("Lemma L1") reads as that label.
+const shortName = label => label.replace(/^Lemma (\d+)$/, 'L$1').replace(/^Lemma /, '')
 const sha = run.lean.source_sha256
 const checks = run.lean.checks
 </script>
@@ -62,7 +65,7 @@ const checks = run.lean.checks
       <article v-for="lemma in run.lemmas" :key="lemma.id" class="ex-card ex-lemma" :class="{ 'ex-lemma-target': lemma === target }">
         <header>
           <strong>{{ lemma.label }}</strong>
-          <span v-if="lemma.uses.length" class="ex-uses">uses {{ lemma.uses.map(label => label.replace('Lemma ', 'L')).join(', ') }}</span>
+          <span v-if="lemma.uses.length" class="ex-uses">uses {{ lemma.uses.map(shortName).join(', ') }}</span>
           <span class="ex-chip ex-chip-model">verifier: {{ lemma.verifier.verdict }}</span>
         </header>
         <div class="ex-math" v-html="math(lemma.statement_tex)"></div>

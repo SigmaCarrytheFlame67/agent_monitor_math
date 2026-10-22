@@ -1410,8 +1410,23 @@ def _load_fact_dag(workspace: Path) -> list[dict[str, Any]] | None:
     return facts
 
 
-def _facts_digest(facts: list[dict[str, Any]]) -> str:
-    canonical = [
+def _load_proof_labels(workspace: Path) -> dict[str, str] | None:
+    """The labels the run's proof.md names its lemmas by
+    (``engine_graph.load_proof_labels``); ``None`` when it numbers them."""
+    try:
+        from agent_monitor import engine_graph
+
+        loader = getattr(engine_graph, "load_proof_labels", None)
+        labels = loader(Path(workspace)) if callable(loader) else None
+    except Exception:  # noqa: BLE001 - unreadable labels mean numbered lemmas
+        return None
+    return labels if isinstance(labels, dict) and labels else None
+
+
+def _facts_digest(
+    facts: list[dict[str, Any]], labels: Mapping[str, str] | None = None
+) -> str:
+    canonical: Any = [
         {
             "fact_id": str(fact.get("fact_id") or ""),
             "statement": str(fact.get("statement") or ""),
@@ -1422,19 +1437,26 @@ def _facts_digest(facts: list[dict[str, Any]]) -> str:
         for fact in facts
         if isinstance(fact, Mapping)
     ]
+    if labels is not None:
+        # The lemma names are part of the graph; numbered runs keep their digest.
+        canonical = {"facts": canonical, "labels": dict(labels)}
     return hashlib.sha256(
         json.dumps(canonical, ensure_ascii=False, sort_keys=True).encode()
     ).hexdigest()
 
 
-def graph_from_facts(facts: list[dict[str, Any]]) -> dict[str, Any]:
+def graph_from_facts(
+    facts: list[dict[str, Any]], labels: Mapping[str, str] | None = None
+) -> dict[str, Any]:
     """Informal DAG built deterministically from a CGM fact DAG (no model).
 
     One node per fact (the target is the ``conclusion``, every other fact a
     ``lemma``), node id = fact id (so Lean's ``Informal: <fact_id>`` doc lines
     and the coverage cross-linker line up), statements verbatim within the
-    sanitizer bounds, and one ``uses`` edge per predecessor.  Acceptance is a
-    model verifier's, never a Lean certificate.
+    sanitizer bounds, and one ``uses`` edge per predecessor.  Lemmas are named
+    as proof.md names them: "Lemma <label>" from ``labels`` (a
+    ``verified-closure@2`` proof), else "Lemma k" in the facts' order.
+    Acceptance is a model verifier's, never a Lean certificate.
     """
     if not isinstance(facts, list) or not facts:
         raise ValueError("fact graph is empty")
@@ -1459,7 +1481,8 @@ def graph_from_facts(facts: list[dict[str, Any]]) -> dict[str, Any]:
             label = "Target theorem"
         else:
             lemma_index += 1
-            label = f"Lemma {lemma_index}"
+            name = labels[fact_id] if labels and fact_id in labels else lemma_index
+            label = f"Lemma {name}"
         citations = [f"cgm fact {fact_id}"[:120]]
         citations.append(
             FACT_GRAPH_ATTESTED_BASIS
@@ -1505,8 +1528,9 @@ def fact_graph_result(workspace: Path) -> dict[str, Any] | None:
     facts = _load_fact_dag(workspace)
     if not facts:
         return None
+    labels = _load_proof_labels(workspace)
     try:
-        graph = graph_from_facts(facts)
+        graph = graph_from_facts(facts, labels)
     except ValueError:
         return None
     attested = all(fact.get("attested") is True for fact in facts)
@@ -1514,7 +1538,7 @@ def fact_graph_result(workspace: Path) -> dict[str, Any] | None:
         "generated_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
         "model": FACT_GRAPH_MODEL,
         "source": "math_harness fact graph",
-        "source_sha256": _facts_digest(facts),
+        "source_sha256": _facts_digest(facts, labels),
         "kind": "informal",
         "status": "derived",
         "derivation": "deterministic",
@@ -1580,7 +1604,9 @@ def load_or_build_informal(
     facts = _load_fact_dag(workspace)
     if not facts:
         return cached
-    if cached and cached.get("source_sha256") == _facts_digest(facts):
+    if cached and cached.get("source_sha256") == _facts_digest(
+        facts, _load_proof_labels(workspace)
+    ):
         return cached
     result = fact_graph_result(workspace)
     if result is None:

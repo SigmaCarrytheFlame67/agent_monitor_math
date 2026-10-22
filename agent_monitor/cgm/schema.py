@@ -46,7 +46,18 @@ HYBRID_EFFORTS = frozenset({"default", "low", "medium", "high", "xhigh", "max"})
 SEMANTICS = "model-verifier"
 VERIFIER_LABEL = "independent-response-only-model-verifier"
 PROOF_RENDERING_VERIFIED = "verified-closure@1"
+# The current writer's rendering of an accepted closure: each lemma is named
+# by the label its proofs cite it by (``closure.render_verified_closure`` with
+# ``labels``).  @1 numbers the lemmas in topological order instead.
+PROOF_RENDERING_VERIFIED_V2 = "verified-closure@2"
 PROOF_RENDERING_UNVERIFIED = "unverified-candidate@1"
+# The renderings an accepted receipt of each schema may name.  Schema 2 (the
+# sequential phase-1 writer) only ever wrote @1.
+ACCEPTED_PROOF_RENDERINGS = {
+    2: frozenset({PROOF_RENDERING_VERIFIED}),
+    3: frozenset({PROOF_RENDERING_VERIFIED, PROOF_RENDERING_VERIFIED_V2}),
+    4: frozenset({PROOF_RENDERING_VERIFIED, PROOF_RENDERING_VERIFIED_V2}),
+}
 PIPELINE_NAME = "cgm-strategist-workers-verifier-curator@1"
 # Candidates are verified one at a time, solved first; inside a candidate the
 # THEOREM closure is verified in its written topological order, in waves of

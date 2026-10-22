@@ -64,3 +64,22 @@ def test_plan_rules_match_the_curator(builder):
     curation = (ROOT / "agent_monitor/cgm/curation.py").read_text(encoding="utf-8")
     for reason in builder.PLAN_RULES:
         assert reason in curation
+
+
+def test_parse_proof_reads_numbered_and_labelled_closures(builder):
+    from agent_monitor.cgm import closure
+
+    facts = [
+        {"fact_id": "a" * 16, "statement": "A", "proof": "base", "predecessors": []},
+        {"fact_id": "b" * 16, "statement": "B", "proof": "Cited facts: L1 = fact " + "a" * 16 + ".\n\nby L1", "predecessors": ["a" * 16]},
+        {"fact_id": "c" * 16, "statement": "C", "proof": "by L2", "predecessors": ["a" * 16, "b" * 16]},
+    ]
+    numbered = closure.render_verified_closure(facts, "c" * 16)
+    labelled = closure.render_verified_closure(facts, "c" * 16, labels={"a" * 16: "L1", "b" * 16: "L2"})
+    for text, names in ((numbered, ["Lemma 1", "Lemma 2"]), (labelled, ["Lemma L1", "Lemma L2"])):
+        intro, items = builder.parse_proof(text)
+        assert intro.startswith("This proof is the verified fact closure")
+        assert [item["label"] for item in items] == [*names, "Main theorem"]
+        assert [item["fact"] for item in items] == ["a" * 16, "b" * 16, "c" * 16]
+        assert [item["uses"] for item in items] == [[], names[:1], names]
+        assert items[1]["proof"].endswith("by L1")

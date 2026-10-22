@@ -2637,8 +2637,39 @@ def _build_facts(
     return ordered, target_id
 
 
+def _proof_labels(facts: Sequence[_FactRecord]) -> dict[str, str]:
+    """The worker label of every lemma: the name its citing proofs use."""
+    return {record.fact_id: record.label for record in facts if not record.is_target}
+
+
+def _render_closure(facts: Sequence[_FactRecord], target_id: str) -> tuple[str, str]:
+    """proof.md of an accepted run, and the rendering it uses.
+
+    Lemmas are named by their worker labels (``verified-closure@2``), so the
+    headings match the labels the proofs cite them by.  Labels that cannot
+    name every lemma uniquely fall back to the numbered ``verified-closure@1``.
+    """
+    mappings = [record.as_mapping() for record in facts]
+    try:
+        return (
+            cgm_closure.render_verified_closure(
+                mappings, target_id, labels=_proof_labels(facts)
+            ),
+            cgm_schema.PROOF_RENDERING_VERIFIED_V2,
+        )
+    except cgm_closure.ClosureError:
+        return (
+            cgm_closure.render_verified_closure(mappings, target_id),
+            cgm_schema.PROOF_RENDERING_VERIFIED,
+        )
+
+
 def _self_check_facts(
-    facts: Sequence[_FactRecord], target_id: str | None, problem: str, proof: str
+    facts: Sequence[_FactRecord],
+    target_id: str | None,
+    problem: str,
+    proof: str,
+    rendering: str,
 ) -> None:
     """Fail closed unless the published bytes will re-validate exactly."""
     from agent_monitor import engine_graph  # local: engine_graph imports cgm only
@@ -2653,7 +2684,13 @@ def _self_check_facts(
             raise MathHarnessError("verified fact does not round-trip its content")
     if target_id is not None:
         rendered = cgm_closure.render_verified_closure(
-            [record.as_mapping() for record in facts], target_id
+            [record.as_mapping() for record in facts],
+            target_id,
+            labels=(
+                _proof_labels(facts)
+                if rendering == cgm_schema.PROOF_RENDERING_VERIFIED_V2
+                else None
+            ),
         )
         if rendered != proof:
             raise MathHarnessError("proof.md does not equal the verified closure")
@@ -4073,6 +4110,7 @@ def _receipt_payload(
     result: _PipelineResult,
     problem_id: str,
     proof_payload: bytes,
+    proof_rendering: str,
     facts: Sequence[_FactRecord],
     target_id: str | None,
     target_payload: bytes | None,
@@ -4121,11 +4159,7 @@ def _receipt_payload(
         "problem_sha256": _sha256(result.problem.encode("utf-8")),
         "task_sha256": _sha256(result.task.encode("utf-8")),
         "proof_sha256": _sha256(proof_payload),
-        "proof_rendering": (
-            cgm_schema.PROOF_RENDERING_VERIFIED
-            if accepted
-            else cgm_schema.PROOF_RENDERING_UNVERIFIED
-        ),
+        "proof_rendering": proof_rendering,
         "provider": final_provider,
         "model": final_model,
         "requested_model": ctx.route.model if ctx.worker_route is None else "max",
@@ -4228,6 +4262,17 @@ def _safe_problem_id(
     return f"problem-{_sha256(problem.encode('utf-8'))[:12]}"
 
 
+@dataclass(frozen=True)
+class _Publication:
+    """One published generation (see ``_write_artifacts``)."""
+
+    written: list[str]
+    proof_text: str
+    proof_rendering: str
+    facts: list[_FactRecord]
+    target_id: str | None
+
+
 def _write_artifacts(
     root: Path,
     *,
@@ -4235,17 +4280,16 @@ def _write_artifacts(
     result: _PipelineResult,
     problem_id: str,
     prior_fact_ids: tuple[str, ...],
-) -> tuple[list[str], str, list[_FactRecord], str | None]:
+) -> _Publication:
     """Publish one generation; the receipt is written last and binds it all."""
     root = root.resolve(strict=True)
     if not root.is_dir():
         raise MathHarnessError("run workspace is not a directory")
     facts, target_id = _build_facts(result, problem_id)
     proof_text: str
+    rendering: str
     if target_id is not None:
-        proof_text = cgm_closure.render_verified_closure(
-            [record.as_mapping() for record in facts], target_id
-        )
+        proof_text, rendering = _render_closure(facts, target_id)
         if _utf8_size(proof_text) > MAX_PROOF_BYTES:
             # Never publish a clipped "verified" proof; fall back honestly.
             ctx.degrade("verified-closure-too-large")
@@ -4254,7 +4298,8 @@ def _write_artifacts(
             facts, target_id = _build_facts(result, problem_id)
     if target_id is None:
         proof_text = _render_unverified(result, _unverified_reason(result, ctx))
-    _self_check_facts(facts, target_id, result.problem, proof_text)
+        rendering = cgm_schema.PROOF_RENDERING_UNVERIFIED
+    _self_check_facts(facts, target_id, result.problem, proof_text, rendering)
     snapshot = _build_memory(result, facts, target_id)
     annotations = _curate(ctx, result, snapshot, target_id)
     _emit_stage(ctx, "finalize")
@@ -4270,6 +4315,7 @@ def _write_artifacts(
         result=result,
         problem_id=problem_id,
         proof_payload=proof_payload,
+        proof_rendering=rendering,
         facts=facts,
         target_id=target_id,
         target_payload=target_payload,
@@ -4326,7 +4372,13 @@ def _write_artifacts(
     # The canonical receipt is last: it binds both graph and root proof bytes.
     _atomic_write(root, ("math_harness", "project", "engine_receipt.json"), receipt_payload)
     written.append("math_harness/project/engine_receipt.json")
-    return written, proof_text, facts, target_id
+    return _Publication(
+        written=written,
+        proof_text=proof_text,
+        proof_rendering=rendering,
+        facts=facts,
+        target_id=target_id,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -4546,23 +4598,24 @@ def _run_pipeline(
         }
     )
     result = _run_cgm(ctx, problem, task_text)
-    written, proof_text, facts, target_id = _write_artifacts(
+    published = _write_artifacts(
         root,
         ctx=ctx,
         result=result,
         problem_id=_safe_problem_id(problem, env, problem_id),
         prior_fact_ids=prior_fact_ids,
     )
+    target_id = published.target_id
     author = result.best_attempt.reply
     return {
         "status": "accepted" if target_id else "unattested",
         "accepted": target_id is not None,
         "proof_path": str(root / "proof.md"),
-        "proof_text": proof_text,
+        "proof_text": published.proof_text,
         "receipt_path": str(root / "math_harness" / "project" / "engine_receipt.json"),
         "target_fact_id": target_id,
-        "fact_ids": [record.fact_id for record in facts],
-        "written": written,
+        "fact_ids": [record.fact_id for record in published.facts],
+        "written": published.written,
         "calls": ctx.calls_used,
         "stages": list(ctx.stages),
         "verdicts": [

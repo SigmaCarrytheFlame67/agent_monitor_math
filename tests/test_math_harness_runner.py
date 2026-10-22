@@ -317,8 +317,9 @@ class MathHarnessAcceptedArtifactTests(unittest.TestCase):
             proof_path = workspace / "proof.md"
             self.assertEqual(
                 proof_path.read_text(encoding="utf-8"),
-                cgm_closure.render_verified_closure(dag, target_id),
+                cgm_closure.render_verified_closure(dag, target_id, labels={lemma_id: "L1"}),
             )
+            self.assertIn(f"## Lemma L1 · fact {lemma_id}", proof_path.read_text())
             self.assertIn("not a Lean or other formal certificate", proof_path.read_text())
 
             receipt = _receipt(workspace)
