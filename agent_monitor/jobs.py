@@ -406,6 +406,47 @@ def _apply_bounded_run_env(
         env["AGENT_MONITOR_MAX_OUTPUT_TOKENS"] = str(_CGM_BOUNDED_OUTPUT_TOKENS)
 
 
+def _service_switch(name: str) -> bool:
+    """A console switch that is on unless set to 0/false/off/no."""
+    return str(os.environ.get(name, "1")).strip().lower() not in {"0", "false", "off", "no"}
+
+
+def _apply_cgm_writeup_env(env: dict[str, str], *, engine: str) -> None:
+    """Switch an Ansatz CGM run's written-proof round on or off.
+
+    The round (math_harness_runner ``_write_up``) follows the console's
+    ``AGENT_MONITOR_CGM_WRITEUP`` (default on) for every CGM run, Max
+    included; guest and sponsored runs (as the runner recognizes them) also
+    need ``AGENT_MONITOR_CGM_WRITEUP_GUESTS`` (default on).  The runner reads
+    only ``AGENT_MONITOR_CGM_WRITEUP``, so this decides it for the child.
+    """
+    if engine not in _CGM_ENGINES:
+        return
+    bounded = any(
+        env.get(name) == "1"
+        for name in (
+            "AGENT_MONITOR_GUEST",
+            "AGENT_MONITOR_PUBLIC_KIMI",
+            "AGENT_MONITOR_SPONSORED_KIMI",
+        )
+    )
+    enabled = _service_switch("AGENT_MONITOR_CGM_WRITEUP") and (
+        not bounded or _service_switch("AGENT_MONITOR_CGM_WRITEUP_GUESTS")
+    )
+    env["AGENT_MONITOR_CGM_WRITEUP"] = "1" if enabled else "0"
+
+
+def _cgm_writeup_allowance(env: dict[str, str]) -> int:
+    """Seconds a CGM run's written-proof round may add after its pipeline."""
+    try:
+        from agent_monitor.runners import math_harness_runner
+
+        return math_harness_runner.writeup_allowance_seconds(env)
+    except (ImportError, ValueError, RuntimeError):
+        # An invalid write-up setting makes the runner skip the round.
+        return 0
+
+
 class StopRequested(Exception):
     """Raised inside a run when the user pressed Stop."""
 
@@ -1784,6 +1825,8 @@ def _start_job_launch(
     _apply_bounded_run_env(
         extra_env, engine=engine, guest=is_guest, sponsored=sponsored_kimi
     )
+    # Before the token lifetime below: the write-up round extends the run.
+    _apply_cgm_writeup_env(extra_env, engine=engine)
     if sponsored_kimi and engine != "plain":
         from agent_monitor import sponsored_kimi_client
 
@@ -2138,6 +2181,7 @@ def _continuation_auth_environment(
             guest=bool(run_data.get("guest")),
             sponsored=True,
         )
+        _apply_cgm_writeup_env(configured, engine=engine)
         configured.update(
             sponsored_kimi_client.issue_credentials(
                 engine=_sponsored_transport_engine(engine),
@@ -4039,6 +4083,9 @@ def _cli_timeout_seconds(engine: str, env: dict[str, str]) -> int:
         # pipeline's own bounded wall clock so it cannot kill a healthy final
         # stage (or the publication step) just before the pipeline's own limit.
         default = 7_200 if normalized == "MATH_HARNESS" else 3_600
+        # An accepted run's written-proof round follows publication on its
+        # own time budget.
+        writeup = _cgm_writeup_allowance(env)
         try:
             from agent_monitor.runners import math_harness_runner
 
@@ -4049,7 +4096,8 @@ def _cli_timeout_seconds(engine: str, env: dict[str, str]) -> int:
                 # Every Claude call is bounded by its stage timeout; the helper
                 # already includes a publication/teardown margin.
                 default = max(
-                    default, math_harness_runner.claude_pipeline_budget_seconds(env)
+                    default,
+                    math_harness_runner.claude_pipeline_budget_seconds(env) + writeup,
                 )
             else:
                 # API/Codex calls start only while max_seconds remains; the last
@@ -4062,7 +4110,9 @@ def _cli_timeout_seconds(engine: str, env: dict[str, str]) -> int:
                     minimum=60,
                     maximum=900,
                 )
-                default = max(default, int(budgets.max_seconds + api_timeout + 300))
+                default = max(
+                    default, int(budgets.max_seconds + api_timeout + 300) + writeup
+                )
         except (ImportError, ValueError, RuntimeError, AttributeError):
             # The runner will surface malformed stage configuration. Its
             # outer process still receives the normal bounded default.
@@ -4099,7 +4149,9 @@ def _cli_timeout_seconds(engine: str, env: dict[str, str]) -> int:
         # Max fixes its own call and run limits (cgm_max.apply_models), and a
         # runner the watchdog stops publishes nothing: operator timeouts may
         # raise a Max run's watchdog but never cut the run short.
-        bounded = max(bounded, default, cgm_max.RUN_SECONDS + 300)
+        bounded = max(
+            bounded, default, cgm_max.RUN_SECONDS + 300 + _cgm_writeup_allowance(env)
+        )
     if env.get("AGENT_MONITOR_SPONSORED_KIMI") == "1":
         bounded = min(bounded, _SPONSORED_KIMI_CLI_TIMEOUT_MAX)
     return bounded
@@ -4588,6 +4640,8 @@ def _run_cli_engine(
         max_iterations=max_iterations,
         problem_id=problem_id,
     )
+    # Starts and continuations alike: the console's switch decides the round.
+    _apply_cgm_writeup_env(env, engine=engine)
     _apply_selected_model_env(env, engine=engine, model=requested_model)
     if engine == "codex" and _is_kimi_model(requested_model):
         # Raw Codex CLI ignores OPENAI_BASE_URL and its modern custom-provider

@@ -1621,13 +1621,63 @@ def _analysis_preview(run_id: str, data: dict) -> dict:
     }
 
 
+def _workspace_bytes(ws: Path, relative: str, limit: int) -> bytes | None:
+    """At most ``limit`` bytes of a regular workspace file, or ``None``."""
+    path = _workspace_target(ws, relative)
+    if path is None or not path.is_file():
+        return None
+    try:
+        with path.open("rb") as stream:
+            return stream.read(limit)
+    except OSError:
+        return None
+
+
+def _writeup_preview(ws: Path) -> dict | None:
+    """The written proof of an Ansatz CGM run (``writeup.md``), if one exists.
+
+    Its status and the check's findings come from ``writeup.json`` only when
+    that sidecar describes exactly this file; ``fresh`` says whether it was
+    written for the current proof.md and engine receipt (a continuation or a
+    Sandbox edit of proof.md leaves it stale).  Only proof.md is editable.
+    """
+    from agent_monitor.cgm import writeup as cgm_writeup
+
+    path = _workspace_target(ws, "writeup.md")
+    payload = _workspace_bytes(ws, "writeup.md", 400_000)
+    if path is None or payload is None:
+        return None
+    view = cgm_writeup.describe(
+        payload,
+        _workspace_bytes(ws, "math_harness/project/writeup.json", 256_000),
+        proof=_workspace_bytes(ws, "proof.md", 400_000),
+        receipt=_workspace_bytes(ws, "math_harness/project/engine_receipt.json", 64_000),
+    )
+    try:
+        mtime = path.stat().st_mtime
+    except OSError:
+        return None
+    return {
+        "text": payload.decode("utf-8", errors="replace"),
+        "status": view["status"],
+        "fresh": view["fresh"],
+        "path": "writeup.md",
+        "revision": _file_revision(path),
+        "mtime": mtime,
+        "check": view["check"],
+        "model": view["model"],
+        "provider": view["provider"],
+    }
+
+
 def _sandbox_preview(run_id: str, data: dict | None) -> dict:
     """Proof.md if it exists, otherwise the latest non-tool agent writes.
 
     The sandbox tab used to wait for a separate /files round-trip and stayed
     blank for the whole run. Folding the draft into /api/run makes preview
     follow the same payload the HITL panel already uses.  An Analyze run
-    previews its report instead (it has no proof).
+    previews its report instead (it has no proof).  An Ansatz CGM run with a
+    written proof also carries it as ``writeup`` (see ``_writeup_preview``).
     """
     data = data or {}
     from agent_monitor import analyze_runs
@@ -1655,7 +1705,7 @@ def _sandbox_preview(run_id: str, data: dict | None) -> dict:
     live_text = _live_writes(data)
     text = proof_md or live_text
     source = "proof.md" if proof_md else ("live" if live_text else "")
-    return {
+    preview = {
         "text": text,
         "source": source,
         "has_proof_md": bool(proof_md),
@@ -1663,6 +1713,13 @@ def _sandbox_preview(run_id: str, data: dict | None) -> dict:
         "revision": proof_revision,
         "mtime": proof_mtime,
     }
+    from agent_monitor.engine_graph import CGM_GRAPH_ENGINES
+
+    if ws and str(data.get("engine") or "").strip().lower() in CGM_GRAPH_ENGINES:
+        writeup = _writeup_preview(ws)
+        if writeup is not None:
+            preview["writeup"] = writeup
+    return preview
 
 
 def _refresh_analyze_block(data: dict, ws: Path | None) -> None:

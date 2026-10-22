@@ -1330,22 +1330,29 @@ _ANALYSIS_WAIT_MARGIN_SECONDS = 900 + 300 + 300
 
 def max_run_wait_seconds() -> float:
     """How long the pipeline waits for an Ansatz CGM Max run: its own wall
-    clock, the CLI watchdog's margin and the record write."""
+    clock, its written-proof round, the CLI watchdog's margin and the record
+    write."""
     from agent_monitor import cgm_max
+    from agent_monitor.jobs import _apply_cgm_writeup_env, _cgm_writeup_allowance
 
-    return float(cgm_max.RUN_SECONDS + 300 + 300)
+    env = {**os.environ, cgm_max.ROUTE_MODE_ENV: "max"}
+    _apply_cgm_writeup_env(env, engine=cgm_max.ENGINE)
+    return float(cgm_max.RUN_SECONDS + _cgm_writeup_allowance(env) + 300 + 300)
 
 
 def cgm_run_wait_seconds(engine: str) -> float:
     """How long the pipeline waits for a CGM run (``math_harness``, ``kimi``):
-    its outer watchdog under the console's budgets, and the record write.
+    its outer watchdog under the console's budgets (its written-proof round
+    included), and the record write.
 
     The run's own environment only lowers that bound (guest and sponsored
     profiles), so the console's environment gives an upper bound.
     """
-    from agent_monitor.jobs import _cli_timeout_seconds
+    from agent_monitor.jobs import _apply_cgm_writeup_env, _cli_timeout_seconds
 
-    return float(_cli_timeout_seconds(engine, dict(os.environ)) + 300)
+    env = dict(os.environ)
+    _apply_cgm_writeup_env(env, engine=engine)
+    return float(_cli_timeout_seconds(engine, env) + 300)
 
 
 def _is_max_run(run_id: str) -> bool:

@@ -26,7 +26,13 @@ pack in ``agent_monitor.cgm`` (Apache-2.0, Copyright 2026 FrenzyMath; see
    AND/OR propagation is applied deterministically in code.
 5. Synthesize -- CGM-format facts for the verified closure, the exploring
    graph (global_memory/*.jsonl), a deterministic ``proof.md`` and a receipt
-   binding everything.
+   binding everything.  Then, for an accepted run with
+   ``AGENT_MONITOR_CGM_WRITEUP=1``, a written-proof round on its own small
+   budget: one writer turns the verified closure into a single readable proof
+   (``writeup.md``), an independent model verifier checks that text as a
+   whole, and a rejected text may be revised.  The write-up is bound by its
+   own sidecar (``math_harness/project/writeup.json``), never by the receipt,
+   and never changes or fails the published generation.
 
 Model-verifier acceptance is never a Lean certificate: receipts always carry
 ``certificate: false`` and ``lean_verified: false``.
@@ -41,7 +47,8 @@ A stop request (SIGTERM) abandons in-flight calls and publishes nothing (the
 process exits 143); once the wall-clock budget plus a short grace has elapsed,
 in-flight calls are abandoned and what has settled is published.  An
 abandoned call can never change an artifact, and a stop request never
-interrupts a publication that has started.
+interrupts a publication that has started.  A stop request during the
+write-up round ends only that round: the run stays published (exit 0).
 
 Usage: ``math_harness_runner.py`` from a run workspace containing the canonical
 ``problem.txt``.  A direct operator may provide one argument as additional task
@@ -111,6 +118,7 @@ from agent_monitor.cgm import curation as cgm_curation
 from agent_monitor.cgm import parsing as cgm_parsing
 from agent_monitor.cgm import prompts as cgm_prompts
 from agent_monitor.cgm import schema as cgm_schema
+from agent_monitor.cgm import writeup as cgm_writeup
 from agent_monitor.cgm.parsing import Candidate, ParseError, VerifierReport
 
 
@@ -131,12 +139,19 @@ MAX_STRATEGIST_BYTES = 48_000
 MAX_WORKER_BYTES = 160_000
 MAX_VERIFIER_BYTES = 64_000
 MAX_CURATOR_BYTES = 48_000
+# A writer reply: the write-up (at most cgm_writeup.MAX_BODY_BYTES) and its markers.
+MAX_WRITEUP_BYTES = 160_000
 MAX_PROOF_BYTES = 190_000
 MAX_FACT_BYTES = 240_000
 MAX_RECEIPT_BYTES = 64_000
 MAX_MEMORY_FILE_BYTES = 1_000_000
 MAX_ATTEMPT_EVIDENCE_BYTES = 60_000
 MAX_CANDIDATES = 3
+# The written proof of an accepted run and the sidecar binding it to the
+# generation it was written from (see ``_write_up``).  Neither name contains
+# "proof", "solution" or "answer": jobs copies such files over proof.md.
+WRITEUP_PARTS = ("writeup.md",)
+WRITEUP_SIDECAR_PARTS = ("math_harness", "project", "writeup.json")
 # The Codex response-only contract this runner requires and records.  Version
 # 5 is the first whose "no tools" claim holds for every bundled model (earlier
 # builds of the adapter could hand "responses lite" models code-mode and
@@ -160,6 +175,10 @@ _STAGE_TIMEOUT_FAMILY = {
     "curator": "critic",
     "repair": "revision",
     "revision": "revision",
+    # The write-up round after publication (see ``_write_up``).
+    "writeup": "candidate",
+    "writefix": "revision",
+    "writecheck": "critic",
 }
 _MIN_CLAUDE_STAGE_TIMEOUT = 60.0
 _MAX_CLAUDE_STAGE_TIMEOUT = 3600.0
@@ -214,6 +233,31 @@ _BUDGET_ENV = {
     "max_lemmas": ("AGENT_MONITOR_CGM_MAX_LEMMAS",),
     "max_seconds": ("AGENT_MONITOR_CGM_MAX_SECONDS",),
 }
+# The written-proof round of an accepted run (see ``_write_up``) runs after
+# publication when this is "1", on a call and time budget of its own, with
+# the fix turns it may spend on a rejected write-up: (default, minimum,
+# maximum).  Guest, public and sponsored runs use the lower profile, whose
+# defaults are also ceilings; Max gives the round an hour, as its
+# maximum-effort calls are long.
+WRITEUP_ENV = "AGENT_MONITOR_CGM_WRITEUP"
+_WRITEUP_PROFILE = {
+    "max_calls": (6, 2, 12),
+    "max_seconds": (1800, 120, 3600),
+    "max_fixes": (1, 0, 2),
+}
+_GUEST_WRITEUP_PROFILE = {
+    "max_calls": (4, 2, 4),
+    "max_seconds": (1200, 120, 1200),
+    "max_fixes": (0, 0, 0),
+}
+_MAX_MODE_WRITEUP_SECONDS = (3600, 120, 3600)
+_WRITEUP_BUDGET_ENV = {
+    "max_calls": "AGENT_MONITOR_CGM_WRITEUP_MAX_CALLS",
+    "max_seconds": "AGENT_MONITOR_CGM_WRITEUP_MAX_SECONDS",
+    "max_fixes": "AGENT_MONITOR_CGM_WRITEUP_MAX_FIXES",
+}
+# The round's last call ends by its deadline plus the grace; publication is quick.
+_WRITEUP_MARGIN_SECONDS = 60
 # Provider calls in flight at once: (default, minimum, maximum).  The Codex and
 # Claude subscription routes default to 1 unless the variable is set.
 _CONCURRENCY_ENV = "AGENT_MONITOR_CGM_CONCURRENCY"
@@ -555,8 +599,13 @@ def _bounded_int(
     return max(minimum, min(parsed, maximum))
 
 
+def _stage_base(stage: str) -> str:
+    """A call stage's family name: ``writefix-retry-low`` -> ``writefix``."""
+    return str(stage or "").split("-", 1)[0]
+
+
 def _stage_family(stage: str) -> str:
-    base = str(stage or "").split("-", 1)[0]
+    base = _stage_base(stage)
     return _STAGE_TIMEOUT_FAMILY.get(base, base)
 
 
@@ -812,6 +861,9 @@ class _Ctx:
     env: Mapping[str, str] = field(default_factory=dict)
     # Max mode: workers and repairs use this route; ``route`` answers the rest.
     worker_route: Route | None = None
+    # Max mode: stages of these further families (outside the CGM receipt's
+    # call grammar, such as the write-up's writer) also use ``worker_route``.
+    worker_stage_families: frozenset[str] = frozenset()
     api_timeout: int = 300
     concurrency: int = 1
     cancel: threading.Event = field(default_factory=threading.Event)
@@ -860,7 +912,10 @@ class _Ctx:
 
     def route_for(self, stage: str) -> Route:
         """The route that answers ``stage`` (always ``route`` outside Max)."""
-        if self.worker_route is not None and cgm_schema.call_family(stage) in WORKER_FAMILIES:
+        if self.worker_route is not None and (
+            cgm_schema.call_family(stage) in WORKER_FAMILIES
+            or _stage_base(stage) in self.worker_stage_families
+        ):
             return self.worker_route
         return self.route
 
@@ -3428,12 +3483,14 @@ def _cleanup_adapter_temps(root: Path) -> None:
     _cleanup_temp_directory(
         root,
         (),
-        allowed_targets=frozenset({"proof.md"}),
+        allowed_targets=frozenset({"proof.md", WRITEUP_PARTS[-1]}),
     )
     _cleanup_temp_directory(
         root,
         ("math_harness", "project"),
-        allowed_targets=frozenset({"PROBLEM.md", "TARGET.md", "engine_receipt.json"}),
+        allowed_targets=frozenset(
+            {"PROBLEM.md", "TARGET.md", "engine_receipt.json", WRITEUP_SIDECAR_PARTS[-1]}
+        ),
     )
     _cleanup_temp_directory(
         root,
@@ -3454,7 +3511,7 @@ def _preflight_artifacts(root: Path | None = None) -> Path:
     if not root.is_dir():
         raise MathHarnessError("run workspace is not a directory")
 
-    for name in ("problem.txt", "proof.md"):
+    for name in ("problem.txt", "proof.md", WRITEUP_PARTS[-1]):
         path = root / name
         try:
             info = path.lstat()
@@ -3483,6 +3540,7 @@ def _preflight_artifacts(root: Path | None = None) -> Path:
         "PROBLEM.md",
         "TARGET.md",
         "engine_receipt.json",
+        WRITEUP_SIDECAR_PARTS[-1],
     )
     for name in fixed_files:
         candidate = current / name
@@ -4271,6 +4329,11 @@ class _Publication:
     proof_rendering: str
     facts: list[_FactRecord]
     target_id: str | None
+    receipt_binding_sha256: str
+
+    @property
+    def proof_sha256(self) -> str:
+        return _sha256(self.proof_text.encode("utf-8"))
 
 
 def _write_artifacts(
@@ -4342,6 +4405,10 @@ def _write_artifacts(
     # attestation for graph bytes that have changed.
     _remove_regular(root, ("math_harness", "project", "engine_receipt.json"))
     _remove_regular(root, ("math_harness", "project", "TARGET.md"))
+    # A write-up belongs to the generation it was written from; this
+    # generation's own (if any) is written after publication.
+    _remove_regular(root, WRITEUP_SIDECAR_PARTS)
+    _remove_regular(root, WRITEUP_PARTS)
     for old_fact_id in prior_fact_ids:
         _remove_regular(
             root,
@@ -4378,7 +4445,428 @@ def _write_artifacts(
         proof_rendering=rendering,
         facts=facts,
         target_id=target_id,
+        receipt_binding_sha256=json.loads(receipt_payload)["binding_sha256"],
     )
+
+
+# ---------------------------------------------------------------------------
+# the written proof ("write-up"), after publication
+# ---------------------------------------------------------------------------
+
+
+def writeup_enabled(source: Mapping[str, str] | None = None) -> bool:
+    """Whether accepted runs get the written-proof round (``WRITEUP_ENV`` is
+    "1"; jobs.py sets it for Ansatz CGM runs, and it is off otherwise)."""
+    env = source if source is not None else os.environ
+    return str(env.get(WRITEUP_ENV) or "").strip() == "1"
+
+
+def _writeup_limits(env: Mapping[str, str]) -> tuple[Budgets, int]:
+    """The write-up round's own call and time budget, and its fix turns."""
+    guest = _is_guest_run(env)
+    profile = dict(_GUEST_WRITEUP_PROFILE if guest else _WRITEUP_PROFILE)
+    if _max_mode(env):
+        profile["max_seconds"] = _MAX_MODE_WRITEUP_SECONDS
+    values = {
+        name: _bounded_int(
+            env,
+            (_WRITEUP_BUDGET_ENV[name],),
+            default=default,
+            minimum=minimum,
+            maximum=maximum,
+        )
+        for name, (default, minimum, maximum) in profile.items()
+    }
+    budgets = Budgets(
+        max_calls=values["max_calls"],
+        max_seconds=values["max_seconds"],
+        guest=guest,
+        concurrency=1,
+    )
+    return budgets, values["max_fixes"]
+
+
+def writeup_allowance_seconds(source: Mapping[str, str] | None = None) -> int:
+    """Wall clock the write-up round may add after publication: its time
+    budget plus a margin, or 0 when the round is off.  For the outer process
+    watchdog (an invalid setting raises :class:`MathHarnessError`)."""
+    env = source if source is not None else os.environ
+    if not writeup_enabled(env):
+        return 0
+    budgets, _fixes = _writeup_limits(env)
+    return budgets.max_seconds + _WRITEUP_MARGIN_SECONDS
+
+
+@dataclass
+class _Writeup:
+    """Where the write-up round stands (see ``_write_up``)."""
+
+    status: str = "failed"  # accepted | rejected | unchecked | failed
+    body: str | None = None
+    reply: Reply | None = None  # the writer reply ``body`` came from
+    report: VerifierReport | None = None  # the check of ``body``, once made
+    fixes: int = 0
+
+
+def _writeup_ctx(ctx: _Ctx) -> tuple[_Ctx, int]:
+    """A call context of its own for the write-up round, and its fix turns.
+
+    Its calls never reach the CGM receipt, which is already published.  It
+    shares the run's routes, environment, events, stop request and stopped
+    accounts; in Max the writer is the Codex worker and the checker the
+    Claude Code advisor, as for the proof itself.
+    """
+    budgets, fixes = _writeup_limits(ctx.env)
+    wctx = _Ctx(
+        route=ctx.route,
+        worker_route=ctx.worker_route,
+        worker_stage_families=frozenset({"writeup", "writefix"}),
+        budgets=budgets,
+        started=time.monotonic(),
+        env=ctx.env,
+        api_timeout=ctx.api_timeout,
+        concurrency=1,
+        cancel=ctx.cancel,
+        emitter=ctx.emitter,
+        sponsored_kimi=ctx.sponsored_kimi,
+        kimi_retries=ctx.kimi_retries,
+        stopped_routes=ctx.stopped_routes,
+        label="Write-up",
+    )
+    return wctx, fixes
+
+
+def _writeup_blocks(result: _PipelineResult) -> list[cgm_writeup.VerifiedBlock]:
+    """The accepted closure as the writer reads it.
+
+    Its lemmas in the worker's written order, then THEOREM (whose statement
+    is the problem), each with the statement and proof the verifier accepted:
+    no fact ids and no "Cited facts" line.
+    """
+    attempt = result.accepted_attempt
+    assert attempt is not None and attempt.candidate is not None
+    candidate = attempt.candidate
+    verified = set(attempt.verified_labels)
+    labels = [label for label in cgm_parsing.closure_labels(candidate) if label in verified]
+    blocks: list[cgm_writeup.VerifiedBlock] = []
+    for label in [*labels, cgm_parsing.THEOREM_LABEL]:
+        theorem = label == cgm_parsing.THEOREM_LABEL
+        block = candidate.theorem if theorem else candidate.lemma(label)
+        assert block is not None
+        blocks.append(
+            cgm_writeup.VerifiedBlock(
+                label=label,
+                uses=block.uses,
+                statement=cgm_schema.normalize_text(result.problem if theorem else block.statement),
+                proof=cgm_schema.normalize_text(block.proof),
+            )
+        )
+    return blocks
+
+
+def _writer_turn(
+    wctx: _Ctx, stage: str, user: str, labels: Sequence[str], *, family: str
+) -> tuple[str, Reply] | None:
+    """One writer turn (``writeup`` or ``writefix``), keeping a call for the
+    check: the write-up and its reply, or ``None`` (the reason is degraded)."""
+    if _stopped(wctx, stage):
+        wctx.degrade(f"{stage}-route-stopped")
+        return None
+    try:
+        job = _run_single(
+            wctx,
+            stage,
+            reserve=1,
+            work=lambda turn: _call_and_parse(
+                wctx,
+                turn,
+                stage=stage,
+                system=cgm_writeup.WRITEUP_SYSTEM,
+                user=user,
+                limit=MAX_WRITEUP_BYTES,
+                parse=lambda text: cgm_writeup.parse_writeup(text, labels),
+                family=family,
+            ),
+        )
+        return _job_result(job)
+    except ParseError:
+        wctx.degrade(f"{stage}-unparsable")
+    except EmptyReplyError:
+        wctx.degrade(f"{stage}-empty")
+    except ProviderCallError as exc:
+        wctx.degrade(f"{stage}-provider-failure")
+        _stop_route(wctx, stage, exc)
+    except PromptBoundError:
+        # The verified text is never clipped to fit.
+        wctx.degrade(f"{stage}-prompt-too-large")
+    except _BudgetExhausted:
+        wctx.degrade(f"{stage}-stopped-by-budget")
+    return None
+
+
+def _check_turn(
+    wctx: _Ctx, problem: str, body: str, *, reserve: int
+) -> VerifierReport | None:
+    """The independent check of a write-up: the CGM verifier with no
+    predecessors, so the text must prove the problem on its own.  ``None``
+    when the check could not be made or read (the reason is degraded)."""
+    stage = "writecheck"
+    if _stopped(wctx, stage):
+        wctx.degrade("writecheck-route-stopped")
+        return None
+    user = _verifier_prompt(cgm_parsing.THEOREM_LABEL, problem, body, [])
+    try:
+        job = _run_single(
+            wctx,
+            stage,
+            reserve=reserve,
+            work=lambda turn: _call_and_parse(
+                wctx,
+                turn,
+                stage=stage,
+                system=cgm_prompts.VERIFIER_SYSTEM,
+                user=user,
+                limit=MAX_VERIFIER_BYTES,
+                parse=cgm_parsing.parse_verifier,
+                family="verify",
+            ),
+        )
+        report, _reply = _job_result(job)
+        return report
+    except ParseError:
+        wctx.degrade("writecheck-unparsable")
+    except EmptyReplyError:
+        wctx.degrade("writecheck-empty")
+    except ProviderCallError as exc:
+        wctx.degrade("writecheck-provider-failure")
+        _stop_route(wctx, stage, exc)
+    except PromptBoundError:
+        wctx.degrade("writecheck-prompt-too-large")
+    except _BudgetExhausted:
+        wctx.degrade("writecheck-stopped-by-budget")
+    return None
+
+
+def _run_writeup(
+    wctx: _Ctx,
+    outcome: _Writeup,
+    problem: str,
+    blocks: Sequence[cgm_writeup.VerifiedBlock],
+    fixes: int,
+) -> None:
+    """Write, check, and revise a rejected write-up while fix turns remain.
+
+    ``outcome`` always holds the latest write-up and the status of that very
+    text, so a stop request at any point leaves it consistent.
+    """
+    labels = cgm_writeup.forbidden_labels([block.label for block in blocks], problem)
+    written = _writer_turn(
+        wctx, "writeup", cgm_writeup.writeup_prompt(problem, blocks), labels, family="worker"
+    )
+    if written is None:
+        _note("Write-up · no usable write-up; the verified facts remain the proof")
+        return
+    outcome.body, outcome.reply = written
+    outcome.status = "unchecked"
+    while True:
+        _note("Write-up · an independent model verifier checks the text as a whole")
+        can_fix = outcome.fixes < fixes
+        report = _check_turn(wctx, problem, outcome.body, reserve=2 if can_fix else 0)
+        if report is None:
+            _note("Write-up · the check could not be completed; published as not checked")
+            return
+        outcome.report = report
+        outcome.status = "accepted" if report.verdict == "correct" else "rejected"
+        if outcome.status == "accepted":
+            _note("Write-up · accepted by the check")
+            return
+        problems = len(report.critical_errors) + len(report.gaps)
+        if not can_fix or not wctx.can_call(reserve=1):
+            _note(f"Write-up · the check found {problems} problem(s); not accepted")
+            return
+        outcome.fixes += 1
+        _note(
+            f"Write-up · the check found {problems} problem(s); "
+            f"revising ({outcome.fixes} of {fixes})"
+        )
+        revised = _writer_turn(
+            wctx,
+            "writefix",
+            cgm_writeup.writefix_prompt(problem, blocks, outcome.body, report),
+            labels,
+            family="repair",
+        )
+        if revised is None:
+            _note("Write-up · no usable revision; the rejected write-up stays")
+            return
+        outcome.body, outcome.reply = revised
+        outcome.report = None
+        outcome.status = "unchecked"
+
+
+def _route_record_of(route: Route) -> dict[str, str]:
+    return {"provider": route.provider, "model": route.model, "transport": route.transport}
+
+
+def _publish_writeup(
+    root: Path, wctx: _Ctx, outcome: _Writeup, published: _Publication
+) -> str:
+    """Write ``writeup.md`` and then its sidecar; returns writeup.md's sha256."""
+    assert outcome.body is not None and outcome.reply is not None
+    payload = cgm_writeup.render_writeup(outcome.status, outcome.body, outcome.report).encode(
+        "utf-8"
+    )
+    digest = _sha256(payload)
+    observed = outcome.reply.observed_model
+    sidecar = {
+        "schema": cgm_writeup.SIDECAR_SCHEMA,
+        "status": outcome.status,
+        "basis": {
+            "receipt_binding_sha256": published.receipt_binding_sha256,
+            "proof_sha256": published.proof_sha256,
+            "target_fact_id": published.target_id,
+            "proof_rendering": published.proof_rendering,
+        },
+        "writeup_sha256": digest,
+        "bytes": len(payload),
+        "prompt_version": cgm_writeup.WRITEUP_PROMPT_VERSION,
+        "prompt_sha256": cgm_writeup.writeup_prompt_sha256(),
+        "routes": {
+            "writer": _route_record_of(wctx.route_for("writeup")),
+            "checker": _route_record_of(wctx.route_for("writecheck")),
+        },
+        "calls": wctx.calls,
+        "check": cgm_writeup.check_record(outcome.report) if outcome.report else None,
+        "fixes": outcome.fixes,
+        "degraded": list(wctx.degraded),
+        "observed_model": observed[:240] if observed else None,
+        "certificate": False,
+        "created_at": _now(),
+    }
+    _atomic_write(root, WRITEUP_PARTS, payload)
+    _atomic_write(
+        root,
+        WRITEUP_SIDECAR_PARTS,
+        json.dumps(sidecar, ensure_ascii=False, sort_keys=True, indent=2).encode("utf-8")
+        + b"\n",
+    )
+    return digest
+
+
+def _write_up(
+    ctx: _Ctx, root: Path, result: _PipelineResult, published: _Publication
+) -> dict[str, Any] | None:
+    """The written-proof round of an accepted, published generation.
+
+    A writer turns the verified closure into one readable proof, an
+    independent checker reads that text as a whole, and a rejected text gets
+    the configured fix turns; the last write-up is published as
+    ``writeup.md`` with its sidecar ``math_harness/project/writeup.json``.
+    Returns the result's ``writeup`` entry, or ``None`` when the round does
+    not run (it is off, or the run has no accepted target).
+
+    The generation is already published, and this round never fails or
+    changes it: every error, and a stop request, only degrades the write-up.
+    """
+    if published.target_id is None or not writeup_enabled(ctx.env):
+        return None
+    outcome = _Writeup()
+    try:
+        wctx, fixes = _writeup_ctx(ctx)
+    except MathHarnessError as exc:
+        # An invalid write-up setting skips the round, never the run.
+        _note(f"Write-up · skipped ({exc})")
+        return _writeup_entry(outcome, None, calls=0, degraded=["writeup-settings-invalid"])
+    try:
+        blocks = _writeup_blocks(result)
+        _note(f"Write-up · writing one proof from the {len(blocks)} verified blocks")
+        _run_writeup(wctx, outcome, result.problem, blocks, fixes)
+    except RunCancelled:
+        wctx.degrade("writeup-stopped")
+        _note("Write-up · stopped; the run stays published")
+    except Exception as exc:  # noqa: BLE001 - the run is already published
+        wctx.degrade("writeup-failed")
+        _note(f"Write-up · failed ({type(exc).__name__}); the verified facts remain the proof")
+    digest: str | None = None
+    if outcome.body is not None:
+        try:
+            digest = _publish_writeup(root, wctx, outcome, published)
+        except Exception as exc:  # noqa: BLE001 - the run is already published
+            for parts in (WRITEUP_SIDECAR_PARTS, WRITEUP_PARTS):
+                try:
+                    _remove_regular(root, parts)
+                except MathHarnessError:
+                    pass
+            outcome.status = "failed"
+            wctx.degrade("writeup-not-published")
+            _note(f"Write-up · could not be published ({type(exc).__name__})")
+        else:
+            _note(f"Write-up · writeup.md · {outcome.status}")
+    return _writeup_entry(
+        outcome,
+        digest,
+        calls=wctx.calls_used,
+        degraded=list(wctx.degraded),
+        model=wctx.route_for("writeup").model,
+    )
+
+
+def _writeup_entry(
+    outcome: _Writeup,
+    digest: str | None,
+    *,
+    calls: int,
+    degraded: list[str],
+    model: str | None = None,
+) -> dict[str, Any]:
+    """The run result's ``writeup`` entry; the paths are workspace-relative
+    and set only when the write-up was published (``digest`` is its hash)."""
+    reply = outcome.reply
+    return {
+        "status": outcome.status,
+        "path": "/".join(WRITEUP_PARTS) if digest else None,
+        "sidecar": "/".join(WRITEUP_SIDECAR_PARTS) if digest else None,
+        "sha256": digest,
+        "checker_verdict": outcome.report.verdict if outcome.report else None,
+        "fixes": outcome.fixes,
+        "calls": calls,
+        "model": reply.model if reply else model,
+        "observed_model": reply.observed_model if reply else None,
+        "degraded": degraded,
+    }
+
+
+_WRITEUP_STATUS_LINES = {
+    "accepted": (
+        "Written proof: checked by an independent model verifier "
+        "(writeup.md; not a Lean certificate)"
+    ),
+    "rejected": (
+        "Written proof: not accepted: the independent check found problems "
+        "(writeup.md); the verified facts remain the proof"
+    ),
+    "unchecked": (
+        "Written proof: not checked (writeup.md); the verified facts remain the proof"
+    ),
+    "failed": "Written proof: not written; the verified facts remain the proof",
+}
+
+
+def writeup_status_line(result: Mapping[str, Any]) -> str:
+    """One line on the written proof for a run's final message ("" when the
+    round did not run)."""
+    writeup = result.get("writeup")
+    if not isinstance(writeup, Mapping):
+        return ""
+    return _WRITEUP_STATUS_LINES.get(str(writeup.get("status")), "")
+
+
+def writeup_paths(result: Mapping[str, Any]) -> list[str]:
+    """The write-up files a run published (workspace-relative)."""
+    writeup = result.get("writeup")
+    if not isinstance(writeup, Mapping):
+        return []
+    return [path for path in (writeup.get("path"), writeup.get("sidecar")) if path]
 
 
 # ---------------------------------------------------------------------------
@@ -4460,7 +4948,14 @@ def run_pipeline(
     Returns ``{"status": "accepted"|"unattested", "accepted": bool,
     "proof_path", "proof_text", "receipt_path", "target_fact_id",
     "fact_ids", "written", "calls", "stages", "verdicts", "degraded",
-    "prompt_pack_sha256", "provider", "model", "observed_model"}``.  Every
+    "prompt_pack_sha256", "provider", "model", "observed_model"}``, plus
+    ``"writeup": {"status": "accepted"|"rejected"|"unchecked"|"failed",
+    "path", "sidecar", "sha256", "checker_verdict", "fixes", "calls",
+    "model", "observed_model", "degraded"}`` when the written-proof round
+    ran (an accepted run with ``AGENT_MONITOR_CGM_WRITEUP=1``; see
+    ``_write_up``): ``writeup.md`` and ``math_harness/project/writeup.json``,
+    whose paths are set only when published.  ``calls`` and ``degraded``
+    count the CGM pipeline's own calls; the round's are its own.  Every
     failure raises :class:`MathHarnessError` (``ProviderCallError`` for a
     provider failure, :class:`RunCancelled` when a SIGTERM arrives before
     publication starts) and publishes no receipt: an unsafe workspace, a
@@ -4606,8 +5101,10 @@ def _run_pipeline(
         prior_fact_ids=prior_fact_ids,
     )
     target_id = published.target_id
+    # After publication: never fails or changes the published generation.
+    writeup = _write_up(ctx, root, result, published)
     author = result.best_attempt.reply
-    return {
+    outcome = {
         "status": "accepted" if target_id else "unattested",
         "accepted": target_id is not None,
         "proof_path": str(root / "proof.md"),
@@ -4633,6 +5130,9 @@ def _run_pipeline(
         "model": author.model if author else route.model,
         "observed_model": getattr(author, "observed_model", None),
     }
+    if writeup is not None:
+        outcome["writeup"] = writeup
+    return outcome
 
 
 def main() -> int:
@@ -4676,7 +5176,9 @@ def main() -> int:
     emit_item(
         {
             "type": "file_change",
-            "changes": [{"path": path} for path in result["written"]],
+            "changes": [
+                {"path": path} for path in [*result["written"], *writeup_paths(result)]
+            ],
         }
     )
     status = (
@@ -4685,8 +5187,12 @@ def main() -> int:
         if result["accepted"]
         else "not verifier-accepted (unattested candidate)"
     )
+    written_proof = writeup_status_line(result)
+    if written_proof:
+        status += f"\n{written_proof}"
     # Attribute the published proof to its author, never the strategist,
     # verifier or curator, nor the routing model when telemetry is absent.
+    # The message carries the verified closure, not the write-up.
     observed = result.get("observed_model")
     emit_item(
         {

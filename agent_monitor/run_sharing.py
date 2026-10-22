@@ -449,6 +449,28 @@ def _analysis_snapshot(run_id, data, read, graph):
     return result
 
 
+def _writeup_fields(data, read):
+    """The written proof of an Ansatz CGM run (writeup.md, at most 300 KB), its
+    status from the sidecar that describes it, and whether it was written for
+    the shared proof.md; nothing for other runs or a run without one."""
+    from agent_monitor.engine_graph import CGM_GRAPH_ENGINES
+
+    if str(data.get('engine') or '').strip().lower() not in CGM_GRAPH_ENGINES:
+        return {}
+    writeup = read('writeup.md')
+    if not writeup:
+        return {}
+    from agent_monitor.cgm import writeup as cgm_writeup
+
+    view = cgm_writeup.describe(
+        writeup.encode('utf-8'),
+        read('math_harness/project/writeup.json').encode('utf-8') or None,
+        proof=read('proof.md').encode('utf-8') or None,
+        receipt=read('math_harness/project/engine_receipt.json').encode('utf-8') or None,
+    )
+    return {'writeup': writeup, 'writeup_status': view['status'], 'writeup_fresh': view['fresh']}
+
+
 def snapshot(run_id, data):
     if not isinstance(run_id, str) or not RUN_ID.fullmatch(run_id) or '..' in run_id:
         raise ValueError('Invalid run identifier.')
@@ -495,6 +517,7 @@ def snapshot(run_id, data):
         'formal_graph': graph('lean_proof_graph.json'), 'lean_source': read('lean/Proof.lean'),
         'notice': 'Read-only snapshot selected by the run owner. It does not update as the run continues. Graphs describe dependencies; they are not, by themselves, proof certificates.',
     }
+    result.update(_writeup_fields(data, read))
     result['graphs'] = _graph_modes(ws, data, read, result, safe_workspace=safe_ws)
     result['informal_graph'] = result['graphs']['outline']['graph']
     result['formal_graph'] = result['graphs']['formal']['graph']

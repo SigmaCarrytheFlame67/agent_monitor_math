@@ -235,6 +235,63 @@ ceilings, so an environment value can only lower them.
 - After deploying a change to `agent_monitor/kimi_k3.py`, restart
   `agent-monitor`: the console loads that module at start, and Formal/DAG and
   Lean calls keep their previous sponsored handling until the restart.
+- An accepted run's `proof.md` names each lemma by the label its proofs cite
+  it by (`## Lemma L1 · fact …`, `**Uses:** Lemma L1 (fact …)`; ties in the
+  order are broken by label, L2 before L10). The receipt records this as
+  `proof_rendering: verified-closure@2`; runs published earlier keep their
+  numbered `verified-closure@1` proof and attest as before.
+
+### Written proof (write-up)
+
+After an accepted run is published, a written-proof round turns the verified
+fact closure into one proof written for a reader (`agent_monitor/cgm/writeup.py`,
+prompt version `cgm-writeup@1`). A writer receives only the problem and the
+verified blocks (each statement and proof exactly as the verifier accepted
+it, in the worker's order, without fact ids) and writes a **Theorem**, any
+**Conventions** once, and the **Proof** in Markdown with LaTeX. An independent
+checker, the CGM verifier with no predecessors, then reads the problem and
+that text alone. A rejected text may be revised and checked again.
+
+- The write-up is `writeup.md` (a fixed header by status, then the model's
+  text) with its sidecar `math_harness/project/writeup.json`: status, the
+  generation it was written from (receipt binding, `proof.md` hash, target,
+  rendering), its own hash, the prompt hash, routes, call records, the check
+  and `certificate: false`. Neither is part of the engine receipt: `proof.md`,
+  the facts and attestation are unchanged, and the verified facts remain the
+  proof. Model-verifier acceptance of the write-up is not a certificate.
+- Status `accepted` (the last check passed), `rejected` (it found problems,
+  listed at the end of `writeup.md`) or `unchecked` (the check could not be
+  made). When the writer gives no usable text there is no write-up. Every
+  publication of a generation first removes the previous write-up, and the
+  console marks a write-up stale once `proof.md` or the receipt changed.
+- The round never fails or changes a published run: provider, budget and
+  format failures only degrade it (`writeup.json` and the run result list why),
+  and Stop during the round ends only the round (the runner still exits 0).
+- The console decides per run: `AGENT_MONITOR_CGM_WRITEUP` (default on; `0`
+  turns the round off for every CGM run) and
+  `AGENT_MONITOR_CGM_WRITEUP_GUESTS` (default on; `0` turns it off for guest
+  and sponsored runs). The runner reads only the `AGENT_MONITOR_CGM_WRITEUP`
+  value jobs.py passes, and an unset value means off.
+
+| Variable | Signed-in default (range) | Guest, public, sponsored |
+|---|---|---|
+| `AGENT_MONITOR_CGM_WRITEUP_MAX_CALLS` (the round's own calls, retries included) | 6 (2–12) | 4 |
+| `AGENT_MONITOR_CGM_WRITEUP_MAX_SECONDS` (its own wall clock) | 1800, Max 3600 (120–3600) | 1200 |
+| `AGENT_MONITOR_CGM_WRITEUP_MAX_FIXES` (revisions of a rejected text) | 1 (0–2) | 0 |
+
+- The round runs on the run's route; in Max, Codex writes and revises and
+  Claude Code checks. Kimi writes at low effort under the 8192-token ceiling.
+  Claude Code calls use the candidate (writer), revision (fix) and critic
+  (check) timeouts.
+- The outer watchdog, a sponsored token's lifetime and the derived-views wait
+  add the round's `MAX_SECONDS` plus 60 s when it is on (Max: at least
+  14760 s). A sponsored run stays within the 6600 s cap: 2400 + 900 + 300 +
+  1200 + 60 s at most.
+- Policy note for the owner: with the round on, a guest or sponsored run
+  whose proof is accepted makes up to 4 more Kimi calls (16 recorded calls
+  instead of 12, plus the run's shared six transport retries), counted
+  against the broker's per-token quota and `PUBLIC_KIMI_GATEWAY_CALLS_PER_HOUR`.
+  `AGENT_MONITOR_CGM_WRITEUP_GUESTS=0` keeps guests and sponsored runs at 12.
 
 ### Guest Formal/Lean and DAG actions
 
