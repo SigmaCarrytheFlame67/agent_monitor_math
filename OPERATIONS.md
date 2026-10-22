@@ -274,8 +274,10 @@ that text alone. A rejected text may be revised and checked again.
   (see above): before its publication the run is stopped and nothing is
   published; after it, the runner records the write-up as far as it got,
   reports and exits 0, and the console records the run as finished (a
-  receipt written during the run is the evidence) without starting queued
-  follow-ups. Stop pressed again meanwhile sends nothing more; a runner that
+  receipt written during the run is the evidence; the Stop itself is
+  recorded before the runner is signalled, so the run's outcome is the last
+  word) without starting queued follow-ups. Stop pressed again meanwhile
+  sends nothing more; a runner that
   has not exited 30 s after the first is killed. The watchdog firing during
   the round likewise leaves the run finished. A server restart during the
   round marks the run interrupted, as for any running run: its `proof.md`
@@ -300,7 +302,10 @@ that text alone. A rejected text may be revised and checked again.
 - The outer watchdog, a sponsored token's lifetime and the derived-views wait
   add the round's `MAX_SECONDS` plus 60 s when it is on (Max: at least
   14760 s), also on top of an operator's `AGENT_MONITOR_CLI_TIMEOUT` or
-  `AGENT_MONITOR_{KIMI,MATH_HARNESS}_TIMEOUT`, which bound the pipeline. A
+  `AGENT_MONITOR_{KIMI,MATH_HARNESS}_TIMEOUT`. Those bound the run until it
+  publishes: a run that has not published by then is timed out as before,
+  and only a published run gets the round's allowance (not for Max, which
+  operator timeouts never cut short). A
   sponsored run stays within the 6600 s cap: 2400 + 900 + 300 + 1200 + 60 s
   at most.
 - Lean and the DAGs of a run that gets the round start once the run has
@@ -645,6 +650,9 @@ the listing, with a per-viewer `readability` policy).
   is also held to 150 calls and 5,400 s. Guests start one readability run
   per hour (three per client network) on top of the guest run limits;
   members count against the member run limits (2 at once, 12 per hour).
+  Policy note for the owner: a member's sponsored run may spend up to four
+  of its 30 calls on repairs (two parts rewritten again and re-checked);
+  guests' runs are never repaired.
 - **Sponsored capacity.** Readability shares Analyze's sponsored pool
   (`AGENT_MONITOR_ANALYZE_SPONSORED_*`, the same daily count file): a run
   holds the key `<run id>` and counts as one sponsored start. A question
@@ -678,9 +686,9 @@ the listing, with a per-viewer `readability` policy).
   at most 30,000 characters of source, 12,000 on guest and sponsored runs;
   the bibliography is never rewritten; each rewrite gets the printed name
   of every label its part cites, `<REFERENCES>`), 4 Check
-  (one independent call per rewritten part; outside guest and sponsored
-  runs, a part with major problems is rewritten once more and checked
-  again), 5 Publish (`readable.md`, `paper_map.json`, `notation.json`,
+  (one independent call per rewritten part; a part with major problems is
+  rewritten once more and checked again, within the run's call cap: at most
+  two parts on a member's sponsored run, none on a guest's), 5 Publish (`readable.md`, `paper_map.json`, `notation.json`,
   `guide.json`, `check.json`, and `receipt.json` written last). In
   `readable.md` (and in answers) leftover LaTeX is written out: `\ref`,
   `\eqref`, `\cref`, `\Cref`, `\autoref` and `\pageref` become the printed
@@ -688,8 +696,17 @@ the listing, with a per-viewer `readability` policy).
   brackets when the parser does not know it. Equation labels are known only
   where the same part tags the display (`\tag{2.1}\label{x}`: `\eqref{x}`
   reads "(2.1)"); the parser numbers no equations. `\cite[x]{a,b}` becomes
-  "[a, b, x]" and `\label` is dropped; each part's headings are shifted so
-  that its top one is `##`. The receipt's `notes` say why the first reply
+  "[a, b, x]" and `\label` is dropped; text-mode LaTeX a rewrite kept is
+  written as Markdown (a theorem-like environment opens with its printed
+  name in bold, a proof ends with ∎, lists keep the manuscript's labels,
+  `\emph`, `\section`, footnotes, TeX quotes, accents and dashes), and
+  each part and answer is then held to the parser's contract again (no line
+  opens a link definition, one of the runner's marks or a fence, and no raw
+  HTML outside math); each part's headings are shifted so
+  that its top one is `##`. A manuscript with no title of its own (pasted
+  without one, or headed only "Proof" or "Written proof", as Make readable
+  pastes a written proof) is named by the guide's title in `readable.md`,
+  the paper map and the run list. The receipt's `notes` say why the first reply
   of a stage could not be read (the parser's message, or that the reply was
   refused unread for its size or tool-call markup), which is what its format
   reminder answered.
