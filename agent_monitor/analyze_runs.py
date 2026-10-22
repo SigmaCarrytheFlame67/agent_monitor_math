@@ -16,7 +16,11 @@ keeps the sponsored budget bounded:
   exit path; a restart starts empty) and a site-wide daily cap persisted in
   the console data directory (``AGENT_MONITOR_ANALYZE_SPONSORED_RUNS_PER_DAY``,
   default 40, ``0`` turns sponsored Analyze off).  Each sponsored analysis and
-  each sponsored re-check counts once.
+  each sponsored re-check counts once.  Readability shares the pool
+  (``readability_runs``), with refusals worded for it (:class:`GateMessages`).
+* :func:`normalize_source` validates a manuscript source for either mode, and
+  :func:`is_manuscript_record` tells the security gates that a run reads
+  someone's manuscript (an analysis or a readability run).
 * :func:`lean_inputs` turns selected nodes of a finished analysis into the
   statement-only Lean inputs (``lean_verify.generate(..., prove=False)``).
 * :func:`viewer_policy` is the per-viewer ``analyze`` object of the engine
@@ -35,6 +39,7 @@ import tempfile
 import threading
 import time
 from collections import OrderedDict
+from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Mapping
@@ -43,8 +48,11 @@ from agent_monitor.analyze.titles import plain_title
 
 RUN_KIND = "analyze"
 PROVE = "prove"
-RUN_KINDS = (PROVE, RUN_KIND)
+# Readability (``agent_monitor.readability_runs``) is the other manuscript mode.
+READABILITY = "readability"
+RUN_KINDS = (PROVE, RUN_KIND, READABILITY)
 ENGINE_ID = "analyze"
+MANUSCRIPT_KINDS = frozenset({RUN_KIND, READABILITY})
 ROLES = ("guest", "member", "admin")
 
 GUEST_CONNECTORS = frozenset({"arxiv", "github", "openai_math"})
@@ -112,6 +120,25 @@ GUEST_SHARE_DAILY_MESSAGE = (
 GUEST_RECHECK_LIMIT_MESSAGE = (
     "Guests can re-check {limit} results of an analysis; sign in to re-check more"
 )
+
+
+@dataclass(frozen=True)
+class GateMessages:
+    """How a sponsored-capacity refusal names the mode that asked (the pool
+    itself is one: Analyze and Readability share it)."""
+
+    off: str = SPONSORED_OFF_MESSAGE
+    guest_off: str = GUEST_SPONSORED_OFF_MESSAGE
+    busy: str = BUSY_MESSAGE
+    guest_busy: str = GUEST_BUSY_MESSAGE
+    guest_share_busy: str = GUEST_SHARE_BUSY_MESSAGE
+    daily: str = DAILY_LIMIT_MESSAGE
+    guest_daily: str = GUEST_DAILY_LIMIT_MESSAGE
+    guest_share_daily: str = GUEST_SHARE_DAILY_MESSAGE
+    held: str = "This analysis already holds a sponsored slot"
+
+
+ANALYZE_GATE = GateMessages()
 STATUS_LABEL = "Statements compiled · proofs not attempted"
 MODEL_VERIFIER_NOTE = "checked by a model verifier — not a certificate"
 UPSTREAM_LEAN_NOTE = "Upstream Lean: not re-checked by this server"
@@ -166,6 +193,17 @@ def is_analyze_record(record: Mapping[str, Any] | None) -> bool:
     return str(data.get("run_kind") or "") == RUN_KIND or str(data.get("engine") or "") == ENGINE_ID
 
 
+def is_manuscript_record(record: Mapping[str, Any] | None) -> bool:
+    """Whether a run record (or job) reads someone's manuscript (Analyze or
+    Readability).  Such a run is never a proof: no proof.md promotion, no
+    derived proof views, no library or DAG memory, no continuation, no proof
+    editing, no compilation of its TeX, no ``source/`` in a share, and it
+    never becomes research memory."""
+    data = record or {}
+    return (str(data.get("run_kind") or "") in MANUSCRIPT_KINDS
+            or str(data.get("engine") or "") in MANUSCRIPT_KINDS)
+
+
 def run_kind_of(body: Mapping[str, Any]) -> str:
     """The requested run kind (absent means ``prove``); raises on anything else."""
     raw = body.get("run_kind")
@@ -173,7 +211,7 @@ def run_kind_of(body: Mapping[str, Any]) -> str:
         return PROVE
     kind = str(raw).strip().lower() if isinstance(raw, str) else ""
     if kind not in RUN_KINDS:
-        raise AnalyzeRequestError('run_kind must be "prove" or "analyze"')
+        raise AnalyzeRequestError('run_kind must be "prove", "analyze" or "readability"')
     return kind
 
 
@@ -285,7 +323,7 @@ def paste_title(text: str) -> str:
     return f"pasted manuscript ({len(text):,} characters)"
 
 
-def validate_link(url: object, role: str) -> dict[str, Any]:
+def validate_link(url: object, role: str, *, guest_refusal: str = GUEST_LINK_REFUSAL) -> dict[str, Any]:
     """``sources.classify`` plus the role rules; returns the classification."""
     if not isinstance(url, str) or not url.strip():
         raise AnalyzeRequestError("Paste a link to analyze")
@@ -295,7 +333,7 @@ def validate_link(url: object, role: str) -> dict[str, Any]:
     if not info.get("ok"):
         raise AnalyzeRequestError(str(info.get("error") or "That link can't be analyzed"))
     if role == "guest" and info.get("connector") not in GUEST_CONNECTORS:
-        raise AnalyzeRequestError(GUEST_LINK_REFUSAL)
+        raise AnalyzeRequestError(guest_refusal)
     if info.get("connector") == "openai_math" and info.get("kind") in ("root", "preprints"):
         raise AnalyzeRequestError(
             "Pick one manuscript of openai/math — the whole collection is not analyzed at once"
@@ -303,19 +341,25 @@ def validate_link(url: object, role: str) -> dict[str, Any]:
     return info
 
 
-def normalize_request(body: Mapping[str, Any], user: Mapping[str, Any] | None) -> dict[str, Any]:
-    """Validate the Analyze fields of a ``POST /api/runs`` body.
+SOURCE_MISSING = "Paste a link or a manuscript, or upload files to analyze"
+ONE_SOURCE = "Analyze one source at a time: a link, pasted text or uploaded files"
 
-    Returns ``{"source": <request source>, "max_nodes": int | None,
-    "focus": str, "formalize": bool, "label": str, "connector": str | None,
-    "attachments": list}``; the ``source`` is the ``analysis/request.json``
-    source except that uploads list no ids yet (``jobs.start_job`` adds them).
-    Raises :class:`AnalyzeRequestError` with a plain message.
+
+def normalize_source(
+    body: Mapping[str, Any],
+    role: str,
+    *,
+    missing: str = SOURCE_MISSING,
+    one_source: str = ONE_SOURCE,
+    guest_refusal: str = GUEST_LINK_REFUSAL,
+) -> dict[str, Any]:
+    """Validate the manuscript of a ``POST /api/runs`` body by role (the
+    other keyword arguments word the refusals for the mode that asks).
+
+    Returns ``{"source", "label", "connector", "attachments"}``; the
+    ``source`` is the request file's source except that uploads list no ids
+    yet (``jobs.start_job`` adds them).  Raises :class:`AnalyzeRequestError`.
     """
-    role = role_of(user)
-    engine = str(body.get("engine") or ENGINE_ID).strip().lower()
-    if engine != ENGINE_ID:
-        raise AnalyzeRequestError('Analyze runs use the "analyze" engine')
     raw_source = body.get("source")
     if raw_source is None:
         raw_source = {}
@@ -342,34 +386,13 @@ def normalize_request(body: Mapping[str, Any], user: Mapping[str, Any] | None) -
     given = [name for name, present in (("link", bool(url)), ("text", bool(text.strip())), ("uploads", bool(uploads)))
              if present]
     if not given:
-        raise AnalyzeRequestError("Paste a link or a manuscript, or upload files to analyze")
+        raise AnalyzeRequestError(missing)
     if len(given) > 1:
-        raise AnalyzeRequestError("Analyze one source at a time: a link, pasted text or uploaded files")
-
-    options = body.get("analyze")
-    if options is None:
-        options = {}
-    if not isinstance(options, Mapping):
-        raise AnalyzeRequestError("analyze must be an object")
-    max_nodes = options.get("max_nodes")
-    if max_nodes is not None:
-        if isinstance(max_nodes, bool) or not isinstance(max_nodes, int) or not 1 <= max_nodes <= 256:
-            raise AnalyzeRequestError("analyze.max_nodes must be a whole number from 1 to 256")
-    focus = options.get("focus")
-    if focus is None:
-        focus = ""
-    if not isinstance(focus, str):
-        raise AnalyzeRequestError("analyze.focus must be text")
-    focus = focus.strip()
-    if len(focus) > MAX_FOCUS_CHARS:
-        raise AnalyzeRequestError(f"The focus is limited to {MAX_FOCUS_CHARS:,} characters")
-    formalize = body.get("formalize")
-    if formalize is not None and not isinstance(formalize, bool):
-        raise AnalyzeRequestError("formalize must be true or false")
+        raise AnalyzeRequestError(one_source)
 
     connector: str | None = None
     if url:
-        info = validate_link(url, role)
+        info = validate_link(url, role, guest_refusal=guest_refusal)
         connector = str(info.get("connector") or "")
         source: dict[str, Any] = {"kind": "url", "url": url}
         # The previewed title when there was a preview; the runner's own
@@ -403,14 +426,51 @@ def normalize_request(body: Mapping[str, Any], user: Mapping[str, Any] | None) -
         names = [str((item or {}).get("name") or "").replace("\\", "/").split("/")[-1][:80] for item in uploads]
         names = [name for name in names if name]
         label = ", ".join(names[:2]) + (f" +{len(names) - 2}" if len(names) > 2 else "") or "uploaded files"
+    return {"source": source, "label": label, "connector": connector, "attachments": uploads}
+
+
+def normalize_request(body: Mapping[str, Any], user: Mapping[str, Any] | None) -> dict[str, Any]:
+    """Validate the Analyze fields of a ``POST /api/runs`` body.
+
+    Returns ``{"source": <request source>, "max_nodes": int | None,
+    "focus": str, "formalize": bool, "label": str, "connector": str | None,
+    "attachments": list}`` (see :func:`normalize_source`).
+    Raises :class:`AnalyzeRequestError` with a plain message.
+    """
+    role = role_of(user)
+    engine = str(body.get("engine") or ENGINE_ID).strip().lower()
+    if engine != ENGINE_ID:
+        raise AnalyzeRequestError('Analyze runs use the "analyze" engine')
+    manuscript = normalize_source(body, role)
+
+    options = body.get("analyze")
+    if options is None:
+        options = {}
+    if not isinstance(options, Mapping):
+        raise AnalyzeRequestError("analyze must be an object")
+    max_nodes = options.get("max_nodes")
+    if max_nodes is not None:
+        if isinstance(max_nodes, bool) or not isinstance(max_nodes, int) or not 1 <= max_nodes <= 256:
+            raise AnalyzeRequestError("analyze.max_nodes must be a whole number from 1 to 256")
+    focus = options.get("focus")
+    if focus is None:
+        focus = ""
+    if not isinstance(focus, str):
+        raise AnalyzeRequestError("analyze.focus must be text")
+    focus = focus.strip()
+    if len(focus) > MAX_FOCUS_CHARS:
+        raise AnalyzeRequestError(f"The focus is limited to {MAX_FOCUS_CHARS:,} characters")
+    formalize = body.get("formalize")
+    if formalize is not None and not isinstance(formalize, bool):
+        raise AnalyzeRequestError("formalize must be true or false")
     return {
-        "source": source,
+        "source": manuscript["source"],
         "max_nodes": max_nodes,
         "focus": focus,
         "formalize": formalize is True,
-        "label": label,
-        "connector": connector,
-        "attachments": uploads,
+        "label": manuscript["label"],
+        "connector": manuscript["connector"],
+        "attachments": manuscript["attachments"],
     }
 
 
@@ -611,16 +671,17 @@ def _seconds_to_midnight(now: float | None = None) -> int:
 
 
 class SponsoredGate:
-    """At most ``sponsored_concurrency()`` sponsored Analyze processes and
-    ``sponsored_runs_per_day()`` sponsored starts per UTC day; guests hold at
-    most ``guest_sponsored_concurrency()`` of those slots and
-    ``guest_sponsored_runs_per_day()`` of those starts.
+    """At most ``sponsored_concurrency()`` sponsored manuscript processes
+    (Analyze and Readability) and ``sponsored_runs_per_day()`` sponsored starts
+    per UTC day; guests hold at most ``guest_sponsored_concurrency()`` of those
+    slots and ``guest_sponsored_runs_per_day()`` of those starts.
 
-    Slots live in memory and are keyed (run id, or ``<run id>#recheck``) so a
-    release is idempotent; the daily counts (``runs``, and ``guest_runs`` for
-    the guests' share) are a small JSON file in the console data directory,
-    updated under a file lock.  A slot whose process never started can be
-    refunded.
+    Slots live in memory and are keyed (run id, ``<run id>#recheck`` or
+    ``<run id>#ask``) so a release is idempotent; the daily counts (``runs``,
+    and ``guest_runs`` for the guests' share) are a small JSON file in the
+    console data directory, updated under a file lock.  A slot whose process
+    never started can be refunded.  Refusals are worded by the caller's
+    :class:`GateMessages`.
     """
 
     STALE_SECONDS = 120.0
@@ -716,41 +777,41 @@ class SponsoredGate:
             self._prune()
             return len(self._active)
 
-    def _refusal(self, *, guest: bool) -> AnalyzeCapacityError | None:
+    def _refusal(self, *, guest: bool, messages: GateMessages) -> AnalyzeCapacityError | None:
         cap = sponsored_runs_per_day()
         guest_cap = guest_sponsored_runs_per_day()
         if cap <= 0 or (guest and guest_cap <= 0):
-            return AnalyzeCapacityError(GUEST_SPONSORED_OFF_MESSAGE if guest else SPONSORED_OFF_MESSAGE,
-                                        status=403)
+            return AnalyzeCapacityError(messages.guest_off if guest else messages.off, status=403)
         if len(self._active) >= sponsored_concurrency():
-            message = (GUEST_BUSY_MESSAGE if guest else BUSY_MESSAGE).format(active=len(self._active))
+            message = (messages.guest_busy if guest else messages.busy).format(active=len(self._active))
             return AnalyzeCapacityError(message, retry_after=60)
         if guest and self._guest_slots() >= guest_sponsored_concurrency():
-            return AnalyzeCapacityError(GUEST_SHARE_BUSY_MESSAGE.format(active=self._guest_slots()),
+            return AnalyzeCapacityError(messages.guest_share_busy.format(active=self._guest_slots()),
                                         retry_after=60)
         today = self._today()
         if today["runs"] >= cap:
-            return AnalyzeCapacityError(GUEST_DAILY_LIMIT_MESSAGE if guest else DAILY_LIMIT_MESSAGE,
+            return AnalyzeCapacityError(messages.guest_daily if guest else messages.daily,
                                         retry_after=_seconds_to_midnight())
         if guest and today["guest_runs"] >= guest_cap:
-            return AnalyzeCapacityError(GUEST_SHARE_DAILY_MESSAGE, retry_after=_seconds_to_midnight())
+            return AnalyzeCapacityError(messages.guest_share_daily, retry_after=_seconds_to_midnight())
         return None
 
-    def capacity_error(self, *, guest: bool = False) -> AnalyzeCapacityError | None:
+    def capacity_error(self, *, guest: bool = False,
+                       messages: GateMessages = ANALYZE_GATE) -> AnalyzeCapacityError | None:
         """The refusal a sponsored start would get now (reserves nothing)."""
         with self._lock:
             self._prune()
-            return self._refusal(guest=guest)
+            return self._refusal(guest=guest, messages=messages)
 
-    def reserve(self, key: str, *, run_id: str, guest: bool = False) -> None:
+    def reserve(self, key: str, *, run_id: str, guest: bool = False, messages: GateMessages = ANALYZE_GATE) -> None:
         """Take a slot and count one sponsored start (and one of the guests'
         share for a guest); raises :class:`AnalyzeCapacityError` when busy or
         at a daily cap."""
         with self._lock:
             self._prune()
             if key in self._active:
-                raise AnalyzeCapacityError("This analysis already holds a sponsored slot", status=409)
-            refusal = self._refusal(guest=guest)
+                raise AnalyzeCapacityError(messages.held, status=409)
+            refusal = self._refusal(guest=guest, messages=messages)
             if refusal is not None:
                 raise refusal
             cap = sponsored_runs_per_day()
@@ -760,11 +821,11 @@ class SponsoredGate:
             def count(usage: dict[str, Any]) -> bool:
                 if _count(usage.get("runs")) >= cap:
                     refused.append(AnalyzeCapacityError(
-                        GUEST_DAILY_LIMIT_MESSAGE if guest else DAILY_LIMIT_MESSAGE,
+                        messages.guest_daily if guest else messages.daily,
                         retry_after=_seconds_to_midnight()))
                     return False
                 if guest and _count(usage.get("guest_runs")) >= guest_cap:
-                    refused.append(AnalyzeCapacityError(GUEST_SHARE_DAILY_MESSAGE,
+                    refused.append(AnalyzeCapacityError(messages.guest_share_daily,
                                                         retry_after=_seconds_to_midnight()))
                     return False
                 usage["runs"] = _count(usage.get("runs")) + 1
