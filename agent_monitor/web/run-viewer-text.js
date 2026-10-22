@@ -67,6 +67,21 @@
     return result + prose(source.slice(end));
   }
 
+  // proof.md of a CGM run published before closure rendering v2 numbers its
+  // lemmas in topological order, while each proof cites the worker's labels
+  // ("Cited facts: L1 = fact …"). On screen only, name the lemma each label
+  // stands for; the saved document keeps its attested bytes.
+  function closureCitedLemmas(value) {
+    const source = String(value || '');
+    if (!source.startsWith('# Proof\n\nThis proof is the verified fact closure')) return source;
+    const numbers = new Map([...source.matchAll(/^## Lemma (\d+) · fact ([0-9a-f]{16})$/gm)].map(match => [match[2], match[1]]));
+    if (!numbers.size) return source;
+    return source.replace(/^Cited facts: (.+)\.$/gm, (line, list) => 'Cited facts: ' + list.split('; ').map(item => {
+      const cite = /^(\S+) = fact ([0-9a-f]{16})$/.exec(item);
+      return cite && numbers.has(cite[2]) ? `${cite[1]} = Lemma ${numbers.get(cite[2])} (fact ${cite[2]})` : item;
+    }).join('; ') + '.');
+  }
+
   function math(target, options = {}) {
     if (typeof window.renderMathInElement !== 'function') return;
     if (options.manuscript) {
@@ -96,7 +111,7 @@
   }
 
   function render(target, value, options = {}) {
-    const original = options.manuscript ? manuscriptProse(value) : String(value || '');
+    const original = options.manuscript ? manuscriptProse(value) : closureCitedLemmas(value);
     const slots = [];
     const hold = expression => {
       slots.push(expression);
@@ -120,5 +135,5 @@
     math(target);
   }
 
-  window.AnsatzSharedText = Object.freeze({ render, math, manuscriptProse });
+  window.AnsatzSharedText = Object.freeze({ render, math, manuscriptProse, closureCitedLemmas });
 })();

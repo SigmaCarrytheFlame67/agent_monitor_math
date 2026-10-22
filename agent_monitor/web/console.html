@@ -4754,12 +4754,25 @@ function dagCoverageForNode(node,isLean){
     )
   )||null;
 }
+/* proof.md of a CGM run published before closure rendering v2 numbers its
+   lemmas in topological order, while each proof cites the worker's labels
+   ("Cited facts: L1 = fact …"). On screen only, name the lemma each label
+   stands for; the file and its download keep their attested bytes. */
+function closureCitedLemmas(text){
+  if(!text.startsWith('# Proof\n\nThis proof is the verified fact closure'))return text;
+  const numbers=new Map([...text.matchAll(/^## Lemma (\d+) · fact ([0-9a-f]{16})$/gm)].map(match=>[match[2],match[1]]));
+  if(!numbers.size)return text;
+  return text.replace(/^Cited facts: (.+)\.$/gm,(line,list)=>'Cited facts: '+list.split('; ').map(item=>{
+    const cite=/^(\S+) = fact ([0-9a-f]{16})$/.exec(item);
+    return cite&&numbers.has(cite[2])?`${cite[1]} = Lemma ${numbers.get(cite[2])} (fact ${cite[2]})`:item;
+  }).join('; ')+'.');
+}
 function renderMarkdownIntoView(text, live, run){
   if(sandboxEditing)return;
   sandboxText=String(text||''); syncSandboxEditor();
   run=run||lastSandboxRun;
   const problems=problemItems(run);
-  const displayText=normalizeProofMarkdown(sandboxText);
+  const displayText=closureCitedLemmas(normalizeProofMarkdown(sandboxText));
   const proofs=splitProofs(displayText);
   if(!problems.length&&!proofs.length)return;
   setProofEmpty(false); $('pdf-pages').style.display='none';
