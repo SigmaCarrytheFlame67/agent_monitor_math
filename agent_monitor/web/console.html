@@ -3655,10 +3655,10 @@ const ENGINE_TONE={kimi:'195 74% 48%',hermes:'154 72% 45%',improof:'221 89% 59%'
 /* The Ansatz CGM engines lead the launcher: Kimi K3 (guest default) and the
    same pipeline on an account's own Codex / Claude Code / API route. */
 const CGM_ENGINE_COPY={
-  kimi:'Ansatz CGM on Kimi K3: strategist → workers → independent verifier → curator · tool-free · Facts + Explore graphs',
-  math_harness:'Ansatz CGM on your own Codex, Claude Code or API route · same pipeline · Facts + Explore graphs',
+  kimi:'Ansatz CGM on Kimi K3: strategist → workers → independent verifier → curator · tool-free · Facts + Explore graphs · an accepted run ends with a written proof, checked as a whole',
+  math_harness:'Ansatz CGM on your own Codex, Claude Code or API route · same pipeline · Facts + Explore graphs · an accepted run ends with a written proof, checked as a whole',
   // The harness as a member sees it (own_key_only): its own API keys only.
-  own_key:'Ansatz CGM on a model from your own API keys · same pipeline · Facts + Explore graphs',
+  own_key:'Ansatz CGM on a model from your own API keys · same pipeline · Facts + Explore graphs · an accepted run ends with a written proof, checked as a whole',
 };
 function engineMenuOrder(list){
   /* CGM engines first: one this session can use before a sign-in-only one,
@@ -3672,8 +3672,8 @@ function engineMenuOrder(list){
    model on `math_harness`, the same pipeline on the account's own route. Runs
    keep the real engine id. */
 const CGM_FAMILY={label:'Ansatz CGM',vendor:'Ansatz · CGM',mark:'CG',tone:'267 86% 64%',
-  copy:'Strategist → workers → independent verifier → curator · Kimi K3 included or your own Codex, Claude Code or API models · Facts + Explore graphs',
-  ownKeyCopy:'Strategist → workers → independent verifier → curator · Kimi K3 included or models from your own API keys · Facts + Explore graphs'};
+  copy:'Strategist → workers → independent verifier → curator · an accepted run ends with a written proof, checked as a whole · Kimi K3 included or your own Codex, Claude Code or API models · Facts + Explore graphs',
+  ownKeyCopy:'Strategist → workers → independent verifier → curator · an accepted run ends with a written proof, checked as a whole · Kimi K3 included or models from your own API keys · Facts + Explore graphs'};
 const ENGINE_AUTH_LABELS={codex_subscription:'Codex',claude_subscription:'Claude Code',api_key:'API'};
 function cgmEngineUsable(id){ const e=ENGINES.find(x=>x.id===id); return !!e&&!!e.available&&!e.requires_login&&!engineRuntimeIssue(e); }
 function cgmModels(){

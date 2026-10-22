@@ -479,6 +479,9 @@ console.log(JSON.stringify({order,guest,loginOnlyKimi,kimi:CGM_ENGINE_COPY.kimi,
         self.assertIn("strategist → workers → independent verifier → curator", output["kimi"])
         self.assertIn("Kimi K3", output["kimi"])
         self.assertIn("own Codex, Claude Code or API route", output["mh"])
+        # An accepted run also ends with a written proof, checked as a whole.
+        for copy in (output["kimi"], output["mh"]):
+            self.assertIn("an accepted run ends with a written proof, checked as a whole", copy)
         self.assertIn("engine='kimi';", SCRIPT)
         self.assertIn("if(u.guest)engine=GUEST_POLICY?.default_engine||'kimi';", SCRIPT)
 
@@ -545,6 +548,8 @@ console.log(JSON.stringify(out));
         self.assertEqual((out["member"]["forKimi"], out["member"]["forAstra"]), ("kimi", "math_harness"))
         self.assertEqual(out["member"]["auth"], "API")
         self.assertIn("Kimi K3 included or models from your own API keys", out["member"]["copy"])
+        for copy in (out["admin"]["copy"], out["member"]["copy"], out["narrowed"]["copy"]):
+            self.assertIn("an accepted run ends with a written proof, checked as a whole", copy)
         self.assertNotIn("Codex", out["member"]["copy"])
         # Narrowed to kimi,plain, the one entry is Kimi K3 only.
         self.assertIn("Ansatz CGM on Kimi K3", out["narrowed"]["copy"])
