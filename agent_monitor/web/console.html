@@ -8394,18 +8394,39 @@ function analysisTextAccents(text){
 // The math of /(\\begin\{equation\*?\}[\s\S]*?\\end\{equation\*?\}|<align, alignat and gather alike>|\$\$[\s\S]*?\$\$|\\\[[\s\S]*?\\\]|\\\([\s\S]*?\\\)|\$(?:\\.|[^$\\])+\$)/.
 const ANALYZE_STATEMENT_MATH_KINDS=s=>[...['equation','align','alignat','gather'].map(name=>mathEnvironment(s,name)),
   mathBetween(s,'$$','$$',0),mathBetween(s,'\\[','\\]',0),mathBetween(s,'\\(','\\)',0),mathEscapedDollar(s)];
-// Statements as readable prose: \ref becomes the result's label and simple
-// text markup is dropped; math is left as written for KaTeX.
+// Statements as readable prose: \ref becomes the result's label, simple text
+// markup is dropped and a list reads inline with the manuscript's labels
+// ("(i) … (ii) …"); math is left as written for KaTeX.
 function analysisProse(text,refLabels){
   // Display environments are math too: their \\ row breaks must survive.
   let parts=splitMath(String(text||''),ANALYZE_STATEMENT_MATH_KINDS);
-  // Text markup around math ("\emph{arity-$k$ diagram}") is dropped too: the
-  // formulas inside stand in as one character each while it is matched.
-  if(parts.length>2){
-    const joined=parts.filter((part,index)=>!(index%2)).map(part=>part.replace(/\uE000/g,'')).join('\uE000');
-    const unwrapped=joined.replace(/\\(?:emph|textbf|textit|textsc|textrm|textsf|texttt|text|mbox)\{([^{}\uE000]*\uE000[^{}]*)\}/g,'$1');
-    if(unwrapped!==joined){ const texts=unwrapped.split('\uE000'); parts=parts.map((part,index)=>index%2?part:texts[index>>1]); }
-  }
+  // Markup around math ("\emph{arity-$k$ diagram}") and lists are read across
+  // the formulas, each standing in as one character while they are matched.
+  const roman=n=>[[1000,'m'],[900,'cm'],[500,'d'],[400,'cd'],[100,'c'],[90,'xc'],[50,'l'],[40,'xl'],[10,'x'],[9,'ix'],[5,'v'],[4,'iv'],[1,'i']]
+    .reduce((out,[value,digits])=>{ while(n>=value){ out+=digits; n-=value; } return out; },'');
+  const styles={arabic:String,roman,Roman:n=>roman(n).toUpperCase(),alph:n=>String.fromCharCode(96+(n-1)%26+1),Alph:n=>String.fromCharCode(64+(n-1)%26+1)};
+  // An enumerate's own labels: "[(i)]", "[a)]" or "[label=\textup{(\roman*)}]"; else "1.", "2.".
+  const numbering=option=>{
+    const plain=String(option||'').replace(/\\text[a-z]{0,6}\{([^{}]*)\}/g,'$1').trim();
+    const keyed=/label\s*=\s*\{?([^,{}]*?)\}?\s*(?:,|$)/.exec(plain);
+    const at=keyed?/\\(arabic|roman|Roman|alph|Alph)\*/.exec(keyed[1]):!plain.includes('=')&&plain.length<=12?/(?<![A-Za-z])[1iIaA](?![A-Za-z])/.exec(plain):null;
+    if(!at)return null;
+    const template=keyed?keyed[1]:plain, style=keyed?at[1]:{1:'arabic',i:'roman',I:'Roman',a:'alph',A:'Alph'}[at[0]];
+    return n=>template.slice(0,at.index)+styles[style](n)+template.slice(at.index+at[0].length);
+  };
+  const lists=[];
+  const joined=parts.filter((part,index)=>!(index%2)).map(part=>part.replace(/\uE000/g,'')).join('\uE000');
+  const read=joined.replace(/\\(?:emph|textbf|textit|textsc|textrm|textsf|texttt|text|mbox)\{([^{}\uE000]*\uE000[^{}]*)\}/g,'$1')
+    .replace(/\\(begin|end)\{(enumerate|itemize|description)\}(?:[ \t]*\[([^\[\]\n]{0,80})\])?|\\item(?![A-Za-z])(?:[ \t]*\[([^\[\]\n]{0,80})\])?/g,(match,side,kind,option,label)=>{
+      if(side==='begin'){ lists.push({kind,count:0,number:kind==='enumerate'?numbering(option):null}); return ' '; }
+      if(side==='end'){ const at=lists.map(list=>list.kind).lastIndexOf(kind); if(at>=0)lists.length=at; return ' '; }
+      const list=lists[lists.length-1];
+      if(label!==undefined)return ' '+label.trim()+' ';
+      if(!list||list.kind!=='enumerate')return ' • ';
+      list.count++;
+      return ' '+(list.number?list.number(list.count):list.count+'.')+' ';
+    });
+  if(read!==joined){ const texts=read.split('\uE000'); parts=parts.map((part,index)=>index%2?part:texts[index>>1]); }
   // KaTeX would number these itself, never with the manuscript's numbers: show them unnumbered.
   return parts.map((part,index)=>index%2?part.replace(/\\(begin|end)\{(equation|align|alignat|gather)\}/g,'\\$1{$2*}'):analysisResolveRefs(analysisTextAccents(part),refLabels)
     .replace(/\\(?:emph|textbf|textit|textsc|textrm|textsf|texttt|text|mbox)\{([^{}]*)\}/g,'$1')

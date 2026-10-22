@@ -906,6 +906,12 @@ test('paper map statements read text markup around math as text, in the console 
   assert.equal(prose('An \\emph{arity-$k$ diagram} is a triple $\\mathcal D=(E,R,\\rho)$.'), 'An arity-$k$ diagram is a triple $\\mathcal D=(E,R,\\rho)$.')
   assert.equal(prose('Suppose the test in Definition~\\ref{def:t} passes for \\textbf{every $J\\ne\\emptyset$}.'),
     'Suppose the test in Definition (The full subsequence test) passes for every $J\\ne\\emptyset$.')
+  // Lists read inline with the manuscript's own labels (live: a definition's conditions showed \\begin{enumerate}).
+  assert.equal(prose('It is valid if: \\begin{enumerate}[label=\\textup{(\\roman*)}] \\item $E$ is an equivalence. \\item On $Q$, $R$ decreases tags. \\end{enumerate} Done.'),
+    'It is valid if: (i) $E$ is an equivalence. (ii) On $Q$, $R$ decreases tags. Done.')
+  assert.equal(prose('\\begin{itemize}\\item one \\item[(b)] two\\end{itemize}'), '• one (b) two')
+  assert.equal(prose('\\begin{enumerate}\\item a \\item b \\begin{enumerate}[(a)]\\item c\\end{enumerate} \\item d\\end{enumerate}'), '1. a 2. b (a) c 3. d')
+  assert.equal(prose('\\begin{enumerate}[I.]\\item a \\item b\\end{enumerate}'), 'I. a II. b')
   // Markup around no math, and math itself, read as before.
   assert.equal(prose('\\emph{valid} and $\\emph{x}$, \\emph{a $x$ {b}}'), 'valid and $\\emph{x}$, \\emph{a $x$ {b}}')
   const sandbox = { window: {}, document: {}, NodeFilter: {}, location: { href: 'https://example.test/' } }
@@ -914,7 +920,7 @@ test('paper map statements read text markup around math as text, in the console 
   assert.equal(shared('An \\emph{arity-$k$ diagram} is a triple.'), 'An arity-$k$ diagram is a triple.')
   assert.equal(shared('\\emph{valid} and $\\emph{x}$'), 'valid and $\\emph{x}$')
   // Hostile text stays linear.
-  for (const text of ['\\emph{a$x$'.repeat(40000), '\\emph{' + '$x$'.repeat(60000)]) {
+  for (const text of ['\\emph{a$x$'.repeat(40000), '\\emph{' + '$x$'.repeat(60000), '\\begin{enumerate}[label=('.repeat(20000), '\\item[$x$'.repeat(30000)]) {
     const started = performance.now()
     prose(text); shared(text)
     assert.ok(performance.now() - started < 3000)
