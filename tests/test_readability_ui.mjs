@@ -893,6 +893,32 @@ test('Paper map: shaded by importance, definitions as boxes, results rounded; pr
   // \ref{<id>} reads as the result's number.
   const refs = run(['dagDetailText', 'paperMapRefLabels'], [], '', `[...paperMapRefLabels({nodes:[{id:'lem:a',label:'Lemma 3.2'},{id:'def:b',label:'Definition'}]})]`)
   assert.deepEqual(refs, [['lem:a', { number: '3.2', name: 'Lemma 3.2' }], ['def:b', { number: 'Definition', name: 'Definition' }]])
+  // An unnumbered result reads as its title, as in the readable version.
+  const titled = run(['dagDetailText', 'paperMapRefLabels'], [], '', `[...paperMapRefLabels({nodes:[{id:'def:t',label:'Definition',title:'The full subsequence test'},{id:'lem:n',label:'Lemma 3.6',title:'Representatives'}]})]`)
+  assert.deepEqual(titled, [['def:t', { number: '(The full subsequence test)', name: 'Definition (The full subsequence test)' }],
+    ['lem:n', { number: '3.6', name: 'Lemma 3.6' }]])
+})
+
+test('paper map statements read text markup around math as text, in the console and on the shared page', () => {
+  const prose = run(['analysisTextAccents', 'analysisResolveRefs', 'analysisUnresolvedLabel', 'analysisProse', 'dagDetailText', 'paperMapRefLabels'],
+    ['ANALYZE_ACCENT_MARKS', 'ANALYZE_BARE_ACCENTED', 'ANALYZE_TEXT_LETTERS', 'ANALYZE_REF_TIE', 'ANALYZE_LABEL_KINDS'], '',
+    `(text)=>analysisProse(text,paperMapRefLabels({nodes:[{id:'def:t',label:'Definition',title:'The full subsequence test'}]}))`)
+  assert.equal(prose('An \\emph{arity-$k$ diagram} is a triple $\\mathcal D=(E,R,\\rho)$.'), 'An arity-$k$ diagram is a triple $\\mathcal D=(E,R,\\rho)$.')
+  assert.equal(prose('Suppose the test in Definition~\\ref{def:t} passes for \\textbf{every $J\\ne\\emptyset$}.'),
+    'Suppose the test in Definition (The full subsequence test) passes for every $J\\ne\\emptyset$.')
+  // Markup around no math, and math itself, read as before.
+  assert.equal(prose('\\emph{valid} and $\\emph{x}$, \\emph{a $x$ {b}}'), 'valid and $\\emph{x}$, \\emph{a $x$ {b}}')
+  const sandbox = { window: {}, document: {}, NodeFilter: {}, location: { href: 'https://example.test/' } }
+  vm.runInNewContext(readFileSync(new URL('../agent_monitor/web/run-viewer-text.js', import.meta.url), 'utf8'), sandbox)
+  const shared = sandbox.window.AnsatzSharedText.manuscriptProse
+  assert.equal(shared('An \\emph{arity-$k$ diagram} is a triple.'), 'An arity-$k$ diagram is a triple.')
+  assert.equal(shared('\\emph{valid} and $\\emph{x}$'), 'valid and $\\emph{x}$')
+  // Hostile text stays linear.
+  for (const text of ['\\emph{a$x$'.repeat(40000), '\\emph{' + '$x$'.repeat(60000)]) {
+    const started = performance.now()
+    prose(text); shared(text)
+    assert.ok(performance.now() - started < 3000)
+  }
 })
 
 test('Paper map shading has a token per level in both themes, and its text stays readable on the darkest card', () => {

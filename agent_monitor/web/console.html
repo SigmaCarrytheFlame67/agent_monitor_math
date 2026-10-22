@@ -8398,7 +8398,14 @@ const ANALYZE_STATEMENT_MATH_KINDS=s=>[...['equation','align','alignat','gather'
 // text markup is dropped; math is left as written for KaTeX.
 function analysisProse(text,refLabels){
   // Display environments are math too: their \\ row breaks must survive.
-  const parts=splitMath(String(text||''),ANALYZE_STATEMENT_MATH_KINDS);
+  let parts=splitMath(String(text||''),ANALYZE_STATEMENT_MATH_KINDS);
+  // Text markup around math ("\emph{arity-$k$ diagram}") is dropped too: the
+  // formulas inside stand in as one character each while it is matched.
+  if(parts.length>2){
+    const joined=parts.filter((part,index)=>!(index%2)).map(part=>part.replace(/\uE000/g,'')).join('\uE000');
+    const unwrapped=joined.replace(/\\(?:emph|textbf|textit|textsc|textrm|textsf|texttt|text|mbox)\{([^{}\uE000]*\uE000[^{}]*)\}/g,'$1');
+    if(unwrapped!==joined){ const texts=unwrapped.split('\uE000'); parts=parts.map((part,index)=>index%2?part:texts[index>>1]); }
+  }
   // KaTeX would number these itself, never with the manuscript's numbers: show them unnumbered.
   return parts.map((part,index)=>index%2?part.replace(/\\(begin|end)\{(equation|align|alignat|gather)\}/g,'\\$1{$2*}'):analysisResolveRefs(analysisTextAccents(part),refLabels)
     .replace(/\\(?:emph|textbf|textit|textsc|textrm|textsf|texttt|text|mbox)\{([^{}]*)\}/g,'$1')

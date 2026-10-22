@@ -478,13 +478,17 @@ function paperMapSectionLabel(section){
   }
   return dagDetailText(section,160).trim();
 }
-// \ref{<id>} in a statement reads as the result's number (its name for \cref).
+// \ref{<id>} in a statement reads as the result's number (its name for \cref);
+// an unnumbered result reads as its title, "Definition (Valid diagrams)", as
+// in the readable version.
 function paperMapRefLabels(graph){
   const labels=new Map();
   (Array.isArray(graph?.nodes)?graph.nodes:[]).forEach(node=>{
-    const id=String(node?.id||''), name=dagDetailText(node?.label,160).trim();
-    if(!id||!name||labels.has(id))return;
-    labels.set(id,{number:/(\d+(?:\.\d+)*[a-z]?)$/i.exec(name)?.[1]||name,name});
+    const id=String(node?.id||''), label=dagDetailText(node?.label,160).trim(), title=dagDetailText(node?.title,120).trim();
+    if(!id||!label||labels.has(id))return;
+    const number=/(\d+(?:\.\d+)*[a-z]?)$/i.exec(label)?.[1];
+    const titled=!number&&title&&title!==label?'('+title+')':'';
+    labels.set(id,{number:number||titled||label,name:titled?label+' '+titled:label});
   });
   return labels;
 }

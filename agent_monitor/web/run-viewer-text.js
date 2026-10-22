@@ -204,12 +204,24 @@
     // The math of /(?:<environment>|\$\$[\s\S]*?\$\$|\\\[[\s\S]*?\\\]|\\\([\s\S]*?\\\)|\$(?:\\.|[^$\\])+\$)/g.
     const kinds = [environment(source), between(source, '$$', '$$', 0), between(source, '\\[', '\\]', 0),
       between(source, '\\(', '\\)', 0), escapedDollar(source)];
+    const texts = [], maths = [];
     for (const [start, stop] of mathSpans(source, kinds)) {
-      result += prose(source.slice(end, start));
-      result += source.slice(start, stop).replace(/\\(begin|end)\{(equation|align|alignat|gather)\}/g, '\\$1{$2*}');
+      texts.push(source.slice(end, start));
+      maths.push(source.slice(start, stop).replace(/\\(begin|end)\{(equation|align|alignat|gather)\}/g, '\\$1{$2*}'));
       end = stop;
     }
-    return result + prose(source.slice(end));
+    texts.push(source.slice(end));
+    unwrapAroundMath(texts).forEach((text, index) => { result += prose(text) + (maths[index] || ''); });
+    return result;
+  }
+  // Text markup around math ("\emph{arity-$k$ diagram}") is dropped too: the
+  // formulas inside stand in as one character each while it is matched.
+  const markupAroundMath = /\\(?:emph|textbf|textit|textsc|textrm|textsf|texttt|text|mbox)\{([^{}\uE000]*\uE000[^{}]*)\}/g;
+  function unwrapAroundMath(texts) {
+    if (texts.length < 2) return texts;
+    const joined = texts.map(text => text.replace(/\uE000/g, '')).join('\uE000');
+    const unwrapped = joined.replace(markupAroundMath, '$1');
+    return unwrapped === joined ? texts : unwrapped.split('\uE000');
   }
 
   // proof.md of a CGM run published before closure rendering v2 numbers its
