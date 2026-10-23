@@ -105,6 +105,105 @@ link before a new account can sign in; it needs the SMTP settings, which also
 send password-reset links. `agent-monitor set-password` sets a password from the
 host when email is not configured.
 
+## Accounts an administrator manages
+
+Admin view → **Accounts** (`GET /api/admin/accounts`, administrators only;
+`agent_monitor/accounts_admin.py`):
+
+- **Add accounts.** Paste one person per line: `Name - email`, `Name <email>`,
+  `Name, email`, `Name<TAB>email`, `email - Name` or just `email` (numbering
+  and bullets are ignored). Each line must hold exactly one address, which is
+  taken whole: `mary-jane@uni.edu` is never cut at its hyphen. The console
+  first shows a **check of the list**, with each line's name, address and
+  what will happen (`preview: true`: nothing is created or sent). Then each
+  new account gets a random password (12 letters and digits by default,
+  8–32, no look-alike characters), shown once and never stored in clear.
+  Accounts made this way can sign in at once (no email verification) and are
+  never administrators. An address that already has an account is left as it
+  is, except that it joins the group, if one is given (see **Groups**).
+  - **Cleaned off an address:** separators stuck to it (`Name:addr`,
+    `Name|addr`), Markdown and a sentence's punctuation around it, and
+    invisible characters.
+  - **Refused:** an address that is not plain ASCII, or that mail would not
+    reach exactly as written.
+  - `POST /api/admin/accounts {text, preview?, group?, password_length?,
+    send_email?, subject?, message?, sender_name?}` → `{results: [{email,
+    name, line, status, password?, email_sent?, group?, group_joined?,
+    error?}]}`.
+  - If the server hits an error it cannot get past (the database locked, say),
+    the run stops at that line. The passwords already made are still in the
+    answer; that line and the later ones come back `not_processed`, with a
+    top-level `stopped`.
+- **Email the sign-in details.** With `send_email`, each new person gets the
+  message with `{name}`, `{email}`, `{password}`, `{url}` and `{sender}`
+  filled in. A blank message means the default one. A message without
+  `{password}` is refused, and no invitation is ever sent without its
+  password.
+  - **Sending:** it goes out with the site's mail settings (`SMTP_SERVER`,
+    `SMTP_USERNAME`, `SMTP_PASSWORD`, `SMTP_FROM_EMAIL`), from the site's
+    address under "<sender name> via Ansätze", and replies go to the
+    administrator's own address.
+  - **`{url}`:** the site's sign-in address, `AGENT_MONITOR_APP_URL` (+ the
+    mount) + `/login`. It is never taken from a request; the console shows it
+    in the form.
+  - **When email is refused (400):** without mail settings, or without
+    `AGENT_MONITOR_APP_URL`. The console then offers the details to copy and
+    send by hand.
+  - **Failed sends:** an email that fails never loses the password; it is
+    reported as not sent.
+- **Access on/off.** `POST /api/admin/accounts/access {emails, access: "on" |
+  "off"}`.
+  - **Off** signs the person out at once (every session ends) and refuses
+    their sign-in, password or Google, with "Your access to this site is
+    paused for now…" (`AGENT_MONITOR_ACCESS_PAUSED_MESSAGE` replaces the
+    text).
+  - **On** lets them sign in again with the same password.
+  - **`others: "off"`** (with `access: "on"` and a `group`) turns everyone
+    else *in that group* off, in the same transaction, including accounts
+    the page never showed. Accounts outside the group are never touched; the
+    console's "Set access from a list" uses it.
+  - **Administrators:** an administrator's access is always on.
+  - **Guest loophole:** a paused person can still use the site as an
+    anonymous guest while guest access is on (`AGENT_MONITOR_GUEST_ACCESS`).
+- **Groups.** An account can be in one group, such as a field test's
+  participants. It joins one through "Add accounts" with a group, or through
+  `POST /api/admin/accounts/group {emails, group}` (`""` takes it out).
+  - **Spelling:** a group typed differently only in case, accents or spacing
+    is the existing one ("Field Test" joins "Field test"). The answers carry
+    the stored `group` and `group_is_new`.
+  - **Scope:** a group only scopes "everyone else" for access, and changes
+    nothing else. "Everyone else off" for a group nobody is in is refused.
+- **New password.** `POST /api/admin/accounts/password {email,
+  send_email?}`: a new random password, shown once; the person is signed out.
+  The email uses its own new-password message. Never for an administrator's
+  account: they use "Forgot password" or `agent-monitor set-password` on the
+  server.
+- **From the server.** `python -m agent_monitor.accounts_admin list | create
+  <file> [--group … --send-email --url … --sender … --reply-to …] | on
+  <emails> | off <emails> | group <group> <emails> | password <email>`. On
+  ansatze.ai:
+
+  ```bash
+  cd /home/repo/agent_monitor_math
+  sudo runuser -u ubuntu -- env AGENT_MONITOR_DATA_DIR=/var/lib/ansatze/console \
+    AGENT_MONITOR_ENV_PATH=/etc/ansatze/console.env PYTHONPATH="$PWD" \
+    ./.venv/bin/python -m agent_monitor.accounts_admin list
+  ```
+
+  - **`--send-email`:** the site's address and mount (`AGENT_MONITOR_APP_URL`,
+    `AGENT_MONITOR_BASE_PATH`) are set in the service unit, not in
+    `console.env`. Emailing from the command line therefore needs `--url
+    https://ansatze.ai/sign-in`, as well as `--sender` and `--reply-to`.
+  - **Environment:** it reads the env file as the console does, and it
+    refuses to run when there is no account database there.
+  - **`create`:** prints every password before it tries any email.
+    `--send-email` refuses to start without mail settings or a sign-in
+    address.
+  - **Exit status:** non-zero whenever part of a request was not done.
+  - **Pauses need the new release:** a pause is enforced only by a console
+    running this release. Until the deploy has finished, a pause written
+    from the command line is not enforced.
+
 ## Ansatz CGM runs
 
 The `kimi` and `math_harness` engines run the CGM pipeline in
