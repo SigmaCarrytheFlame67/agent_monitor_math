@@ -82,7 +82,9 @@
 .rd-map-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; flex-wrap: wrap; }
 .md-view .rd-map .rd-map-head p { margin: 0; }
 .rd-map-graph, .rd-map-actions button { padding: 4px 10px; border-radius: 8px; border: 1px solid var(--border); background: var(--panel2); color: var(--fg); font: 600 11.5px/1.2 var(--sans); cursor: pointer; white-space: nowrap; }
-.rd-map-graph:hover, .rd-map-actions button:hover { border-color: var(--accent); color: var(--accent); }
+.rd-map-graph:hover, .rd-map-actions button:hover:not(:disabled) { border-color: var(--accent); color: var(--accent); }
+/* "Ask" while the run takes no question (its title says why). */
+.rd-map-actions button:disabled { opacity: .45; cursor: not-allowed; }
 .md-view .rd-map h3 { font-size: 13px; margin: 1.3em 0 .5em; color: var(--muted); }
 .rd-map-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 6px; }
 .rd-map-row { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; gap: 4px 12px; align-items: start; padding: 8px 10px; border: 1px solid var(--border); border-left: 3px solid var(--pm-edge-1); border-radius: 10px; background: var(--pm-fill-1); }
@@ -99,7 +101,8 @@
 .rd-map-row.imp-4 .rd-imp, .rd-map-row.imp-5 .rd-imp { color: var(--fg); }
 .rd-map-row.imp-4 .rd-main-tag, .rd-map-row.imp-5 .rd-main-tag { background: var(--accent); border-color: var(--accent); color: var(--on-accent); }
 
-/* Ask about this paper (the right panel) */
+/* Ask about this paper or analysis (the right panel of a readable version
+   and of an analysis) */
 .ask-list { flex: 1; min-height: 0; overflow-y: auto; margin: 0; padding: 14px 16px; list-style: none; display: flex; flex-direction: column; gap: 16px; }
 .ask-list[hidden] { display: none; }
 .ask-empty { color: var(--dim); font-size: 12px; line-height: 1.6; }
@@ -124,6 +127,7 @@
 .ask-compose[hidden] { display: none; }
 .ask-compose textarea { width: 100%; min-height: 64px; max-height: 140px; resize: vertical; border: 1px solid var(--border); border-radius: 10px; padding: 10px 12px; background: var(--panel); color: var(--fg); font: inherit; font-size: 13px; outline: none; }
 .ask-compose textarea:focus { border-color: var(--accent); }
+.ask-compose textarea:disabled { opacity: .6; cursor: not-allowed; }
 .ask-compose .row { display: flex; justify-content: space-between; align-items: center; gap: 8px; }
 .ask-compose .hint { font-size: 10px; color: var(--dim); }
 .ask-compose #ask-send { flex-shrink: 0; border: 0; border-radius: 8px; padding: 8px 16px; background: var(--accent); color: var(--on-accent, #fff); font-size: 12px; font-weight: 700; cursor: pointer; }

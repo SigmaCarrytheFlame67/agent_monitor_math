@@ -1745,6 +1745,10 @@ body { background:var(--bg); }
 /* An analysis in the session view */
 .analysis-run #proof-edit-btn, .analysis-run .chat-compose, .analysis-run #sess-cont,
 .analysis-run #lean-audit, .analysis-run #lean-harness, .analysis-run #lean-engine, .analysis-run .lean-chat-block, .analysis-run #prompt-strip { display: none !important; }
+/* Its Progress notes stay above the questions and answers (the Ask panel),
+   in a strip of their own that gives the conversation the room. */
+.analysis-run .chat-msgs { flex: 0 1 auto; max-height: min(22%, 150px); padding: 10px 16px; gap: 8px; border-bottom: 1px solid var(--border); }
+.analysis-run .chat-msgs:empty { display: none; }
 .chat-hdr .chat-title { display: inline; margin: 0; font-size: 12px; font-weight: 700; color: var(--fg); }
 .analysis-stages { display: flex; flex-wrap: wrap; gap: 4px; margin: 8px 0 0; padding: 0; list-style: none; counter-reset: stage; }
 .analysis-stages[hidden] { display: none; }
@@ -1850,6 +1854,9 @@ body { background:var(--bg); }
   .dag-filters { padding: 6px 12px; }
   .dag-filters .count { margin-left: 0; flex-basis: 100%; }
   .analysis-progress .ap-result .issue { padding-left: 0; }
+  /* The stacked panel is too short for both: the conversation keeps it (the
+     status line above still says where the analysis stands). */
+  .analysis-run .chat-msgs { display: none; }
 }
 @media (forced-colors: active) {
   .dag-node.analysis { border-left-color: CanvasText; }
@@ -2295,6 +2302,10 @@ window.fetch=async(...a)=>{
   return r;
 };
 let ENGINES=[], SETTINGS=null, SETTINGS_RUNTIME_BASELINE=null, engine='kimi';
+// Whether ENGINES is the server's listing: it is empty until the first one
+// is read, and a placeholder stands in for one that could not be. A mode a
+// listing leaves out is switched off on this site (the Ask panel says so).
+let enginesListed=false;
 let runId=null, jobId=null, proofPath=null, lastProofMtime=0, pollTimer=null, pdfRenderGen=0;
 let sandboxEditing=false, sandboxDirty=false, sandboxConflict=false, sandboxSaveTimer=null;
 let sandboxSaving=false, sandboxSaveAgain=false;
@@ -2304,7 +2315,7 @@ let screen='landing', workspaceView='sandbox';
    while /api/engines lists the `analyze` engine with modes ["analyze"]. */
 const RUN_KIND_KEY='proving-console-run-kind-v1';
 const ANALYZE_FORMALIZE_KEY='proving-console-analyze-formalize-v1';
-const ANALYZE_CONTINUE_NOTE="Analyze runs can't be continued. Start a new analysis, or re-check a node in the DAG.";
+const ANALYZE_ASK_NOTE='Questions are answered by a model from this paper and its analysis — not a certificate. An analysis is never continued; re-check a result in the DAG.';
 const ANALYZE_VERDICT_NOTE='checked by a model verifier — not a certificate';
 /* Readability (run_kind "readability"): the fourth mode, offered while the
    server lists the `readability` engine; its run view is in /static/readability.js. */
@@ -3655,9 +3666,14 @@ $('library-modal').addEventListener('click',e=>{ if(e.target.id==='library-modal
 
 /* ── engines ── */
 async function loadEngines(){
-  try{ ENGINES=(await(await fetch('/api/engines')).json()).engines||[]; }
-  catch(e){ ENGINES=[{id:'hermes',label:'Hermes',vendor:'Nous Research',description:'Embedded agent harness',available:false,health_detail:'Unable to load engine status'}]; }
+  try{ const listed=(await(await fetch('/api/engines')).json()).engines; ENGINES=listed||[]; enginesListed=Array.isArray(listed); }
+  catch(e){ ENGINES=[{id:'hermes',label:'Hermes',vendor:'Nous Research',description:'Embedded agent harness',available:false,health_detail:'Unable to load engine status'}]; enginesListed=false; }
   renderEngines();
+  // The Ask panel of the run shown (readability.js) follows the listing's
+  // policies, and with it the buttons that start a question from elsewhere
+  // (the Map tab, an open result's details): a record drawn before the
+  // listing arrived is drawn again.
+  if(readabilityUiReady()&&runId&&lastSandboxRun?.run_id===runId)renderManuscriptAsks(lastSandboxRun);
 }
 const ENGINE_MARK={kimi:'K3',hermes:'HE',improof:'IM',math_harness:'MA',ucla:'UC',codex:'CX',claude:'CC',openclaude:'OC',openhands:'OH',openclaw:'CL',deepagents:'DA',plain:'LL',metaharness:'MH',deepseek_harness:'DS'};
 const ENGINE_GLYPH={kimi:'◉',hermes:'🟢',improof:'🔵',math_harness:'✦',ucla:'🟦',codex:'💠',claude:'🟧',openclaude:'🟣',openhands:'🟠',openclaw:'🔴',deepagents:'🟪',plain:'⚪',metaharness:'🟡',deepseek_harness:'🌊'};
@@ -3939,7 +3955,8 @@ async function loadRuns(){
   const seen=new Set();
   // A re-check of one node of an analysis is a job of its own: it marks its
   // analysis as running ("re-checking …") without replacing its entry. A
-  // question about a readable version is one too ("answering a question").
+  // question about an analysis or a readable version is one too ("answering
+  // a question").
   const rechecks=new Map(), asks=new Map();
   jobs=jobs.filter(j=>{
     if(j.kind==='recheck'){ if(j.status==='running'&&!rechecks.has(j.run_id))rechecks.set(j.run_id,j); return false; }
@@ -3962,7 +3979,7 @@ async function loadRuns(){
       :(CURRENT_USER?.guest||analysis||readability?'':`<button class="run-act cont" data-run="${rid}" title="Continue">▶</button>`);
     const title=(preview||'').trim()||pid;
     const sub=analysis
-      ?`<span class="run-kind">Analyze</span>${escapeHtml(recheck?String(recheck.problem_preview||'Re-check').replace(/^Re-check · /,'re-checking '):'Ansatz Analyze')}`
+      ?`<span class="run-kind">Analyze</span>${escapeHtml(recheck?String(recheck.problem_preview||'Re-check').replace(/^Re-check · /,'re-checking '):asks.has(rid)?'answering a question':'Ansatz Analyze')}`
       :readability?`<span class="run-kind">Readable</span>${escapeHtml(asks.has(rid)?'answering a question':'Ansatz Readability')}`
       :escapeHtml(en||'?');
     return `<div class="run-item ${rid===runId?'active':''}${analysis?' analysis':''}${readability?' readability':''}" data-run="${rid}" ${jid?`data-job="${jid}"`:''} title="${escapeHtml(title)}"><div class="run-top"><div class="en"><span class="sdot ${st||'archived'}"></span><span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${escapeHtml(title)}</span></div>${act}<button class="run-del" data-run="${rid}">×</button></div><div class="st">${sub}</div></div>`;
@@ -3976,7 +3993,11 @@ async function loadRuns(){
 }
 
 function selectRun(rid,jid){
-  if(runId!==rid){chatAttachments.clear();$('chat-input').value='';const monitorView=$('view-monitor');if(monitorView)monitorView.scrollTop=0;}
+  if(runId!==rid){
+    chatAttachments.clear();$('chat-input').value='';const monitorView=$('view-monitor');if(monitorView)monitorView.scrollTop=0;
+    // The Ask panel (readability.js) starts empty for another run.
+    if(typeof resetManuscriptAsk==='function')resetManuscriptAsk(rid);
+  }
   runId=rid; jobId=jid; lastProofMtime=0; lastChatKey=''; convoKey=''; convoOpen.clear(); dagRunKey=''; leanRunKey=''; leanDirty=false; autoPipelineKey='';
   // Do not let the previous run's pipeline stages drive the new run's Lean
   // empty state while its own dashboard payload is still loading.
@@ -4052,6 +4073,7 @@ function consoleRunSignature(run){
     String(last.output||'').length,t.cost_usd,t.input_tokens,t.output_tokens,
     run.sandbox_preview?.revision,ap.status,ap.updated_at,stages,lean.status,lean.attempt_count,
     run.analyze?.recheck?.status,run.analyze?.recheck?.node_id,
+    run.analyze?.ask?.status,run.analyze?.ask?.ask_id,Array.isArray(run.analyze?.asks)?run.analyze.asks.length:0,
     run.readability?.ask?.status,run.readability?.ask?.ask_id,Array.isArray(run.readability?.asks)?run.readability.asks.length:0,
   ]);
 }
@@ -4086,12 +4108,19 @@ document.addEventListener('visibilitychange',()=>{
   pollLoop();
 });
 async function tick(){
-  if(!runId)return false;
+  // The run this tick polls. Its record is applied only while that run is
+  // still the one shown: after each wait a tick whose run was left (another
+  // run chosen, which selectRun polls itself, or none) applies nothing.
+  const rid=runId;
+  if(!rid)return false;
   let run=null;
   try{
-    const r=await fetch('/api/run/'+encodeURIComponent(runId));
+    const r=await fetch('/api/run/'+encodeURIComponent(rid));
+    if(runId!==rid)return true;
     if(r.ok){
-      run=await r.json(); const t=run.totals||{};
+      run=await r.json();
+      if(runId!==rid)return true;
+      const t=run.totals||{};
       const sig=consoleRunSignature(run), changed=sig!==pollSig;
       pollSig=sig; pollQuiet=changed?0:pollQuiet+1;
       pollDelay=nextPollDelay(pollDelay,changed);
@@ -4104,28 +4133,30 @@ async function tick(){
       if(workspaceView==='monitor')renderConversation(run);
       const running=run.status==='running';
       // A node re-check runs after its analysis finished, a question after its
-      // readable version was published: keep polling for them.
-      const pipelineRunning=run.auto_pipeline?.status==='running'||run.analyze?.recheck?.status==='running'||run.readability?.ask?.status==='running';
+      // analysis or readable version was published: keep polling for them.
+      const pipelineRunning=run.auto_pipeline?.status==='running'||run.analyze?.recheck?.status==='running'||run.analyze?.ask?.status==='running'||run.readability?.ask?.status==='running';
       renderAutoPipeline(run.auto_pipeline);
       applySandboxPreview(run);
       if(refreshSide){
         await refreshProofPreview(!running&&changed, run);
+        if(runId!==rid)return true;
         loadChat();
       }
       if(!running){
         // The run list learns at once that the run ended (an analysis takes its title).
         if(pipelineRunning){ if(pollListedEnd!==run.run_id){ pollListedEnd=run.run_id; loadRuns(); } return true; }
         loadRuns();
-        const rid=run.run_id;
         setTimeout(()=>{ if(runId===rid) refreshProofPreview(true, run); }, 900);
         return false;
       }
       return true;
     }
   }catch(e){}
+  if(runId!==rid)return true;
   pollDelay=nextPollDelay(pollDelay,false);
   if(run) applySandboxPreview(run);
   await refreshProofPreview(false, run);
+  if(runId!==rid)return true;
   loadChat();
   return true;
 }
@@ -4255,7 +4286,8 @@ function updateChatStatus(run){
   // limit, a reconnect request) rather than the log's last line.
   else if(run.status==='failed'){ const why=String(run.error||'').trim()||detail; box.className='chat-status on err'; $('chat-stage').textContent='Failed'; $('chat-detail').textContent=why.length>240?why.slice(0,239)+'…':why; $('chat-detail').title=why; }
   else { box.className='chat-status on'; $('chat-stage').textContent=label+'…'; $('chat-detail').textContent=detail; }
-  const recheck=run.analyze?.recheck, ask=run.readability?.ask;
+  // A question about a finished analysis or readable version is answered after the run.
+  const recheck=run.analyze?.recheck, ask=run.analyze?.ask||run.readability?.ask;
   if(recheck?.status==='running'){ box.className='chat-status on'; $('chat-stage').textContent='Re-checking…'; $('chat-detail').textContent=String(recheck.label||recheck.node_id||''); }
   if(ask?.status==='running'){ box.className='chat-status on'; $('chat-stage').textContent='Answering…'; $('chat-detail').textContent=String(ask.question||'').slice(0,160); }
   updateLiveChips(run);
@@ -6285,8 +6317,13 @@ function renderDag(d){
     el.onkeydown=event=>{ if(event.key==='Enter'||event.key===' '){ event.preventDefault(); selectDagNode(node); } };
   });
   dagSelectedNodeId=null;
+  // A result a link asked for (analysisJumpTo) waits for its run's graph in
+  // its mode; otherwise the result selected before stays selected.
+  const pending=stage._pendingSelect; stage._pendingSelect=null;
+  const wanted=pending&&pending.runId===runId&&pending.mode===dagMode?graph.nodes.find(n=>String(n?.id).toLowerCase()===pending.id):null;
   const keptNode=keep===null?null:graph.nodes.find(n=>String(n.id)===keep);
-  if(keptNode)selectDagNode(keptNode);
+  if(wanted)showAnalysisResult(wanted);
+  else if(keptNode)selectDagNode(keptNode);
   else closeDagDetail();
 }
 function dagHighlight(id){
@@ -6315,6 +6352,38 @@ function selectDagNode(node){
   dagHighlight(null);
   renderDagDetail(node,dagView);
 }
+// What the actions in a result's details (an analysis's Manuscript DAG, a
+// readable version's Paper map) are drawn from besides the result: the
+// record of the run shown once it has arrived, whether a question about it
+// is being answered (Re-check waits for one), and why no question can be
+// started about it (readability.js, which may not have loaded).
+function dagDetailActionsKey(){
+  const run=lastSandboxRun?.run_id===runId?lastSandboxRun:null, ready=readabilityUiReady();
+  return JSON.stringify([String(runId||''),run?run.analyze?.ask?.status==='running':null,ready,ready&&run?shownAskBlocked():'']);
+}
+// The actions of the open result's details, drawn again once what they are
+// drawn from has changed (renderManuscriptAsks asks, with the run's new
+// record in place): Re-check and the Ask buttons never keep a state that
+// has passed. Only the actions are: the details stay as the reader left
+// them (scrolled, a proof excerpt open, the manuscript's lines shown under
+// the actions), with focus on the same action.
+function redrawDagDetailActions(){
+  const panel=$('dag-detail'), role=dagView?.view?.role;
+  if(!panel||panel.hidden||(role!=='analysis'&&role!=='paper-map')||dagSelectedNodeId===null||dagView.runId!==runId)return;
+  const key=dagDetailActionsKey(), old=panel.querySelector('.analysis-actions');
+  if(panel._actionsKey===key||!old)return;
+  const node=(dagView.graph?.nodes||[]).find(item=>String(item?.id)===dagSelectedNodeId); if(!node)return;
+  const active=document.activeElement, focused=active&&old.contains(active)?active.textContent:null;
+  panel._actionsKey=key;
+  if(role==='paper-map')old.querySelector('.analysis-action-row')?.replaceWith(paperMapActions(node));
+  else{
+    const meta=node.meta&&typeof node.meta==='object'&&!Array.isArray(node.meta)?node.meta:{}, ref=meta.source_ref&&typeof meta.source_ref==='object'?meta.source_ref:{};
+    const fresh=analysisDetailActions(node,meta,ref), lines=old.querySelector('.analysis-source-lines');
+    if(lines)fresh.append(lines);
+    old.replaceWith(fresh);
+  }
+  if(focused!==null)[...panel.querySelector('.analysis-actions').querySelectorAll('button')].find(button=>button.textContent===focused&&!button.disabled)?.focus({preventScroll:true});
+}
 function dagDetailText(value,limit=20000){
   if(value===null||value===undefined)return '';
   if(typeof value==='object')return '';
@@ -6322,8 +6391,11 @@ function dagDetailText(value,limit=20000){
 }
 function renderDagDetail(node,context){
   const panel=$('dag-detail'); if(!panel)return;
-  if(context?.view?.role==='analysis')return renderAnalysisDetail(node,context);
-  if(context?.view?.role==='paper-map')return renderPaperMapDetail(node,context);
+  const role=context?.view?.role;
+  // A result's actions follow the run's record (redrawDagDetailActions).
+  if(role==='analysis'||role==='paper-map')panel._actionsKey=dagDetailActionsKey();
+  if(role==='analysis')return renderAnalysisDetail(node,context);
+  if(role==='paper-map')return renderPaperMapDetail(node,context);
   const view=context.view, meta=node.meta&&typeof node.meta==='object'&&!Array.isArray(node.meta)?node.meta:{};
   const visual=dagNodeVisual(node,view);
   const make=(tag,cls,text)=>{ const el=document.createElement(tag); if(cls)el.className=cls; if(text!==undefined)el.textContent=text; return el; };
@@ -7144,20 +7216,24 @@ async function sendChat(){
 $('chat-send').onclick=sendChat;
 $('chat-input').onkeydown=e=>{ if(e.key==='Enter'&&!e.shiftKey){e.preventDefault();sendChat();} };
 
-/* ── PDF selection → chat (Cursor-style) ── */
+/* ── PDF selection → chat (Cursor-style) ──
+   A readable version (its Readable and Original tabs) and an analysis (its
+   report and its stored manuscript) ask about the passage in the Ask panel
+   (readability.js); a proof run quotes it into the chat. */
 const selPop=$('sel-pop');
 let selText='';
+function selectionAsks(){ return document.body.classList.contains('readability-run')||document.body.classList.contains('analysis-run'); }
 document.addEventListener('mouseup',e=>{
   if(selPop.contains(e.target))return;
   setTimeout(()=>{
     const sel=window.getSelection();
     const text=(sel?.toString()||'').trim();
     const inPdf=sel&&sel.rangeCount&&($('pdf-pages').contains(sel.anchorNode)||$('md-view').contains(sel.anchorNode));
-    // A readable version asks about passages of its Readable and Original tabs.
-    const readable=document.body.classList.contains('readability-run');
-    const askable=!readable||readabilityUiReady()&&!!readabilitySelectionView();
+    const asks=selectionAsks();
+    const askable=!asks||readabilityUiReady()&&!!manuscriptSelectionView();
     if(text&&inPdf&&askable){
-      selText=readable?readabilitySelectionText(sel)||text:text;
+      // A rendered passage is sent as written; a PDF's text layer as the browser reads it.
+      selText=asks&&$('md-view').contains(sel.anchorNode)?manuscriptSelectionText(sel)||text:text;
       const rect=sel.getRangeAt(0).getBoundingClientRect();
       selPop.style.display='flex';
       const scale=parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--console-scale'))||1;
@@ -7173,7 +7249,7 @@ $('pdf-pages')?.addEventListener('scroll',()=>{ selPop.style.display='none'; });
 $('md-view')?.addEventListener('scroll',()=>{ selPop.style.display='none'; });
 selPop.onclick=()=>{
   if(!selText)return;
-  if(document.body.classList.contains('readability-run')){ selPop.style.display='none'; askAboutSelection(selText); return; }
+  if(selectionAsks()){ selPop.style.display='none'; askAboutSelection(selText); return; }
   const input=$('chat-input');
   const quoted=selText.split('\n').map(l=>'> '+l).join('\n');
   input.value=(input.value?input.value+'\n\n':'')+quoted+'\n';
@@ -7904,19 +7980,25 @@ function applyRunKindView(kind,rid){
   const analysis=kind==='analyze', readability=kind==='readability';
   document.body.classList.toggle('analysis-run',analysis);
   document.body.classList.toggle('readability-run',readability);
-  $('chat-title').textContent=analysis?'Progress':readability?'Ask about this paper':'Human in the loop';
-  $('chat-subtitle').textContent=analysis?ANALYZE_CONTINUE_NOTE:readability?READABILITY_ASK_NOTE:'Guide the prover — feedback continues the run';
+  $('chat-title').textContent=analysis?'Ask about this analysis':readability?'Ask about this paper':'Human in the loop';
+  $('chat-subtitle').textContent=analysis?ANALYZE_ASK_NOTE:readability?READABILITY_ASK_NOTE:'Guide the prover — feedback continues the run';
   $('proof-title').textContent=analysis?'Analysis':readability?'Readability':'Proof';
   const empty=$('proof-empty')?.lastElementChild;
   if(empty)empty.textContent=analysis?'The analysis report will appear here.':readability?'The readable version will appear here.':'Proof preview will appear here.';
-  // A readable version has tabs of its own, the Ask panel instead of the chat,
-  // and no Lean.
-  for(const id of ['readability-tabs','ask-list','ask-compose']){ const el=$(id); if(el)el.hidden=!readability; }
+  // A readable version has tabs of its own and no Lean; it and an analysis
+  // have the Ask panel instead of the chat (an analysis keeps its Progress
+  // notes above it).
+  const tabs=$('readability-tabs'); if(tabs)tabs.hidden=!readability;
+  for(const id of ['ask-list','ask-compose']){ const el=$(id); if(el)el.hidden=!readability&&!analysis; }
+  const notes=$('chat-msgs');
+  if(notes&&analysis){ notes.setAttribute('role','region'); notes.setAttribute('aria-label','Progress notes'); }
+  else if(notes){ notes.removeAttribute('role'); notes.removeAttribute('aria-label'); }
+  const question=$('ask-input'); if(question)question.placeholder=analysis?'Ask about a result, a verdict or a step…':'Ask about a step, a symbol or a result…';
   // The view is the tabs' panel while a readable version is shown.
   const panel=$('md-view');
   if(panel&&readability){ panel.setAttribute('role','tabpanel'); panel.setAttribute('aria-labelledby','rd-tab-'+(typeof readabilityTab==='string'?readabilityTab:'readable')); }
   else if(panel){ panel.removeAttribute('role'); panel.removeAttribute('aria-labelledby'); }
-  $('sel-pop').textContent=readability?'Ask about this':'💬 Add to chat';
+  $('sel-pop').textContent=readability||analysis?'Ask about this':'💬 Add to chat';
   $('analysis-stages').setAttribute('aria-label',readability?'Readability stages':'Analyze stages');
   if(readability&&workspaceView==='lean')setWorkspaceView('sandbox');
   // A proof run has no manuscript source (an analysis or readable version sets its own).
@@ -8050,7 +8132,7 @@ const ANALYZE_STAGE_LINE=/^(\d) (Ingest|Segment|Check|Roll-up|Report)(?: · (.*)
 const ANALYZE_RESULT_LINE=/^Check · (.+?) · (checked|gap|error|unclear|not_checked)(?: — (.*))?$/;
 const ANALYZE_NOW_LINE=/^Check · now checking (.+)$/;
 const ANALYZE_SOURCE_WORDS={link:'from a link','pasted text':'from pasted text','uploaded files':'from uploaded files'};
-// One short line for the Progress panel (the stage name is shown next to it).
+// One short line for the right panel's status line (the stage name is shown next to it).
 function analysisProgressDetail(lines){
   const line=String(lines[lines.length-1]||'');
   let match=ANALYZE_STAGE_LINE.exec(line);
@@ -8179,11 +8261,19 @@ function applyAnalysisPreview(run){
   syncSandboxEditor();
   syncAnalysisSourceControls(run);
   if(box.has_report&&rid)setDownloadUrl('/api/workspace/'+encodeURIComponent(rid)+'/file?path='+encodeURIComponent('analysis/report.md')+'&download=1','analysis-report.md');
-  if(analysisSourceShown&&analysisSourceRunId===rid)return true;
+  // The Ask panel (readability.js) follows the record whichever view is shown.
+  if(readabilityUiReady())renderManuscriptAsks(run);
+  else if(readabilityUiMissing)$('ask-hint').textContent='The Ask panel could not be loaded. Reload the page to ask.';
   const report=!!box.has_report;
+  // The graph names the results in the report and in the answers.
+  if(report&&rid&&!analysisGraphCache.has(rid))ensureAnalysisGraph(rid).then(payload=>{
+    if(!payload||runId!==rid)return;
+    if(readabilityUiReady()&&lastSandboxRun?.run_id===rid)renderManuscriptAsks(lastSandboxRun);
+    if(!analysisSourceShown){ $('md-view')._proofRenderKey=''; renderAnalysisReport(text,false,lastSandboxRun); }
+  });
+  if(analysisSourceShown&&analysisSourceRunId===rid)return true;
   renderAnalysisReport(report?text:analysisProgressText(text)||(live?'1 Ingest':''),!report,run,
     live?'The report appears here when the analysis finishes. Progress so far:':'This analysis published no report. What it recorded:');
-  if(report&&rid&&!analysisGraphCache.has(rid))ensureAnalysisGraph(rid).then(payload=>{ if(payload&&runId===rid&&!analysisSourceShown){ $('md-view')._proofRenderKey=''; renderAnalysisReport(text,false,lastSandboxRun); } });
   return !!text;
 }
 function renderAnalysisReport(text,progress,run,note=''){
@@ -8327,6 +8417,27 @@ function analysisNodeVisual(n,meta,out){
   const external=Array.isArray(meta.external)?meta.external.length:0;
   if(external)out.chips.push({text:external+' external',color:'#64748b',title:'Results from other work that this proof uses'});
   return out;
+}
+// A result as the manuscript prints it ("Lemma 3.2"): its label up to its
+// number (a title after it is left out), else its kind and number, else its
+// label or id. Answers and the Ask panel name results so.
+function analysisResultName(node){
+  const meta=node?.meta&&typeof node.meta==='object'?node.meta:{};
+  const label=analysisTextAccents(dagDetailText(node?.label,200).replace(/\s+/g,' ').trim()), number=dagDetailText(meta.number,40).trim();
+  const printed=number&&label?new RegExp('^\\S.*?\\s'+number.replace(/[.*+?^${}()|[\]\\]/g,'\\$&')+'(?![\\w.])').exec(label):null;
+  if(printed)return printed[0];
+  const kind=dagDetailText(meta.env||node?.kind,40).replace(/_/g,' ').trim();
+  if(number&&kind)return kind.charAt(0).toUpperCase()+kind.slice(1)+' '+number;
+  return label||dagDetailText(node?.id,80);
+}
+// The printed names of an analysis graph's results, by (lower-case) id.
+function analysisResultNames(graph){
+  const names=new Map();
+  (Array.isArray(graph?.nodes)?graph.nodes:[]).forEach(node=>{
+    const id=dagDetailText(node?.id,80).toLowerCase();
+    if(id&&!names.has(id))names.set(id,analysisResultName(node));
+  });
+  return names;
 }
 // \label keys of the manuscript's results: \ref prints the number, \cref the name and number.
 function analysisRefLabels(graph){
@@ -8639,9 +8750,12 @@ function analysisDetailActions(node,meta,ref){
   // A guest re-checks a few results per analysis (the server counts them).
   const guestLimit=viewerIsGuest()?Number(analyzePolicy()?.rechecks_per_analysis)||0:0;
   const used=Number(run?.analyze?.rechecks?.started)||0, spent=guestLimit>0&&used>=guestLimit;
-  recheckButton.disabled=!run||running||recheck?.status==='running'||!checkable||spent;
+  // The server takes one re-check or question about an analysis at a time.
+  const asking=run?.analyze?.ask?.status==='running';
+  recheckButton.disabled=!run||running||recheck?.status==='running'||asking||!checkable||spent;
   recheckButton.title=!checkable?'Only results whose proof the parser located can be re-checked'
     :running?'Available when the analysis finishes':recheck?.status==='running'?'Another re-check is running'
+    :asking?'A question about this analysis is being answered — re-check when it is answered'
     :spent?`Guests can re-check ${guestLimit} results of an analysis; sign in to re-check more`
     :'Check this result again with the model verifier (one result, a few calls'+(guestLimit?`; guests re-check ${guestLimit} results per analysis, ${Math.max(0,guestLimit-used)} left`:'')+')';
   if(spent&&!status.textContent)status.textContent=`Guests can re-check ${guestLimit} results of an analysis — sign in to re-check more.`;
@@ -8650,7 +8764,16 @@ function analysisDetailActions(node,meta,ref){
   formalize.disabled=!run||running;
   formalize.title=running?'Available when the analysis finishes':'Formalize this statement in Lean on this server (statements only; proofs are not attempted)';
   formalize.onclick=()=>formalizeAnalysisNode(node);
-  row.append(recheckButton,formalize);
+  // A question about the result is written in the Sandbox's Ask panel
+  // (readability.js), with the result as its context. Before the record
+  // arrives only questions turned off for every analysis stop it.
+  const ask=analyzeEl('button','run-change','Ask about this result'); ask.type='button';
+  const askBlocked=!readabilityUiReady()?'The Ask panel has not loaded — reload the page to ask.'
+    :run?manuscriptAskReason(run,manuscriptAsks(run),{now:false}):manuscriptAskOff('analyze');
+  ask.disabled=!!askBlocked;
+  ask.title=askBlocked||'Ask a question about this result in the Sandbox (answered by a model — not a certificate)';
+  ask.onclick=()=>askAboutNode(node);
+  row.append(recheckButton,formalize,ask);
   const url=typeof ref.url==='string'&&/^https:\/\/\S+$/.test(ref.url)?ref.url:'';
   if(url){
     const open=analyzeEl('a','analysis-open-source','Open in source ↗'); open.href=url; open.target='_blank'; open.rel='noopener noreferrer'; open.title=url;
@@ -8684,6 +8807,34 @@ function formalizeAnalysisNode(node){
   if(!runId)return;
   goSession('lean');
   leanAction('verify',{targets:[String(node.id)],prove:false});
+}
+// A result named in an answer opens in the Manuscript DAG with its details:
+// at once when the run's graph is drawn, else once it is (renderDag takes
+// the selection the stage holds for it).
+function analysisJumpTo(nodeId){
+  const id=String(nodeId||'').toLowerCase(); if(!id||!runId)return;
+  const drawn=dagMode==='analysis'&&dagView?.runId===runId&&dagView.mode==='analysis'&&dagDisplayedRunId===runId&&dagDisplayedMode==='analysis';
+  $('dag-stage')._pendingSelect=drawn?null:{runId,mode:'analysis',id};
+  if(dagMode!=='analysis')setDagMode('analysis',{refresh:false});
+  if(workspaceView!=='dag')setWorkspaceView('dag');
+  else if(!drawn)refreshDagView();
+  if(!drawn)return;
+  const node=(dagView.graph.nodes||[]).find(item=>String(item?.id).toLowerCase()===id);
+  if(node)showAnalysisResult(node);
+}
+// Opens a result's details in the drawn Manuscript DAG (never toggles them
+// closed) and brings its card into view, focused; a card its verdict filter
+// hides is shown again.
+function showAnalysisResult(node){
+  if(!node||!dagView)return;
+  const verdict=analysisVerdict(node.meta);
+  if(dagView.view?.role==='analysis'&&analysisHidden.has(verdict)){
+    analysisHidden.delete(verdict);
+    renderAnalysisFilters(dagView.graph,analysisCoverageText(dagView.payload));
+  }
+  if(dagSelectedNodeId!==String(node.id))selectDagNode(node);
+  const card=document.getElementById(dagView.domIdByNodeId.get(String(node.id))||'');
+  if(card){ card.scrollIntoView({block:'center',inline:'center',behavior:'smooth'}); card.focus({preventScroll:true}); }
 }
 async function showAnalysisSourceLines(ref,box,button){
   const run=lastSandboxRun, rid=String(run?.run_id||'');

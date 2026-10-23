@@ -132,6 +132,8 @@ function analyzeEl(tag,cls,text){ const el={tag,className:cls||'',textContent:te
 function analysisRunState(){ return {run:{run_id:'r1',analyze:{}},running:false,recheck:null}; }
 function viewerIsGuest(){ return false; } function analyzePolicy(){ return {}; } function dagDetailText(v){ return String(v); }
 function analysisSourceFile(){ return 'paper.tex'; }
+function readabilityUiReady(){ return true; } function manuscriptAsks(){ return []; }
+function manuscriptAskReason(){ return ''; } function manuscriptAskOff(){ return ''; } function askAboutNode(){}
 const ANALYZE_VERDICT_LABEL={};
 """
             + _js_function("analysisDetailActions")
@@ -142,7 +144,8 @@ console.log(JSON.stringify(made.filter(el=>el.tag==='button').map(el=>[el.textCo
         )
         self.assertEqual(
             _run_node(program),
-            [["↻ Re-check", "run-change"], ["∎ Formalize statement", "run-change"], ["Open in source", ""]],
+            [["↻ Re-check", "run-change"], ["∎ Formalize statement", "run-change"],
+             ["Ask about this result", "run-change"], ["Open in source", ""]],
         )
 
 

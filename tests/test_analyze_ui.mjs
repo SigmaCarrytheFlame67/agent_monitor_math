@@ -503,7 +503,8 @@ test('a guest sees how many re-checks are left, and the button stops at the limi
   setAttribute(k,v){this.attrs[k]=v;},append(...k){this.kids.push(...k);}})};
 let guest=true, used=0; const viewerIsGuest=()=>guest, analyzePolicy=()=>({rechecks_per_analysis:2});
 const analysisRunState=()=>({run:{run_id:'r1',status:'finished',analyze:{rechecks:{started:used}}},running:false,recheck:null});
-const dagDetailText=v=>String(v||''), analysisSourceFile=()=>'', recheckAnalysisNode=()=>{}, formalizeAnalysisNode=()=>{}, showAnalysisSourceLines=()=>{};`
+const dagDetailText=v=>String(v||''), analysisSourceFile=()=>'', recheckAnalysisNode=()=>{}, formalizeAnalysisNode=()=>{}, showAnalysisSourceLines=()=>{};
+const readabilityUiReady=()=>true, manuscriptAsks=()=>[], manuscriptAskReason=()=>'', manuscriptAskOff=()=>'', askAboutNode=()=>{};`
   const actions = run(['analyzeEl', 'analysisDetailActions'], ['ANALYZE_VERDICT_LABEL'], dom, `((u,g)=>{ used=u; guest=g;
   const box=analysisDetailActions({id:'lem:sum',label:'Lemma 2.2'},{checkable:true},{});
   const row=box.kids[1], status=box.kids[2]; const button=row.kids[0]; return [button.disabled,button.title,status.textContent]; })`)
