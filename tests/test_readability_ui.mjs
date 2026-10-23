@@ -441,7 +441,7 @@ test('result markers become anchor badges: id-safe, labelled, never DOM ids; raw
   assert.doesNotMatch(sanitized[0], /rd-anchor|rd-ref|<button|<span/)
   // That is the only HTML readability.js gives the page.
   assert.equal([...readability.matchAll(/innerHTML|insertAdjacentHTML|outerHTML/g)].length, 1)
-  assert.match(fn('renderReadableMarkdown'), /container\.innerHTML=html;\n\s*placeReadableMarks\(container,marks,nonce,labels\);/)
+  assert.match(fn('renderReadableMarkdown'), /container\.innerHTML=html;\n\s*placeReadableMarks\(container,marks,nonce,labels,where\);/)
   assert.match(fn('readableMarkdown'), /return \{html:sanitizeRenderedHtml\(/)
 })
 
@@ -545,7 +545,7 @@ const readabilityMacros=()=>({'\\\\R':'\\\\mathbb{R}'}), renderMathIn=()=>{};`,
     ['Notation', 'Symbol', 'Meaning', 'Where introduced', 'Terms', 'Term', 'Meaning', 'Where introduced'])
   const json = JSON.stringify(out.doc)
   assert.match(json, /"cls":"rd-ref","text":"Read","data":\{"rdRef":"def:alpha"\}/)
-  for (const name of ['renderReadabilityNotation', 'readabilityWhereCell', 'readabilityTable', 'readabilityTex', 'renderReadabilityMap', 'readabilityMapRow', 'renderPaperMapDetail', 'renderReadabilityAskContext', 'renderReadabilityOriginal', 'readabilityNumberedLines'])
+  for (const name of ['renderReadabilityNotation', 'readabilityWhereCell', 'readabilityTable', 'readabilityTex', 'renderReadabilityMap', 'readabilityMapRow', 'renderPaperMapDetail', 'renderManuscriptAskContext', 'renderReadabilityOriginal', 'readabilityNumberedLines'])
     assert.doesNotMatch(fn(name), /innerHTML|insertAdjacentHTML|outerHTML/, name)
   // Without KaTeX the symbol is plain text.
   const fallback = run(['readabilityTex'], [], 'const window={};', `(()=>{ const el={textContent:''}; readabilityTex(el,'\\\\beta<b>',{}); return el.textContent; })()`)
@@ -554,10 +554,10 @@ const readabilityMacros=()=>({'\\\\R':'\\\\mathbb{R}'}), renderMathIn=()=>{};`,
 
 test('answers: sanitized Markdown with result links; the question and the passage stay text', () => {
   const { document, assigned } = miniDocument()
-  const item = run([...SANITIZER, ...READABLE, 'dagDetailText', 'readabilityAskRunning', 'readabilityAskItem'],
+  const item = run([...SANITIZER, ...READABLE, 'dagDetailText', 'manuscriptAskRunning', 'manuscriptAskItem'],
     ['SAFE_MARKDOWN_TAGS', 'READABLE_MARKER_LINE', 'READABLE_RESULT_LINK'],
     `const window=globalThis; let readableMarkdownParser=null; const fmtTs=()=>'10:42';`,
-    `((entry,labels)=>readabilityAskItem(entry,new Map(labels)))`,
+    `((entry,labels)=>manuscriptAskItem(entry,new Map(labels)))`,
     { marked: true, raw: true, context: { document, location: { href: 'https://ansatze.test/console' } } })
   const labels = [['thm:main', 'Theorem 1.1']]
   const done = item({ ask_id: 'a1', status: 'done', model: 'kimi-k3', finished_at: '2026-10-22T10:42:00Z', node_id: 'thm:main', question: '<b>Why</b> does $x<y$ hold?', selection: '<script>alert(1)</script> the passage',
@@ -588,9 +588,38 @@ test('answers: sanitized Markdown with result links; the question and the passag
   assert.equal(failed.className, 'ask-item failed')
 })
 
+test('an analysis\'s answers name its results as the manuscript prints them, and their links open the Manuscript DAG', () => {
+  const { document, assigned } = miniDocument()
+  const item = run([...SANITIZER, ...READABLE, 'dagDetailText', 'manuscriptAskRunning', 'manuscriptAskItem', 'analysisTextAccents', 'analysisResultName', 'analysisResultNames'],
+    ['SAFE_MARKDOWN_TAGS', 'READABLE_MARKER_LINE', 'READABLE_RESULT_LINK', 'ANALYZE_ACCENT_MARKS', 'ANALYZE_BARE_ACCENTED', 'ANALYZE_TEXT_LETTERS', 'MANUSCRIPT_ASK'],
+    `const window=globalThis; let readableMarkdownParser=null; const fmtTs=()=>'10:42';`,
+    // As renderManuscriptAsks draws an analysis's question: its graph's printed names, links to the Manuscript DAG.
+    `((entry,graph)=>manuscriptAskItem(entry,analysisResultNames(graph),MANUSCRIPT_ASK.analyze.where))`,
+    { marked: true, raw: true, context: { document, location: { href: 'https://ansatze.test/console' } } })
+  // Nodes of a live analysis graph (Short Egyptian fractions): a label may carry the result's title.
+  const graph = { nodes: [{ id: 'lem:residues', kind: 'lemma', label: 'Lemma 4.1', meta: { number: '4.1', env: 'lemma' } },
+    { id: 'prop:density', kind: 'proposition', label: 'Proposition 2.1 (A dense set of short expansions)', meta: { number: '2.1', env: 'proposition' } }] }
+  const entry = { ask_id: 'a1', status: 'done', node_id: 'prop:density', question: 'Is the gap real?', model: 'claude-opus-5-5', finished_at: '2026-10-22T10:42:00Z',
+    answer: 'It rests on Lemma 4.1 [[result:lem:residues]] and on [[result:PROP:density]]; [[result:lem:gone]] is no result of this analysis, and $x<y$ <b>stays</b> text.' }
+  const done = item(entry, graph)
+  const refs = done.querySelector('.ask-a').querySelectorAll('.rd-ref')
+  // Right after its own name a link is the compact ↗, named for screen readers; elsewhere it reads as the printed name.
+  assert.deepEqual(refs.map(ref => [ref.className, ref.textContent, ref.dataset.rdRef, ref.title, ref.getAttribute('aria-label')]), [
+    ['rd-ref rd-ref-jump', '↗', 'lem:residues', 'Show Lemma 4.1 in the Manuscript DAG', 'Show Lemma 4.1 in the Manuscript DAG'],
+    ['rd-ref', 'Proposition 2.1', 'prop:density', 'Show Proposition 2.1 in the Manuscript DAG', null]])
+  // A result the graph does not list stays plain text; raw HTML is text; math stays TeX for KaTeX.
+  assert.match(done.querySelector('.ask-a').textContent, /lem:gone is no result of this analysis, and \$x<y\$ <b>stays<\/b> text\./)
+  assert.equal(done.querySelectorAll('b').length, 0)
+  assert.doesNotMatch(assigned.at(-1), /<button/)
+  assert.equal(done.querySelector('.ask-about').textContent, 'About Proposition 2.1')
+  assert.equal(done.querySelector('.ask-meta').textContent, 'claude-opus-5-5 · 10:42')
+  // Before the graph has loaded, every link is a button named by its id (the panel is drawn again once it has).
+  assert.deepEqual(item(entry, null).querySelector('.ask-a').querySelectorAll('.rd-ref').map(ref => ref.textContent), ['lem:residues', 'prop:density', 'lem:gone'])
+})
+
 test('a selected passage is sent as written: no line numbers or badges, result links and formulas as their source', () => {
   const { document } = miniDocument()
-  const text = run(['readabilitySelectionText', 'readabilityFormulaAt'], [], '', 'readabilitySelectionText', { raw: true, context: { document } })
+  const text = run(['manuscriptSelectionText', 'manuscriptFormulaAt'], [], '', 'manuscriptSelectionText', { raw: true, context: { document } })
   const fragment = html => { const box = document.createElement('div'); box.innerHTML = html; const out = document.createDocumentFragment(); out.append(...box.childNodes); return out }
   // A selection of one range whose copy is `html` (what Range.cloneContents gives for it).
   const selection = (html, { start = null, end = null } = {}) => {
@@ -624,22 +653,25 @@ test('a selected passage is sent as written: no line numbers or badges, result l
   assert.deepEqual(prose.moved, [])
   assert.equal(text({ rangeCount: 0 }), '')
   assert.equal(text(null), '')
-  // The selection pop-up of a readable version takes the passage from here.
-  assert.match(consoleScript, /selText=readable\?readabilitySelectionText\(sel\)\|\|text:text;/)
+  // The selection pop-up of a readable version (or an analysis) takes a rendered passage from here.
+  assert.match(consoleScript, /selText=asks&&\$\('md-view'\)\.contains\(sel\.anchorNode\)\?manuscriptSelectionText\(sel\)\|\|text:text;/)
 })
 
+// The Ask panel's record helpers and compose box, for either kind of run.
+const ASK_STATE = ['isAnalysisRun', 'isReadabilityRun', 'manuscriptAskKind', 'manuscriptAskPolicy', 'manuscriptAskWords', 'manuscriptAskOff', 'manuscriptAskRunOff',
+  'manuscriptAskRunning', 'manuscriptAsks', 'manuscriptAskAllowance', 'manuscriptAskReason']
 test('questions: one in flight at a time, the one just sent shown at once, and guests see how many are left', () => {
-  const ask = run(['readabilityAskRunning', 'readabilityAsks', 'readabilityAskAllowance', 'syncReadabilityAskCompose'], [], `
-const readabilityAskSent=new Map(); let readabilityAskSending='', guest=false;
+  const ask = run([...ASK_STATE, 'syncManuscriptAskCompose'], ['MANUSCRIPT_ASK'], `
+const manuscriptAskSent=new Map(); let manuscriptAskSending='', guest=false;
 const els={}; const $=id=>els[id]||(els[id]={id,disabled:false,title:'',textContent:''});
-const viewerIsGuest=()=>guest, readabilityPolicy=()=>({asks:{per_run:3}});`,
+const viewerIsGuest=()=>guest, readabilityPolicy=()=>({asks:{per_run:3}}), analyzePolicy=()=>null;`,
   `((op,run,arg)=>{
-    if(op==='asks'){ readabilityAskSent.clear(); if(arg)readabilityAskSent.set(run.run_id,arg); return readabilityAsks(run).map(item=>item.ask_id+':'+item.status); }
-    guest=arg; syncReadabilityAskCompose(run,readabilityAsks(run)); return [$('ask-send').disabled,$('ask-send').title,$('ask-hint').textContent];
+    if(op==='asks'){ manuscriptAskSent.clear(); if(arg)manuscriptAskSent.set(run.run_id,arg); return manuscriptAsks(run).map(item=>item.ask_id+':'+item.status); }
+    guest=arg; syncManuscriptAskCompose(run,manuscriptAsks(run)); return [$('ask-send').disabled,$('ask-send').title,$('ask-hint').textContent];
   })`)
   ask.asks = (record, sent) => ask('asks', record, sent)
   ask.compose = (record, isGuest) => ask('compose', record, isGuest)
-  const published = { run_id: 'r1', status: 'finished', sandbox_preview: { has_readable: true } }
+  const published = { run_id: 'r1', run_kind: 'readability', status: 'finished', sandbox_preview: { has_readable: true } }
   const record = { ...published, readability: { asks: [{ ask_id: 'a1', status: 'done', answer: 'x' }, { ask_id: 'a2', status: 'running' }], ask: { ask_id: 'a2', status: 'running' } } }
   assert.deepEqual(ask.asks(record), ['a1:done', 'a2:running'])
   // Sent, but the record does not show it yet: shown as in flight; once the record shows one in flight, never twice.
@@ -654,14 +686,15 @@ const viewerIsGuest=()=>guest, readabilityPolicy=()=>({asks:{per_run:3}});`,
   const spent = { ...published, readability: { asks_started: 3, asks: ['a1', 'a2'].map(ask_id => ({ ask_id, status: 'done', answer: 'x' })) } }
   assert.match(ask.compose(spent, true)[1], /^Guests can ask 3 questions about a readable version — sign in to ask more\.$/)
   assert.equal(ask.compose(spent, true)[0], true)
-  assert.deepEqual(ask.compose({ run_id: 'r1', status: 'running', sandbox_preview: {} }, false).slice(0, 2), [true, 'You can ask once the readable version is published.'])
+  assert.deepEqual(ask.compose({ run_id: 'r1', run_kind: 'readability', status: 'running', sandbox_preview: {} }, false).slice(0, 2), [true, 'You can ask once the readable version is published.'])
   // The run is polled while a question is in flight, and its signature follows the questions.
   assert.match(consoleScript, /run\.readability\?\.ask\?\.status==='running';/)
   assert.match(consoleScript, /run\.readability\?\.ask\?\.status,run\.readability\?\.ask\?\.ask_id,Array\.isArray\(run\.readability\?\.asks\)\?run\.readability\.asks\.length:0,/)
   // The request names the question, the passage, its view and the result asked about.
-  const send = fn('sendReadabilityAsk')
-  assert.match(send, /fetch\('\/api\/run\/'\+encodeURIComponent\(rid\)\+'\/readability\/ask',\{method:'POST'/)
-  assert.match(send, /const request=\{question,selection:String\(context\.selection\|\|''\)\.slice\(0,4000\),view:context\.view==='original'\?'original':'readable'\};/)
+  const send = fn('sendManuscriptAsk')
+  assert.match(send, /fetch\('\/api\/run\/'\+encodeURIComponent\(rid\)\+'\/'\+spec\.endpoint,\{method:'POST'/)
+  assert.match(constant('MANUSCRIPT_ASK'), /readability:\{block:'readability',endpoint:'readability\/ask',published:'has_readable',views:\['readable','original'\],/)
+  assert.match(send, /const request=\{question,selection:manuscriptAskCut\(context\.selection,4000\),view:spec\.views\.includes\(context\.view\)\?context\.view:spec\.views\[0\]\};/)
   assert.match(send, /if\(context\.node_id\)request\.node_id=String\(context\.node_id\);/)
 })
 
@@ -670,19 +703,22 @@ test('asking about a passage or a result: what is sent, and where a result link 
   vm.runInContext(`
 const calls=[], posts=[], els={};
 const $=id=>els[id]||(els[id]={id,value:'',textContent:'',disabled:false,hidden:false,kids:[],focus(){ calls.push('focus '+id); },replaceChildren(...kids){ this.kids=kids; }});
-let readabilityAskContext=null, readabilityAskSending='', readabilityTab='original', runId='r1', workspaceView='dag';
-const readabilityAskSent=new Map();
+let manuscriptAskContext=null, manuscriptAskSending='', readabilityTab='original', runId='r1', workspaceView='dag', analysisSourceShown=false, analysisSourceRunId='';
+const manuscriptAskSent=new Map();
 let lastSandboxRun={run_id:'r1',run_kind:'readability',status:'finished',sandbox_preview:{has_readable:true},readability:{asks:[]}};
 let reply={ok:true,status:202,body:{ok:true,ask_id:'f00dfeed0001'}};
 const fetch=async(url,options)=>{ posts.push([url,JSON.parse(options.body)]); return {ok:reply.ok,status:reply.status,json:async()=>reply.body}; };
 const window={getSelection:()=>({removeAllRanges(){ calls.push('unselect'); }})};
-const startPolling=()=>calls.push('poll'), renderReadabilityAsks=()=>{}, syncReadabilityAskCompose=()=>{}, limitMessage=message=>message+' (limit)';
+const startPolling=()=>calls.push('poll'), renderManuscriptAsks=()=>{}, syncManuscriptAskCompose=()=>{}, limitMessage=message=>message+' (limit)';
 const setWorkspaceView=view=>{ workspaceView=view; calls.push('view '+view); }, setReadabilityTab=view=>{ readabilityTab=view; calls.push('tab '+view); };
 const analyzeEl=(tag,cls,text)=>({tag,cls,text,onclick:null,setAttribute(){}}), paperMapCardTitle=node=>node.label, readabilityLabels=()=>new Map([['lem:gone','Lemma 9']]);
 const anchors=[{dataset:{rdAnchor:'Thm:Main'}},{dataset:{rdAnchor:'thm:main'},scrollIntoView(){ calls.push('scroll'); },focus(){ calls.push('focus anchor'); },classList:{remove(){},add(name){ calls.push(name); }}}];
-const document={querySelectorAll:selector=>{ calls.push(selector); return anchors; }};
-${['isReadabilityRun', 'readabilityAskRunning', 'readabilityAsks', 'readabilitySelectionView', 'renderReadabilityAskContext', 'askAboutSelection', 'askAboutNode', 'sendReadabilityAsk', 'readabilityJumpTo'].map(fn).join('\n')}
-const state=()=>({calls:calls.splice(0),posts:posts.splice(0),context:readabilityAskContext,shown:$('ask-context').hidden?'':$('ask-context').kids[0]?.text,input:$('ask-input').value,status:$('ask-status').textContent});`, context)
+const document={querySelectorAll:selector=>{ calls.push(selector); return anchors; },body:{classList:{contains:()=>false}}};
+let policy={enabled:true,asks:{enabled:true,per_run:3}};
+const readabilityPolicy=()=>policy, analyzePolicy=()=>null, viewerIsGuest=()=>false;
+${['MANUSCRIPT_ASK', 'MANUSCRIPT_ASK_VIEW_WORDS'].map(constant).join('\n')}
+${[...ASK_STATE, 'shownAskKind', 'readabilitySelectionView', 'manuscriptSelectionView', 'renderManuscriptAskContext', 'manuscriptAskCut', 'askAboutSelection', 'askAboutNode', 'sendManuscriptAsk', 'readabilityJumpTo'].map(fn).join('\n')}
+const state=()=>({calls:calls.splice(0),posts:posts.splice(0),context:manuscriptAskContext,shown:$('ask-context').hidden?'':$('ask-context').kids[0]?.text,input:$('ask-input').value,status:$('ask-status').textContent});`, context)
   const step = code => vm.runInContext(code, context)
   const state = () => plain(step('state()'))
   // A passage of the Original: trimmed, with its tab; the request carries both.
@@ -690,28 +726,28 @@ const state=()=>({calls:calls.splice(0),posts:posts.splice(0),context:readabilit
   assert.deepEqual(state(), { calls: ['unselect', 'focus ask-input'], posts: [], context: { selection: 'tion{Setting} line two <scr', view: 'original' },
     shown: 'About this passage of the original: “tion{Setting} line two <scr”', input: '', status: '' })
   step("$('ask-input').value='  What is set up here?  '")
-  await step('sendReadabilityAsk()')
+  await step('sendManuscriptAsk()')
   let after = state()
   assert.deepEqual(after.posts, [['/api/run/r1/readability/ask', { question: 'What is set up here?', selection: 'tion{Setting} line two <scr', view: 'original' }]])
   // Sent: the box is cleared, the question shows as in flight, and the run is polled for its answer.
   assert.deepEqual([after.context, after.shown, after.input, after.calls], [null, '', '', ['poll']])
-  assert.deepEqual(plain(step("readabilityAsks(lastSandboxRun).map(item=>[item.ask_id,item.status,item.view,item.selection])")),
+  assert.deepEqual(plain(step("manuscriptAsks(lastSandboxRun).map(item=>[item.ask_id,item.status,item.view,item.selection])")),
     [['f00dfeed0001', 'running', 'original', 'tion{Setting} line two <scr']])
   // A result from the map or the DAG: its id, and the Readable version as the view.
-  step("readabilityAskSent.clear(); askAboutNode({id:'thm:main',label:'Theorem 2.1'}); $('ask-input').value='Why is it true?'")
+  step("manuscriptAskSent.clear(); askAboutNode({id:'thm:main',label:'Theorem 2.1'}); $('ask-input').value='Why is it true?'")
   assert.equal(state().shown, 'About Theorem 2.1')
-  await step('sendReadabilityAsk()')
+  await step('sendManuscriptAsk()')
   assert.deepEqual(state().posts, [['/api/run/r1/readability/ask', { question: 'Why is it true?', selection: '', view: 'readable', node_id: 'thm:main' }]])
   // A long passage is cut to 4,000 characters; a refusal is shown and keeps the question.
-  step("readabilityAskSent.clear(); readabilityTab='readable'; askAboutSelection('x'.repeat(4500)); $('ask-input').value='q'; reply={ok:false,status:429,body:{error:'Guests can ask 3 questions about a readable version'}}")
-  await step('sendReadabilityAsk()')
+  step("manuscriptAskSent.clear(); readabilityTab='readable'; askAboutSelection('x'.repeat(4500)); $('ask-input').value='q'; reply={ok:false,status:429,body:{error:'Guests can ask 3 questions about a readable version'}}")
+  await step('sendManuscriptAsk()')
   after = state()
   assert.equal(after.posts[0][1].selection.length, 4000)
   assert.equal(after.posts[0][1].view, 'readable')
   assert.deepEqual([after.status, after.input, after.context.view], ['✗ Guests can ask 3 questions about a readable version (limit)', 'q', 'readable'])
   // Nothing is sent while a question is on its way, or for a run that is not a readable version.
-  step("readabilityAskSending='r1'"); await step('sendReadabilityAsk()')
-  step("readabilityAskSending=''; lastSandboxRun={run_id:'r1',engine:'kimi'}"); await step('sendReadabilityAsk()')
+  step("manuscriptAskSending='r1'"); await step('sendManuscriptAsk()')
+  step("manuscriptAskSending=''; lastSandboxRun={run_id:'r1',engine:'kimi'}"); await step('sendManuscriptAsk()')
   assert.deepEqual(state().posts, [])
   // A result link opens the Readable version at the result's anchor, found by its data attribute (never a DOM id).
   step("readabilityTab='notation'; workspaceView='dag'; readabilityJumpTo('thm:main')")
@@ -732,11 +768,11 @@ const document={body:{classList:{toggle(c,on){ if(on)bodyClasses.add(c); else bo
   querySelectorAll:sel=>sel.includes('#dag-mode')?[...sel.matchAll(/data-mode="([a-z-]+)"/g)].map(m=>modes[m[1]]):[]};
 let dagMode='engine', dagAutoRunId='', workspaceView='lean'; const switched=[];
 const setDagMode=(mode)=>{ dagMode=mode; switched.push(mode); }, setWorkspaceView=v=>{ workspaceView=v; switched.push('view:'+v); };
-const ANALYZE_CONTINUE_NOTE='analyze note', READABILITY_ASK_NOTE='Questions are answered by a model from this paper — not a certificate.';`,
+const ANALYZE_ASK_NOTE='analyze note', READABILITY_ASK_NOTE='Questions are answered by a model from this paper — not a certificate.';`,
   `(kind=>{ applyRunKindView(kind,'r1'); return {body:[...bodyClasses],chat:$('chat-title').textContent,proof:$('proof-title').textContent,
     shown:['readability-tabs','ask-list','ask-compose'].filter(id=>!$(id).hidden),selPop:$('sel-pop').textContent,stages:$('analysis-stages').attrs['aria-label'],
     modes:Object.keys(modes).filter(mode=>!modes[mode].hidden),dagMode,switched:switched.splice(0),workspaceView,source:[$('analysis-source-link').hidden,$('analysis-source-toggle').hidden],
-    panel:{...$('md-view').attrs}}; })`)
+    panel:{...$('md-view').attrs},notes:{...$('chat-msgs').attrs},placeholder:$('ask-input').placeholder}; })`)
   const readable = view('readability')
   assert.deepEqual(readable.body, ['readability-run'])
   assert.equal(readable.chat, 'Ask about this paper')
@@ -761,6 +797,16 @@ const ANALYZE_CONTINUE_NOTE='analyze note', READABILITY_ASK_NOTE='Questions are 
   const analysis = view('analyze')
   assert.deepEqual(analysis.body, ['analysis-run'])
   assert.deepEqual(analysis.modes, ['analysis', 'informal', 'formal', 'compiler'])
+  // An analysis has the Ask panel too (no tabs), with its Progress notes kept above it as a named region.
+  assert.equal(analysis.chat, 'Ask about this analysis')
+  assert.deepEqual(analysis.shown, ['ask-list', 'ask-compose'])
+  assert.equal(analysis.selPop, 'Ask about this')
+  assert.deepEqual(analysis.notes, { role: 'region', 'aria-label': 'Progress notes' })
+  assert.equal(analysis.placeholder, 'Ask about a result, a verdict or a step…')
+  assert.deepEqual(analysis.panel, {})
+  // Another kind of run gives the notes back their plain role.
+  assert.deepEqual([readable.notes, view('prove').notes], [{}, {}])
+  assert.equal(readable.placeholder, 'Ask about a step, a symbol or a result…')
   // What a readable version hides, and its tab strip and Ask panel, are in readability.css.
   assert.match(css, /\.readability-run #proof-edit-btn,[^{]*\.readability-run \.chat-msgs, \.readability-run \.chat-compose, \.readability-run #sess-cont,[^{]*\.readability-run \.seg-control button\[data-view="lean"\] \{ display: none !important; \}/)
   // The tabs are a tablist of their own; the status beside them is no tab.
@@ -843,7 +889,8 @@ const document={querySelectorAll:()=>[]};
 let runId='', lastSandboxRun=null, workspaceView='sandbox', dagMode='engine';
 const RUN_KIND_BY_ID=new Map();
 const applySandboxPreview=run=>calls.push('draw '+run.run_id), startPolling=()=>calls.push('poll'), refreshDagView=()=>calls.push('dag');
-const sendReadabilityAsk=()=>{}, setReadabilityTab=()=>{}, readabilityJumpTo=()=>{};
+const sendManuscriptAsk=()=>{}, setReadabilityTab=()=>{}, manuscriptAskJump=()=>{}, shownAskKind=()=>'', renderManuscriptAsks=run=>calls.push('asks '+run.run_id);
+${fn('isAnalysisRun')}
 ${fn('isReadabilityRun')}
 ${fn('initReadabilityUi')}
 const load=(rid,record,kind,view,mode)=>{ runId=rid; lastSandboxRun=record; RUN_KIND_BY_ID.clear(); if(kind)RUN_KIND_BY_ID.set(rid,kind); workspaceView=view; dagMode=mode; initReadabilityUi(); return calls.splice(0); };`, init)
@@ -851,6 +898,9 @@ const load=(rid,record,kind,view,mode)=>{ runId=rid; lastSandboxRun=record; RUN_
   assert.deepEqual(loaded('r1', { run_id: 'r1', run_kind: 'readability' }, 'readability', 'dag', 'paper-map'), ['draw r1', 'poll', 'dag'])
   // Its record not yet in: polling brings it.
   assert.deepEqual(loaded('r1', null, 'readability', 'sandbox', 'paper-map'), ['poll'])
+  // An analysis already drawn gets its Ask panel (its record is polled by the console as before).
+  assert.deepEqual(loaded('a1', { run_id: 'a1', run_kind: 'analyze' }, 'analyze', 'dag', 'analysis'), ['asks a1'])
+  assert.deepEqual(loaded('a1', null, 'analyze', 'sandbox', 'analysis'), [])
   // Another kind of run, or none, is left alone.
   assert.deepEqual(loaded('p1', { run_id: 'p1', engine: 'kimi' }, 'prove', 'dag', 'engine'), [])
   assert.deepEqual(loaded('', null, '', 'sandbox', 'engine'), [])
@@ -1143,7 +1193,7 @@ test('readable.md splits at the runner\'s part marks only', () => {
   assert.deepEqual(notes('junk'), [])
   // A passage selected across a part's end leaves its check notes out.
   const { document } = miniDocument()
-  const selected = run(['readabilitySelectionText', 'readabilityFormulaAt'], [], '', 'readabilitySelectionText', { raw: true, context: { document } })
+  const selected = run(['manuscriptSelectionText', 'manuscriptFormulaAt'], [], '', 'manuscriptSelectionText', { raw: true, context: { document } })
   const fragment = html => { const box = document.createElement('div'); box.innerHTML = html; const out = document.createDocumentFragment(); out.append(...box.childNodes); return out }
   const selection = html => ({ rangeCount: 1, getRangeAt: () => ({ cloneRange: () => ({ startContainer: null, endContainer: null, setStartBefore() {}, setEndAfter() {}, cloneContents: () => fragment(html) }) }) })
   assert.equal(selected(selection('<p>the end of part one.</p>\n<details class="rd-check-notes"><summary>Check notes (1)</summary><ul><li>x</li></ul></details>\n<h2>3. The class</h2>')),

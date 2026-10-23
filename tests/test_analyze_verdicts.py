@@ -166,13 +166,22 @@ def test_prompt_pack_hash_binds_every_prompt():
     assert first == prompts.PROMPT_PACK_SHA256
     with patch.object(prompts, "ANALYZE_VERIFIER_SYSTEM", prompts.ANALYZE_VERIFIER_SYSTEM + " "):
         assert prompts.prompt_pack_sha256() != first
+    # The answers of the Ask panel are bound too.
+    with patch.object(prompts, "ANALYZE_ASK_SYSTEM", prompts.ANALYZE_ASK_SYSTEM + " "):
+        assert prompts.prompt_pack_sha256() != first
+    with patch.object(prompts, "ASK_RESULT_BYTES", (1, 1)):
+        assert prompts.prompt_pack_sha256() != first
     with patch.object(cgm_prompts, "FORMAT_REMINDER", cgm_prompts.FORMAT_REMINDER + " "):
         assert prompts.prompt_pack_sha256() != first
     assert len(first) == 64 and first == hashlib.sha256(json.dumps({
         "version": prompts.PROMPT_PACK_VERSION, "prompts": prompts.all_prompts(),
         "format_reminder": cgm_prompts.FORMAT_REMINDER,
-        "budgets": {"full": prompts.FULL_BUDGET, "bounded": prompts.BOUNDED_BUDGET, "paper_map": prompts.PAPER_MAP_BYTES},
+        "budgets": {"full": prompts.FULL_BUDGET, "bounded": prompts.BOUNDED_BUDGET, "paper_map": prompts.PAPER_MAP_BYTES,
+                    "ask": [prompts.ASK_PROMPT_BYTES, prompts.ASK_OVERVIEW_BYTES, prompts.ASK_RESULTS_BYTES,
+                            prompts.ASK_RESULT_BYTES, prompts.ASK_REPLY_BYTES, prompts.CARRIED_NOTE,
+                            prompts.EARLIER_EXCHANGES, prompts.EARLIER_BYTES]},
     }, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
+    assert set(prompts.all_prompts()) == {"verifier", "paper_map", "segment", "ask"}
 
 
 def test_node_prompt_fences_manuscript_delimiters():

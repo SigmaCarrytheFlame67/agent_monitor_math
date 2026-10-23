@@ -1034,7 +1034,7 @@ def test_the_prompt_pack_is_bounded_and_hashed():
         assert 500 < len(text.encode()) <= harness.MAX_SYSTEM_PROMPT_BYTES
         assert "tool" not in text.replace("You have no\ntools", "").replace("You have no tools", "").replace(
             "pseudo-tool", "")
-    assert prompts.PROMPT_PACK_VERSION == "readability-prompts@2"
+    assert prompts.PROMPT_PACK_VERSION == "readability-prompts@3"
     assert re.fullmatch(r"[0-9a-f]{64}", prompts.PROMPT_PACK_SHA256)
     assert prompts.PROMPT_PACK_SHA256 == prompts.prompt_pack_sha256()
 
@@ -1311,6 +1311,55 @@ def test_a_question_about_a_passage_across_marks_gets_its_part(tmp_path, model):
                                                               "Restated. Result lem:rep."})
     assert runner.run_ask(tmp_path, "ffffffffffff", route_env=kimi_env())["part"] == 1
     assert "READABLE VERSION, part 1 (Introduction)" in fake.calls[-1]["user"]
+
+
+def test_a_follow_up_question_reads_the_earlier_exchange_and_its_part(tmp_path, model):
+    fake = model()
+    run(tmp_path, write_request(tmp_path), kimi_env())
+
+    def asked(number: int, **body) -> tuple[dict, str]:
+        ask.write_request(tmp_path, f"{number:012x}", body)
+        answer = runner.run_ask(tmp_path, f"{number:012x}", route_env=kimi_env())
+        assert ask.load_answer(tmp_path, f"{number:012x}") == answer
+        return answer, fake.calls[-1]["user"]
+
+    def block(user: str, name: str) -> str:
+        return user.split(f"<{name}>\n", 1)[1].split(f"\n</{name}>", 1)[0]
+
+    first, user = asked(1, question="Who wrote this?", selection="A. Author, Even numbers.", view="original")
+    assert (first["part"], first["earlier"]) == (2, 0) and "<EARLIER>" not in user
+    # A follow-up that selects nothing: the first exchange comes along, and
+    # the part the last answer was read in.
+    follow, user = asked(2, question="Why is it cited?")
+    assert block(user, "EARLIER") == ('Question: Who wrote this?\nAbout the passage: "A. Author, Even numbers."\n'
+                                      "Answer: It is even. See [[result:thm:main]].")
+    assert user.index("</QUESTION>") < user.index("<EARLIER>") < user.index("<PASSAGE>") < user.index("<CONTEXT>")
+    assert block(user, "PASSAGE") == "none"
+    assert block(user, "CONTEXT").startswith("READABLE VERSION, part 2 (References):")
+    assert "ORIGINAL, part 2:\n\\begin{thebibliography}{9}" in block(user, "CONTEXT")
+    assert (follow["part"], follow["earlier"], follow["status"]) == (2, 1, "done")
+    # A question with a result or a passage of its own reads its own part, or none.
+    about, user = asked(3, question="Why does this hold?", node_id="lem:sum")
+    assert (about["part"], about["earlier"]) == (1, 2)
+    assert "READABLE VERSION, part 1 (Introduction)" in block(user, "CONTEXT") and "<ABOUT_RESULT>" in user
+    nowhere, user = asked(4, question="And this?", selection="Nowhere in this manuscript", view="readable")
+    assert (nowhere["part"], nowhere["earlier"]) == (None, 3)
+    assert block(user, "CONTEXT") == "none: the guide below is all the context"
+    # At most three earlier exchanges, oldest first; the last had no part, so neither has its follow-up.
+    after, user = asked(5, question="So?")
+    assert (after["part"], after["earlier"]) == (None, 3)
+    earlier = block(user, "EARLIER")
+    assert [line for line in earlier.split("\n") if line.startswith("Question:")] == [
+        "Question: Why is it cited?", "Question: Why does this hold?", "Question: And this?"]
+    assert "About: Lemma 2.2 [[result:lem:sum]]" in earlier
+    assert block(user, "CONTEXT") == "none: the guide below is all the context"
+    # A part the readable version does not have is never read.
+    ask.write_request(tmp_path, f"{6:012x}", {"question": "Planted?"})
+    ask.write_answer(tmp_path, f"{6:012x}", {"status": "done", "answer": "Yes.", "part": 9,
+                                             "created_at": "2999-01-01T00:00:00Z"})
+    stray, user = asked(7, question="Then?")
+    assert stray["part"] is None and block(user, "CONTEXT") == "none: the guide below is all the context"
+    assert "Question: Planted?" in block(user, "EARLIER")
 
 
 def test_the_receipt_says_why_a_format_reminder_was_sent(tmp_path, model):

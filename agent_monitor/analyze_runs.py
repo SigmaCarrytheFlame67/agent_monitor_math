@@ -18,9 +18,13 @@ keeps the sponsored budget bounded:
   default 40, ``0`` turns sponsored Analyze off).  Each sponsored analysis and
   each sponsored re-check counts once.  Readability shares the pool
   (``readability_runs``), with refusals worded for it (:class:`GateMessages`);
-  a question about a readability run (one model call) takes a slot while it
-  is answered but counts against a daily budget of its own
-  (:func:`sponsored_asks_per_day`), never against the manuscript starts.
+  a question about a finished analysis or a readability run (one model call)
+  takes a slot while it is answered but counts against a daily budget of its
+  own (:func:`sponsored_asks_per_day`), never against the manuscript starts.
+* Questions (the Ask panel of a finished manuscript run): the per-run and
+  hourly limits both modes share (:data:`GUEST_ASKS_PER_RUN`,
+  :data:`ASKS_PER_HOUR`), and the switch for questions about analyses
+  (:func:`asks_enabled`).
 * :func:`normalize_source` validates a manuscript source for either mode, and
   :func:`is_manuscript_record` tells the security gates that a run reads
   someone's manuscript (an analysis or a readability run).
@@ -84,11 +88,25 @@ GUEST_DAILY_CAP_ENV = "AGENT_MONITOR_ANALYZE_GUEST_SPONSORED_RUNS_PER_DAY"
 GUEST_CONCURRENCY_ENV = "AGENT_MONITOR_ANALYZE_GUEST_SPONSORED_CONCURRENCY"
 DEFAULT_DAILY_CAP = 40
 DEFAULT_CONCURRENCY = 2
-# Sponsored questions about readability runs, per UTC day (guests' share:
-# half by default).  Kept in the same usage file as ``asks``/``guest_asks``.
+# Sponsored questions about finished manuscript runs (analyses and readable
+# versions together), per UTC day (guests' share: half by default).  Kept in
+# the same usage file as ``asks``/``guest_asks``; the variables keep the names
+# they had when only readable versions answered questions.
 ASK_DAILY_CAP_ENV = "AGENT_MONITOR_READABILITY_SPONSORED_ASKS_PER_DAY"
 GUEST_ASK_DAILY_CAP_ENV = "AGENT_MONITOR_READABILITY_GUEST_SPONSORED_ASKS_PER_DAY"
 DEFAULT_DAILY_ASK_CAP = 200
+# Questions about a finished manuscript run: a guest asks at most this many
+# about one run (counted on its record) and this many in a session-hour;
+# signed-in accounts per hour by role.  The hourly limits count the questions
+# about analyses and readable versions together.
+GUEST_ASKS_PER_RUN = 3
+GUEST_ASKS_PER_HOUR = 6
+ASKS_PER_HOUR = {"guest": GUEST_ASKS_PER_HOUR, "member": 30, "admin": 120}
+# The questions (and answers) a run record keeps, newest last.
+ASKS_KEPT = 50
+# Questions about analyses (default on; readable versions have their own
+# switches, AGENT_MONITOR_READABILITY_ENABLED and _GUESTS).
+ASKS_ENV = "AGENT_MONITOR_ANALYZE_ASKS"
 USAGE_FILENAME = "analyze_sponsored_usage.json"
 # A guest re-checks at most this many results of one analysis (each re-check
 # is up to eight sponsored calls); the console also bounds guest re-checks
@@ -128,6 +146,8 @@ GUEST_SHARE_DAILY_MESSAGE = (
 GUEST_RECHECK_LIMIT_MESSAGE = (
     "Guests can re-check {limit} results of an analysis; sign in to re-check more"
 )
+GUEST_ASK_LIMIT_MESSAGE = "Guests can ask {limit} questions about an analysis; sign in to ask more"
+ASKS_DISABLED_MESSAGE = "Questions about analyses are turned off on this site."
 
 
 @dataclass(frozen=True)
@@ -147,6 +167,22 @@ class GateMessages:
 
 
 ANALYZE_GATE = GateMessages()
+# A question about an analysis holds a slot of the pool while it is answered,
+# but counts against the sponsored questions of the day (``daily="asks"``),
+# never against the manuscript runs.
+ASK_DAILY = "asks"
+ASK_GATE_MESSAGES = GateMessages(
+    off="Sponsored questions are turned off on this site",
+    guest_off="Sponsored questions are turned off for guests on this site — sign in to ask",
+    busy="Sponsored Analyze is busy ({active} manuscript runs are using it) — ask again in a few minutes",
+    guest_busy="Sponsored Analyze is busy ({active} manuscript runs are using it) — ask again in a few minutes",
+    guest_share_busy=("Sponsored Analyze for guests is busy ({active} running) — ask again in a few minutes, "
+                      "or sign in"),
+    daily="Sponsored questions are at today's limit — ask again tomorrow",
+    guest_daily="Sponsored questions are at today's limit — ask again tomorrow",
+    guest_share_daily="Sponsored questions for guests are at today's limit — ask again tomorrow, or sign in",
+    held="A question about this analysis is already being answered",
+)
 STATUS_LABEL = "Statements compiled · proofs not attempted"
 MODEL_VERIFIER_NOTE = "checked by a model verifier — not a certificate"
 UPSTREAM_LEAN_NOTE = "Upstream Lean: not re-checked by this server"
@@ -263,6 +299,85 @@ def availability_error(user: Mapping[str, Any] | None) -> AnalyzeRequestError | 
         if error:
             return AnalyzeRequestError(error, status=403)
     return None
+
+
+def asks_enabled() -> bool:
+    """Questions about finished analyses are offered (``AGENT_MONITOR_ANALYZE_ASKS``, default on)."""
+    return _limits()._flag(os.environ, ASKS_ENV, True)
+
+
+def ask_error(user: Mapping[str, Any] | None) -> AnalyzeRequestError | None:
+    """Why ``user`` may not ask about an analysis right now, else ``None``
+    (the Analyze switches, then the questions switch)."""
+    refusal = availability_error(user)
+    if refusal is not None:
+        return refusal
+    if not asks_enabled():
+        return AnalyzeRequestError(ASKS_DISABLED_MESSAGE, status=403)
+    return None
+
+
+def ask_key(run_id: str) -> str:
+    """The sponsored-pool key a question about ``run_id`` holds while it is answered."""
+    return f"{run_id}#ask"
+
+
+# Why a question about a sponsored run of a mode can't be answered while
+# sponsored manuscript runs are off (the pool's daily runs, or the guests'
+# share of them, set to 0).
+SPONSORED_ASKS_OFF = {
+    "analyze": "Sponsored Analyze is turned off on this site, so questions about this analysis can't be answered now",
+    "readability": ("Sponsored Readability is turned off on this site, so questions about this readable version "
+                    "can't be answered now"),
+}
+
+
+GUEST_SPONSORED_ASKS_OFF = {
+    "analyze": ("Sponsored Analyze is turned off for guests on this site, so questions about this analysis can't be "
+                "answered now"),
+    "readability": ("Sponsored Readability is turned off for guests on this site, so questions about this readable "
+                    "version can't be answered now"),
+}
+
+
+def sponsored_questions_error(*, guest: bool, mode: str = RUN_KIND) -> str:
+    """Why a question about a sponsored run can't be asked now ("" when it
+    can): the pool's sponsored runs are off (a daily cap of 0, or a guests'
+    share of 0 for a guest), as for any model work on a sponsored run, or the
+    sponsored questions are (their own daily cap, or the guests' share of it)."""
+    if sponsored_runs_per_day() <= 0:
+        return SPONSORED_ASKS_OFF.get(mode, SPONSORED_ASKS_OFF[RUN_KIND])
+    if guest and guest_sponsored_runs_per_day() <= 0:
+        return GUEST_SPONSORED_ASKS_OFF.get(mode, GUEST_SPONSORED_ASKS_OFF[RUN_KIND])
+    # Off for everyone, or for guests only (who are told to sign in), as the pool says it.
+    if sponsored_asks_per_day() <= 0:
+        return ASK_GATE_MESSAGES.off
+    if guest and guest_sponsored_asks_per_day() <= 0:
+        return ASK_GATE_MESSAGES.guest_off
+    return ""
+
+
+def asks_policy(refusal: AnalyzeRequestError | None, role: str, *, mode: str = RUN_KIND,
+                switch: bool = True) -> dict[str, Any]:
+    """The ``asks`` object of a mode's viewer policy: whether this viewer may
+    ask at all (``enabled``, with a ``reason`` when not; a guest's runs are
+    always sponsored), whether questions about sponsored runs can be answered
+    now (``sponsored``, ``sponsored_reason``) and the limits."""
+    guest = role == "guest"
+    sponsored_reason = sponsored_questions_error(guest=guest, mode=mode)
+    reason = (str(refusal) if refusal is not None else "" if switch else ASKS_DISABLED_MESSAGE) or (
+        sponsored_reason if guest else "")
+    return {
+        "enabled": not reason,
+        "reason": reason or None,
+        "sponsored": not sponsored_reason,
+        "sponsored_reason": sponsored_reason or None,
+        "per_hour": ASKS_PER_HOUR.get(role, GUEST_ASKS_PER_HOUR),
+        "per_run": GUEST_ASKS_PER_RUN if guest else None,
+        "in_flight": 1,
+        "question_chars": 2_000,
+        "selection_chars": 4_000,
+    }
 
 
 SPONSORED_DERIVED_OFF_MESSAGE = (
@@ -669,7 +784,7 @@ def guest_sponsored_concurrency() -> int:
 
 
 def sponsored_asks_per_day() -> int:
-    """Site-wide daily cap on sponsored questions about readability runs (0 = off)."""
+    """Site-wide daily cap on sponsored questions about analyses and readability runs (0 = off)."""
     return _bounded_env(ASK_DAILY_CAP_ENV, DEFAULT_DAILY_ASK_CAP, 0, 100_000)
 
 
@@ -807,7 +922,9 @@ class SponsoredGate:
     def _refusal(self, *, guest: bool, messages: GateMessages, daily: str = "runs") -> AnalyzeCapacityError | None:
         cap, guest_cap = (limit() for limit in DAILY_COUNTS[daily])
         if cap <= 0 or (guest and guest_cap <= 0):
-            return AnalyzeCapacityError(messages.guest_off if guest else messages.off, status=403)
+            # Questions off for everyone are not "off for guests" (signing in would not help).
+            everyone = cap <= 0 and daily == "asks"
+            return AnalyzeCapacityError(messages.guest_off if guest and not everyone else messages.off, status=403)
         if len(self._active) >= sponsored_concurrency():
             message = (messages.guest_busy if guest else messages.busy).format(active=len(self._active))
             return AnalyzeCapacityError(message, retry_after=60)
@@ -1100,6 +1217,7 @@ def viewer_policy(user: Mapping[str, Any] | None, *, guest_runs_per_hour: int = 
         "formalize_label": STATUS_LABEL,
         "verdict_note": MODEL_VERIFIER_NOTE,
         "upstream_lean_note": UPSTREAM_LEAN_NOTE,
+        "asks": asks_policy(refusal, role, switch=asks_enabled()),
         "continue": False,
     }
     if role == "guest":

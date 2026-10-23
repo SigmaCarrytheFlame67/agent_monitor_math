@@ -67,7 +67,7 @@ if not __package__:
     if str(repository_root) not in sys.path:
         sys.path.insert(0, str(repository_root))
 
-from agent_monitor import safe_fetch
+from agent_monitor import manuscript_ask, safe_fetch
 from agent_monitor.analyze import latex_structure, sources, text_structure
 from agent_monitor.analyze.prompts import utf8_len
 from agent_monitor.analyze.titles import uninformative_title
@@ -828,7 +828,8 @@ def run_ask(
     sink: Callable[[dict[str, Any]], None] | None = None,
 ) -> dict[str, Any]:
     """Answer the question ``readability/asks/<ask_id>.json`` with one model
-    call on the run's route; writes and returns the answer.  Raises
+    call on the run's route (the questions answered before it come along, so a
+    follow-up can be read); writes and returns the answer.  Raises
     ``AnalyzeError`` (or :class:`ConfigError`, :class:`Stopped`) with a
     public-safe message; a failed answer is written too."""
     root = Path(workspace).resolve()
@@ -849,19 +850,26 @@ def run_ask(
     paper = paper_map.load(root) or {"nodes": []}
     nodes = segments.get("nodes") or []
     limit = prompts.BOUNDED_ASK_CONTEXT_BYTES if run.info.bounded else prompts.ASK_CONTEXT_BYTES
+    # The questions answered before this one, so that a follow-up can be read
+    # (one that selects nothing reads the part the last answer was read in).
+    exchanges = readability_ask.STORE.earlier(root, ask_id)
     context, part = readability_ask.context(
         ask=question, readable=_text_file(folder / "readable.md"),
         original_lines=_text_file(folder / "original.txt").split("\n"),
         parts=[item for item in check.get("parts") or [] if isinstance(item, dict) and isinstance(item.get("index"), int)],
-        node_parts={node["id"]: node.get("part") for node in paper["nodes"]}, limit=limit)
+        node_parts={node["id"]: node.get("part") for node in paper["nodes"]}, limit=limit,
+        carried_part=exchanges[-1].get("part") if exchanges else None)
     about = next((node for node in nodes if isinstance(node, dict) and question.get("node_id")
                   and node.get("id") == question["node_id"]), None)
+    printed = {node["id"]: prompts.printed(node) for node in nodes if isinstance(node, dict) and node.get("id")}
+    earlier = manuscript_ask.earlier_text(exchanges, limit=manuscript_ask.EARLIER_BYTES[1 if run.info.bounded else 0],
+                                          name_of=lambda node_id: printed.get(node_id, ""))
     user = prompts.ask_prompt(question=question["question"], passage=question["selection"], context=context,
                               guide=prompts.guide_summary(guide, run.summary_bytes),
                               results=prompts.results_list(nodes, run.guide_bytes[0]),
-                              about=prompts.about_result(about))
-    ids = [node["id"] for node in nodes if isinstance(node, dict) and node.get("id")]
-    answer: dict[str, Any] = {"schema": ANSWER_SCHEMA, "ask_id": ask_id, "part": part,
+                              about=prompts.about_result(about), earlier=earlier)
+    ids = list(printed)
+    answer: dict[str, Any] = {"schema": ANSWER_SCHEMA, "ask_id": ask_id, "part": part, "earlier": len(exchanges),
                               "model": run.info.route.model, "route": run.info.name}
     token = harness._RUN_EMITTER.set(run.emitter)
     failure = ""

@@ -9,16 +9,20 @@
    proof toolbar render into #md-view; the right panel asks questions about
    the paper (POST /api/run/<id>/readability/ask; questions and answers come
    back in run.readability.asks, the one in flight in run.readability.ask).
-   DAG: the Paper map mode (GET /api/run/<id>/proof_graph?kind=paper-map). */
+   DAG: the Paper map mode (GET /api/run/<id>/proof_graph?kind=paper-map).
+
+   The Ask panel serves analyses too (POST /api/run/<id>/analysis/ask;
+   run.analyze.asks and run.analyze.ask): see "Ask about a finished
+   manuscript run" below. */
 const READABILITY_TABS=['readable','original','notation','map'];
 let readabilityTab='readable', readabilityTabRunId='';
 const readabilityMapCache=new Map(), readabilityMapLoads=new Map(), readabilityMapMisses=new Map();
 const readabilityOriginalCache=new Map(), readabilityOriginalLoads=new Map();
-// The question being written (a selected passage or a result) and the ones
-// sent but not yet in the run's record, by run.
-// The run whose question is on its way ('' when none).
-let readabilityAskContext=null, readabilityAskSending='';
-const readabilityAskSent=new Map();
+// The question being written about (a selected passage or a result), the run
+// whose question is on its way ('' when none), the questions sent but not yet
+// in their run's record (by run), and the run the panel was last drawn for.
+let manuscriptAskContext=null, manuscriptAskSending='', manuscriptAskRunId='';
+const manuscriptAskSent=new Map();
 
 /* ── progress of a running readable version ──
    The runner's own notes ("Readability · 3 Rewrite · part 2 of 5"), never a
@@ -74,10 +78,10 @@ function readabilityProgressView(lines,run){
 function applyReadabilityPreview(run){
   const box=run?.sandbox_preview||{}, live=run?.status==='running', rid=String(run?.run_id||'');
   if(readabilityTabRunId!==rid){
-    // The Ask panel and its notes belong to the run that was shown.
-    readabilityTabRunId=rid; readabilityTab='readable'; readabilityAskContext=null; renderReadabilityAskContext();
-    for(const id of ['ask-status','readability-tab-status']){ const el=$(id); if(el)el.textContent=''; }
-    const input=$('ask-input'); if(input)input.value='';
+    // The tabs and their notes belong to the run that was shown (the Ask
+    // panel is reset by renderManuscriptAsks).
+    readabilityTabRunId=rid; readabilityTab='readable';
+    const status=$('readability-tab-status'); if(status)status.textContent='';
   }
   // Nothing in a readable version is editable in the Sandbox.
   sandboxEditing=false; sandboxText=''; sandboxRevision=String(box.revision||'missing');
@@ -88,11 +92,11 @@ function applyReadabilityPreview(run){
   if(box.has_readable&&rid)setDownloadUrl('/api/workspace/'+encodeURIComponent(rid)+'/file?path='+encodeURIComponent('readability/readable.md')+'&download=1','readable.md');
   syncReadabilityTabs();
   renderReadabilityTab(run);
-  renderReadabilityAsks(run);
+  renderManuscriptAsks(run);
   // The paper map names the results the readable version marks.
   if(box.has_readable&&rid&&!readabilityMapCache.has(rid))ensurePaperMap(rid).then(payload=>{
     if(!payload||runId!==rid||lastSandboxRun?.run_id!==rid)return;
-    $('md-view')._proofRenderKey=''; renderReadabilityTab(lastSandboxRun); renderReadabilityAsks(lastSandboxRun);
+    $('md-view')._proofRenderKey=''; renderReadabilityTab(lastSandboxRun); renderManuscriptAsks(lastSandboxRun);
   });
   return !!(box.has_readable||String(box.text||'').trim());
 }
@@ -153,10 +157,11 @@ const READABLE_RESULT_LINK=/\[\[\s*result\s*:\s*([^\]\s]{1,80})\s*\]\]/gi;
    someone else's manuscript: raw HTML is shown as text and the rendered HTML
    is sanitized like any run output, last. The runner's result markers (a line
    "[result:<id>]: #", which Markdown renders as nothing) become anchor badges
-   and an answer's "[[result:<id>]]" a button that jumps to that anchor. Each
-   crosses Markdown and the sanitizer as a token of plain text that no input
-   can contain (it carries a fresh nonce), and placeReadableMarks builds its
-   element in place of the token: in text nodes only, never from markup. */
+   and an answer's "[[result:<id>]]" a button that shows that result (its
+   anchor in the readable version, its card in an analysis's Manuscript DAG).
+   Each crosses Markdown and the sanitizer as a token of plain text that no
+   input can contain (it carries a fresh nonce), and placeReadableMarks builds
+   its element in place of the token: in text nodes only, never from markup. */
 function readableMarkdown(text){
   const nonce=Math.random().toString(36).slice(2,10).padEnd(8,'0'), marks=[];
   const tokenFor=mark=>{ marks.push(mark); return '@@RD'+nonce+'x'+(marks.length-1)+'@@'; };
@@ -187,11 +192,12 @@ function readableMarkdown(text){
     .replace(new RegExp('@@RDENV'+nonce+'x(\\d+)@@','g'),(_,i)=>escapeHtml(environments[Number(i)]||''));
   return {html:sanitizeRenderedHtml(restored),marks,nonce};
 }
-// Readable Markdown in `container`, with its anchor badges and result links.
-function renderReadableMarkdown(container,text,labels){
+// Readable Markdown in `container`, with its anchor badges and result links
+// (`where` a link shows its result: the readable version, by default).
+function renderReadableMarkdown(container,text,labels,where){
   const {html,marks,nonce}=readableMarkdown(text);
   container.innerHTML=html;
-  placeReadableMarks(container,marks,nonce,labels);
+  placeReadableMarks(container,marks,nonce,labels,where);
 }
 function readableTextNodes(node,out=[]){
   node.childNodes.forEach(child=>{ if(child.nodeType===3)out.push(child); else readableTextNodes(child,out); });
@@ -200,7 +206,7 @@ function readableTextNodes(node,out=[]){
 // Each token's element in its place. A token in code reads as it was
 // written, in a link's text as the result's name (no button in a link), and
 // in a link's address or title as it was written.
-function placeReadableMarks(root,marks,nonce,labels){
+function placeReadableMarks(root,marks,nonce,labels,where){
   if(!marks.length)return;
   const pattern=new RegExp('@@RD'+nonce+'x(\\d+)@@','g'), name=id=>labels instanceof Map&&labels.get(id)||id;
   readableTextNodes(root).filter(node=>node.nodeValue.includes('@@RD'+nonce)).forEach(node=>{
@@ -214,7 +220,7 @@ function placeReadableMarks(root,marks,nonce,labels){
       at=match.index+match[0].length;
       // "Lemma 3.9 [[result:lem]]": the name is written already, the link is a jump.
       const named=mark.kind==='ref'&&before.trimEnd().toLowerCase().endsWith(String(name(mark.id)).toLowerCase());
-      pieces.push(literal?mark.raw:inLink?name(mark.id):mark.kind==='anchor'?readableAnchorNode(mark.id,name(mark.id)):readableRefNode(mark.id,labels,named));
+      pieces.push(literal?mark.raw:inLink?name(mark.id):mark.kind==='anchor'?readableAnchorNode(mark.id,name(mark.id)):readableRefNode(mark.id,labels,named,where));
     }
     if(at<text.length)pieces.push(text.slice(at));
     node.replaceWith(...pieces);
@@ -235,14 +241,14 @@ function readableAnchorNode(id,label){
   badge.dataset.rdAnchor=id; badge.tabIndex=-1; badge.title=label===id?id:label+' · '+id;
   return badge;
 }
-// A result the paper map does not list stays plain text; right after its
-// own name the link is a compact jump.
-function readableRefNode(id,labels,named=false){
+// A result the run's results (paper map, analysis graph) do not list stays
+// plain text; right after its own name the link is a compact jump.
+function readableRefNode(id,labels,named=false,where='the readable version'){
   const label=labels instanceof Map&&labels.get(id)||id;
   if(labels instanceof Map&&labels.size&&!labels.has(id))return named?'':label;
   const button=analyzeEl('button',named?'rd-ref rd-ref-jump':'rd-ref',named?'↗':label);
-  button.type='button'; button.dataset.rdRef=id; button.title='Show '+label+' in the readable version';
-  if(named)button.setAttribute('aria-label','Show '+label+' in the readable version');
+  button.type='button'; button.dataset.rdRef=id; button.title='Show '+label+' in '+where;
+  if(named)button.setAttribute('aria-label','Show '+label+' in '+where);
   return button;
 }
 // Part counts ({parts, faithful, issues, unchecked, …}): the preview's, else the run's summary.
@@ -552,6 +558,8 @@ function paperMapActions(node){
   read.onclick=()=>readabilityJumpTo(String(node.id));
   // Asking is a change only the run's owner may make.
   const ask=analyzeEl('button','run-change','Ask about this'); ask.type='button';
+  const why=typeof shownAskBlocked==='function'?shownAskBlocked():'';
+  ask.disabled=!!why; if(why)ask.title=why;
   ask.onclick=()=>askAboutNode(node);
   row.append(read,ask);
   return row;
@@ -614,7 +622,9 @@ function readabilityMapRow(node){
   const actions=analyzeEl('div','rd-map-actions');
   const read=analyzeEl('button','','Read'); read.type='button'; read.title='Show '+label+' in the readable version';
   read.onclick=()=>readabilityJumpTo(String(node.id));
-  const ask=analyzeEl('button','run-change','Ask'); ask.type='button'; ask.title='Ask about '+label;
+  const ask=analyzeEl('button','run-change','Ask'); ask.type='button';
+  const why=typeof shownAskBlocked==='function'?shownAskBlocked():'';
+  ask.disabled=!!why; ask.title=why||'Ask about '+label;
   ask.onclick=()=>askAboutNode(node);
   actions.append(read,ask);
   row.append(dots,main,actions);
@@ -622,7 +632,8 @@ function readabilityMapRow(node){
 }
 function renderReadabilityMap(run,view){
   const rid=String(run?.run_id||''), payload=readabilityMapCache.get(rid), graph=payload?.graph;
-  const key=JSON.stringify(['rd-map',rid,!!graph,String(payload?.generated_at||''),(graph?.nodes||[]).length,(graph?.edges||[]).length]);
+  // Drawn again when why no question can be started changes: its Ask buttons say it.
+  const key=JSON.stringify(['rd-map',rid,!!graph,String(payload?.generated_at||''),(graph?.nodes||[]).length,(graph?.edges||[]).length,shownAskBlocked()]);
   if(view._proofRenderKey===key)return;
   view._proofRenderKey=key;
   const doc=analyzeEl('div','md-doc analysis-doc rd-map');
@@ -672,32 +683,119 @@ function readabilityJumpTo(nodeId){
   anchor.classList.remove('flash'); void anchor.offsetWidth; anchor.classList.add('flash');
 }
 
-/* ── Ask about this paper ── */
-function readabilityAskRunning(item){ return ['running','queued'].includes(String(item?.status||'')); }
+/* ── Ask about a finished manuscript run ──
+   The right panel of a readable version and of an analysis: a question about
+   a selected passage or a result, answered by one model call (Markdown with
+   TeX and "[[result:<id>]]" links to the run's results). One question at a
+   time per run. Each kind keeps its questions in its own block of the run
+   record and has its own endpoint, views and words. */
+const MANUSCRIPT_ASK={
+  readability:{block:'readability',endpoint:'readability/ask',published:'has_readable',views:['readable','original'],
+    about:'a readable version',waiting:'You can ask once the readable version is published.',
+    unpublished:'This run published no readable version to ask about.',off:'Questions about readable versions are turned off on this site.',
+    where:'the readable version',
+    empty:'Ask about a step, a symbol or a result. Select a passage in the readable version or the original and choose “Ask about this”, or ask about a result from the Map.'},
+  analyze:{block:'analyze',endpoint:'analysis/ask',published:'has_report',views:['report','source'],
+    about:'an analysis',waiting:'You can ask once the analysis is published.',
+    unpublished:'This analysis published no report to ask about.',off:'Questions about analyses are turned off on this site.',
+    where:'the Manuscript DAG',
+    empty:'Ask about a result, a verdict or a step of a proof. Select a passage of the report or the manuscript and choose “Ask about this”, or ask about a result from the Manuscript DAG.'},
+};
+// What a selected passage is a passage of, after "About this passage".
+const MANUSCRIPT_ASK_VIEW_WORDS={readable:'',original:' of the original',report:' of the report',source:' of the manuscript'};
+// The Ask panel's kind for a run record: 'analyze', 'readability' or ''.
+function manuscriptAskKind(run){ return isAnalysisRun(run)?'analyze':isReadabilityRun(run)?'readability':''; }
+// The kind of the run shown: its record's, else the view's (set from the run
+// list before the record arrives).
+function shownAskKind(){
+  const kind=manuscriptAskKind(lastSandboxRun?.run_id===runId?lastSandboxRun:null);
+  if(kind)return kind;
+  const view=document.body?.classList;
+  return view?.contains('analysis-run')?'analyze':view?.contains('readability-run')?'readability':'';
+}
+function manuscriptAskPolicy(kind){ return kind==='analyze'?analyzePolicy():kind==='readability'?readabilityPolicy():null; }
+// A reason the server gives, as text ('' when it gives none).
+function manuscriptAskWords(value){ return typeof value==='string'?value.trim():''; }
+// Why questions of this kind are not offered on this site (or to this
+// viewer), or '' while they are: the mode, or its questions, are off for
+// this viewer (the policy says why), or the engine listing leaves the mode
+// out (a mode switched off is not listed). Before the listing has been read
+// (enginesListed, console.html) nothing is known, and nothing is off.
+function manuscriptAskOff(kind){
+  const spec=MANUSCRIPT_ASK[kind]; if(!spec)return '';
+  const policy=manuscriptAskPolicy(kind);
+  if(!policy)return typeof enginesListed!=='undefined'&&enginesListed?spec.off:'';
+  if(policy.enabled!==false&&policy.asks?.enabled!==false)return '';
+  return manuscriptAskWords(policy.asks?.reason)||manuscriptAskWords(policy.reason)||spec.off;
+}
+// Why no question can be asked about this run while the site's settings
+// stay as they are, or '' when one can: its kind's questions are off, or it
+// is a sponsored run while questions about sponsored runs are (their caps
+// are 0, or the sponsored mode is off).
+function manuscriptAskRunOff(run){
+  const kind=manuscriptAskKind(run), off=manuscriptAskOff(kind);
+  if(off||run?.credential_source!=='sponsored_kimi')return off;
+  const asks=manuscriptAskPolicy(kind)?.asks;
+  return asks?.sponsored===false?manuscriptAskWords(asks.sponsored_reason)||'Sponsored questions are turned off on this site.':'';
+}
+function manuscriptAskRunning(item){ return ['running','queued'].includes(String(item?.status||'')); }
 // The run's questions, oldest first; the one in flight, and one just sent
 // that the record does not list yet, come last.
-function readabilityAsks(run){
-  const rid=String(run?.run_id||''), block=run?.readability&&typeof run.readability==='object'?run.readability:{};
+function manuscriptAsks(run){
+  const spec=MANUSCRIPT_ASK[manuscriptAskKind(run)], rid=String(run?.run_id||'');
+  const block=spec&&run[spec.block]&&typeof run[spec.block]==='object'?run[spec.block]:{};
   const asks=(Array.isArray(block.asks)?block.asks:[]).filter(item=>item&&typeof item==='object').slice(-50);
   const listed=new Set(asks.map(item=>String(item.ask_id||'')).filter(Boolean));
-  const current=block.ask&&typeof block.ask==='object'&&readabilityAskRunning(block.ask)?block.ask:null;
+  const current=block.ask&&typeof block.ask==='object'&&manuscriptAskRunning(block.ask)?block.ask:null;
   if(current&&!listed.has(String(current.ask_id||''))){ asks.push(current); listed.add(String(current.ask_id||'')); }
-  const sent=readabilityAskSent.get(rid);
+  const sent=manuscriptAskSent.get(rid);
   // Once the record shows a question in flight (one at a time) or lists it,
   // or after a while without, the record speaks for it.
-  if(sent&&(current||listed.has(sent.ask_id)||Date.now()-sent.sent_at>20000))readabilityAskSent.delete(rid);
+  if(sent&&(current||listed.has(sent.ask_id)||Date.now()-sent.sent_at>20000))manuscriptAskSent.delete(rid);
   else if(sent)asks.push(sent);
   return asks;
 }
-// A guest's questions left for this readable version (the record counts the
-// ones asked), or null (no limit shown).
-function readabilityAskAllowance(run,asks){
-  if(!viewerIsGuest())return null;
-  const limit=Number(readabilityPolicy()?.asks?.per_run)||0, asked=Number(run?.readability?.asks_started);
+// A guest's questions left about this run (the record counts the ones
+// asked), or null (no limit shown).
+function manuscriptAskAllowance(run,asks){
+  const kind=manuscriptAskKind(run);
+  if(!kind||!viewerIsGuest())return null;
+  const limit=Number(manuscriptAskPolicy(kind)?.asks?.per_run)||0, asked=Number(run?.[MANUSCRIPT_ASK[kind].block]?.asks_started);
   return limit?{limit,left:Math.max(0,limit-(Number.isFinite(asked)&&asked>0?asked:asks.length))}:null;
 }
-function readabilityAskItem(item,labels){
-  const running=readabilityAskRunning(item), answer=typeof item.answer==='string'?item.answer.slice(0,20000):'';
+// Why no question can be sent about this run now, or '' when one can:
+// asking is off (for its kind, or for sponsored runs while it is one),
+// nothing is published yet, a question (or, in an analysis, a re-check) is
+// under way, or a guest has asked all theirs. `now: false` leaves out what
+// passes by itself (a question or re-check under way).
+// Why the run shown takes no question now ('' when it does), for the buttons
+// that start one from elsewhere (the Map tab, the Paper map).
+function shownAskBlocked(){
+  const run=lastSandboxRun?.run_id===runId?lastSandboxRun:null;
+  return run?manuscriptAskReason(run,manuscriptAsks(run),{now:false}):'';
+}
+function manuscriptAskReason(run,asks,{now=true}={}){
+  const kind=manuscriptAskKind(run), spec=MANUSCRIPT_ASK[kind];
+  if(!spec)return '';
+  const off=manuscriptAskRunOff(run); if(off)return off;
+  const live=run.status==='running';
+  if(!run.sandbox_preview?.[spec.published]||live)return live?spec.waiting:spec.unpublished;
+  if(now&&(!!manuscriptAskSending&&manuscriptAskSending===String(run.run_id||'')||asks.some(manuscriptAskRunning)))return 'One question at a time — the answer is on its way.';
+  if(now&&kind==='analyze'&&run.analyze?.recheck?.status==='running')return 'A result is being re-checked — you can ask when it finishes.';
+  const allowance=manuscriptAskAllowance(run,asks);
+  return allowance&&allowance.left<=0?`Guests can ask ${allowance.limit} questions about ${spec.about} — sign in to ask more.`:'';
+}
+// The printed names ("Lemma 3.2") of the results an answer may link to, by
+// id, and the author macros its math is typeset with.
+function manuscriptAskLabels(run){
+  const rid=String(run?.run_id||'');
+  return manuscriptAskKind(run)==='analyze'?analysisResultNames(analysisGraphCache.get(rid)?.graph):readabilityLabels(rid);
+}
+function manuscriptAskMacros(run){
+  return manuscriptAskKind(run)==='analyze'?analysisKatexMacros(analysisGraphCache.get(String(run?.run_id||''))?.graph):readabilityMacros(run);
+}
+function manuscriptAskItem(item,labels,where){
+  const running=manuscriptAskRunning(item), answer=typeof item.answer==='string'?item.answer.slice(0,20000):'';
   const li=analyzeEl('li','ask-item'+(running?' pending':!answer.trim()?' failed':''));
   const question=analyzeEl('div','ask-q');
   question.append(analyzeEl('span','who','You'),analyzeEl('span','',dagDetailText(item.question,2000)));
@@ -705,70 +803,113 @@ function readabilityAskItem(item,labels){
   const node=dagDetailText(item.node_id,200).trim();
   if(node)li.append(analyzeEl('p','ask-about','About '+(item.label||labels.get(node)||node)));
   const passage=dagDetailText(item.selection,4000).trim();
-  if(passage)li.append(analyzeEl('blockquote','ask-passage',passage.length>600?passage.slice(0,600)+'…':passage));
+  // Cut by characters, never inside one (a selection can hold astral math letters).
+  if(passage)li.append(analyzeEl('blockquote','ask-passage',Array.from(passage).length>600?Array.from(passage).slice(0,600).join('')+'…':passage));
   const reply=analyzeEl('div','ask-a md-doc');
   if(running)reply.append(analyzeEl('p','ask-pending','Answering…'));
   else if(!answer.trim())reply.append(analyzeEl('p','ask-error','✗ '+(dagDetailText(item.error,300)||'No answer was written.')));
-  else renderReadableMarkdown(reply,answer,labels);
+  else renderReadableMarkdown(reply,answer,labels,where);
   li.append(reply);
   const at=item.finished_at||item.started_at, meta=[dagDetailText(item.model,80),at?fmtTs(at):''].filter(Boolean);
   if(meta.length&&!running)li.append(analyzeEl('p','ask-meta',meta.join(' · ')));
   return li;
 }
-function renderReadabilityAsks(run){
-  const list=$('ask-list'); if(!list)return;
-  const rid=String(run?.run_id||''), asks=readabilityAsks(run), labels=readabilityLabels(rid), macros=readabilityMacros(run);
+// The Ask panel belongs to the run shown: another run starts with no
+// question, context, note or conversation, and nothing can be sent until
+// renderManuscriptAsks draws it from its record (which may never come: a
+// run that cannot be read). A question still being sent stays its run's:
+// manuscriptAskSending holds that run's id.
+function resetManuscriptAsk(rid){
+  rid=String(rid||'');
+  if(manuscriptAskRunId===rid)return;
+  manuscriptAskRunId=rid; manuscriptAskContext=null; renderManuscriptAskContext();
+  const status=$('ask-status'); if(status)status.textContent='';
+  const input=$('ask-input'); if(input){ input.value=''; input.disabled=false; }
+  // Drawn again from scratch once the record arrives, even with the same questions.
+  const list=$('ask-list');
+  if(list){ list.replaceChildren(); list._askKey=''; list._askRunId=''; list._askCount=0; }
+  const button=$('ask-send'); if(button){ button.disabled=true; button.title=''; }
+  const hint=$('ask-hint'); if(hint)hint.textContent=rid?'Loading…':'';
+}
+function renderManuscriptAsks(run){
+  const list=$('ask-list'), spec=MANUSCRIPT_ASK[manuscriptAskKind(run)]; if(!list||!spec)return;
+  const rid=String(run.run_id||'');
+  // The record of a run no longer shown (a late poll of the run left) never
+  // takes the panel over.
+  if(rid!==String(runId||''))return;
+  resetManuscriptAsk(rid);
+  const asks=manuscriptAsks(run), labels=manuscriptAskLabels(run), macros=manuscriptAskMacros(run);
   const key=JSON.stringify([rid,asks.map(item=>[item.ask_id,item.status,String(item.answer||'').length,item.error]),labels.size,macros]);
   if(list._askKey!==key){
     const grew=list._askRunId===rid&&asks.length>Number(list._askCount||0);
     const stick=grew||list._askRunId!==rid||list.scrollHeight-list.scrollTop-list.clientHeight<80;
     list._askKey=key; list._askRunId=rid; list._askCount=asks.length;
-    list.replaceChildren(...(asks.length?asks.map(item=>readabilityAskItem(item,labels))
-      :[analyzeEl('li','ask-empty','Ask about a step, a symbol or a result. Select a passage in the readable version or the original and choose “Ask about this”, or ask about a result from the Map.')]));
+    list.replaceChildren(...(asks.length?asks.map(item=>manuscriptAskItem(item,labels,spec.where)):[analyzeEl('li','ask-empty',spec.empty)]));
     list.querySelectorAll('a[href]').forEach(link=>{ link.target='_blank'; link.rel='noopener noreferrer'; });
     renderMathIn(list,macros);
     if(stick)list.scrollTop=list.scrollHeight;
   }
-  syncReadabilityAskCompose(run,asks);
+  syncManuscriptAskCompose(run,asks);
+  syncManuscriptAskButtons(run);
 }
-function syncReadabilityAskCompose(run,asks){
-  const button=$('ask-send'), hint=$('ask-hint'); if(!button||!hint)return;
-  const published=!!run?.sandbox_preview?.has_readable, allowance=readabilityAskAllowance(run,asks);
-  const reason=!published?(run?.status==='running'?'You can ask once the readable version is published.':'This run published no readable version to ask about.')
-    :readabilityAskSending===String(run?.run_id||'')||asks.some(readabilityAskRunning)?'One question at a time — the answer is on its way.'
-    :allowance&&allowance.left<=0?`Guests can ask ${allowance.limit} questions about a readable version — sign in to ask more.`:'';
+// The buttons that start a question from outside the panel follow the run
+// shown as its compose box does: the Map tab's (its render key holds why no
+// question can be started) and those of an open result's details in the DAG
+// (an analysis's Re-check, which waits for a question, among them).
+function syncManuscriptAskButtons(run){
+  if(isReadabilityRun(run)&&readabilityTab==='map')renderReadabilityTab(run);
+  redrawDagDetailActions();
+}
+function syncManuscriptAskCompose(run,asks){
+  const button=$('ask-send'), hint=$('ask-hint'), input=$('ask-input'); if(!button||!hint)return;
+  const reason=manuscriptAskReason(run,asks), allowance=manuscriptAskAllowance(run,asks);
   button.disabled=!!reason; button.title=reason;
+  // Nothing can be written while asking about this run is off; otherwise the next question can be.
+  if(input)input.disabled=!!manuscriptAskRunOff(run);
   hint.textContent=reason||(allowance?`${allowance.left} of ${allowance.limit} guest questions left · Enter to ask`:'Enter to ask · Shift+Enter newline');
 }
-function renderReadabilityAskContext(){
+function renderManuscriptAskContext(){
   const box=$('ask-context'); if(!box)return;
-  const context=readabilityAskContext;
+  const context=manuscriptAskContext;
   if(!context){ box.hidden=true; box.replaceChildren(); return; }
   const passage=String(context.selection||'').replace(/\s+/g,' ').trim();
-  const text=passage?'About this passage'+(context.view==='original'?' of the original':'')+': “'+(passage.length>240?passage.slice(0,240)+'…':passage)+'”':'About '+(context.label||context.node_id);
+  const of=Object.prototype.hasOwnProperty.call(MANUSCRIPT_ASK_VIEW_WORDS,context.view)?MANUSCRIPT_ASK_VIEW_WORDS[context.view]:'';
+  const shown=Array.from(passage), text=passage?'About this passage'+of+': “'+(shown.length>240?shown.slice(0,240).join('')+'…':passage)+'”':'About '+(context.label||context.node_id);
   const clear=analyzeEl('button','','×'); clear.type='button'; clear.setAttribute('aria-label','Ask without this context');
-  clear.onclick=()=>{ readabilityAskContext=null; renderReadabilityAskContext(); $('ask-input')?.focus(); };
+  clear.onclick=()=>{ manuscriptAskContext=null; renderManuscriptAskContext(); $('ask-input')?.focus(); };
   box.replaceChildren(analyzeEl('span','',text),clear);
   box.hidden=false;
 }
 // The tab a selected passage comes from, when it can be asked about.
 function readabilitySelectionView(){ return readabilityTab==='readable'||readabilityTab==='original'?readabilityTab:''; }
-// A selected passage as it is written, so that it can be found in
-// readable.md or original.txt: none of the view's own labels (the Original's
-// line numbers, the anchor badges, the notes above the text), result links
-// as "[[result:<id>]]" and typeset math as its TeX ("$n^2$"); a formula
-// selected in part is taken whole.
-function readabilitySelectionText(selection){
+// The view a passage selected in the run shown comes from, when it can be
+// asked about ('' when not): a readable version's Readable or Original tab,
+// an analysis's report or its stored manuscript. Whichever is shown, only a
+// published run that a question could be asked about offers it, for the
+// reasons the DAG's "Ask about this result" follows (a question or re-check
+// under way passes by itself).
+function manuscriptSelectionView(){
+  const run=lastSandboxRun?.run_id===runId?lastSandboxRun:null, kind=manuscriptAskKind(run);
+  if(!kind||manuscriptAskReason(run,manuscriptAsks(run),{now:false}))return '';
+  if(kind==='readability')return readabilitySelectionView();
+  return analysisSourceShown&&analysisSourceRunId===String(runId||'')?'source':'report';
+}
+// A selected passage as it is written, so that it can be found in the text
+// it was selected from (readable.md, original.txt, report.md or the stored
+// manuscript): none of the view's own labels (line numbers, anchor badges,
+// the notes above the text), result links as "[[result:<id>]]" and typeset
+// math as its TeX ("$n^2$"); a formula selected in part is taken whole.
+function manuscriptSelectionText(selection){
   if(!selection?.rangeCount)return '';
   const box=document.createElement('div');
   for(let index=0;index<selection.rangeCount;index++){
     const range=selection.getRangeAt(index).cloneRange();
-    const start=readabilityFormulaAt(range.startContainer), end=readabilityFormulaAt(range.endContainer);
+    const start=manuscriptFormulaAt(range.startContainer), end=manuscriptFormulaAt(range.endContainer);
     if(start)range.setStartBefore(start);
     if(end)range.setEndAfter(end);
     box.append(range.cloneContents());
   }
-  box.querySelectorAll('.ln,.rd-anchor,.rd-banner,.analysis-live-note,.rd-pdf-note,.rd-check-notes').forEach(label=>label.remove());
+  box.querySelectorAll('.ln,.rd-anchor,.rd-banner,.analysis-live-note,.analysis-live-foot,.rd-pdf-note,.rd-check-notes').forEach(label=>label.remove());
   box.querySelectorAll('.rd-ref').forEach(ref=>ref.replaceWith(ref.dataset.rdRef?'[[result:'+ref.dataset.rdRef+']]':''));
   box.querySelectorAll('.katex').forEach(math=>{
     const tex=math.querySelector('annotation[encoding="application/x-tex"]')?.textContent;
@@ -779,46 +920,60 @@ function readabilitySelectionText(selection){
   return box.textContent.replace(/\s+/g,' ').trim();
 }
 // The typeset formula (displayed or inline) that a node of a selection is in.
-function readabilityFormulaAt(node){
+function manuscriptFormulaAt(node){
   const element=node?.nodeType===1?node:node?.parentElement;
   return element?.closest('.katex-display')||element?.closest('.katex')||null;
 }
+// `text` cut to `limit` characters by code point: a cut never leaves half of
+// a surrogate pair (an astral letter such as 𝔸), which the server cannot read.
+function manuscriptAskCut(text,limit){ return Array.from(String(text||'')).slice(0,limit).join(''); }
 function askAboutSelection(text){
-  readabilityAskContext={selection:String(text||'').trim().slice(0,4000),view:readabilitySelectionView()||'readable'};
+  const spec=MANUSCRIPT_ASK[shownAskKind()]; if(!spec)return;
+  manuscriptAskContext={selection:manuscriptAskCut(String(text||'').trim(),4000),view:manuscriptSelectionView()||spec.views[0]};
   window.getSelection()?.removeAllRanges();
-  renderReadabilityAskContext();
+  renderManuscriptAskContext();
   $('ask-input')?.focus();
 }
+// A result from the Map, the Paper map or the Manuscript DAG: asked about in
+// the Sandbox, named as the run names it ("Lemma 3.2").
 function askAboutNode(node){
-  readabilityAskContext={node_id:String(node?.id||''),label:paperMapCardTitle(node),view:'readable'};
+  const kind=shownAskKind(), spec=MANUSCRIPT_ASK[kind]; if(!spec)return;
+  manuscriptAskContext={node_id:String(node?.id||''),label:kind==='analyze'?analysisResultName(node):paperMapCardTitle(node),view:spec.views[0]};
   if(workspaceView!=='sandbox')setWorkspaceView('sandbox');
-  renderReadabilityAskContext();
+  renderManuscriptAskContext();
   $('ask-input')?.focus();
 }
-async function sendReadabilityAsk(){
+// A result named in an answer: its anchor in the readable version, or its
+// card (and details) in the analysis's Manuscript DAG.
+function manuscriptAskJump(id){
+  const kind=shownAskKind();
+  if(kind==='readability')readabilityJumpTo(id);
+  else if(kind==='analyze')analysisJumpTo(id);
+}
+async function sendManuscriptAsk(){
   const rid=runId, run=lastSandboxRun?.run_id===rid?lastSandboxRun:null, input=$('ask-input'), status=$('ask-status');
-  const question=String(input?.value||'').trim();
-  if(!rid||!isReadabilityRun(run)||!question||readabilityAskSending===rid||$('ask-send').disabled)return;
+  const spec=MANUSCRIPT_ASK[manuscriptAskKind(run)], question=String(input?.value||'').trim();
+  if(!rid||!spec||!question||manuscriptAskSending===rid||$('ask-send').disabled)return;
   if(question.length>2000){ status.textContent='Questions are limited to 2,000 characters.'; return; }
-  const context=readabilityAskContext||{};
-  const request={question,selection:String(context.selection||'').slice(0,4000),view:context.view==='original'?'original':'readable'};
+  const context=manuscriptAskContext||{};
+  const request={question,selection:manuscriptAskCut(context.selection,4000),view:spec.views.includes(context.view)?context.view:spec.views[0]};
   if(context.node_id)request.node_id=String(context.node_id);
-  readabilityAskSending=rid; status.textContent='Sending…';
-  syncReadabilityAskCompose(run,readabilityAsks(run));
+  manuscriptAskSending=rid; status.textContent='Sending…';
+  syncManuscriptAskCompose(run,manuscriptAsks(run));
   try{
-    const response=await fetch('/api/run/'+encodeURIComponent(rid)+'/readability/ask',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(request)});
+    const response=await fetch('/api/run/'+encodeURIComponent(rid)+'/'+spec.endpoint,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(request)});
     const body=await response.json().catch(()=>({}));
     if(!response.ok)throw new Error(response.status===429?limitMessage(body.error||'Limit reached',response):String(body.error||('HTTP '+response.status)));
     if(runId!==rid)return;
-    readabilityAskSent.set(rid,{...request,ask_id:String(body.ask_id||''),status:'running',label:context.label||'',sent_at:Date.now()});
-    input.value=''; readabilityAskContext=null; renderReadabilityAskContext(); status.textContent='';
+    manuscriptAskSent.set(rid,{...request,ask_id:String(body.ask_id||''),status:'running',label:context.label||'',sent_at:Date.now()});
+    input.value=''; manuscriptAskContext=null; renderManuscriptAskContext(); status.textContent='';
     startPolling();
   }catch(err){
     if(runId===rid)status.textContent='✗ '+String(err.message||err).slice(0,300);
   }finally{
-    if(readabilityAskSending===rid)readabilityAskSending='';
+    if(manuscriptAskSending===rid)manuscriptAskSending='';
     // The run shown now, which may be another one, is told where it stands.
-    if(lastSandboxRun?.run_id===runId&&isReadabilityRun(lastSandboxRun))renderReadabilityAsks(lastSandboxRun);
+    if(lastSandboxRun?.run_id===runId&&manuscriptAskKind(lastSandboxRun))renderManuscriptAsks(lastSandboxRun);
   }
 }
 
@@ -835,20 +990,22 @@ function initReadabilityUi(){
       setReadabilityTab(READABILITY_TABS[next],{focus:true});
     };
   });
-  $('ask-send').onclick=sendReadabilityAsk;
-  $('ask-input').addEventListener('keydown',event=>{ if(event.key==='Enter'&&!event.shiftKey){ event.preventDefault(); sendReadabilityAsk(); } });
-  // A result named in an answer, or in the notation table, opens at its anchor.
+  $('ask-send').onclick=sendManuscriptAsk;
+  $('ask-input').addEventListener('keydown',event=>{ if(event.key==='Enter'&&!event.shiftKey){ event.preventDefault(); sendManuscriptAsk(); } });
+  // A result named in an answer, or in the notation table, opens where the
+  // run shows it (an anchor of the readable version, a card of the DAG).
   for(const id of ['ask-list','md-view'])$(id).addEventListener('click',event=>{
     const ref=event.target.closest?.('.rd-ref');
-    if(ref&&document.body.classList.contains('readability-run')){ event.preventDefault(); readabilityJumpTo(ref.dataset.rdRef); }
+    if(ref&&shownAskKind()){ event.preventDefault(); manuscriptAskJump(ref.dataset.rdRef); }
   });
   // A readable version selected before this file loaded is drawn now, and
   // polled again: the console's status line and log of it need this file too.
+  // An analysis already drawn gets its Ask panel.
   const run=lastSandboxRun?.run_id===runId?lastSandboxRun:null;
   if(runId&&(isReadabilityRun(run)||RUN_KIND_BY_ID.get(String(runId))==='readability')){
     if(run)applySandboxPreview(run);
     startPolling();
     if(workspaceView==='dag'&&dagMode==='paper-map')refreshDagView();
-  }
+  }else if(runId&&isAnalysisRun(run))renderManuscriptAsks(run);
 }
 if(document.getElementById('readability-tabs'))initReadabilityUi();

@@ -531,6 +531,44 @@ when the server offers it.
   "Analyze runs can't be continued. Start a new analysis, or re-check a node
   in the DAG." Compilation (`/pdf`, `final.pdf`, `final_latex`) is refused:
   the TeX is a third-party manuscript.
+- **Questions (Ask panel).** `POST /api/run/<id>/analysis/ask {question
+  (≤ 2,000 characters), selection? (≤ 4,000), view: "report" | "source",
+  node_id?}` answers a question about a published analysis in the background
+  (202 `{ask_id}`) with one call (stage `ask`; four with its retries, 900 s)
+  on the analysis's own route: `analyze_runner.py --ask <id>` reads
+  `analysis/asks/<id>.json` and writes `<id>.reply.json`
+  (`agent_monitor.analyze.ask`). The context is what the analysis published,
+  never anything fetched again: title, abstract and summary, each result
+  with its verdict and the verifier's main finding (as many as fit: 16 KB, 6 KB
+  on sponsored and guest routes, the main results and those with findings
+  first, the rest counted as omitted), and in full (statement,
+  the proof the manuscript gives, verdict, findings, the results it uses and
+  is used by; a document-order guess is marked as one) at most three
+  results: the one asked about from the DAG; those a selected passage
+  belongs to (a passage of the stored source by the lines of the file it
+  starts in, one of the report by its start in what the report prints about a
+  result, its label and findings, then in the verifier's other notes; a
+  passage that stands in several results belongs to none) or names ("Lemma
+  3.2", `\ref{lem:x}`);
+  and those the question names, or the main results for "the main theorem".
+  The last three questions answered about the run and their answers come
+  along (`<EARLIER>`), so a follow-up reads; a follow-up that selects and
+  names nothing is also given the results the last answer was about.
+  Answers link results as `[[result:<id>]]` and are refused when they carry
+  raw HTML. Limits as for Readability's questions, counted together with
+  them: one question at a time per run and none during a re-check; guests 3
+  per analysis and 6 per hour (12 per client network), members 30 per hour,
+  administrators 120. A sponsored question holds a slot of the pool while it
+  is answered and counts against the day's sponsored questions, never the
+  analyses; while sponsored runs are off (a daily cap of 0, or a guests'
+  share of 0 for a guest) questions about sponsored analyses and readable
+  versions are refused (403), as re-checks are. `run["analyze"]` keeps `ask` (in flight), `asks` (the last 50),
+  `asks_started` and `ask_usage`; re-checks and refreshes of the block keep
+  them. `AGENT_MONITOR_ANALYZE_ASKS=0` turns questions about analyses off
+  (403 "Questions about analyses are turned off on this site."); the Analyze
+  switches above cover them too. Project members read the answers but may
+  not ask; calls are booked as stage `ask`; a question a restart left running
+  becomes `interrupted`, and an in-flight question defers an automatic deploy.
 - **What leaves the server.** The Sandbox shows `analysis/report.md`; the owner
   can open the stored source file, never anyone else. A shared snapshot holds
   the report, the Manuscript DAG (node statements, labels, verdicts:
@@ -757,11 +795,14 @@ the listing, with a per-viewer `readability` policy).
   reads `readability/asks/<id>.json` and writes `<id>.reply.json`. The
   context is the part holding the selected passage (looked up in the view
   it was selected in, then the other, ignoring Markdown marks, math
-  delimiters and whitespace; else the selected result's part, else the
-  guide alone). One question at a time per run;
-  guests 3 per run and 6 per hour (12 per client network), members 30 per
-  hour, administrators 120. Answers, like rewrites, are refused when they
-  carry raw HTML outside math.
+  delimiters and whitespace; else the selected result's part; else, for a
+  question that selects nothing, the part the last answered question was
+  read in; else the guide alone). The last three questions answered about
+  the run and their answers come along (`<EARLIER>`), so a follow-up reads. One question at a
+  time per run; guests 3 per run and 6 per hour (12 per client network),
+  members 30 per hour, administrators 120, counted together with questions
+  about analyses. Answers, like rewrites, are refused when they carry raw
+  HTML outside math.
   Project members read the answers but may not ask. Each call is booked in
   the usage ledger as stage `ask`; a question a restart left running becomes
   `interrupted`, and an in-flight question defers an automatic deploy.
@@ -778,8 +819,9 @@ the listing, with a per-viewer `readability` policy).
 | `AGENT_MONITOR_READABILITY_CONCURRENCY` | 3 (sponsored and guest at most 2, subscriptions 1) |
 | `AGENT_MONITOR_READABILITY_API_TIMEOUT` | 300 s (630 s on sponsored Kimi) |
 | `AGENT_MONITOR_READABILITY_WATCHDOG_SECONDS` | set per run: its deadline + one call + 300 s |
-| `AGENT_MONITOR_READABILITY_SPONSORED_ASKS_PER_DAY` | 200 sponsored questions per UTC day (0 turns them off) |
+| `AGENT_MONITOR_READABILITY_SPONSORED_ASKS_PER_DAY` | 200 sponsored questions per UTC day, about readable versions and analyses together (0 turns them off) |
 | `AGENT_MONITOR_READABILITY_GUEST_SPONSORED_ASKS_PER_DAY` | half of the above |
+| `AGENT_MONITOR_ANALYZE_ASKS` | on (questions about analyses) |
 
 ## Research atlas and shared memory
 

@@ -276,11 +276,12 @@ GUEST_READABILITY_RUNS_PER_HOUR = 1
 GUEST_READABILITY_RUNS_PER_CLIENT_PER_HOUR = 3
 _GUEST_READABILITY_WINDOWS: dict[int, deque[float]] = {}
 _GUEST_READABILITY_CLIENT_WINDOWS: dict[str, deque[float]] = {}
-# Questions about readability runs per account and hour (readability_runs.ASKS_PER_HOUR),
-# and guests' questions per client network and hour.
-GUEST_READABILITY_ASKS_PER_CLIENT_PER_HOUR = 12
-_READABILITY_ASK_WINDOWS: dict[int, deque[float]] = {}
-_READABILITY_ASK_CLIENT_WINDOWS: dict[str, deque[float]] = {}
+# Questions about finished manuscript runs (analyses and readable versions
+# together) per account and hour (analyze_runs.ASKS_PER_HOUR), and guests'
+# questions per client network and hour.
+GUEST_ASKS_PER_CLIENT_PER_HOUR = 12
+_ASK_WINDOWS: dict[int, deque[float]] = {}
+_ASK_CLIENT_WINDOWS: dict[str, deque[float]] = {}
 # Link previews (POST /api/analyze/resolve) fetch metadata from arXiv/GitHub.
 ANALYZE_RESOLVES_PER_HOUR = {"guest": 10, "member": 30, "admin": 120}
 GUEST_ANALYZE_RESOLVES_PER_CLIENT_PER_HOUR = 20
@@ -527,6 +528,10 @@ def _guest_analyze_summary() -> dict[str, Any]:
             analyze_runs._caps_view(analyze_runs.effective_caps("guest", sponsored=True))
             if enabled else None
         ),
+        "asks": enabled and analyze_runs.asks_enabled()
+        and not analyze_runs.sponsored_questions_error(guest=True),
+        "asks_per_run": analyze_runs.GUEST_ASKS_PER_RUN,
+        "asks_per_hour": analyze_runs.GUEST_ASKS_PER_HOUR,
     }
 
 
@@ -642,40 +647,40 @@ def _release_guest_readability(user_id: int, client: str | None) -> None:
     _release_guest_mode(_GUEST_READABILITY_WINDOWS, _GUEST_READABILITY_CLIENT_WINDOWS, user_id, client)
 
 
-def _reserve_readability_ask(user: dict[str, Any], client: str | None = None) -> tuple[str | None, int]:
-    """Questions about readability runs per account and hour, by role, and a
-    guest's per client network (``client``) and hour."""
-    from agent_monitor import analyze_runs, readability_runs
+def _reserve_ask(user: dict[str, Any], client: str | None = None) -> tuple[str | None, int]:
+    """Questions about finished manuscript runs (analyses and readable
+    versions together) per account and hour, by role, and a guest's per
+    client network (``client``) and hour."""
+    from agent_monitor import analyze_runs
 
     role = analyze_runs.role_of(user)
-    limit = readability_runs.ASKS_PER_HOUR.get(role, readability_runs.GUEST_ASKS_PER_HOUR)
+    limit = analyze_runs.ASKS_PER_HOUR.get(role, analyze_runs.GUEST_ASKS_PER_HOUR)
     now = time.monotonic()
     user_id = int(user.get("id") or 0)
     with _ANALYZE_LOCK:
-        _prune_windows(_READABILITY_ASK_WINDOWS, now - 3600.0)
-        _prune_windows(_READABILITY_ASK_CLIENT_WINDOWS, now - 3600.0)
-        retry = _window_full(_READABILITY_ASK_WINDOWS.get(user_id), limit, now, 3600.0)
+        _prune_windows(_ASK_WINDOWS, now - 3600.0)
+        _prune_windows(_ASK_CLIENT_WINDOWS, now - 3600.0)
+        retry = _window_full(_ASK_WINDOWS.get(user_id), limit, now, 3600.0)
         if retry:
             return f"You can ask {limit} questions per hour; please try again later", retry
         if client is not None:
-            retry = _window_full(_READABILITY_ASK_CLIENT_WINDOWS.get(client),
-                                 GUEST_READABILITY_ASKS_PER_CLIENT_PER_HOUR, now, 3600.0)
+            retry = _window_full(_ASK_CLIENT_WINDOWS.get(client), GUEST_ASKS_PER_CLIENT_PER_HOUR, now, 3600.0)
             if retry:
                 return "Too many guest questions from your network this hour; please try again later", retry
-        _READABILITY_ASK_WINDOWS.setdefault(user_id, deque()).append(now)
+        _ASK_WINDOWS.setdefault(user_id, deque()).append(now)
         if client is not None:
-            _READABILITY_ASK_CLIENT_WINDOWS.setdefault(client, deque()).append(now)
+            _ASK_CLIENT_WINDOWS.setdefault(client, deque()).append(now)
     return None, 0
 
 
-def _release_readability_ask(user: dict[str, Any], client: str | None = None) -> None:
+def _release_ask(user: dict[str, Any], client: str | None = None) -> None:
     """Return the newest question when the request sent nothing."""
     with _ANALYZE_LOCK:
-        window = _READABILITY_ASK_WINDOWS.get(int(user.get("id") or 0))
+        window = _ASK_WINDOWS.get(int(user.get("id") or 0))
         if window:
             window.pop()
         if client is not None:
-            client_window = _READABILITY_ASK_CLIENT_WINDOWS.get(client)
+            client_window = _ASK_CLIENT_WINDOWS.get(client)
             if client_window:
                 client_window.pop()
 
@@ -1991,7 +1996,7 @@ def _refresh_analyze_block(data: dict, ws: Path | None) -> None:
     except Exception:  # noqa: BLE001 - the stored block stays
         fresh = None
     if fresh:
-        for key in ("recheck", "rechecks"):
+        for key in ("recheck", "rechecks", *job_manager.ASK_KEYS):
             if block.get(key):
                 fresh[key] = block[key]
         data["analyze"] = fresh
@@ -2018,7 +2023,7 @@ def _refresh_readability_block(data: dict, ws: Path | None) -> None:
     except Exception:  # noqa: BLE001 - the stored block stays
         fresh = None
     if fresh:
-        for key in ("ask", "asks", "asks_started", "ask_usage"):
+        for key in job_manager.ASK_KEYS:
             if block.get(key):
                 fresh[key] = block[key]
         data["readability"] = fresh
@@ -2723,44 +2728,50 @@ class Handler(RunSharingMixin, ProjectsMixin, ResearchMixin, BaseHTTPRequestHand
             return
         self._send(200, json.dumps(job))
 
-    def _start_readability_ask(self, rid: str, body: dict, user: dict) -> None:
-        """``POST /api/run/<id>/readability/ask {question, selection?, view?,
+    def _start_manuscript_ask(self, rid: str, body: dict, user: dict, kind: str) -> None:
+        """``POST /api/run/<id>/readability/ask`` (``kind`` ``"readability"``)
+        or ``/analysis/ask`` (``"analyze"``) ``{question, selection?, view?,
         node_id?}`` (the run's owner or the operator): 202 ``{ask_id}``; the
-        answer lands in ``run["readability"]["asks"]``."""
-        from agent_monitor import readability_runs
+        answer lands in ``run["readability"]["asks"]`` or
+        ``run["analyze"]["asks"]``."""
+        from agent_monitor import analyze_runs, readability_runs
         from agent_monitor.analyze_runs import AnalyzeRequestError
 
+        analysis = kind == "analyze"
         record = _run_record_for(rid)
-        if not readability_runs.is_readability_record(record):
-            self._send(400, json.dumps({"error": "Only readability runs answer questions about a paper"}))
+        if not (analyze_runs.is_analyze_record(record) if analysis else readability_runs.is_readability_record(record)):
+            self._send(400, json.dumps({"error": "Only Analyze runs answer questions about an analysis" if analysis
+                                        else "Only readability runs answer questions about a paper"}))
             return
-        if user.get("guest") and job_manager.ask_count(record) >= readability_runs.GUEST_ASKS_PER_RUN:
+        if user.get("guest") and job_manager.ask_count(record) >= analyze_runs.GUEST_ASKS_PER_RUN:
+            message = analyze_runs.GUEST_ASK_LIMIT_MESSAGE if analysis else readability_runs.GUEST_ASK_LIMIT_MESSAGE
             self._send(403, json.dumps({
-                "error": readability_runs.GUEST_ASK_LIMIT_MESSAGE.format(limit=readability_runs.GUEST_ASKS_PER_RUN),
+                "error": message.format(limit=analyze_runs.GUEST_ASKS_PER_RUN),
                 "login_required": True,
             }))
             return
         client = self._guest_client_key() if user.get("guest") else None
-        error, retry_after = _reserve_readability_ask(user, client)
+        error, retry_after = _reserve_ask(user, client)
         if error:
             self._send(429, json.dumps({"error": error}), headers={"Retry-After": str(retry_after)})
             return
+        start = job_manager.start_analysis_ask if analysis else job_manager.start_readability_ask
         try:
-            result = job_manager.start_readability_ask(rid, body if isinstance(body, dict) else {}, user=user)
+            result = start(rid, body if isinstance(body, dict) else {}, user=user)
         except AnalyzeRequestError as exc:
-            _release_readability_ask(user, client)
+            _release_ask(user, client)
             self._send_analyze_error(exc)
             return
         except FileNotFoundError:
-            _release_readability_ask(user, client)
+            _release_ask(user, client)
             self._send(404, json.dumps({"error": "run not found"}))
             return
         except ValueError as exc:
-            _release_readability_ask(user, client)
+            _release_ask(user, client)
             self._send(400, json.dumps({"error": str(exc)}, ensure_ascii=False))
             return
         except Exception as exc:  # noqa: BLE001
-            _release_readability_ask(user, client)
+            _release_ask(user, client)
             self._send(500, json.dumps({"error": f"The question could not be sent: {exc}"}, ensure_ascii=False))
             return
         self._send(202, json.dumps(result, ensure_ascii=False))
@@ -2839,6 +2850,11 @@ class Handler(RunSharingMixin, ProjectsMixin, ResearchMixin, BaseHTTPRequestHand
         record = _run_record_for(rid)
         if not analyze_runs.is_analyze_record(record):
             self._send(400, json.dumps({"error": "Only Analyze runs have nodes to re-check"}))
+            return
+        if str((record or {}).get("status") or "") == "running" or job_manager.run_is_active(rid):
+            # Refused before a guest's re-check, derived action or a member's
+            # start is spent (jobs refuses it again under its launch claim).
+            self._send(409, json.dumps({"error": job_manager.RECHECK_BUSY}))
             return
         slot: _GuestDerivedSlot | None = None
         member_admitted = False
@@ -3938,16 +3954,17 @@ class Handler(RunSharingMixin, ProjectsMixin, ResearchMixin, BaseHTTPRequestHand
             self._start_analysis_recheck(rid, body, user)
             return
 
-        if path.startswith("/api/run/") and path.endswith("/readability/ask"):
-            rid = path.removeprefix("/api/run/").removesuffix("/readability/ask")
-            if not rid or "/" in rid or not self._owns_run(rid, user):
-                self._send(404, json.dumps({"error": "run not found"}))
+        for suffix, kind in (("/readability/ask", "readability"), ("/analysis/ask", "analyze")):
+            if path.startswith("/api/run/") and path.endswith(suffix):
+                rid = path.removeprefix("/api/run/").removesuffix(suffix)
+                if not rid or "/" in rid or not self._owns_run(rid, user):
+                    self._send(404, json.dumps({"error": "run not found"}))
+                    return
+                # Project members may read the questions and answers, not ask.
+                if self._deny_run_change(rid, user, "ask about it"):
+                    return
+                self._start_manuscript_ask(rid, body, user, kind)
                 return
-            # Project members may read the questions and answers, not ask.
-            if self._deny_run_change(rid, user, "ask about it"):
-                return
-            self._start_readability_ask(rid, body, user)
-            return
 
         if path.startswith("/api/library/tools/") and path.endswith("/run"):
             if self._deny_guest(user, "trusted library tools"):

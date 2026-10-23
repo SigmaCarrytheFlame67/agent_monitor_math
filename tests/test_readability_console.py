@@ -71,7 +71,7 @@ def gate(tmp_path, monkeypatch):
 def readability_console(member_console, gate, monkeypatch):
     monkeypatch.setattr(analyze_runs, "_RESOLVED_TITLES", OrderedDict())
     windows = (console._GUEST_READABILITY_WINDOWS, console._GUEST_READABILITY_CLIENT_WINDOWS,
-               console._READABILITY_ASK_WINDOWS, console._READABILITY_ASK_CLIENT_WINDOWS,
+               console._ASK_WINDOWS, console._ASK_CLIENT_WINDOWS,
                console._GUEST_ANALYZE_WINDOWS,
                console._GUEST_ANALYZE_CLIENT_WINDOWS, console._ANALYZE_RESOLVE_WINDOWS,
                console._ANALYZE_RESOLVE_CLIENT_WINDOWS)
@@ -135,7 +135,8 @@ def test_the_listing_offers_readability_with_each_viewers_policy(readability_con
     assert policy["caps"]["own_key"] is None
     assert policy["sources"]["links"] == ["arxiv", "github", "openai_math"]
     assert policy["sources"]["paste_chars"] == 20_000 and "zip" not in policy["sources"]["upload_extensions"]
-    assert policy["asks"] == {"per_hour": 6, "per_run": 3, "in_flight": 1, "question_chars": 2000,
+    assert policy["asks"] == {"enabled": True, "reason": None, "sponsored": True, "sponsored_reason": None,
+                              "per_hour": 6, "per_run": 3, "in_flight": 1, "question_chars": 2000,
                               "selection_chars": 4000}
     assert [item["id"] for item in policy["audiences"]] == ["research", "graduate", "undergraduate"]
     assert policy["check_note"] == "checked against the original by a model — not a certificate"
@@ -669,7 +670,7 @@ def test_guest_asks_are_limited_per_run(readability_console, monkeypatch):
 def test_guest_questions_are_limited_per_network(readability_console, monkeypatch):
     answers: list = []
     _fake_ask(monkeypatch, answers)
-    monkeypatch.setattr(console, "GUEST_READABILITY_ASKS_PER_CLIENT_PER_HOUR", 2)
+    monkeypatch.setattr(console, "GUEST_ASKS_PER_CLIENT_PER_HOUR", 2)
     network = {"X-Forwarded-For": "203.0.113.40"}
     with running_server() as port:
         cookies = []
@@ -730,7 +731,7 @@ def test_the_gate_keeps_the_guests_share_of_questions_and_refunds_them(gate, mon
 
 
 def test_asks_per_hour_and_one_in_flight(readability_console, monkeypatch):
-    monkeypatch.setattr(readability_runs, "ASKS_PER_HOUR", {"guest": 6, "member": 2, "admin": 120})
+    monkeypatch.setattr(analyze_runs, "ASKS_PER_HOUR", {"guest": 6, "member": 2, "admin": 120})
     monkeypatch.setattr(jobs, "_continuation_auth_environment",
                         lambda **kwargs: ({"AGENT_MONITOR_PYTHON": "python"}, "api_key"))
     launched: list = []
