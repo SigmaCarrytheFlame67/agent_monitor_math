@@ -17,7 +17,7 @@ import traceback
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any  # noqa: F401 — used throughout
+from typing import Any, NamedTuple  # noqa: F401 — used throughout
 
 from agent_monitor import CACHE_DIR, HERMES_HOME, PROBLEMS_DIR, RUNS_DIR
 from agent_monitor import account_policy
@@ -646,9 +646,13 @@ def _register_proc(run_id: str, proc: Any) -> None:
         _terminate_registered_proc(proc)
 
 
-def _unregister_proc(run_id: str) -> None:
+def _unregister_proc(run_id: str, proc: Any = None) -> None:
+    """Forget the process registered for ``run_id``: with ``proc``, only if
+    it is still that one (the watcher of a stopped re-check or question may
+    exit after the next one has registered its own)."""
     with _LOCK:
-        _PROCS.pop(run_id, None)
+        if proc is None or _PROCS.get(run_id) is proc:
+            _PROCS.pop(run_id, None)
 
 
 def _now() -> str:
@@ -1002,10 +1006,11 @@ def _upsert_manifest(run: dict[str, Any]) -> None:
         # itself is no longer "running").
         recheck = run["analyze"].get("recheck")
         entry["recheck_running"] = isinstance(recheck, dict) and recheck.get("status") == "running"
-    if isinstance(run.get("readability"), dict):
-        # Likewise for a question about a readability run.
-        question = run["readability"].get("ask")
-        entry["ask_running"] = isinstance(question, dict) and question.get("status") == "running"
+    blocks = [run[name] for name in ASK_BLOCKS if isinstance(run.get(name), dict)]
+    if blocks:
+        # Likewise for a question about a readability run or an analysis.
+        entry["ask_running"] = any(isinstance(block.get("ask"), dict) and block["ask"].get("status") == "running"
+                                   for block in blocks)
     if not entry["problem_preview"]:
         # Runner flushes don't carry problem_text_preview — keep the stored one.
         entry.pop("problem_preview")
@@ -3381,14 +3386,18 @@ def _finalize_analyze_record(run: dict[str, Any], workspace: Path) -> None:
 
     run["run_kind"] = "analyze"
     try:
+        stored = dict(_load_run_record(str(run.get("run_id"))).get("analyze") or {})
+    except (FileNotFoundError, json.JSONDecodeError, OSError):
+        stored = {}
+    try:
         block = analyze_record.run_block(workspace)
     except Exception:  # noqa: BLE001 - a damaged artifact must not lose the run
         block = None
-    if block is None:
-        try:
-            block = dict(_load_run_record(str(run.get("run_id"))).get("analyze") or {})
-        except (FileNotFoundError, json.JSONDecodeError, OSError):
-            block = {}
+    block = dict(block if block is not None else stored)
+    # Its questions, re-checks and their tallies live only in the record.
+    for key in (*ASK_KEYS, "recheck", "rechecks"):
+        if stored.get(key) and key not in block:
+            block[key] = stored[key]
     run["analyze"] = block
     title = _analyze_title(block)
     if not title:
@@ -3437,7 +3446,7 @@ def _finalize_readability_record(run: dict[str, Any], workspace: Path) -> None:
     except Exception:  # noqa: BLE001 - a damaged artifact must not lose the run
         block = None
     block = dict(block if block is not None else stored)
-    for key in ("ask", "asks", "asks_started", "ask_usage"):
+    for key in ASK_KEYS:
         if stored.get(key) and key not in block:
             block[key] = stored[key]
     run["readability"] = block
@@ -5247,7 +5256,7 @@ def _run_cli_engine(
         reader.join(timeout=1)
         if proc.stdout is not None:
             proc.stdout.close()
-        _unregister_proc(run_id)
+        _unregister_proc(run_id, proc)
         _remove_codex_api_home(codex_api_home)
         # A wrapper that ended, or was stopped, before reading its prompt
         # file leaves it behind.
@@ -6888,6 +6897,9 @@ def start_analysis_recheck(
     gate_key: str | None = None
     claimed = False
     state_written: tuple[str, str, str] | None = None
+    # The job this request registered: a refusal fails that one only, never
+    # the re-check already running.
+    registered: str | None = None
     try:
         record = _load_run_record(run_id)
     except (FileNotFoundError, json.JSONDecodeError, OSError):
@@ -6917,7 +6929,7 @@ def start_analysis_recheck(
             )
         if str(record.get("status") or "") == "running" or run_is_active(run_id):
             raise analyze_runs.AnalyzeRequestError(
-                "Wait for the analysis (or its current re-check) to finish", status=409
+                RECHECK_BUSY, status=409
             )
         if not _claim_launch(run_id):
             raise analyze_runs.AnalyzeRequestError(
@@ -6955,9 +6967,11 @@ def start_analysis_recheck(
                 status=403,
             )
         if sponsored:
+            # The guests' share of the sponsored pool follows who asks.  The
+            # key is released on failure only once this request holds it (a
+            # refusal for a held slot must not free the holder's).
+            analyze_runs.GATE.reserve(analyze_runs.recheck_key(run_id), run_id=run_id, guest=requester_guest)
             gate_key = analyze_runs.recheck_key(run_id)
-            # The guests' share of the sponsored pool follows who asks.
-            analyze_runs.GATE.reserve(gate_key, run_id=run_id, guest=requester_guest)
         configured, _route = _continuation_auth_environment(
             run_data=record,
             engine=_ANALYZE_ENGINE,
@@ -6994,6 +7008,7 @@ def start_analysis_recheck(
             "credential_source": record.get("credential_source"),
             "problem_preview": f"Re-check · {label}",
         })
+        registered = job_id
         claimed = False
         _stop_event(run_id).clear()
         _set_recheck_state(run_id, {"node_id": node_id, "label": label, "status": "running",
@@ -7020,9 +7035,9 @@ def start_analysis_recheck(
             if gate_key is not None:
                 analyze_runs.GATE.release(gate_key, refund=True)
             with _LOCK:
-                for job in _JOBS.values():
-                    if job.get("run_id") == run_id and job.get("kind") == "recheck" and job.get("status") == "running":
-                        job["status"] = "failed"
+                job = _JOBS.get(registered or "")
+                if job is not None and job.get("status") == "running":
+                    job["status"] = "failed"
             if state_written is not None:
                 job_id, label, started_at = state_written
                 _set_recheck_state(run_id, {
@@ -7034,9 +7049,13 @@ def start_analysis_recheck(
                 on_exit()
 
 
+# A re-check waits for the analysis, its re-check or a question about it.
+RECHECK_BUSY = "Wait for the analysis (or its current re-check or question) to finish"
 # Serializes every write of ``run["analyze"]["recheck"]`` (a re-check's own
-# updates and the repair of a re-check that a restart interrupted).
-_RECHECK_STATE_LOCK = threading.Lock()
+# updates and the repair of a re-check that a restart interrupted), and of the
+# questions about a run (``_ASK_STATE_LOCK``): on an analysis both rewrite
+# ``run["analyze"]``.
+_RECHECK_STATE_LOCK = threading.RLock()
 
 
 def recheck_count(record: dict[str, Any] | None) -> int:
@@ -7141,6 +7160,10 @@ def _set_recheck_state(
             except Exception:  # noqa: BLE001 - keep the stored block
                 fresh = None
             if fresh:
+                # The questions about the analysis live only in the record.
+                for key in ASK_KEYS:
+                    if block.get(key) and key not in fresh:
+                        fresh[key] = block[key]
                 block = fresh
         if started:
             tally["started"] = recheck_count({"analyze": {"rechecks": tally}}) + 1
@@ -7270,7 +7293,7 @@ def _watch_runner(
                     _terminate_registered_proc(proc, force=True)
                     escalate_at = now + 3600
     finally:
-        _unregister_proc(run_id)
+        _unregister_proc(run_id, proc)
     return output or "", proc.returncode, error
 
 
@@ -7358,23 +7381,102 @@ def _execute_recheck(
                 pass
 
 
-# A question about a finished readability run is answered by the runner
-# itself (``readability_runner.py --ask <ask_id>``: one call, four with its
-# retries, and 15 minutes) with the run's own route environment; the outer
-# watchdog adds one call and the answer's publication.
+# A question about a finished manuscript run (a readable version or an
+# analysis) is answered by the mode's runner itself (``--ask <ask_id>``: one
+# call, four with its retries, and 15 minutes) with the run's own route
+# environment; the outer watchdog adds one call and the answer's publication.
 _ASK_GRACE_SECONDS = 180
-# Serializes every write of ``run["readability"]["ask"]`` and ``["asks"]``.
-_ASK_STATE_LOCK = threading.Lock()
+# Every write of a record's question state (``run[block]["ask"]`` and
+# ``["asks"]``) takes the re-check state's lock: on an analysis both rewrite
+# ``run["analyze"]``.
+_ASK_STATE_LOCK = _RECHECK_STATE_LOCK
 ASK_INTERRUPTED = "The question was interrupted (the server restarted); ask it again"
+# The record blocks that hold questions, and their question state (kept when
+# a block is rebuilt from the workspace).
+ASK_BLOCKS = ("readability", "analyze")
+ASK_KEYS = ("ask", "asks", "asks_started", "ask_usage")
+
+
+class _AskMode(NamedTuple):
+    """How a question about one kind of manuscript run is asked and answered."""
+
+    kind: str
+    block: str
+    engine: str
+    runner: str
+    event: str
+    timeout_variable: str
+    wrong_kind: str
+    unpublished: str
+    node_refusal: str
+    busy: str
+    api_key_refusal: str
+
+
+_ASK_MODES = {
+    "readability": _AskMode(
+        kind="readability", block="readability", engine=_READABILITY_ENGINE, runner="readability_runner.py",
+        event="readability.ask", timeout_variable="AGENT_MONITOR_READABILITY_API_TIMEOUT",
+        wrong_kind="Only readability runs answer questions about a paper",
+        unpublished="This run has no readable version to ask about yet",
+        node_refusal="node_id must be a result of this run",
+        busy="Wait for the run (or the question before) to finish",
+        api_key_refusal=("This run used an API key, which members can't use on this site; "
+                         "start a new readability run on the included Kimi K3"),
+    ),
+    "analyze": _AskMode(
+        kind="analyze", block="analyze", engine=_ANALYZE_ENGINE, runner="analyze_runner.py",
+        event="analyze.ask", timeout_variable="AGENT_MONITOR_ANALYZE_API_TIMEOUT",
+        wrong_kind="Only Analyze runs answer questions about an analysis",
+        unpublished="This analysis has no published report to ask about yet",
+        node_refusal="node_id must be a result of this analysis",
+        busy="Wait for the analysis (or its re-check, or the question before) to finish",
+        api_key_refusal=("This analysis ran on an API key, which members can't use on this site; "
+                         "start a new analysis on the included Kimi K3"),
+    ),
+}
+
+
+def ask_block_of(record: dict[str, Any] | None) -> str:
+    """The block of a manuscript run's record that holds its questions."""
+    from agent_monitor import analyze_runs
+
+    return "analyze" if analyze_runs.is_analyze_record(record) else "readability"
 
 
 def ask_count(record: dict[str, Any] | None) -> int:
     """How many questions were asked about this run (``asks_started``)."""
-    block = (record or {}).get("readability")
+    block = (record or {}).get(ask_block_of(record))
     try:
         return max(0, int(block.get("asks_started") or 0)) if isinstance(block, dict) else 0
     except (TypeError, ValueError):
         return 0
+
+
+def _ask_store(kind: str):
+    if kind == "analyze":
+        from agent_monitor.analyze import ask as analyze_ask
+
+        return analyze_ask.STORE
+    from agent_monitor.readability import ask as readability_ask
+
+    return readability_ask.STORE
+
+
+def _ask_published(kind: str, ws: Path) -> bool:
+    """Whether the run published what questions are about (its receipt is written last)."""
+    return (ws / ("analysis" if kind == "analyze" else "readability") / "receipt.json").is_file()
+
+
+def _ask_node_ids(kind: str, ws: Path) -> set[str]:
+    """The results a question may be about: the analysis graph's, or the paper map's."""
+    if kind == "analyze":
+        from agent_monitor.analyze import graph as analysis_graph
+
+        return {node["id"] for node in (analysis_graph.load(ws) or {}).get("nodes") or []}
+    from agent_monitor.readability import paper_map
+
+    return {node["id"] for node in (paper_map.load(ws) or {}).get("nodes") or []}
 
 
 def start_readability_ask(
@@ -7384,24 +7486,55 @@ def start_readability_ask(
     user: dict[str, Any] | None,
     on_exit: Any = None,
 ) -> dict[str, Any]:
-    """Answer a question about a finished readability run in the background.
+    """Answer a question about a finished readability run in the background
+    (:func:`start_manuscript_ask`)."""
+    return start_manuscript_ask(run_id, body, kind="readability", user=user, on_exit=on_exit)
+
+
+def start_analysis_ask(
+    run_id: str,
+    body: dict[str, Any],
+    *,
+    user: dict[str, Any] | None,
+    on_exit: Any = None,
+) -> dict[str, Any]:
+    """Answer a question about a finished analysis in the background
+    (:func:`start_manuscript_ask`)."""
+    return start_manuscript_ask(run_id, body, kind="analyze", user=user, on_exit=on_exit)
+
+
+def start_manuscript_ask(
+    run_id: str,
+    body: dict[str, Any],
+    *,
+    kind: str,
+    user: dict[str, Any] | None,
+    on_exit: Any = None,
+) -> dict[str, Any]:
+    """Answer a question about a finished readability run (``kind``
+    ``"readability"``) or analysis (``"analyze"``) in the background.
 
     ``body`` is ``{question, selection?, view?, node_id?}``.  Returns
     ``{"ok": True, "status": "asking", "run_id", "ask_id", "job_id"}`` at
-    once; the question waits in ``run["readability"]["ask"]`` and lands with
-    its answer in ``run["readability"]["asks"]`` (the last 50).  One question
-    at a time per run.  ``on_exit`` runs once when it is answered or did not
-    start.  Raises ``analyze_runs.AnalyzeRequestError`` (status 400, 403, 409
-    or 429) or ``FileNotFoundError``.
+    once; the question waits in ``run[block]["ask"]`` and lands with its
+    answer in ``run[block]["asks"]`` (the last 50; the block is
+    ``"readability"`` or ``"analyze"``).  One question at a time per run, and
+    none while the run (or an analysis's re-check) runs.  ``on_exit`` runs
+    once when it is answered or did not start.  Raises
+    ``analyze_runs.AnalyzeRequestError`` (status 400, 403, 409 or 429) or
+    ``FileNotFoundError``.
     """
     from agent_monitor import analyze_runs, readability_runs
-    from agent_monitor.readability import ask as readability_ask
-    from agent_monitor.readability import paper_map
-    from agent_monitor.runners.readability_runner import ASK_SECONDS
+    from agent_monitor.manuscript_ask import AskError
 
+    mode = _ASK_MODES[kind]
+    analysis = kind == "analyze"
     handed_off = False
     gate_key: str | None = None
     claimed = False
+    # The job this request registered: a refusal fails that one only, never
+    # the question already being answered.
+    registered: str | None = None
     state_written: dict[str, Any] | None = None
     try:
         record = _load_run_record(run_id)
@@ -7410,28 +7543,24 @@ def start_readability_ask(
             on_exit()
         raise FileNotFoundError("run not found") from None
     try:
-        if not readability_runs.is_readability_record(record):
-            raise analyze_runs.AnalyzeRequestError("Only readability runs answer questions about a paper")
-        refusal = readability_runs.availability_error(user)
+        if not (analyze_runs.is_analyze_record(record) if analysis
+                else readability_runs.is_readability_record(record)):
+            raise analyze_runs.AnalyzeRequestError(mode.wrong_kind)
+        refusal = analyze_runs.ask_error(user) if analysis else readability_runs.availability_error(user)
         if refusal is not None:
             raise refusal
+        store = _ask_store(kind)
         try:
-            question = readability_ask.normalize(body)
-        except readability_ask.AskError as exc:
+            question = store.normalize(body)
+        except AskError as exc:
             raise analyze_runs.AnalyzeRequestError(str(exc)) from None
         ws = workspace_dir(run_id)
-        if not (ws / "readability" / "receipt.json").is_file():
-            raise analyze_runs.AnalyzeRequestError(
-                "This run has no readable version to ask about yet", status=409
-            )
-        if question["node_id"] and question["node_id"] not in {
-            node["id"] for node in (paper_map.load(ws) or {}).get("nodes") or []
-        }:
-            raise analyze_runs.AnalyzeRequestError("node_id must be a result of this run")
+        if not _ask_published(kind, ws):
+            raise analyze_runs.AnalyzeRequestError(mode.unpublished, status=409)
+        if question["node_id"] and question["node_id"] not in _ask_node_ids(kind, ws):
+            raise analyze_runs.AnalyzeRequestError(mode.node_refusal)
         if str(record.get("status") or "") == "running" or run_is_active(run_id):
-            raise analyze_runs.AnalyzeRequestError(
-                "Wait for the run (or the question before) to finish", status=409
-            )
+            raise analyze_runs.AnalyzeRequestError(mode.busy, status=409)
         if not _claim_launch(run_id):
             raise analyze_runs.AnalyzeRequestError(
                 "A question about this run is already being answered", status=409
@@ -7445,50 +7574,53 @@ def start_readability_ask(
                 current = _load_run_record(run_id)
             except (FileNotFoundError, json.JSONDecodeError, OSError):
                 current = record
-            if ask_count(current) >= readability_runs.GUEST_ASKS_PER_RUN:
+            if ask_count(current) >= analyze_runs.GUEST_ASKS_PER_RUN:
+                message = analyze_runs.GUEST_ASK_LIMIT_MESSAGE if analysis else readability_runs.GUEST_ASK_LIMIT_MESSAGE
                 raise analyze_runs.AnalyzeRequestError(
-                    readability_runs.GUEST_ASK_LIMIT_MESSAGE.format(limit=readability_runs.GUEST_ASKS_PER_RUN),
-                    status=403,
+                    message.format(limit=analyze_runs.GUEST_ASKS_PER_RUN), status=403
                 )
         # The model and route the run used, exactly as a re-check does.
         model = _continuation_model(record, None)
         sponsored = str(record.get("credential_source") or "") == "sponsored_kimi"
         guest = bool(record.get("guest"))
         if not sponsored and account_policy.member_analyze_sponsored_only(user):
-            raise analyze_runs.AnalyzeRequestError(
-                "This run used an API key, which members can't use on this site; "
-                "start a new readability run on the included Kimi K3",
-                status=403,
-            )
+            raise analyze_runs.AnalyzeRequestError(mode.api_key_refusal, status=403)
         if sponsored:
-            gate_key = readability_runs.ask_key(run_id)
+            # Sponsored model work stops when sponsored manuscript runs are
+            # turned off, questions included (as re-checks and formalizing do).
+            off = analyze_runs.sponsored_questions_error(guest=requester_guest, mode=kind)
+            if off:
+                raise analyze_runs.AnalyzeRequestError(off, status=403)
             # A slot of the sponsored pool, counted among the day's questions
             # (not its manuscript runs); the guests' share follows who asks.
-            analyze_runs.GATE.reserve(gate_key, run_id=run_id, guest=requester_guest,
-                                      messages=readability_runs.ASK_GATE_MESSAGES,
-                                      daily=readability_runs.ASK_DAILY)
+            # Ours once reserved: a refusal ("held") gives back nobody's slot.
+            analyze_runs.GATE.reserve(analyze_runs.ask_key(run_id), run_id=run_id, guest=requester_guest,
+                                      messages=(analyze_runs.ASK_GATE_MESSAGES if analysis
+                                                else readability_runs.ASK_GATE_MESSAGES),
+                                      daily=analyze_runs.ASK_DAILY)
+            gate_key = analyze_runs.ask_key(run_id)
         configured, _route = _continuation_auth_environment(
             run_data=record,
-            engine=_READABILITY_ENGINE,
+            engine=mode.engine,
             model=model,
             user=user,
             env=_user_extra_env(user, model),
         )
-        _apply_bounded_run_env(configured, engine=_READABILITY_ENGINE, guest=guest, sponsored=sponsored)
+        _apply_bounded_run_env(configured, engine=mode.engine, guest=guest, sponsored=sponsored)
         if not sponsored and _is_kimi_model(model):
             configured["AGENT_MONITOR_KIMI_BASE_URL"] = _operator_kimi_base()
-        env = _analyze_recheck_env(configured, model=model, engine=_READABILITY_ENGINE)
-        timeout = ASK_SECONDS + _analyze_api_timeout(
-            sponsored, variable="AGENT_MONITOR_READABILITY_API_TIMEOUT") + _ASK_GRACE_SECONDS
+        env = _analyze_recheck_env(configured, model=model, engine=mode.engine)
+        timeout = _ask_seconds(kind) + _analyze_api_timeout(
+            sponsored, variable=mode.timeout_variable) + _ASK_GRACE_SECONDS
         ask_id = uuid.uuid4().hex[:12]
-        readability_ask.write_request(ws, ask_id, question)
+        store.write_request(ws, ask_id, question)
         job_id = uuid.uuid4().hex[:10]
         started_at = _now()
         _register_claimed_job(run_id, {
             "job_id": job_id,
             "run_id": run_id,
-            "engine": _READABILITY_ENGINE,
-            "run_kind": "readability",
+            "engine": mode.engine,
+            "run_kind": kind,
             "kind": "ask",
             "ask_id": ask_id,
             "status": "running",
@@ -7502,6 +7634,7 @@ def start_readability_ask(
             "credential_source": record.get("credential_source"),
             "problem_preview": "Ask · " + " ".join(question["question"].split())[:100],
         })
+        registered = job_id
         claimed = False
         _stop_event(run_id).clear()
         state = {
@@ -7514,16 +7647,16 @@ def start_readability_ask(
             "job_id": job_id,
             "started_at": started_at,
         }
-        _set_ask_state(run_id, state, started=True)
+        _set_ask_state(run_id, state, started=True, block=mode.block)
         state_written = state
         thread = threading.Thread(
             target=_execute_ask,
             kwargs={
                 "run_id": run_id, "job_id": job_id, "state": state, "workspace": ws, "env": env,
-                "timeout": timeout, "gate_key": gate_key, "on_exit": on_exit, "model": model,
+                "timeout": timeout, "gate_key": gate_key, "on_exit": on_exit, "model": model, "kind": kind,
             },
             daemon=True,
-            name=f"readability-ask-{job_id}",
+            name=f"{kind}-ask-{job_id}",
         )
         thread.start()
         handed_off = True
@@ -7535,14 +7668,23 @@ def start_readability_ask(
             if gate_key is not None:
                 analyze_runs.GATE.release(gate_key, refund=True)
             with _LOCK:
-                for job in _JOBS.values():
-                    if job.get("run_id") == run_id and job.get("kind") == "ask" and job.get("status") == "running":
-                        job["status"] = "failed"
+                job = _JOBS.get(registered or "")
+                if job is not None and job.get("status") == "running":
+                    job["status"] = "failed"
             if state_written is not None:
                 _set_ask_state(run_id, {**state_written, "status": "failed", "finished_at": _now(),
-                                        "error": "The question could not be sent"})
+                                        "error": "The question could not be sent"}, block=mode.block)
             if callable(on_exit):
                 on_exit()
+
+
+def _ask_seconds(kind: str) -> int:
+    """The runner's own time limit for a question."""
+    if kind == "analyze":
+        from agent_monitor.runners.analyze_runner import ASK_SECONDS
+    else:
+        from agent_monitor.runners.readability_runner import ASK_SECONDS
+    return int(ASK_SECONDS)
 
 
 def _set_ask_state(
@@ -7551,82 +7693,91 @@ def _set_ask_state(
     *,
     started: bool = False,
     usage: dict[str, Any] | None = None,
+    block: str = "readability",
 ) -> None:
-    """Record a question in ``run["readability"]``: ``ask`` while it runs,
-    then in ``asks`` (the last 50, oldest first).  ``asks_started`` counts
-    the questions asked (``started=True`` counts one) and ``ask_usage`` the
-    model calls, tokens and estimated cost they spent (``usage``)."""
-    from agent_monitor.readability_runs import ASKS_KEPT
+    """Record a question in ``run[block]`` (``"readability"`` or
+    ``"analyze"``): ``ask`` while it runs, then in ``asks`` (the last 50,
+    oldest first).  ``asks_started`` counts the questions asked
+    (``started=True`` counts one) and ``ask_usage`` the model calls, tokens
+    and estimated cost they spent (``usage``)."""
+    from agent_monitor.analyze_runs import ASKS_KEPT
 
+    if block not in ASK_BLOCKS:
+        raise ValueError(f"no questions are kept in run[{block!r}]")
     with _ASK_STATE_LOCK:
         try:
             run = _load_run_record(run_id)
         except (FileNotFoundError, json.JSONDecodeError, OSError):
             return
-        block = dict(run.get("readability") or {})
+        stored = dict(run.get(block) or {})
         if started:
-            block["asks_started"] = ask_count({"readability": block}) + 1
-        tally = dict(block.get("ask_usage") or {}) if isinstance(block.get("ask_usage"), dict) else {}
+            stored["asks_started"] = ask_count({"run_kind": block, block: stored}) + 1
+        tally = dict(stored.get("ask_usage") or {}) if isinstance(stored.get("ask_usage"), dict) else {}
         for key, value in (usage or {}).items():
             if isinstance(value, (int, float)) and not isinstance(value, bool) and value:
                 tally[key] = round(float(tally.get(key) or 0) + float(value), 6)
                 if key != "cost_usd":
                     tally[key] = int(tally[key])
         if tally:
-            block["ask_usage"] = tally
+            stored["ask_usage"] = tally
         if state.get("status") == "running":
-            block["ask"] = state
+            stored["ask"] = state
         else:
-            current = block.get("ask") if isinstance(block.get("ask"), dict) else {}
+            current = stored.get("ask") if isinstance(stored.get("ask"), dict) else {}
             if current.get("ask_id") == state.get("ask_id"):
-                block.pop("ask", None)
-            asks = [item for item in block.get("asks") or []
+                stored.pop("ask", None)
+            asks = [item for item in stored.get("asks") or []
                     if isinstance(item, dict) and item.get("ask_id") != state.get("ask_id")]
-            block["asks"] = (asks + [state])[-ASKS_KEPT:]
-        run["readability"] = block
+            stored["asks"] = (asks + [state])[-ASKS_KEPT:]
+        run[block] = stored
         run["updated_at"] = _now()
         _write_run(run)
 
 
 def reconcile_ask_state(run_id: str, run: dict[str, Any] | None = None) -> dict[str, Any] | None:
     """Repair a question that a lost worker left ``running`` (a restart, a
-    crash of its thread): it becomes ``interrupted``.  Returns the current
-    record."""
+    crash of its thread), about a readability run or an analysis: it becomes
+    ``interrupted``.  Returns the current record."""
     if run is None:
         try:
             run = _load_run_record(run_id)
         except (FileNotFoundError, json.JSONDecodeError, OSError):
             return None
-    block = run.get("readability") if isinstance(run.get("readability"), dict) else {}
-    question = block.get("ask") if isinstance(block.get("ask"), dict) else None
-    if not question or question.get("status") != "running" or _recheck_worker_alive(run_id, question.get("job_id")):
-        return run
-    with _ASK_STATE_LOCK:
+    for name in ASK_BLOCKS:
+        block = run.get(name) if isinstance(run.get(name), dict) else {}
+        question = block.get("ask") if isinstance(block.get("ask"), dict) else None
+        if not question or question.get("status") != "running" or _recheck_worker_alive(run_id, question.get("job_id")):
+            continue
+        with _ASK_STATE_LOCK:
+            try:
+                current = _load_run_record(run_id)
+            except (FileNotFoundError, json.JSONDecodeError, OSError):
+                return run
+            state = (current.get(name) or {}).get("ask")
+            if (
+                not isinstance(state, dict)
+                or state.get("status") != "running"
+                or state.get("job_id") != question.get("job_id")
+                or _recheck_worker_alive(run_id, state.get("job_id"))
+            ):
+                run = current
+                continue
+        _set_ask_state(run_id, {**state, "status": "interrupted", "finished_at": _now(), "error": ASK_INTERRUPTED},
+                       block=name)
+        from agent_monitor import analyze_runs
+
+        # A slot held by a lost thread of this process is returned at once.
+        analyze_runs.GATE.release(analyze_runs.ask_key(run_id))
         try:
-            current = _load_run_record(run_id)
+            run = _load_run_record(run_id)
         except (FileNotFoundError, json.JSONDecodeError, OSError):
-            return run
-        state = (current.get("readability") or {}).get("ask")
-        if (
-            not isinstance(state, dict)
-            or state.get("status") != "running"
-            or state.get("job_id") != question.get("job_id")
-            or _recheck_worker_alive(run_id, state.get("job_id"))
-        ):
-            return current
-    _set_ask_state(run_id, {**state, "status": "interrupted", "finished_at": _now(), "error": ASK_INTERRUPTED})
-    from agent_monitor import analyze_runs, readability_runs
-
-    # A slot held by a lost thread of this process is returned at once.
-    analyze_runs.GATE.release(readability_runs.ask_key(run_id))
-    try:
-        return _load_run_record(run_id)
-    except (FileNotFoundError, json.JSONDecodeError, OSError):
-        return current
+            run = current
+    return run
 
 
-def _ask_outcome(output: str) -> tuple[dict[str, Any] | None, str]:
-    """The runner's ``readability.ask`` result, or its terminal error message."""
+def _ask_outcome(output: str, event_type: str = "readability.ask") -> tuple[dict[str, Any] | None, str]:
+    """The runner's ``event_type`` result (``readability.ask``,
+    ``analyze.ask``), or its terminal error message."""
     result: dict[str, Any] | None = None
     error = ""
     for line in output.splitlines():
@@ -7639,7 +7790,7 @@ def _ask_outcome(output: str) -> tuple[dict[str, Any] | None, str]:
             continue
         if not isinstance(event, dict):
             continue
-        if event.get("type") == "readability.ask" and isinstance(event.get("result"), dict):
+        if event.get("type") == event_type and isinstance(event.get("result"), dict):
             result = event["result"]
         item = event.get("item") if isinstance(event.get("item"), dict) else None
         if item and item.get("type") == "error" and item.get("terminal") is True:
@@ -7658,7 +7809,9 @@ def _execute_ask(
     gate_key: str | None,
     on_exit: Any,
     model: str | None = None,
+    kind: str = "readability",
 ) -> None:
+    mode = _ASK_MODES[kind]
     status = "failed"
     result: dict[str, Any] | None = None
     error = ""
@@ -7666,7 +7819,7 @@ def _execute_ask(
     # A question that never reached a model gives its sponsored start back.
     unsent = False
     try:
-        runner = Path(__file__).resolve().parent / "runners" / "readability_runner.py"
+        runner = Path(__file__).resolve().parent / "runners" / mode.runner
         argv = [sys.executable, "-u", str(runner), "--ask", str(state["ask_id"])]
         output, returncode, error = _watch_runner(
             run_id, argv, workspace=workspace, env=env, timeout=timeout,
@@ -7681,7 +7834,7 @@ def _execute_ask(
                 spent = _book_recheck_usage(run_id, output, model=model, stage="ask")
             except Exception:  # noqa: BLE001 - accounting must not lose the outcome
                 spent = {}
-            result, terminal = _ask_outcome(output)
+            result, terminal = _ask_outcome(output, mode.event)
             # Exit 2 is a configuration refusal: nothing was sent to a model.
             unsent = returncode == 2
             if returncode == 0 and result is not None:
@@ -7699,15 +7852,21 @@ def _execute_ask(
             final.update(
                 answer=str(result.get("answer") or "")[:20_000],
                 refs=[str(item)[:80] for item in (result.get("refs") or [])[:50]],
-                part=result.get("part") if isinstance(result.get("part"), int) else None,
                 model=str(result.get("model") or model or "")[:120],
             )
+            if isinstance(result.get("part"), int):
+                final["part"] = result["part"]
+            about = [str(item)[:80] for item in (result.get("about") or [])[:4] if isinstance(item, str)]
+            if about:
+                final["about"] = about
+            if result.get("carried") is True:
+                final["carried"] = True
         if error:
             final["error"] = error[:600]
         if spent.get("calls"):
             final["usage"] = {key: spent[key] for key in ("calls", "input_tokens", "output_tokens", "cost_usd")}
         try:
-            _set_ask_state(run_id, final, usage=spent or None)
+            _set_ask_state(run_id, final, usage=spent or None, block=mode.block)
         except Exception:  # noqa: BLE001
             pass
         _update_job(job_id, status="finished" if status == "done" else status, error=error or None)
@@ -7742,9 +7901,10 @@ def stop_run(run_id: str) -> dict[str, Any]:
         repeated = stop.is_set()
         stop.set()
         proc = _PROCS.get(run_id)
-    if repeated and proc is not None:
+    if repeated and (proc is not None or (active or {}).get("kind") in ("recheck", "ask")):
         # The first Stop signalled this runner (or _register_proc killed it)
-        # and records the stop; its worker ends it.
+        # and records the stop; its worker ends it.  A re-check or question
+        # is ended by its worker whether or not its runner is registered now.
         return {"ok": True, "status": "stopped", "run_id": run_id}
     graceful = bool(active) and (
         active.get("engine") in {*_MANUSCRIPT_ENGINES, *_CGM_ENGINES}
@@ -7776,8 +7936,12 @@ def stop_run(run_id: str) -> dict[str, Any]:
         return result
     if active.get("kind") in ("recheck", "ask"):
         # Stopping a re-check (or a question) changes nothing: the run keeps
-        # its status and every result (a re-check restores its node).
-        _update_job(active["job_id"], status="stopped")
+        # its status and every result (a re-check restores its node).  Its
+        # job stays running until its worker ends (the worker always records
+        # the outcome, "stopped" here, and ends the job), so nothing new
+        # starts beside a runner that is still winding down, and the
+        # question or re-check is never read as lost meanwhile.  A runner
+        # that registers after this Stop is killed at once (_register_proc).
         return {"ok": True, "status": "stopped", "run_id": run_id, "job_id": active["job_id"],
                 active["kind"]: True}
     _record_stopped(run_id, active["job_id"])

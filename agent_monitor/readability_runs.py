@@ -19,7 +19,8 @@ told:
   manuscript work, with refusals worded for Readability
   (:data:`GATE_MESSAGES`); a run holds the key ``<run id>`` and counts as a
   sponsored start, a question holds ``<run id>#ask`` and counts against the
-  day's sponsored questions instead (:data:`ASK_GATE_MESSAGES`).
+  day's sponsored questions instead (:data:`ASK_GATE_MESSAGES`), which
+  questions about analyses share.
 * :func:`viewer_policy` is the per-viewer ``readability`` object of the
   engine listing, so the browser offers exactly what the server accepts.
 
@@ -42,13 +43,13 @@ MAX_FOCUS_CHARS = 2_000
 WATCHDOG_ENV = "AGENT_MONITOR_READABILITY_WATCHDOG_SECONDS"
 COMMAND_ENV = "READABILITY_CMD"
 KIMI_MODEL = "kimi-k3"
-# Guests may ask this many questions about one run (counted on its record),
-# and this many in a session-hour; signed-in accounts per hour by role.
-GUEST_ASKS_PER_RUN = 3
-GUEST_ASKS_PER_HOUR = 6
-ASKS_PER_HOUR = {"guest": GUEST_ASKS_PER_HOUR, "member": 30, "admin": 120}
-# The questions (and answers) a run record keeps, newest last.
-ASKS_KEPT = 50
+# The question limits Analyze and Readability share (``analyze_runs``): a
+# guest's questions per run and per session-hour, an account's per hour (both
+# modes' questions together) and the questions a record keeps.
+GUEST_ASKS_PER_RUN = analyze_runs.GUEST_ASKS_PER_RUN
+GUEST_ASKS_PER_HOUR = analyze_runs.GUEST_ASKS_PER_HOUR
+ASKS_PER_HOUR = analyze_runs.ASKS_PER_HOUR
+ASKS_KEPT = analyze_runs.ASKS_KEPT
 
 CONTINUE_REFUSAL = (
     "Readability runs can't be continued. Start a new one, or ask about the paper in the Ask panel."
@@ -80,8 +81,9 @@ GATE_MESSAGES = GateMessages(
 )
 # A question holds a slot of the same pool while it is answered, but counts
 # against the sponsored questions of the day (``analyze_runs.GATE`` with
-# ``daily="asks"``), never against the manuscript runs.
-ASK_DAILY = "asks"
+# ``daily="asks"``, shared with the questions about analyses), never against
+# the manuscript runs.
+ASK_DAILY = analyze_runs.ASK_DAILY
 ASK_GATE_MESSAGES = GateMessages(
     off="Sponsored questions are turned off on this site",
     guest_off="Sponsored questions are turned off for guests on this site — sign in to ask",
@@ -215,8 +217,7 @@ def watchdog_seconds(caps: Any, *, sponsored: bool, api_timeout: int | None = No
     return analyze_runs.watchdog_seconds(caps, sponsored=sponsored, api_timeout=api_timeout)
 
 
-def ask_key(run_id: str) -> str:
-    return f"{run_id}#ask"
+ask_key = analyze_runs.ask_key
 
 
 def _caps_view(caps: Any) -> dict[str, int]:
@@ -256,13 +257,7 @@ def viewer_policy(user: Mapping[str, Any] | None, *, guest_runs_per_hour: int = 
         "audiences": [{"id": key, "label": label} for key, label in AUDIENCE_LABELS.items()],
         "default_audience": DEFAULT_AUDIENCE,
         "focus_chars": MAX_FOCUS_CHARS,
-        "asks": {
-            "per_hour": ASKS_PER_HOUR.get(role, GUEST_ASKS_PER_HOUR),
-            "per_run": GUEST_ASKS_PER_RUN if role == "guest" else None,
-            "in_flight": 1,
-            "question_chars": 2_000,
-            "selection_chars": 4_000,
-        },
+        "asks": analyze_runs.asks_policy(refusal, role, mode=RUN_KIND),
         "check_note": CHECK_NOTE,
         "continue": False,
     }

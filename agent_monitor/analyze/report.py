@@ -102,6 +102,26 @@ def _depth_and_path(graph: Mapping[str, Any]) -> tuple[int, list[str], list[tupl
     return overall, path if depth > 1 else [], most_used
 
 
+def finding_cell(node: Mapping[str, Any], refs: Mapping[str, tuple[str, str]]) -> str:
+    """The Findings table's text about ``node``: its first finding (else the
+    verifier's notes or summary), after its location, as the report prints it."""
+    meta = node.get("meta") or {}
+    first = (meta.get("issues") or [{}])[0]
+    finding = first.get("issue") or meta.get("notes") or meta.get("summary") or ""
+    if first.get("location"):
+        finding = f"{first['location']}: {finding}"
+    return _cell(tex_text_refs(finding, refs), 300)
+
+
+def finding_bullets(node: Mapping[str, Any], refs: Mapping[str, tuple[str, str]]) -> list[str]:
+    """The report's "all findings" lines about ``node`` (only when it has more than one)."""
+    issues = (node.get("meta") or {}).get("issues") or []
+    if len(issues) <= 1:
+        return []
+    return [f"{issue['type']}: {_cell(tex_text_refs(issue.get('location'), refs), 120)} — "
+            f"{_cell(tex_text_refs(issue.get('issue'), refs), 600)}" for issue in issues]
+
+
 def render(graph: Mapping[str, Any], manuscript: Mapping[str, Any], receipt: Mapping[str, Any],
            *, paper_map: Mapping[str, Any] | None = None, formalize: bool = False) -> str:
     """The analysis report as Markdown."""
@@ -252,23 +272,18 @@ def render(graph: Mapping[str, Any], manuscript: Mapping[str, Any], receipt: Map
         lines.append("| --- | --- | --- | --- | --- |")
         for node in flagged:
             meta = node["meta"]
-            first = (meta.get("issues") or [{}])[0]
-            finding = first.get("issue") or meta.get("notes") or meta.get("summary") or ""
-            if first.get("location"):
-                finding = f"{first['location']}: {finding}"
             location = meta.get("locator") or ""
             url = _url((meta.get("source_ref") or {}).get("url"))
             location_cell = f"[{_cell(location, 80)}]({url})" if url else _cell(location, 80)
             lines.append(f"| {_label(node)} | {location_cell} | {VERDICT_TEXT[meta['verdict']]} | "
-                         f"{VERDICT_TEXT.get(meta.get('closure') or '', '—')} | {prose(finding, 300)} |")
+                         f"{VERDICT_TEXT.get(meta.get('closure') or '', '—')} | {finding_cell(node, refs)} |")
         lines.append("")
         for node in flagged:
-            issues = node["meta"].get("issues") or []
-            if len(issues) <= 1:
+            bullets = finding_bullets(node, refs)
+            if not bullets:
                 continue
             lines.append(f"**{_label(node)}** — all findings:")
-            for issue in issues:
-                lines.append(f"- {issue['type']}: {prose(issue.get('location'), 120)} — {prose(issue.get('issue'), 600)}")
+            lines += [f"- {bullet}" for bullet in bullets]
             lines.append("")
     if lines[-1] != "":
         lines.append("")

@@ -6,6 +6,7 @@ Run from a run workspace that holds ``analysis/request.json`` (written by
 
     python -u agent_monitor/runners/analyze_runner.py            # an analysis
     python -u agent_monitor/runners/analyze_runner.py --recheck <node_id>
+    python -u agent_monitor/runners/analyze_runner.py --ask <ask_id>  # one question about it
 
 Stages (``pipeline.stage`` events, ids shared with the CGM pipeline):
 ``scaffold`` 1 Ingest (fetch or unpack the source into ``analysis/source``),
@@ -92,6 +93,11 @@ LABEL = "Analyze"
 MAX_REPLY_BYTES = 64_000
 RECHECK_SECONDS = 900
 RECHECK_MAX_CALLS = 8
+# One question about a finished analysis: the call, its low-effort retry and
+# a format reminder, in 15 minutes.
+ASK_MAX_CALLS = 4
+ASK_SECONDS = 900
+ANSWER_SCHEMA = "ansatze-analyze-answer-v1"
 # Guests check no proof that needs more than one call, in an analysis or a re-check.
 GUEST_TOO_LONG = "Too long for a guest check (sign in to check long proofs)"
 GITHUB_TOKEN_ENV = "AGENT_MONITOR_ANALYZE_GITHUB_TOKEN"
@@ -1158,6 +1164,173 @@ def run_analysis(
         harness._RUN_EMITTER.reset(token)
 
 
+# ---------------------------------------------------------------------------
+# a question about a finished analysis
+# ---------------------------------------------------------------------------
+
+
+def _json_file(path: Path) -> dict[str, Any] | None:
+    try:
+        if path.is_symlink() or not path.is_file() or path.stat().st_size > 64 * 1024 * 1024:
+            return None
+        value = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    return value if isinstance(value, dict) else None
+
+
+def _call_usage(calls: list[dict[str, Any]]) -> dict[str, int]:
+    total: dict[str, int] = {}
+    for record in calls:
+        for key, value in (record.get("usage") or {}).items():
+            if isinstance(value, int) and not isinstance(value, bool):
+                total[key] = total.get(key, 0) + value
+    return total
+
+
+def _answer_refs(segments: Mapping[str, Any], graph: Mapping[str, Any]) -> dict[str, tuple[str, str]]:
+    """``{label: (printed name, number)}`` that an answer's leftover ``\\ref``
+    is written out with: the manuscript's results and sections, and the
+    section labels the graph read from the stored source (an analysis parsed
+    before its sections kept their labels), as its report and DAG print them."""
+    from agent_monitor.readability import references
+
+    refs = references.label_map(segments)
+    for label, value in (graph.get("ref_labels") or {}).items():
+        if isinstance(label, str) and isinstance(value, Mapping) and value.get("name"):
+            name, number = str(value["name"]), str(value.get("number") or "")
+            refs.setdefault(label, (name, "" if number == name else number))
+    return refs
+
+
+def run_ask(
+    workspace: Path,
+    ask_id: str,
+    *,
+    route_env: Mapping[str, str],
+    sink: Callable[[dict[str, Any]], None] | None = None,
+) -> dict[str, Any]:
+    """Answer the question ``analysis/asks/<ask_id>.json`` about a finished
+    analysis with one model call on the analysis's route (the questions
+    answered before it come along, so a follow-up can be read); writes and
+    returns the answer.  Its context is what the analysis published
+    (``agent_monitor.analyze.ask``); the result asked about from the DAG, or
+    the results a selected passage belongs to or names, come in full.  Raises
+    :class:`ConfigError` (nothing was sent), ``AnalyzeError`` or
+    :class:`Stopped` with a public-safe message; a failed answer is written
+    too."""
+    from agent_monitor import manuscript_ask
+    from agent_monitor.analyze import ask as analyze_ask
+    from agent_monitor.readability import parse as answer_parse
+    from agent_monitor.readability import references, texprose
+
+    root = Path(workspace).resolve()
+    folder = root / "analysis"
+    try:
+        req = analysis_request.load(root)
+        question = analyze_ask.STORE.load_request(root, ask_id)
+    except (analysis_request.RequestError, manuscript_ask.AskError) as exc:
+        raise ConfigError(str(exc)) from None
+    receipt = _json_file(folder / "receipt.json")
+    graph = analysis_graph.load(root)
+    if not receipt or graph is None:
+        raise ConfigError("This analysis has no published report to ask about yet")
+    about_id = question["node_id"]
+    if about_id and about_id not in {node["id"] for node in graph["nodes"]}:
+        raise ConfigError("node_id must be a result of this analysis")
+    run = AnalysisRun(root, req, env=route_env, sink=sink, cancel=threading.Event(),
+                      caps_override={"max_calls": ASK_MAX_CALLS, "max_seconds": ASK_SECONDS})
+    segments = _json_file(folder / "segments.json") or {}
+    manuscript = _json_file(folder / "manuscript.json") or {}
+    bounded = 1 if run.info.bounded else 0
+    names = analyze_ask.names(graph, segments)
+    sources = (analyze_ask.source_texts(folder, segments)
+               if question["view"] == "source" and question["selection"] else None)
+    related_ids = analyze_ask.related(question["selection"], view=question["view"], graph=graph,
+                                      segments=segments, exclude=about_id, sources=sources)
+    # The results the typed question names ("Why is Lemma 2.3 a gap?"), or
+    # the main results for "the main theorem".
+    related_ids += analyze_ask.named(question["question"], graph=graph, segments=segments,
+                                     exclude=[node_id for node_id in (about_id, *related_ids) if node_id])
+    related_ids = related_ids[:analyze_ask.MAX_SUBJECTS - (1 if about_id else 0)]
+    exchanges = analyze_ask.STORE.earlier(root, ask_id)
+    carried = False
+    if not about_id and not related_ids and not question["selection"] and exchanges:
+        # A follow-up that selects and names nothing is about what the last answer was about.
+        last = exchanges[-1]
+        related_ids = [node_id for node_id in dict.fromkeys([last.get("node_id"), *(last.get("about") or [])])
+                       if node_id in names][:analyze_ask.MAX_RELATED]
+        carried = bool(related_ids)
+    earlier = manuscript_ask.earlier_text(exchanges, limit=manuscript_ask.EARLIER_BYTES[bounded],
+                                          name_of=lambda node_id: names.get(node_id, ""))
+    overview = analyze_ask.overview(graph=graph, segments=segments, manuscript=manuscript, receipt=receipt,
+                                    limit=prompts.ASK_OVERVIEW_BYTES[bounded])
+    results = analyze_ask.results_list(graph, segments, prompts.ASK_RESULTS_BYTES[bounded])
+    # The results shown in full get the room the rest of the prompt leaves:
+    # the first up to two thirds of it when others follow, the others an
+    # equal share of what the ones before them left.
+    subjects = [node_id for node_id in (about_id, *related_ids) if node_id]
+    fixed = prompts.ask_prompt(question=question["question"], passage=question["selection"], view=question["view"],
+                               overview=overview, results=results, earlier=earlier)
+    room = max(4_000, prompts.ASK_PROMPT_BYTES[bounded] - prompts.utf8_len(fixed) - 400 * len(subjects))
+    ceiling = prompts.ASK_RESULT_BYTES[bounded]
+    texts: list[str] = []
+    for index, node_id in enumerate(subjects):
+        left = len(subjects) - index
+        share = room if left == 1 else room * 2 // 3 if index == 0 else room // left
+        texts.append(analyze_ask.result_text(node_id, graph=graph, segments=segments, limit=min(ceiling, share)))
+        room = max(0, room - prompts.utf8_len(texts[-1]))
+    about = texts.pop(0) if about_id else ""
+    related = "\n\n".join(texts)
+    if related and carried:
+        related = prompts.CARRIED_NOTE + "\n" + related
+    user = prompts.ask_prompt(question=question["question"], passage=question["selection"], view=question["view"],
+                              overview=overview, results=results, about=about, related=related, earlier=earlier)
+    ids = list(names)
+    answer: dict[str, Any] = {"schema": ANSWER_SCHEMA, "ask_id": ask_id, "about": subjects, "carried": carried,
+                              "earlier": len(exchanges), "model": run.info.route.model, "route": run.info.name}
+    token = harness._RUN_EMITTER.set(run.emitter)
+    failure = ""
+    try:
+        with harness._stop_on_sigterm(run.cancel):
+            run.emit({"type": "thread.started", "thread_id": "analyze-ask"})
+            try:
+                job = harness._run_single(
+                    run.ctx, "ask", reserve=0,
+                    work=lambda turn: harness._call_and_parse(
+                        run.ctx, turn, stage="ask", system=prompts.ANALYZE_ASK_SYSTEM, user=user,
+                        limit=prompts.ASK_REPLY_BYTES, parse=partial(answer_parse.parse_answer, node_ids=ids),
+                        family=prompts.ASK_FAMILY))
+                parsed, reply = harness._job_result(job)
+                # Leftover LaTeX reads as in a readable version: references by
+                # their printed names, text-mode markup as Markdown.
+                labels = {node["id"]: references.printed_name(node) for node in segments.get("nodes") or []
+                          if isinstance(node, dict) and node.get("id")}
+                parsed["answer"] = answer_parse.neutral(texprose.convert(
+                    references.resolve(parsed["answer"], _answer_refs(segments, graph)), labels))
+                answer.update(parsed, status="done", model=(reply.observed_model or reply.model or run.info.route.model))
+            except harness.RunCancelled:
+                raise Stopped("The question was stopped; nothing was answered") from None
+            except harness.ProviderCallError as exc:
+                failure = run._failure_reason(exc)[0]
+            except harness.PromptBoundError:
+                failure = "the question and its context are too long for one model call"
+            except ParseError as exc:
+                failure = f"the answer could not be read ({exc})"[:300]
+            except (harness._BudgetExhausted, harness.MathHarnessError):
+                failure = "the question reached its time or call limit"
+    finally:
+        run.emitter.close()
+        harness._RUN_EMITTER.reset(token)
+    answer.update(usage=_call_usage(run.ctx.calls), calls=run.ctx.calls_used, created_at=_utc_now())
+    if failure:
+        answer.update(status="failed", error=failure)
+    analyze_ask.STORE.write_answer(root, ask_id, answer)
+    if failure:
+        raise AnalyzeError(f"The question could not be answered: {failure}")
+    return answer
+
+
 def public_message(text: str, env: Mapping[str, str]) -> str:
     """``text`` without any credential value from ``env`` (keys, tokens)."""
     value = " ".join(str(text or "").split())
@@ -1171,6 +1344,7 @@ def public_message(text: str, env: Mapping[str, str]) -> str:
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Ansatz Analyze runner")
     parser.add_argument("--recheck", metavar="NODE_ID")
+    parser.add_argument("--ask", metavar="ASK_ID")
     args = parser.parse_args(argv)
     workspace = Path.cwd()
     env = dict(os.environ)
@@ -1196,6 +1370,10 @@ def main(argv: list[str] | None = None) -> int:
                 os.environ.pop(name, None)
         if info_env.get("NO_PROXY") == "*":
             os.environ["NO_PROXY"] = os.environ["no_proxy"] = "*"
+        if args.ask:
+            result = run_ask(workspace, args.ask, route_env=env)
+            harness.emit({"type": "analyze.ask", "result": result})
+            return 0
         outcome = run_analysis(workspace, req, env=env)
     except AnalyzeError as exc:  # ConfigError (2) and Stopped (143) included
         harness.emit_item({"type": "error", "message": public_message(str(exc), env), "terminal": True})
