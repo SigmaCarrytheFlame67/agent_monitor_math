@@ -189,8 +189,18 @@ Admin view → **Accounts** (`GET /api/admin/accounts`, administrators only;
   - **Scope:** a group only scopes "everyone else" for access, and changes
     nothing else. "Everyone else off" for a group nobody is in is refused.
 - **Full access.** `POST /api/admin/accounts/full-access {emails,
-  full_access: "on" | "off"}`, or `full_access: true` when adding accounts.
-  Adding gives it to new accounts only: an address that already had an
+  full_access: "on" | "off"}`, or `full_access: true | false` when adding
+  accounts.
+  - **On by default.** Every new member account starts with full access:
+    sign-ups (password or Google) and accounts added here, unless the Add
+    form's box is cleared (`full_access: false`, `--no-full-access`). Guests
+    never have it. The first start of this release gives every existing
+    member account full access, once (`auth_migrations`), so an account
+    switched off afterwards stays off. `AGENT_MONITOR_FULL_ACCESS_DEFAULT=0`
+    turns the default off for new accounts; it takes nothing back. While
+    sign-ups are open this means anyone who signs up can run the local-tool
+    harnesses on this host (see "What it lifts").
+  - Adding gives it to new accounts only: an address that already had an
   account comes back `full_access_skipped`, because whoever registered it
   first may not be the person on the list. Give it from the table once
   checked.

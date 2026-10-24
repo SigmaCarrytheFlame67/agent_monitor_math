@@ -261,19 +261,19 @@ def list_accounts() -> list[dict[str, Any]]:
     } for row in rows]
 
 
-def _grant_full_access(email: str) -> bool | None:
-    """Give a non-administrator account full access: True when that changed
-    it, False when it had it already, None for an administrator (who always
-    has it)."""
+def _grant_full_access(email: str, on: bool = True) -> bool | None:
+    """Give a non-administrator account full access (or, with ``on`` false,
+    take it back): True when that changed it, False when it was so already,
+    None for an administrator (who always has it)."""
     with closing(auth._conn()) as conn, conn:
         conn.execute("BEGIN IMMEDIATE")
         row = conn.execute("SELECT id, is_admin, full_access FROM users WHERE email=? AND is_guest=0",
                            (email,)).fetchone()
         if row is None or row["is_admin"]:
             return None
-        if row["full_access"]:
+        if bool(row["full_access"]) == on:
             return False
-        conn.execute("UPDATE users SET full_access=1 WHERE id=?", (row["id"],))
+        conn.execute("UPDATE users SET full_access=? WHERE id=?", (int(on), row["id"]))
     return True
 
 
@@ -294,7 +294,8 @@ def _join_group(email: str, group: str) -> bool | None:
 
 
 def create_accounts(people: Iterable[Mapping[str, Any]], *, password_length: object = None,
-                    preview: bool = False, group: object = None, full_access: bool = False) -> list[dict[str, Any]]:
+                    preview: bool = False, group: object = None,
+                    full_access: bool | None = None) -> list[dict[str, Any]]:
     """Create an account for each person (``{name, email, line?}``) with a
     random password.  Returns, in order, ``{email, name, line, status,
     password?, error?}`` where ``status`` is ``created`` (with its password,
@@ -306,12 +307,16 @@ def create_accounts(people: Iterable[Mapping[str, Any]], *, password_length: obj
 
     With ``group``, new accounts are put in it, and so is an existing
     account that is not an administrator's (``group_joined`` when that
-    changes its group).  With ``full_access``, new accounts get full access;
-    an existing account never does here (``full_access_skipped``): whoever
+    changes its group).  New accounts get full access when ``full_access``
+    is true, not when it is false, and by the site's default
+    (auth.full_access_by_default) when it is None; an existing account never
+    gets it here (``full_access_skipped``): whoever
     registered that address first may not be the person on the list, so it is
     given from the table once checked.  Nothing else about an existing
     account changes."""
     length = _clean_length(password_length)
+    if full_access is None:
+        full_access = auth.full_access_by_default()
     group, _new = resolve_group(group)
     people = list(people)
     if len(people) > MAX_PEOPLE:
@@ -389,6 +394,13 @@ def create_accounts(people: Iterable[Mapping[str, Any]], *, password_length: obj
                         entry["group"] = group
                         if joined and entry["status"] == "exists":
                             entry["group_joined"] = True
+            if not full_access and entry["status"] == "created":
+                try:
+                    _grant_full_access(email, on=False)
+                except Exception:  # noqa: BLE001 - the account (and its password) stand regardless
+                    logger.exception("[ADMIN] taking full access back from a new account failed")
+                    entry["full_access_error"] = "Has full access (the default); remove it from the table"
+                    entry["full_access"] = True
             if full_access and entry["status"] == "created":
                 try:
                     granted = _grant_full_access(email)
@@ -630,10 +642,11 @@ def main(argv: list[str] | None = None) -> int:
     create.add_argument("--sender", default="", help="the name the emails are signed with (needed with --send-email)")
     create.add_argument("--reply-to", default="", help="the address replies go to (needed with --send-email)")
     create.add_argument("--group", default="", help="put the new (and existing) accounts in this group")
-    create.add_argument("--full-access", action="store_true",
-                        help="give the new accounts full access: their own Claude Code and Codex, and every "
-                             "engine, including harnesses that run local tools on this host (an address that "
-                             "already has an account gets it only with the full-access command)")
+    create.add_argument("--full-access", action=argparse.BooleanOptionalAction, default=None,
+                        help="give the new accounts full access (or, with --no-full-access, not): their own "
+                             "Claude Code and Codex, and every engine, including harnesses that run local tools "
+                             "on this host (default: the site's, AGENT_MONITOR_FULL_ACCESS_DEFAULT, on unless 0; "
+                             "an address that already has an account gets it only with the full-access command)")
     for name, help_text in (("on", "turn access on"), ("off", "turn access off (signs the person out)")):
         sub = commands.add_parser(name, help=help_text)
         sub.add_argument("emails", nargs="+")

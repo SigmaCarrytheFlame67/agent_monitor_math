@@ -221,7 +221,9 @@ function listPayload({ emailAvailable = false, url = 'https://ansatze.example/lo
 }
 
 // The section in a vm context, with the page's static parts of it as the markup has them.
-function load({ user = OPERATOR } = {}) {
+// The Add form's full-access box starts ticked (every new account gets it by
+// default); tests about something else untick it, the full-access test keeps it.
+function load({ user = OPERATOR, fullAccess = false } = {}) {
   focused = null
   const els = {}
   const $ = id => els[id] || (els[id] = Object.assign(new El('div'), { id }))
@@ -246,6 +248,7 @@ function load({ user = OPERATOR } = {}) {
     console: { log: quiet, info: quiet, warn: quiet, error: quiet, debug: quiet } })
   vm.runInContext([`let CURRENT_USER=${JSON.stringify(user)};`, ...CONSTS.map(constant), ...['analyzeEl', 'viewerIsAdmin', ...NAMES].map(fn), 'wireAdminAccounts();'].join('\n'), context)
   const step = code => vm.runInContext(code, context)
+  if (!fullAccess) { $('admin-acct-add-full').checked = false; $('admin-acct-add-full').onchange() }
   return { $, els, step, srv, copied, confirms, logged, answers, listeners }
 }
 async function loaded(view, payload = listPayload()) {
@@ -681,7 +684,7 @@ test('adding accounts: the server checks the list first, and shows line by line 
   // The same text and options as the real run, with preview: nothing is made or sent yet. The group goes as typed.
   assert.deepEqual(plain(srv.pending.map(r => [r.url, r.method, r.body])), [['/api/admin/accounts', 'POST', {
     text: 'Maryam Mirzakhani - maryam@example.org\nemmy.noether@example.org\nno address here\nGrace Hopper <grace@example.org>\nmaryam@example.org',
-    password_length: 12, send_email: true, subject: DEFAULTS.subject, message: DEFAULTS.message, sender_name: 'Workshop Operator', group: ' Field   test ', preview: true }]])
+    password_length: 12, send_email: true, subject: DEFAULTS.subject, message: DEFAULTS.message, sender_name: 'Workshop Operator', group: ' Field   test ', full_access: false, preview: true }]])
   assert.deepEqual([create.textContent, create.getAttribute('aria-busy'), status($, 'admin-acct-add-status')[0]], ['Checking the list…', 'true', 'Checking the list…'])
   // The server says which group that is: the existing one, in its own spelling (finding #10).
   srv.answer(200, { email_available: true, group: GROUP, group_is_new: false, results: previewOf(view, { 'emmy.noether@example.org': 'exists', 'maryam@example.org': 'new' }, GROUP)
@@ -774,7 +777,7 @@ test('creating accounts without email: one request, the passwords shown once and
   const done = confirmButton($).onclick()
   assert.deepEqual(plain(srv.pending.map(r => [r.url, r.method, r.body])), [['/api/admin/accounts', 'POST', {
     text: 'Maryam Mirzakhani - maryam@example.org\nLovelace, Ada <ada2@example.org>\nemmy.noether@example.org\n=HYPERLINK("x") <calc@example.org>\nPaul Erdős',
-    password_length: 14, send_email: false, subject: 'Welcome to   the workshop', message: 'Hello {name} ({email}): {password} at {url}. {other} — {sender}', sender_name: 'Dr.   Operator' }]])
+    password_length: 14, send_email: false, subject: 'Welcome to   the workshop', message: 'Hello {name} ({email}): {password} at {url}. {other} — {sender}', sender_name: 'Dr.   Operator', full_access: false }]])
   // While it is made: said, the box read-only, the form's button busy and focused (the preview's is gone).
   assert.deepEqual([status($, 'admin-acct-add-status')[0], $('admin-acct-add-create').textContent, $('admin-acct-add-create').getAttribute('aria-busy'), $('admin-acct-add-text').readOnly,
     $('admin-acct-preview').hidden, focused], ['Creating 5 accounts…', 'Creating…', 'true', true, true, $('admin-acct-add-create')])
@@ -1512,15 +1515,18 @@ test('full access for the selected rows: giving it is always asked in the page (
 })
 
 test('full access for added accounts: a checkbox with what it opens; new accounts get it, existing ones on the list never do (said in the preview and the run)', async () => {
-  const view = load(), { $, srv, step } = view
+  const view = load({ fullAccess: true }), { $, srv, step } = view
   await loaded(view, fullPayload())
   const full = $('admin-acct-add-full'), warn = $('admin-acct-add-full-warn')
-  assert.deepEqual([full.checked, warn.hidden, warn.textContent], [false, true, FULL_WARNING])
+  // Ticked by default, as every new account gets it, with what it opens shown.
+  assert.deepEqual([full.checked, warn.hidden, warn.textContent], [true, false, FULL_WARNING])
   $('admin-acct-add-text').value = 'Maryam Mirzakhani - maryam@example.org\nemmy.noether@example.org\nada.lovelace@example.org'
   $('admin-acct-add-group').value = GROUP
-  // Unticked: nothing about full access is sent.
+  // Unticked: the warning goes, and the server is told not to give it.
+  full.checked = false; full.onchange()
+  assert.equal(warn.hidden, true)
   let done = $('admin-acct-add-create').onclick()
-  assert.equal('full_access' in srv.pending[0].body, false)
+  assert.equal(srv.pending[0].body.full_access, false)
   srv.answer(200, { results: previewOf(view, { 'emmy.noether@example.org': 'exists', 'ada.lovelace@example.org': 'exists' }, GROUP) }); await done
   // Ticked: what it opens shows under it, and the preview is asked again.
   full.checked = true; full.onchange()

@@ -255,6 +255,31 @@ def _migrate_access_pause(conn: sqlite3.Connection) -> None:
                 raise
 
 
+def full_access_by_default() -> bool:
+    """Whether new member accounts start with full access (account_policy):
+    yes unless ``AGENT_MONITOR_FULL_ACCESS_DEFAULT`` is 0/false/off/no.
+    Guests never have it; an administrator can take it back per account."""
+    value = os.environ.get("AGENT_MONITOR_FULL_ACCESS_DEFAULT", "1").strip().lower()
+    return value not in ("0", "false", "off", "no")
+
+
+def _migrate_full_access_default(conn: sqlite3.Connection) -> None:
+    """Give every existing member account full access, once, when full
+    access is the default.  Recorded in ``auth_migrations`` so an account an
+    administrator later takes it back from stays without it."""
+    conn.execute(
+        "CREATE TABLE IF NOT EXISTS auth_migrations (name TEXT PRIMARY KEY, applied_at TEXT NOT NULL)"
+    )
+    if not full_access_by_default():
+        return
+    cur = conn.execute(
+        "INSERT OR IGNORE INTO auth_migrations (name, applied_at) VALUES ('full_access_default', ?)",
+        (_now(),),
+    )
+    if cur.rowcount:
+        conn.execute("UPDATE users SET full_access=1 WHERE is_guest=0 AND full_access=0")
+
+
 def _migrate_email_verification(conn: sqlite3.Connection) -> None:
     """Add verification state; accounts that predate it count as verified."""
     columns = {
@@ -340,6 +365,7 @@ def _conn() -> sqlite3.Connection:
                 _migrate_user_roles(conn)
                 _migrate_email_verification(conn)
                 _migrate_access_pause(conn)
+                _migrate_full_access_default(conn)
                 conn.execute(
                     "CREATE INDEX IF NOT EXISTS idx_users_is_guest ON users(is_guest)"
                 )
@@ -424,7 +450,8 @@ def _user_dict(row: sqlite3.Row | None) -> dict[str, Any] | None:
         "picture": row["picture"],
         "is_admin": bool(row["is_admin"]) and not is_guest,
         "guest": is_guest,
-        # Given by an administrator (account_policy.has_full_access).
+        # On by default (full_access_by_default); an administrator can take
+        # it back (account_policy.has_full_access).
         "full_access": bool("full_access" in row.keys() and row["full_access"]) and not is_guest,
     }
 
@@ -516,8 +543,9 @@ def register(
         try:
             cur = conn.execute(
                 "INSERT INTO users"
-                " (email, name, password_hash, salt, is_admin, is_guest, created_at, email_verified_at)"
-                " VALUES (?,?,?,?,?,?,?,?)",
+                " (email, name, password_hash, salt, is_admin, is_guest, created_at, email_verified_at,"
+                " full_access)"
+                " VALUES (?,?,?,?,?,?,?,?,?)",
                 (
                     email,
                     (name or "").strip() or None,
@@ -528,6 +556,7 @@ def register(
                     _now(),
                     # HTTP sign-ups start unverified; operator-created accounts do not.
                     None if require_open else _now(),
+                    int(full_access_by_default()),
                 ),
             )
         except sqlite3.IntegrityError:
@@ -1072,9 +1101,10 @@ def login_with_google(
                 is_admin = not _registered_user_exists(conn)
                 cur = conn.execute(
                     "INSERT INTO users"
-                    " (email, name, google_sub, picture, is_admin, is_guest, created_at, email_verified_at)"
-                    " VALUES (?,?,?,?,?,?,?,?)",
-                    (email, name, sub, picture, int(is_admin), 0, _now(), _now()),
+                    " (email, name, google_sub, picture, is_admin, is_guest, created_at, email_verified_at,"
+                    " full_access)"
+                    " VALUES (?,?,?,?,?,?,?,?,?)",
+                    (email, name, sub, picture, int(is_admin), 0, _now(), _now(), int(full_access_by_default())),
                 )
                 _seed_new_user_defaults(conn, int(cur.lastrowid))
         else:

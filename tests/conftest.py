@@ -58,6 +58,14 @@ def _isolated_usage_ledger(tmp_path_factory, monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def _restricted_members_by_default(monkeypatch):
+    # The site gives every member full access by default; most tests are
+    # about a restricted member (one an administrator switched off), so they
+    # start from that.  tests/test_full_access.py checks the default itself.
+    monkeypatch.setenv("AGENT_MONITOR_FULL_ACCESS_DEFAULT", "0")
+
+
+@pytest.fixture(autouse=True)
 def _isolated_state_paths(tmp_path_factory, monkeypatch):
     root = tmp_path_factory.mktemp("state")
     for module_name, attribute, filename in _STATE_PATHS:

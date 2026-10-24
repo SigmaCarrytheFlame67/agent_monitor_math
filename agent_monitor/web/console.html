@@ -2444,8 +2444,8 @@ body { background:var(--bg); }
                     <label class="acct-check off" id="admin-acct-add-send-label"><input type="checkbox" id="admin-acct-add-send" disabled/> Email each person their sign-in details</label>
                     <p class="acct-note" id="admin-acct-add-nomail" hidden>This site cannot send email (SMTP is not set up) — copy the details below and send them yourself.</p>
                     <p class="acct-note" id="admin-acct-add-nourl" hidden>Emails need the site's address (AGENT_MONITOR_APP_URL), which is not set. Messages copied from here say “(the site's address)” instead.</p>
-                    <label class="acct-check" id="admin-acct-add-full-label"><input type="checkbox" id="admin-acct-add-full"/> <span>Full access <small class="acct-dim">· their own Claude Code and Codex, and every engine; for new accounts only (an existing one gets it from the table)</small></span></label>
-                    <p class="acct-warn" id="admin-acct-add-full-warn" hidden></p>
+                    <label class="acct-check" id="admin-acct-add-full-label"><input type="checkbox" id="admin-acct-add-full" checked/> <span>Full access <small class="acct-dim">· on by default · their own Claude Code and Codex, and every engine; for new accounts only (an existing one gets it from the table)</small></span></label>
+                    <p class="acct-warn" id="admin-acct-add-full-warn"></p>
                   </div>
                   <div class="acct-form-col">
                     <label class="acct-field">Sender name <input type="text" id="admin-acct-add-sender" autocomplete="off"/></label>
@@ -4872,7 +4872,7 @@ function adminAccountsForm(){
 function adminAccountsBody(form,lines){
   const body={text:lines.join('\n'),password_length:form.password_length,send_email:form.send_email,subject:form.subject,message:form.message,sender_name:form.sender_name};
   if(form.group.trim())body.group=form.group;
-  if(form.full_access)body.full_access=true;
+  body.full_access=!!form.full_access;
   return body;
 }
 // What a message sent by hand says, as the server would fill it in: an invitation from
@@ -5416,6 +5416,8 @@ function wireAdminAccounts(){
   $('admin-acct-full-off').onclick=()=>adminAccountsBulkFull('off');
   // Full access for the new accounts: what it opens is said under the box while it is ticked.
   $('admin-acct-add-full-warn').textContent=ACCOUNT_FULL_WARNING;
+  // On by default, as for every new account (auth.full_access_by_default); what it opens shows with it.
+  $('admin-acct-add-full').checked=true; $('admin-acct-add-full-warn').hidden=false;
   $('admin-acct-add-full').onchange=()=>{ $('admin-acct-add-full-warn').hidden=!$('admin-acct-add-full').checked; dropAdminAccountsPreview(); };
   $('admin-acct-list-open').onclick=()=>toggleAdminAccessList();
   $('admin-acct-list-group').onchange=()=>{ ACCOUNTS.listGroup=$('admin-acct-list-group').value; dropAdminAccessPlan(); syncAdminAccessListGroup(); };

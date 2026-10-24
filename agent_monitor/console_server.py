@@ -2352,7 +2352,9 @@ class Handler(RunSharingMixin, ProjectsMixin, ResearchMixin, BaseHTTPRequestHand
                 group, group_is_new = accounts_admin.resolve_group(body.get("group"))
                 results = accounts_admin.create_accounts(accounts_admin.parse_people(text),
                                                          password_length=body.get("password_length"), preview=preview,
-                                                         group=group, full_access=body.get("full_access") is True)
+                                                         group=group,
+                                                         full_access=body["full_access"]
+                                                         if isinstance(body.get("full_access"), bool) else None)
                 for result in results:
                     if send_email and not preview and result["status"] == "created":
                         result["email_sent"] = accounts_admin.send_invite(
