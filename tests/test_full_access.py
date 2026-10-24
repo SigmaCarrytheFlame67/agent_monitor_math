@@ -305,3 +305,74 @@ def test_analyze_and_readability_offer_a_full_access_account_its_own_subscriptio
     for policy in (analyze_runs.viewer_policy, readability_runs.viewer_policy):
         assert "claude_subscription" in policy(full)["routes"] and "codex_subscription" in policy(full)["routes"]
         assert policy(plain)["routes"] == ["sponsored_kimi", "api_key"]
+
+
+# ── On by default ────────────────────────────────────────────────────────────
+
+def _full(email):
+    return {a["email"]: a["full_access"] for a in accounts_admin.list_accounts()}[email]
+
+
+def test_every_new_member_account_starts_with_full_access(member_console, monkeypatch):
+    monkeypatch.setenv("AGENT_MONITOR_FULL_ACCESS_DEFAULT", "1")
+    monkeypatch.setenv("AGENT_MONITOR_REGISTRATION_OPEN", "1")
+    assert auth.full_access_by_default()
+    member = auth.register("signup@example.test", "signup-password-1")
+    assert member["full_access"] is True and auth.may_use_own_subscriptions(member["id"])
+    guest, _token = auth.create_guest_session()
+    assert guest["full_access"] is False and not auth.is_full_access_account(guest["id"])
+    # Taken back from the table, it stays taken back.
+    accounts_admin.set_full_access(["signup@example.test"], on=False)
+    assert not auth.is_full_access_account(member["id"])
+    # Off: new accounts start restricted again; nobody loses it.
+    monkeypatch.setenv("AGENT_MONITOR_FULL_ACCESS_DEFAULT", "0")
+    assert not auth.full_access_by_default()
+    assert auth.register("later@example.test", "later-password-1")["full_access"] is False
+
+
+def test_a_google_sign_up_starts_with_full_access(member_console, monkeypatch):
+    from cryptography.hazmat.primitives.asymmetric import rsa
+    from jwt.algorithms import RSAAlgorithm
+    import jwt
+    import time
+
+    monkeypatch.setenv("AGENT_MONITOR_FULL_ACCESS_DEFAULT", "1")
+    key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+    jwk = json.loads(RSAAlgorithm.to_jwk(key.public_key()))
+    jwk.update(kid="test-key", alg="RS256", use="sig")
+    monkeypatch.setattr(auth, "_google_jwks", lambda: {"keys": [jwk]})
+    monkeypatch.setenv("GOOGLE_OAUTH_CLIENT_ID", "client-123.apps.googleusercontent.com")
+    now = int(time.time())
+    token = jwt.encode({"iss": "https://accounts.google.com", "aud": "client-123.apps.googleusercontent.com",
+                        "sub": "g-1", "email": "g@example.test", "email_verified": True, "name": "G",
+                        "iat": now, "exp": now + 300}, key, algorithm="RS256", headers={"kid": "test-key"})
+    assert auth.login_with_google(token)["full_access"] is True
+
+
+def test_existing_members_get_full_access_once(member_console, monkeypatch):
+    # Accounts made before this release (default off) get it at the first
+    # start with the default on, and only then.
+    member = auth.register("old@example.test", "old-password-1")
+    assert member["full_access"] is False
+    guest, _token = auth.create_guest_session()
+    monkeypatch.setenv("AGENT_MONITOR_FULL_ACCESS_DEFAULT", "1")
+    monkeypatch.setattr(auth, "_INITIALIZED", False)
+    assert auth.is_full_access_account(member["id"]) and not auth.is_full_access_account(guest["id"])
+    accounts_admin.set_full_access(["old@example.test"], on=False)
+    monkeypatch.setattr(auth, "_INITIALIZED", False)  # the next start
+    assert not auth.is_full_access_account(member["id"])
+
+
+def test_adding_accounts_follows_the_box_and_otherwise_the_default(member_console, monkeypatch):
+    monkeypatch.setenv("AGENT_MONITOR_FULL_ACCESS_DEFAULT", "1")
+    off = accounts_admin.create_accounts(accounts_admin.parse_people("off@example.test"), full_access=False)
+    assert off[0]["status"] == "created" and not off[0].get("full_access") and _full("off@example.test") is False
+    default = accounts_admin.create_accounts(accounts_admin.parse_people("d@example.test"))
+    assert default[0].get("full_access") is True and _full("d@example.test") is True
+    preview = accounts_admin.create_accounts(accounts_admin.parse_people("p@example.test"), preview=True)
+    assert preview[0]["status"] == "new" and preview[0].get("full_access") is True
+    with running_server() as port:
+        admin = _admin_cookie()
+        _post(port, "/api/admin/accounts", admin, {"text": "api-off@example.test", "full_access": False})
+        _post(port, "/api/admin/accounts", admin, {"text": "api-default@example.test"})
+    assert _full("api-off@example.test") is False and _full("api-default@example.test") is True
