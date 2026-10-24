@@ -225,10 +225,14 @@ function load({ user = OPERATOR } = {}) {
   focused = null
   const els = {}
   const $ = id => els[id] || (els[id] = Object.assign(new El('div'), { id }))
-  for (const id of ['admin-acct-list', 'admin-acct-plan', 'admin-acct-results', 'admin-acct-preview', 'admin-acct-add-nomail', 'admin-acct-add-nourl', 'admin-acct-add-url', 'admin-acct-list-nogroup'])
+  for (const id of ['admin-acct-list', 'admin-acct-plan', 'admin-acct-results', 'admin-acct-preview', 'admin-acct-add-nomail', 'admin-acct-add-nourl', 'admin-acct-add-url', 'admin-acct-list-nogroup',
+    'admin-acct-bulk-ask', 'admin-acct-doors', 'admin-acct-list-doors'])
     $(id).hidden = true
   for (const id of ['admin-acct-on', 'admin-acct-off', 'admin-acct-group-set', 'admin-acct-group-remove', 'admin-acct-add-send', 'admin-acct-add-create', 'admin-acct-list-open'])
     $(id).disabled = true
+  // The bar's controls are in the bar, as in the markup.
+  $('admin-acct-bulk').append(...['admin-acct-selected', 'admin-acct-all', 'admin-acct-clear', 'admin-acct-on', 'admin-acct-off', 'admin-acct-group-name',
+    'admin-acct-group-set', 'admin-acct-group-remove'].map($))
   $('admin-acct-add-length').value = '12'
   $('admin-acct-filter').value = 'all'
   $('admin-acct-list-review').className = 'acct-btn primary'
@@ -424,64 +428,71 @@ test('a switch posts its one address and changes its row in place; an administra
   assert.deepEqual(view.logged, [])
 })
 
-test('selected rows are turned on or off, or put in a group, together; "Select all shown" follows the search and the group', async () => {
+test('selected rows are turned on or off, or put in a group, together; once a change is made they are no longer selected', async () => {
   const view = load(), { $, srv } = view
   await loaded(view, listPayload({ extra: PUBLIC }))
-  const pick = address => { const box = rowOf($, address).querySelector('input'); box.checked = true; box.onchange() }
-  const bulk = ['admin-acct-on', 'admin-acct-off', 'admin-acct-group-set', 'admin-acct-group-remove'].map(id => $(id).disabled)
-  assert.deepEqual([$('admin-acct-selected').textContent, bulk], ['None selected', [true, true, true, true]])
-  for (const local of ['ada.lovelace', 'emmy.noether', 'gauss']) pick(email(local))
-  assert.deepEqual([$('admin-acct-selected').textContent, ['admin-acct-on', 'admin-acct-off', 'admin-acct-group-set', 'admin-acct-group-remove'].map(id => $(id).disabled)],
-    ['3 selected', [false, false, false, false]])
-  let done = $('admin-acct-off').onclick()
-  assert.deepEqual(srv.pending[0].body, { emails: ['ada.lovelace@example.org', 'emmy.noether@example.org', 'gauss@example.org'], access: 'off' })
-  $('admin-acct-off').onclick()
+  const pick = (...addresses) => { for (const address of addresses) { const box = rowOf($, address).querySelector('input'); box.checked = true; box.onchange() } }
+  const bulk = () => ['admin-acct-on', 'admin-acct-off', 'admin-acct-group-set', 'admin-acct-group-remove'].map(id => $(id).disabled)
+  const three = ['ada.lovelace@example.org', 'emmy.noether@example.org', 'gauss@example.org']
+  assert.deepEqual([$('admin-acct-selected').textContent, bulk()], ['None selected', [true, true, true, true]])
+  pick(...three)
+  assert.deepEqual([$('admin-acct-selected').textContent, bulk(), rowOf($, 'emmy.noether@example.org').classList.contains('acct-selected')], ['3 selected', [false, false, false, false], true])
+  const off = $('admin-acct-off')
+  off.focus()
+  let done = off.onclick()
+  assert.deepEqual(srv.pending[0].body, { emails: three, access: 'off' })
+  off.onclick()
   assert.equal(srv.pending.length, 1)
-  srv.answer(200, { updated: ['ada.lovelace@example.org', 'emmy.noether@example.org', 'gauss@example.org'], skipped: [] }); await done
+  srv.answer(200, { updated: three, skipped: [] }); await done
   assert.deepEqual(offNow($), ['ada.lovelace', 'emmy.noether', 'gauss', 'poincare', 'turing', 'cantor', 'weyl', 'paul.erdos'])
   assert.deepEqual(status($), ['Access turned off for 3 accounts. They are signed out until it is on again.', 'acct-status ok'])
+  // Made: the rows are no longer selected (finding #4), and the focus, on a button now disabled, goes to the search.
+  assert.deepEqual([$('admin-acct-selected').textContent, bulk(), rowOf($, 'ada.lovelace@example.org').querySelector('input').checked, focused],
+    ['None selected', [true, true, true, true], false, $('admin-acct-q')])
+  // A request that fails keeps the selection, to try again; one the server answers (skipping some) does not.
+  pick(...three)
+  done = $('admin-acct-on').onclick(); srv.answer(500, { error: 'database is locked' }); await done
+  assert.deepEqual([status($)[0], $('admin-acct-selected').textContent], ['Could not turn access on: database is locked.', '3 selected'])
   done = $('admin-acct-on').onclick()
-  srv.answer(200, { updated: ['ada.lovelace@example.org', 'emmy.noether@example.org'], skipped: [{ email: 'gauss@example.org', reason: 'No account uses this email.' }] }); await done
-  assert.deepEqual(status($), ['Access turned on for 2 accounts. Skipped 1: gauss@example.org (No account uses this email).', 'acct-status err'])
+  srv.answer(200, { updated: three.slice(0, 2), skipped: [{ email: 'gauss@example.org', reason: 'No account uses this email.' }] }); await done
+  assert.deepEqual([status($), $('admin-acct-selected').textContent],
+    [['Access turned on for 2 accounts. Skipped 1: gauss@example.org (No account uses this email).', 'acct-status err'], 'None selected'])
+  // Rows ticked while a change is on its way stay selected after it.
+  pick(three[0])
+  done = $('admin-acct-off').onclick()
+  pick('riemann@example.org')
+  srv.answer(200, { updated: [three[0]], skipped: [] }); await done
+  assert.deepEqual([$('admin-acct-selected').textContent, rowOf($, 'riemann@example.org').querySelector('input').checked], ['1 selected', true])
+  $('admin-acct-clear').onclick()
+  assert.equal($('admin-acct-selected').textContent, 'None selected')
 
   // A group for the selection: a name is needed; the list is read again after.
+  pick(...three)
   $('admin-acct-group-set').onclick()
   assert.deepEqual([srv.pending.length, status($)[0], focused], [0, 'Type the group’s name first (or use “Remove from group”).', $('admin-acct-group-name')])
   // The name goes as typed: the server cleans it and says which group it is (finding #10).
   $('admin-acct-group-name').value = '  Day   two  '
   done = $('admin-acct-group-set').onclick()
-  assert.deepEqual(plain(srv.pending.map(r => [r.url, r.body])), [['/api/admin/accounts/group',
-    { emails: ['ada.lovelace@example.org', 'emmy.noether@example.org', 'gauss@example.org'], group: '  Day   two  ' }]])
-  srv.answer(200, { updated: ['ada.lovelace@example.org', 'emmy.noether@example.org', 'gauss@example.org'], skipped: [], group: 'Day two', group_is_new: true }); await flush()
+  assert.deepEqual(plain(srv.pending.map(r => [r.url, r.body])), [['/api/admin/accounts/group', { emails: three, group: '  Day   two  ' }]])
+  srv.answer(200, { updated: three, skipped: [], group: 'Day two', group_is_new: true }); await flush()
   assert.deepEqual(srv.pending.map(r => [r.url, r.method]), [['/api/admin/accounts', 'GET']])
   const regrouped = listPayload({ extra: PUBLIC })
-  for (const account of regrouped.accounts) if (['ada.lovelace@example.org', 'emmy.noether@example.org', 'gauss@example.org'].includes(account.email)) account.group = 'Day two'
+  for (const account of regrouped.accounts) if (three.includes(account.email)) account.group = 'Day two'
   regrouped.groups = ['Day two', 'Field test']
   srv.answer(200, regrouped); await done
-  assert.deepEqual([status($), $('admin-acct-group-name').value, rowOf($, 'ada.lovelace@example.org').children[3].textContent, options($('admin-acct-filter')).map(o => o[1])],
-    [['3 accounts now in Day two, a new group.', 'acct-status ok'], '', 'Day two', ['All groups', 'Day two', 'Field test', 'No group']])
+  assert.deepEqual([status($), $('admin-acct-group-name').value, rowOf($, 'ada.lovelace@example.org').children[3].textContent, options($('admin-acct-filter')).map(o => o[1]),
+    $('admin-acct-selected').textContent], [['3 accounts now in Day two, a new group.', 'acct-status ok'], '', 'Day two', ['All groups', 'Day two', 'Field test', 'No group'], 'None selected'])
   // Typed in another spelling of a group there is: the server's spelling is the one said.
+  pick(three[0])
   $('admin-acct-group-name').value = 'field TEST'
   done = $('admin-acct-group-set').onclick()
-  srv.answer(200, { updated: ['ada.lovelace@example.org'], skipped: [], group: 'Field test', group_is_new: false }); await flush(); srv.answer(200, regrouped); await done
+  srv.answer(200, { updated: [three[0]], skipped: [], group: 'Field test', group_is_new: false }); await flush(); srv.answer(200, regrouped); await done
   assert.deepEqual(status($), ['1 account joined the existing group Field test.', 'acct-status ok'])
+  pick(...three)
   done = $('admin-acct-group-remove').onclick()
-  assert.deepEqual(srv.pending[0].body, { emails: ['ada.lovelace@example.org', 'emmy.noether@example.org', 'gauss@example.org'], group: '' })
-  srv.answer(200, { updated: ['ada.lovelace@example.org'], skipped: [] }); await flush(); srv.answer(200, regrouped); await done
-  assert.deepEqual(status($), ['1 account taken out of its group.', 'acct-status ok'])
-
-  // "Select all shown": the rows the search and the group show (never an administrator's); the selection outlives them.
-  $('admin-acct-clear').onclick()
-  $('admin-acct-filter').value = 'none'; $('admin-acct-filter').onchange()
-  $('admin-acct-all').onclick()
-  assert.deepEqual([$('admin-acct-selected').textContent, rowOf($, 'admin@example.org').querySelector('input').checked], ['2 selected', false])
-  $('admin-acct-filter').value = 'all'; $('admin-acct-filter').onchange()
-  $('admin-acct-q').value = 'riemann'; $('admin-acct-q').oninput()
-  assert.equal($('admin-acct-selected').textContent, '2 selected (2 not shown)')
-  done = $('admin-acct-off').onclick()
-  assert.deepEqual(srv.pending[0].body.emails, ['grace.hopper@example.org', 'paul.erdos@example.org'])
-  srv.answer(200, { updated: [], skipped: [] }); await done
-  assert.deepEqual(status($), ['No account was changed.', 'acct-status err'])
+  assert.deepEqual(srv.pending[0].body, { emails: three, group: '' })
+  srv.answer(200, { updated: [three[0]], skipped: [] }); await flush(); srv.answer(200, regrouped); await done
+  assert.deepEqual([status($), $('admin-acct-selected').textContent], [['1 account taken out of its group.', 'acct-status ok'], 'None selected'])
   assert.deepEqual(view.logged, [])
 })
 
@@ -496,17 +507,19 @@ test('access from a list, for a group: strict reading (nothing guessed), what ea
   const plan = lines => plain(step(`(()=>{ const p=adminAccessPlan(${JSON.stringify(lines.join('\n'))},ACCOUNTS.list,'Field test');
     const keys=list=>list.map(a=>a.key); return {on:keys(p.on),turnOn:keys(p.turnOn),turnOff:keys(p.turnOff),outside:keys(p.outside),off:keys(p.off),admins:keys(p.admins),
       text:adminAccessPlanText(p),several:p.several.map(l=>l.entry),
-      lines:p.lines.map(l=>({entry:l.entry,accounts:keys(l.accounts),problem:l.problem,notes:l.notes,matches:keys(l.matches),suggest:keys(l.suggest)}))}; })()`))
+      lines:p.lines.map(l=>({entry:l.entry,accounts:keys(l.accounts),problem:l.problem,notes:l.notes,matches:keys(l.matches),suggest:keys(l.suggest),extra:l.extra}))}; })()`))
   const line = lines => plan(lines).lines[0]
-  // The reviewer's cases (finding #0): the address decides; a name beside it never adds anyone.
+  // The reviewer's cases (finding #0): the address decides; a name beside it never adds anyone. Beside an
+  // address only that account's name may be written (round 3): this account is Rob Smith, so "Robert" is
+  // not his name, and nobody is turned on for the line (a warning says so).
   let read = plan(['Smith, Robert <robert.smith@uni.example>'])
-  assert.deepEqual([read.on, read.lines[0].notes], [['robert.smith@uni.example'],
-    ["the name “Smith, Robert” does not match this address's account (Rob Smith): the address was used"]])
+  assert.deepEqual([read.on, read.lines[0].problem, read.lines[0].extra, read.lines[0].matches, read.lines[0].notes],
+    [[], 'extra', ['Robert'], ['robert.smith@uni.example'], []])
   assert.ok(!read.on.includes('smith@uni2.example') && !read.on.includes('robert@mail.example'))
   // ...and every other account of the group goes off: John Smith (smith@) stays off, Ada (a control participant) goes off.
   assert.ok(read.off.includes('smith@uni2.example') && read.turnOff.includes('ada.lovelace@example.org'))
-  assert.deepEqual(plain([line(['Robert <robert.smith@uni.example>']).accounts, line(['Robert <robert.smith@uni.example>']).notes]),
-    [['robert.smith@uni.example'], ["the name “Robert” does not match this address's account (Rob Smith): the address was used"]])
+  assert.deepEqual(plain([line(['Robert <robert.smith@uni.example>']).accounts, line(['Robert <robert.smith@uni.example>']).extra]), [[], ['Robert']])
+  assert.deepEqual([line(['Smith, Rob <robert.smith@uni.example>']).accounts, line(['Smith, Rob <robert.smith@uni.example>']).problem], [['robert.smith@uni.example'], ''])
   // A word is never an address before its @: "Smith" and "Smith, Robert" name nobody (a suggestion is shown, never applied).
   assert.deepEqual(line(['Smith']), { entry: 'Smith', accounts: [], problem: 'unmatched', notes: [], matches: [],
     suggest: ['robert.smith@uni.example', 'smith@uni2.example', 'john.smith@a.example'] })
@@ -527,10 +540,11 @@ test('access from a list, for a group: strict reading (nothing guessed), what ea
   read = plan(['ada.lovelace@example.org, emmy.noether@example.org', 'Sofia Kovalevskaya, Leonhard Euler', 'Sofia Kovalevskaya, Leonhard Eulr'])
   assert.deepEqual([read.on, read.several, read.lines[2].problem], [['ada.lovelace@example.org', 'emmy.noether@example.org', 'kovalevskaya@example.org', 'euler@example.org'],
     ['ada.lovelace@example.org, emmy.noether@example.org', 'Sofia Kovalevskaya, Leonhard Euler'], 'unmatched'])
-  // A name on an address line that is someone else's is not used: a note says so (finding #6).
+  // A name on an address line that is none of its accounts' stops the line (finding #6, then round 3); the
+  // accounts' own names, an initial, nothing at all, are taken.
   read = plan(['ada.lovelace@example.org, emmy.noether@example.org, Srinivasa Ramanujan', 'Bernhard Riemann <riemann@example.org>', 'Ada L <ada.lovelace@example.org>'])
-  assert.deepEqual([read.on, read.lines[0].notes, read.lines[1].notes, read.lines[2].notes], [['ada.lovelace@example.org', 'emmy.noether@example.org', 'riemann@example.org'],
-    ["the name “Srinivasa Ramanujan” does not match the accounts of these addresses (Ada Lovelace, Emmy Noether): the addresses were used"], [], []])
+  assert.deepEqual([read.on, read.lines[0].problem, read.lines[0].extra, read.lines[1].notes, read.lines[2].notes],
+    [['ada.lovelace@example.org', 'riemann@example.org'], 'extra', ['Srinivasa', 'Ramanujan'], [], []])
   // An apostrophe belongs to an address; a shorter address that ends the same is someone else (finding #18).
   read = plan(["siobhan.o'brien@example.org", "Siobhan O'Brien <siobhan.o'brien@example.org>"])
   assert.deepEqual([read.on, read.off.includes('brien@example.org')], [["siobhan.o'brien@example.org"], true])
@@ -541,22 +555,25 @@ test('access from a list, for a group: strict reading (nothing guessed), what ea
 
   // Drawn: what each warning says Apply does, and "How each line was read" open because of them.
   view.step(`ACCOUNTS.plan=adminAccessPlan(${JSON.stringify(['Smith, Robert <robert.smith@uni.example>', 'Smith', 'John Smith', 'Ada Lovelace <ada.lovelace+workshop@example.org>',
-    'ada.lovelace@example.org, emmy.noether@example.org'].join('\n'))},ACCOUNTS.list,'Field test'); renderAdminAccessPlan();`)
+    'ada.lovelace@example.org, emmy.noether@example.org', 'ramanujan@example.org, ramanujan+ws@example.org'].join('\n'))},ACCOUNTS.list,'Field test'); renderAdminAccessPlan();`)
   const drawn = $('admin-acct-plan')
   const boxes = drawn.children.filter(el => el.classList.contains('acct-warn') || el.classList.contains('acct-note-box')).map(el => el.textContent)
   assert.deepEqual(boxes, [
-    'Nobody is turned on for these 3 lines:“Smith” No account has this name. Did you mean Rob Smith (robert.smith@uni.example), John Smith (smith@uni2.example) or John Smith (john.smith@a.example)? Use the full name as the table shows it, or the address.'
+    "Nobody is turned on for these 4 lines:“Smith, Robert <robert.smith@uni.example>” The line also has “Robert”, which is not part of this account's name (Rob Smith). Remove it, or leave the person off the list."
+      + '“Smith” No account has this name. Did you mean Rob Smith (robert.smith@uni.example), John Smith (smith@uni2.example) or John Smith (john.smith@a.example)? Use the full name as the table shows it, or the address.'
       + '“John Smith” 2 accounts have this name (smith@uni2.example, john.smith@a.example): use the address of the one meant.'
       + "“Ada Lovelace <ada.lovelace+workshop@example.org>” No account has this address, and the name beside it is not used to find one. Use the account's address as the table shows it.",
     'One line, several people — check (1):“ada.lovelace@example.org, emmy.noether@example.org” → Ada Lovelace (ada.lovelace@example.org), Emmy Noether (emmy.noether@example.org).',
-    "Notes (1):“Smith, Robert <robert.smith@uni.example>” → Rob Smith (robert.smith@uni.example): the name “Smith, Robert” does not match this address's account (Rob Smith): the address was used."])
+    // What is still a note: a second address no account has, on a line whose other address is someone's.
+    'Notes (1):“ramanujan@example.org, ramanujan+ws@example.org” → Srinivasa Ramanujan (ramanujan@example.org): no account has the address ramanujan+ws@example.org: nobody is turned on for it.'])
   const details = drawn.querySelector('details')
   assert.equal(details.open, true)
   assert.deepEqual(details.querySelectorAll('li').map(li => li.textContent), [
-    "“Smith, Robert <robert.smith@uni.example>” → Rob Smith (robert.smith@uni.example) (the name “Smith, Robert” does not match this address's account (Rob Smith): the address was used)",
+    "“Smith, Robert <robert.smith@uni.example>” → nobody: “Robert” is not part of Rob Smith's name",
     '“Smith” → nobody: no account has this name', '“John Smith” → nobody: more than one account has this name',
     '“Ada Lovelace <ada.lovelace+workshop@example.org>” → nobody: no account has this address',
-    '“ada.lovelace@example.org, emmy.noether@example.org” → Ada Lovelace (ada.lovelace@example.org), Emmy Noether (emmy.noether@example.org)'])
+    '“ada.lovelace@example.org, emmy.noether@example.org” → Ada Lovelace (ada.lovelace@example.org), Emmy Noether (emmy.noether@example.org)',
+    '“ramanujan@example.org, ramanujan+ws@example.org” → Srinivasa Ramanujan (ramanujan@example.org) (no account has the address ramanujan+ws@example.org: nobody is turned on for it)'])
   // Everything read exactly: no warning, and the details stay closed.
   view.step(`ACCOUNTS.plan=adminAccessPlan('Ada Lovelace\\nrobert.smith@uni.example',ACCOUNTS.list,'Field test'); renderAdminAccessPlan();`)
   assert.deepEqual([$('admin-acct-plan').querySelector('details').open, $('admin-acct-plan').children.filter(el => el.classList.contains('acct-warn')).length], [false, 0])
@@ -1082,6 +1099,288 @@ test('round 2: a blank message is the default, the page guards passwords on relo
   assert.deepEqual([view.logged, odd.logged], [[], []])
 })
 
+test('round 3: a change for the selection acts on what was meant: search, tick, change; rows not shown are named first; "Select all shown" replaces the selection', async () => {
+  const view = load(), { $, srv, step } = view
+  const payload = () => listPayload({ extra: [...PUBLIC, { id: 61, email: 'ana.silva@example.org', name: 'Ana Silva', access: 'on', group: GROUP }] })
+  await loaded(view, payload())
+  const search = text => { $('admin-acct-q').value = text; $('admin-acct-q').oninput() }
+  const tick = address => { const box = rowOf($, address).querySelector('input'); box.checked = true; box.onchange() }
+  const ask = $('admin-acct-bulk-ask'), on = $('admin-acct-on'), off = $('admin-acct-off')
+  // The reviewer's day (finding #4): search, tick, off; search, tick, off; search, tick, on. Each change is for its own person.
+  search('Lovelace'); tick('ada.lovelace@example.org')
+  let done = off.onclick()
+  assert.deepEqual(srv.pending[0].body, { emails: ['ada.lovelace@example.org'], access: 'off' })
+  srv.answer(200, { updated: ['ada.lovelace@example.org'], skipped: [] }); await done
+  search('Silva'); tick('ana.silva@example.org')
+  assert.equal($('admin-acct-selected').textContent, '1 selected')
+  done = off.onclick()
+  assert.deepEqual(srv.pending[0].body, { emails: ['ana.silva@example.org'], access: 'off' })
+  srv.answer(200, { updated: ['ana.silva@example.org'], skipped: [] }); await done
+  search('Turing'); tick('turing@example.org')
+  done = on.onclick()
+  assert.deepEqual([srv.pending[0].body, ask.hidden], [{ emails: ['turing@example.org'], access: 'on' }, true])
+  srv.answer(200, { updated: ['turing@example.org'], skipped: [] }); await done
+  search('')
+  // The first two stay off.
+  assert.deepEqual(['ada.lovelace', 'ana.silva', 'turing'].map(local => access($, email(local))[0]), ['false', 'false', 'true'])
+
+  // A selection built across searches is kept; before a change, the rows of it not shown are named, in the page.
+  search('Lovelace'); tick('ada.lovelace@example.org'); search('Silva'); tick('ana.silva@example.org'); search('Turing'); tick('turing@example.org')
+  assert.equal($('admin-acct-selected').textContent, '3 selected (2 not shown)')
+  on.focus()
+  on.onclick()
+  assert.equal(srv.pending.length, 0)
+  assert.deepEqual([ask.hidden, ask.children[0].textContent, ask.querySelectorAll('button').map(b => [b.textContent, b.type, b.className])], [false,
+    'Turn access on for 3 accounts, 2 not shown here: Ada Lovelace, Ana Silva?', [['Turn access on for all 3', 'button', 'acct-btn primary'], ['Only the 1 shown', 'button', 'acct-btn'], ['Cancel', 'button', 'acct-btn']]])
+  assert.deepEqual([focused, focused.getAttribute('aria-describedby'), ask.children[0].id], [button(ask, 'Turn access on for all 3'), 'admin-acct-bulk-question', 'admin-acct-bulk-question'])
+  // Cancel: nothing is sent, the selection stays, the focus goes back to the button.
+  button(ask, 'Cancel').onclick()
+  assert.deepEqual([ask.hidden, ask.children.length, srv.pending.length, $('admin-acct-selected').textContent, focused], [true, 0, 0, '3 selected (2 not shown)', on])
+  // Only the rows shown: the others are not sent, and are no longer selected either.
+  on.onclick()
+  done = button(ask, 'Only the 1 shown').onclick()
+  assert.deepEqual([plain(srv.pending[0].body), ask.hidden, focused], [{ emails: ['turing@example.org'], access: 'on' }, true, on])
+  srv.answer(200, { updated: ['turing@example.org'], skipped: [] }); await done
+  assert.deepEqual([$('admin-acct-selected').textContent, focused, status($)[0]], ['None selected', $('admin-acct-q'), 'Access turned on for 1 account.'])
+  // All of them, once named.
+  search('Lovelace'); tick('ada.lovelace@example.org'); search('Turing'); tick('turing@example.org')
+  off.onclick()
+  assert.equal(ask.children[0].textContent, 'Turn access off for 2 accounts, 1 not shown here: Ada Lovelace? They are signed out at once.')
+  done = button(ask, 'Turn access off for all 2').onclick()
+  assert.deepEqual(srv.pending[0].body, { emails: ['ada.lovelace@example.org', 'turing@example.org'], access: 'off' })
+  srv.answer(200, { updated: ['ada.lovelace@example.org', 'turing@example.org'], skipped: [] }); await done
+  assert.equal($('admin-acct-selected').textContent, 'None selected')
+  // Nothing hidden: no question.
+  tick('turing@example.org')
+  done = on.onclick()
+  assert.deepEqual([ask.hidden, srv.pending.length], [true, 1])
+  srv.answer(200, { updated: ['turing@example.org'], skipped: [] }); await done
+  // The question goes when what it asks about changes: the selection, the search, the group shown, the group's name.
+  search('Lovelace'); tick('ada.lovelace@example.org'); search('Turing'); tick('turing@example.org')
+  for (const change of [() => tick('turing@example.org'), () => search('Turing '), () => { $('admin-acct-filter').onchange() },
+    () => { $('admin-acct-group-name').oninput() }, () => $('admin-acct-clear').onclick()]) {
+    on.onclick()
+    assert.equal(ask.hidden, false)
+    change()
+    assert.deepEqual([ask.hidden, srv.pending.length], [true, 0])
+  }
+  // A group for a selection with rows not shown: named first too; then the group as typed.
+  search('Lovelace'); tick('ada.lovelace@example.org'); search('Turing'); tick('turing@example.org')
+  $('admin-acct-group-name').value = 'Day two'
+  $('admin-acct-group-set').onclick()
+  assert.deepEqual([ask.children[0].textContent, button(ask, 'Set the group for all 2') !== undefined, srv.pending.length],
+    ['Put 2 accounts in the group “Day two”, 1 not shown here: Ada Lovelace?', true, 0])
+  done = button(ask, 'Set the group for all 2').onclick()
+  assert.deepEqual(plain(srv.pending[0].body), { emails: ['ada.lovelace@example.org', 'turing@example.org'], group: 'Day two' })
+  srv.answer(200, { updated: ['ada.lovelace@example.org', 'turing@example.org'], skipped: [], group: 'Day two', group_is_new: true }); await flush(); srv.answer(200, payload()); await done
+  assert.deepEqual([status($)[0], $('admin-acct-selected').textContent], ['2 accounts now in Day two, a new group.', 'None selected'])
+  tick('turing@example.org'); search('Lovelace'); tick('ada.lovelace@example.org')
+  $('admin-acct-group-remove').onclick()
+  assert.deepEqual([ask.children[0].textContent, button(ask, 'Take all 2 out') !== undefined], ['Take 2 accounts out of their group, 1 not shown here: Alan Turing?', true])
+  button(ask, 'Cancel').onclick()
+  assert.equal(focused, $('admin-acct-group-remove'))
+
+  // "Select all shown" picks the rows shown, in place of the selection before (Ada is no longer selected).
+  search(''); $('admin-acct-filter').value = 'none'; $('admin-acct-filter').onchange()
+  $('admin-acct-all').onclick()
+  assert.deepEqual([$('admin-acct-selected').textContent, step("[...ACCOUNTS.selected].join(' ')")], ['2 selected', 'grace.hopper@example.org paul.erdos@example.org'])
+  // Leaving the view clears the selection.
+  step('clearAdminAccountSecrets()')
+  assert.deepEqual([$('admin-acct-selected').textContent, rowOf($, 'grace.hopper@example.org').querySelector('input').checked, on.disabled], ['None selected', false, true])
+  assert.deepEqual(view.logged, [])
+})
+
+test('round 3: a line is taken only when it can mean one person: a name that also fits another account, or a mark on the line, turns nobody on', async () => {
+  const view = load(), { $, step } = view
+  await loaded(view, listPayload({ extra: [...PUBLIC,
+    { id: 70, email: 'smith@uni.example', name: 'Smith', access: 'off', group: GROUP }, { id: 71, email: 'john.smith@uni.example', name: 'John Smith', access: 'on', group: GROUP },
+    { id: 72, email: 'ana@uni.example', name: 'Ana', access: 'off', group: GROUP }, { id: 73, email: 'ana.silva@uni.example', name: 'Ana Silva', access: 'on', group: GROUP },
+    { id: 74, email: 'wang.wei@uni.example', name: 'Wang Wei', access: 'off', group: GROUP }, { id: 75, email: 'wei.wang@uni.example', name: 'Wei J. Wang', access: 'on', group: GROUP }] }))
+  const read = entry => plain(step(`(()=>{ const p=adminAccessPlan(${JSON.stringify(entry)},ACCOUNTS.list,'Field test'), l=p.lines[0], keys=list=>(list||[]).map(a=>a.key);
+    return {on:keys(p.on),problem:l.problem,exact:l.exact?.key,also:keys(l.also),matches:keys(l.matches),marks:l.marks,text:l.problem?adminAccessProblemText(l):'',reading:adminAccessReadingText(l)}; })()`))
+  // An exact name that also fits others (finding #5): nobody, both named.
+  assert.deepEqual(read('Smith'), { on: [], problem: 'ambiguous', exact: 'smith@uni.example', also: ['john.smith@uni.example'], matches: ['smith@uni.example', 'john.smith@uni.example'],
+    text: 'is the full name of Smith (smith@uni.example) and also fits John Smith (john.smith@uni.example): use the address of the one meant.',
+    reading: 'nobody: the name also fits another account' })
+  assert.deepEqual([read('John Smith').problem, read('John Smith').exact, read('John Smith').also], ['ambiguous', 'john.smith@uni.example', ['smith@uni.example']])
+  assert.deepEqual([read('Ana').exact, read('Ana').also, read('Ana Silva').exact, read('Ana Silva').also],
+    ['ana@uni.example', ['ana.silva@uni.example'], 'ana.silva@uni.example', ['ana@uni.example']])
+  // The words in another order: said so.
+  assert.deepEqual([read('Wei Wang').on, read('Wei Wang').text], [[],
+    'is, in another order, the full name of Wang Wei (wang.wei@uni.example) and also fits Wei J. Wang (wei.wang@uni.example): use the address of the one meant.'])
+  assert.deepEqual([read('Wang, Wei').exact, read('Wang, Wei').also, read('Wang Wei').also], ['wang.wei@uni.example', ['wei.wang@uni.example'], ['wei.wang@uni.example']])
+  // At commas, each name must be one person's.
+  assert.deepEqual([read('Smith, Emmy Noether').on, read('Smith, Emmy Noether').text], [[],
+    'The names on this line fit 3 accounts (smith@uni.example, john.smith@uni.example, emmy.noether@example.org): use the address of each person meant.'])
+  assert.equal(read('Smith, Emmy Noether').reading, 'nobody: a name on it fits more than one account')
+  // The address picks the one meant; a name that fits nobody else is still taken.
+  assert.deepEqual([read('smith@uni.example').on, read('Ana <ana@uni.example>').on, read('Emmy Noether').on, read('Noether, Emmy').on],
+    [['smith@uni.example'], ['ana@uni.example'], ['emmy.noether@example.org'], ['emmy.noether@example.org']])
+
+  // A mark on the line (finding #6): nobody, on a name line and on an address line alike.
+  for (const [entry, marks] of [['Emmy Noether ✗', ['✗']], ['emmy.noether@example.org ✗', ['✗']], ['~~Emmy Noether~~', ['~~']], ['Emmy Noether -', ['-']], ['Emmy Noether —', ['—']],
+    ['Ada Lovelace\t✓', ['✓']], ['Ada Lovelace ❌', ['❌']], ['*Ada Lovelace*', ['*']], ['Ada Lovelace × ', ['×']], ['Ada Lovelace!', ['!']], ['Ada Lovelace?', ['?']],
+    ['Ada Lovelace & Emmy Noether', ['&']], ['ada.lovelace@example.org -', ['-']], ['Emmy Noether: ', [':']], ['✓ Ada Lovelace', ['✓']], ['Emmy Noether ✗ ~~', ['✗', '~~']]]) {
+    const got = read(entry)
+    assert.deepEqual([got.on, got.problem, got.marks], [[], 'marks', marks], entry)
+  }
+  assert.deepEqual([read('Emmy Noether ✗').text, read('Emmy Noether ✗').reading], ['The line also has “✗”, which is not understood. Remove the mark, or leave the person off the list.',
+    'nobody: “✗” on the line is not understood'])
+  assert.deepEqual([read('Emmy Noether ✗ ~~').text, read('✗').text], ['The line also has “✗” and “~~”, which are not understood. Remove the marks, or leave the person off the list.',
+    'The line has “✗”, which is not understood. Remove the mark, or leave the person off the list.'])
+  // Names and addresses as people write them are not marks.
+  for (const entry of ['Ada L. <ada.lovelace@example.org>', '"Ada Lovelace" <ada.lovelace@example.org>', "'Ada Lovelace'", 'Ada Lovelace - ada.lovelace@example.org', 'Ada Lovelace — ada.lovelace@example.org',
+    'Ada Lovelace: ada.lovelace@example.org', 'Ada Lovelace | ada.lovelace@example.org', 'Ada Lovelace\tada.lovelace@example.org', 'ada.lovelace@example.org, Ada Lovelace,',
+    '<mailto:ada.lovelace@example.org>', 'Ada Lovelace (ada.lovelace@example.org)', '– Ada Lovelace', '• Ada Lovelace', '◦ Ada Lovelace', '▪ Ada Lovelace', '1) Ada Lovelace', 'Lovelace, Ada'])
+    assert.deepEqual([read(entry).on, read(entry).problem], [['ada.lovelace@example.org'], ''], entry)
+  assert.deepEqual(plain(step(`["Siobhan O'Brien",'Siobhan O’Brien','Jean-Pierre Serre','J.R.R. Tolkien','Prof. David Hilbert','Ada Lovelace.','St. John Smith','Gil·li','Kurt Gödel','Ｊｏｈｎ'].map(adminAccessMarks)`)),
+    [[], [], [], [], [], [], [], [], [], []])
+
+  // Drawn: these lines in the warning box, and in "How each line was read".
+  view.step(`ACCOUNTS.plan=adminAccessPlan(${JSON.stringify(['Smith', 'Wei Wang', 'Emmy Noether ✗', 'emmy.noether@example.org ✗', 'Ada Lovelace'].join('\n'))},ACCOUNTS.list,'Field test'); renderAdminAccessPlan();`)
+  const drawn = $('admin-acct-plan')
+  assert.deepEqual(drawn.children.filter(el => el.classList.contains('acct-warn')).map(el => el.textContent), [
+    'Nobody is turned on for these 4 lines:“Smith” is the full name of Smith (smith@uni.example) and also fits John Smith (john.smith@uni.example): use the address of the one meant.'
+      + '“Wei Wang” is, in another order, the full name of Wang Wei (wang.wei@uni.example) and also fits Wei J. Wang (wei.wang@uni.example): use the address of the one meant.'
+      + '“Emmy Noether ✗” The line also has “✗”, which is not understood. Remove the mark, or leave the person off the list.'
+      + '“emmy.noether@example.org ✗” The line also has “✗”, which is not understood. Remove the mark, or leave the person off the list.'])
+  assert.deepEqual([drawn.children[0].textContent, drawn.querySelector('details').open, drawn.querySelector('details').querySelectorAll('li').map(li => li.textContent)], ['1 on, 22 off', true, [
+    '“Smith” → nobody: the name also fits another account', '“Wei Wang” → nobody: the name also fits another account', '“Emmy Noether ✗” → nobody: “✗” on the line is not understood',
+    '“emmy.noether@example.org ✗” → nobody: “✗” on the line is not understood', '“Ada Lovelace” → Ada Lovelace (ada.lovelace@example.org)']])
+  assert.deepEqual(view.logged, [])
+})
+
+test('round 3: beside an address only its account\'s name may be written; a sheet\'s labels ("control", "- no", "| intervention", "B") turn nobody on', async () => {
+  const view = load(), { $, step } = view
+  await loaded(view, listPayload({ extra: [...PUBLIC,
+    { id: 80, email: 'wei.wang@uni.example', name: 'Wei J. Wang', access: 'off', group: GROUP }, { id: 81, email: 'robert.smith@uni.example', name: 'Robert Smith', access: 'off', group: GROUP },
+    { id: 82, email: 'bob@x.org', name: 'Bob Brown', access: 'off', group: GROUP }] }))
+  const read = entry => plain(step(`(()=>{ const p=adminAccessPlan(${JSON.stringify(entry)},ACCOUNTS.list,'Field test'), l=p.lines[0];
+    return {on:p.on.map(a=>a.key),problem:l.problem,extra:l.extra,notes:l.notes,text:l.problem?adminAccessProblemText(l):'',reading:adminAccessReadingText(l)}; })()`))
+  // The account's own name, in any order, with titles and initials: taken.
+  for (const [entry, address] of [['Wang, Wei <wei.wang@uni.example>', 'wei.wang@uni.example'], ['Robert J. Smith <robert.smith@uni.example>', 'robert.smith@uni.example'],
+    ['Smith, Robert <robert.smith@uni.example>', 'robert.smith@uni.example'], ['Smith, Robert J. <robert.smith@uni.example>', 'robert.smith@uni.example'],
+    ['Robert Smith, robert.smith@uni.example', 'robert.smith@uni.example'], ['Rob Smith <robert.smith@uni.example>', 'robert.smith@uni.example'],
+    ['Ada L <ada.lovelace@example.org>', 'ada.lovelace@example.org'], ['Lovelace, A. <ada.lovelace@example.org>', 'ada.lovelace@example.org'],
+    ['A. Lovelace - ada.lovelace@example.org', 'ada.lovelace@example.org'], ['Prof. Ada Lovelace <ada.lovelace@example.org>', 'ada.lovelace@example.org'],
+    ['ada.lovelace@example.org', 'ada.lovelace@example.org'], ['Bob Brown | bob@x.org', 'bob@x.org']])
+    assert.deepEqual([read(entry).on, read(entry).problem], [[address], ''], entry)
+  assert.deepEqual(read('Ada Lovelace <ada.lovelace@example.org>, Emmy Noether <emmy.noether@example.org>').on, ['ada.lovelace@example.org', 'emmy.noether@example.org'])
+  // A sheet's labels beside the address: nobody, with a warning (not a note) that names the word and the account.
+  assert.deepEqual(read('ada.lovelace@example.org control'), { on: [], problem: 'extra', extra: ['control'], notes: [],
+    text: "The line also has “control”, which is not part of this account's name (Ada Lovelace). Remove it, or leave the person off the list.",
+    reading: "nobody: “control” is not part of Ada Lovelace's name" })
+  for (const [entry, extra] of [['ada.lovelace@example.org - no', ['no']], ['Ada Lovelace <ada.lovelace@example.org> | intervention', ['intervention']],
+    ['Emmy Noether <emmy.noether@example.org> no', ['no']], ['bob@x.org | B', ['B']], ['ada.lovelace@example.org x', ['x']], ['Ada Lovelace <ada.lovelace@example.org> A', ['A']],
+    ['Bob Brown <bob@x.org>\tB', ['B']], ['Ada Lovelace, ada.lovelace@example.org, 1', ['1']], ['ada.lovelace@example.org (control arm)', ['control', 'arm']],
+    ['Robert J Smith <robert.smith@uni.example>', ['J']],
+    // A letter is an initial only within the name, for a word of it not written out: not "A" after Ada Lovelace, nor in a field of its own.
+    ['Ada Lovelace A <ada.lovelace@example.org>', ['A']], ['Lovelace <ada.lovelace@example.org> | A', ['A']]])
+    assert.deepEqual([read(entry).on, read(entry).problem, read(entry).extra], [[], 'extra', extra], entry)
+  assert.equal(read('ada.lovelace@example.org (control arm)').text,
+    "The line also has “control” and “arm”, which are not part of this account's name (Ada Lovelace). Remove them, or leave the person off the list.")
+  // Several addresses: a word that is none of their names stops the whole line.
+  assert.deepEqual(read('ada.lovelace@example.org, emmy.noether@example.org, control'), { on: [], problem: 'extra', extra: ['control'], notes: [],
+    text: "The line also has “control”, which is not part of these accounts' names (Ada Lovelace, Emmy Noether). Remove it, or leave these people off the list.",
+    reading: "nobody: “control” is not part of these accounts' names" })
+  assert.deepEqual(read('Ada Lovelace <ada.lovelace@example.org>, Emmy Noether <emmy.noether@example.org> | B').extra, ['B'])
+  // What stays a note: a second address no account has, beside one that is someone's.
+  assert.deepEqual([read('ada.lovelace@example.org, ada.lovelace+ws@example.org').on, read('ada.lovelace@example.org, ada.lovelace+ws@example.org').notes],
+    [['ada.lovelace@example.org'], ['no account has the address ada.lovelace+ws@example.org: nobody is turned on for it']])
+
+  // Drawn: in the warning box, not in a note; the details open.
+  view.step(`ACCOUNTS.plan=adminAccessPlan(${JSON.stringify(['ada.lovelace@example.org control', 'Emmy Noether <emmy.noether@example.org> - no',
+    'Bernhard Riemann <riemann@example.org> | intervention', 'Wang, Wei <wei.wang@uni.example>'].join('\n'))},ACCOUNTS.list,'Field test'); renderAdminAccessPlan();`)
+  const drawn = $('admin-acct-plan')
+  assert.deepEqual(drawn.children.filter(el => el.classList.contains('acct-warn') || el.classList.contains('acct-note-box')).map(el => el.textContent), [
+    "Nobody is turned on for these 3 lines:“ada.lovelace@example.org control” The line also has “control”, which is not part of this account's name (Ada Lovelace). Remove it, or leave the person off the list."
+      + "“Emmy Noether <emmy.noether@example.org> - no” The line also has “no”, which is not part of this account's name (Emmy Noether). Remove it, or leave the person off the list."
+      + "“Bernhard Riemann <riemann@example.org> | intervention” The line also has “intervention”, which is not part of this account's name (Bernhard Riemann). Remove it, or leave the person off the list."])
+  assert.deepEqual([drawn.children[0].textContent, drawn.querySelector('details').open], ['1 on, 19 off', true])
+  assert.deepEqual(view.logged, [])
+})
+
+test('round 3: a change after Review sets the reviewed list aside; Review waits for a change on its way; nothing changes while a list is applied', async () => {
+  const view = load(), { $, srv } = view
+  const payload = () => listPayload({ extra: PUBLIC })
+  await loaded(view, payload())
+  const tick = address => { const box = rowOf($, address).querySelector('input'); box.checked = true; box.onchange() }
+  const review = async () => { const done = $('admin-acct-list-review').onclick(); srv.answer(200, payload()); await done; assert.equal($('admin-acct-plan').hidden, false) }
+  const ASIDE = ' The list you reviewed was set aside: press Review again.'
+  $('admin-acct-list-open').onclick()
+  $('admin-acct-list-text').value = 'Ada Lovelace\nEmmy Noether'
+  await review()
+  // A switch after Review (refuted #0): the plan goes when the change starts, and the status says to review again.
+  const toggle = switchOf($, 'cantor@example.org')
+  toggle.focus()
+  let done = toggle.onclick()
+  assert.deepEqual([$('admin-acct-plan').hidden, $('admin-acct-list-review').classList.contains('primary'), focused], [true, true, toggle])
+  srv.answer(200, { updated: ['cantor@example.org'], skipped: [] }); await done
+  assert.deepEqual(status($), ['Access on for Georg Cantor.' + ASIDE, 'acct-status ok'])
+  // A change for the selection, and a group: the same.
+  await review()
+  tick('riemann@example.org')
+  done = $('admin-acct-off').onclick()
+  assert.equal($('admin-acct-plan').hidden, true)
+  srv.answer(200, { updated: ['riemann@example.org'], skipped: [] }); await done
+  assert.equal(status($)[0], 'Access turned off for 1 account. They are signed out until it is on again.' + ASIDE)
+  await review()
+  tick('hilbert@example.org'); $('admin-acct-group-name').value = 'Day two'
+  done = $('admin-acct-group-set').onclick()
+  assert.equal($('admin-acct-plan').hidden, true)
+  srv.answer(200, { updated: ['hilbert@example.org'], skipped: [], group: 'Day two', group_is_new: true }); await flush(); srv.answer(200, payload()); await done
+  assert.equal(status($)[0], '1 account now in Day two, a new group.' + ASIDE)
+  // Without a plan, nothing is said about one.
+  done = switchOf($, 'cantor@example.org').onclick(); srv.answer(200, { updated: ['cantor@example.org'], skipped: [] }); await done
+  assert.equal(status($)[0], 'Access on for Georg Cantor.')
+  // Review waits for a change still on its way...
+  done = switchOf($, 'gauss@example.org').onclick()
+  $('admin-acct-list-review').onclick()
+  assert.deepEqual([srv.pending.length, status($)[0], $('admin-acct-plan').hidden], [1, 'An access change is still on its way: review the list once it is done.', true])
+  srv.answer(200, { updated: ['gauss@example.org'], skipped: [] }); await done
+  // ...and a change started while it reads the accounts leaves no plan.
+  const reviewing = $('admin-acct-list-review').onclick()
+  done = switchOf($, 'weyl@example.org').onclick()
+  srv.answer(200, payload()); await reviewing
+  assert.deepEqual([$('admin-acct-plan').hidden, status($)[0]], [true, 'Access was changed while the list was being reviewed: press Review again once the change is done.'])
+  srv.answer(200, { updated: ['weyl@example.org'], skipped: [] }); await done
+  // While the list is applied, no switch, change for the selection or group starts.
+  await review()
+  const applying = $('admin-acct-plan').querySelector('button.primary').onclick()
+  assert.equal(srv.pending.length, 1)
+  switchOf($, 'turing@example.org').onclick()
+  tick('turing@example.org'); $('admin-acct-on').onclick(); $('admin-acct-group-name').value = 'Pilot'; $('admin-acct-group-set').onclick(); $('admin-acct-group-remove').onclick()
+  assert.deepEqual([srv.pending.length, status($), access($, 'turing@example.org')], [1, ['The list is being applied: change access once it is done.', 'acct-status err'], ['false', 'Off', null]])
+  srv.answer(200, { updated: ['ada.lovelace@example.org', 'emmy.noether@example.org'], turned_off: [], skipped: [] }); await flush(); srv.answer(200, payload()); await applying
+  assert.match(status($)[0], /^Access set from the list for Field test: /)
+  assert.deepEqual(view.logged, [])
+})
+
+test('round 3: ways in that a pause leaves open (sign-ups, guest access) are said by the switches and in the list\'s panel, only those open', async () => {
+  const SIGN_UPS = 'sign-ups are open, so they could create a second account with another address or Google account (it would be in no group)'
+  const GUESTS = 'guest access is on, so they could use the site as a guest'
+  const LEAD = 'A paused participant can still get in another way: '
+  const view = load(), { $, step } = view
+  await loaded(view, { ...listPayload(), open_doors: { sign_ups: true, guests: true } })
+  const doors = $('admin-acct-doors'), inList = $('admin-acct-list-doors')
+  const both = LEAD + SIGN_UPS + '; and ' + GUESTS + '. To keep a control arm fully out, close sign-ups and guest access for the study.'
+  assert.deepEqual([doors.hidden, doors.textContent, doors.children[0].tagName, doors.children[0].textContent, inList.textContent], [false, both, 'B', LEAD.trim(), both])
+  // Said once: in the list's panel while it is open.
+  $('admin-acct-list-open').onclick()
+  assert.deepEqual([doors.hidden, inList.hidden], [true, false])
+  $('admin-acct-list-cancel').onclick()
+  assert.deepEqual([doors.hidden, inList.hidden], [false, false])
+  // Only what is open; nothing when nothing is (or the server does not say).
+  for (const [open, text] of [[{ sign_ups: true, guests: false }, LEAD + SIGN_UPS + '. To keep a control arm fully out, close sign-ups for the study.'],
+    [{ sign_ups: false, guests: true }, LEAD + GUESTS + '. To keep a control arm fully out, close guest access for the study.'], [{ sign_ups: false, guests: false }, ''],
+    [{ sign_ups: 'yes', guests: 1 }, ''], [undefined, '']]) {
+    const again = view.step('loadAdminAccounts()'); view.srv.answer(200, { ...listPayload(), open_doors: open }); await again
+    assert.deepEqual([doors.hidden, doors.textContent, inList.hidden, inList.textContent], [!text, text, !text, text], JSON.stringify(open))
+  }
+  assert.deepEqual(plain(step(`adminAccountsFromResponse({accounts:[],open_doors:{sign_ups:true}}).doors`)), { signUps: true, guests: false })
+  assert.deepEqual(view.logged, [])
+})
+
 test('hostile names, addresses and server messages are set as text', async () => {
   const view = load(), { $, srv } = view
   const evil = '<img src=x onerror="alert(1)">'
@@ -1106,7 +1405,7 @@ test('hostile names, addresses and server messages are set as text', async () =>
   $('admin-acct-list-open').onclick()
   $('admin-acct-list-text').value = '<svg onload=alert(4)>'
   done = $('admin-acct-list-review').onclick(); srv.answer(200, listPayload()); await done
-  assert.match($('admin-acct-plan').textContent, /Nobody is turned on for this line:“<svg onload=alert\(4\)>” No account has this name\./)
+  assert.match($('admin-acct-plan').textContent, /Nobody is turned on for this line:“<svg onload=alert\(4\)>” The line also has “=”, which is not understood\./)
   assert.deepEqual([$('admin-acct-results'), $('admin-acct-plan'), $('admin-acct-preview')].flatMap(root => root.elements()).filter(el => ['IMG', 'SCRIPT', 'SVG', 'I', 'U'].includes(el.tagName)), [])
   assert.deepEqual(view.logged, [])
 })
@@ -1190,6 +1489,11 @@ test('the Accounts section comes first in the admin view, with plain buttons, st
   assert.match(section, /<p class="acct-warn" id="admin-acct-session" role="alert" hidden><b>Your session has ended\.<\/b> Copy the passwords shown here first \(they cannot be shown again\), then sign in again\.<\/p>/)
   assert.match(section, /<select id="admin-acct-filter" aria-label="Show the accounts of a group"><option value="all">All groups<\/option><option value="none">No group<\/option><\/select>/)
   assert.match(section, /<datalist id="admin-acct-groups"><\/datalist>/)
+  // Under the bar: the question about selected rows not shown (round 3, #4), and the ways in a pause leaves open;
+  // the same note in the list's panel.
+  assert.match(section, /id="admin-acct-group-remove" disabled>Remove from group<\/button>\n\s*<\/div>\n\s*<div class="acct-warn acct-ask" id="admin-acct-bulk-ask" role="group" aria-label="Selected accounts not shown" hidden><\/div>\n\s*<p class="acct-doors" id="admin-acct-doors" hidden><\/p>/)
+  assert.match(section, / Administrators always keep access\.<\/p>\n\s*<p class="acct-doors" id="admin-acct-list-doors" hidden><\/p>\n\s*<textarea class="acct-mono" id="admin-acct-list-text"/)
+  assert.match(html, /\.acct-ask\[hidden\] \{ display: none; \}/)
   assert.match(section, /<input type="number" id="admin-acct-add-length" min="8" max="32" step="1" value="12"/)
   for (const placeholder of ['{name}', '{email}', '{password}', '{url}', '{sender}']) assert.ok(section.includes(`<code>${placeholder}</code>`), placeholder)
   // The section's script: no storage, no console, no URL of the page, no HTML from strings; requests carry nothing in their URL.

@@ -1232,6 +1232,13 @@ button.start { height: 52px; padding: 11px 25px; border-radius: 13px; font-size:
 /* The session ended with passwords still shown: kept in sight wherever the section is scrolled (opaque, above the table). */
 #admin-acct-session { position: sticky; top: 0; z-index: 5; margin: 0 0 10px; font-size: 12px; background: color-mix(in srgb, var(--warn) 14%, var(--bg2)); box-shadow: 0 6px 16px rgba(0,0,0,.16); }
 .acct-note-box { padding: 8px 10px; border: 1px solid var(--border); border-radius: 9px; background: var(--panel2); color: var(--fg); font-size: 11px; line-height: 1.5; }
+/* Selected rows not shown, named before a change for the selection; ways in that a pause leaves open. */
+.acct-ask { display: grid; gap: 8px; margin: 0 0 8px; font-size: 12px; }
+.acct-ask[hidden] { display: none; }
+.acct-ask p { margin: 0; overflow-wrap: anywhere; }
+.acct-doors { margin: 0 0 8px; padding: 7px 10px; border: 1px solid var(--border); border-left: 3px solid color-mix(in srgb, var(--warn) 75%, var(--border)); border-radius: 8px; background: var(--panel); color: var(--muted); font-size: 11px; line-height: 1.5; }
+.acct-doors b { color: var(--fg); }
+.acct-panel .acct-doors { margin: 0; }
 .acct-plan-list { margin: 4px 0 0 18px; display: grid; gap: 3px; overflow-wrap: anywhere; }
 .acct-lines { margin: 4px 0 0 16px; font-family: var(--mono); font-size: 10px; color: var(--muted); }
 .acct-add { margin-top: 14px; border: 1px solid var(--border); border-radius: 12px; background: var(--panel2); }
@@ -2401,11 +2408,14 @@ body { background:var(--bg); }
               <button type="button" class="acct-btn" id="admin-acct-group-set" disabled>Set group</button>
               <button type="button" class="acct-btn" id="admin-acct-group-remove" disabled>Remove from group</button>
             </div>
+            <div class="acct-warn acct-ask" id="admin-acct-bulk-ask" role="group" aria-label="Selected accounts not shown" hidden></div>
+            <p class="acct-doors" id="admin-acct-doors" hidden></p>
             <datalist id="admin-acct-groups"></datalist>
             <div class="acct-panel" id="admin-acct-list" hidden>
               <label class="acct-field acct-inline" for="admin-acct-list-group">Group <select id="admin-acct-list-group"><option value="">Choose a group…</option></select></label>
               <p class="acct-warn" id="admin-acct-list-nogroup" hidden>A list needs a group: it turns off the accounts of that group that it does not name, and leaves every other account alone. No account is in a group yet: give the workshop’s accounts one with “Group” under Add accounts below, or select their rows and use “Set group”.</p>
               <p class="acct-label"><b>Who should have access today?</b> Paste their email addresses or names, one per line. <span id="admin-acct-list-scope">Everyone else in the group is turned off; accounts outside it are not touched.</span> Administrators always keep access.</p>
+              <p class="acct-doors" id="admin-acct-list-doors" hidden></p>
               <textarea class="acct-mono" id="admin-acct-list-text" rows="5" spellcheck="false" autocomplete="off" aria-label="Who should have access today, one per line" placeholder="ada@example.org&#10;Emmy Noether&#10;Srinivasa Ramanujan &lt;ramanujan@example.org&gt;"></textarea>
               <div class="acct-actions"><button type="button" class="acct-btn primary" id="admin-acct-list-review">Review</button><button type="button" class="acct-btn" id="admin-acct-list-cancel">Cancel</button></div>
               <div class="acct-plan" id="admin-acct-plan" tabindex="-1" aria-label="Access from the list" hidden></div>
@@ -3874,7 +3884,7 @@ $('admin-q').oninput=()=>{ clearTimeout(ADMIN.timer); ADMIN.timer=setTimeout(()=
    copied), or another run, clears it. Server text is set as text. ── */
 const ACCOUNTS={list:[],groups:[],loaded:false,loading:null,emailAvailable:false,signInUrl:null,sender:{name:'',email:''},
   defaults:{subject:'',message:'',reset_subject:'',reset_message:'',password_length:12},query:'',filter:'all',
-  selected:new Set(),pending:new Map(),rows:new Map(),seq:0,mutations:0,generation:0,bulkBusy:false,
+  selected:new Set(),bulkAsk:null,doors:{signUps:false,guests:false},pending:new Map(),rows:new Map(),seq:0,mutations:0,generation:0,bulkBusy:false,
   plan:null,planApply:null,listGroup:'',reviewing:false,applying:false,preview:null,previewHead:null,previewing:false,previewSeq:0,
   results:null,run:null,creating:null,resets:new Map(),retrying:false,formFilled:false,addOpened:false};
 // With email on, people are created (and emailed) five at a time, one request
@@ -3924,7 +3934,9 @@ function adminAccountsFromResponse(data){
   const groups=[...new Set([...listed,...accounts.map(account=>account.group).filter(group=>group&&!listed.includes(group)).sort()])];
   const defaults=data?.defaults&&typeof data.defaults==='object'?data.defaults:{}, length=Number(defaults.password_length);
   const url=typeof data?.sign_in_url==='string'?data.sign_in_url.trim():'';
-  return {accounts,groups,emailAvailable:data?.email_available===true,signInUrl:url||null,
+  // Other ways in that turning access off does not close (open sign-ups, guest use).
+  const doors={signUps:data?.open_doors?.sign_ups===true,guests:data?.open_doors?.guests===true};
+  return {accounts,groups,doors,emailAvailable:data?.email_available===true,signInUrl:url||null,
     sender:{name:text(data?.sender?.name).trim(),email:text(data?.sender?.email).trim()},
     defaults:{subject:text(defaults.subject),message:text(defaults.message),reset_subject:text(defaults.reset_subject),reset_message:text(defaults.reset_message),
       password_length:Number.isInteger(length)&&length>=8&&length<=32?length:12}};
@@ -4019,15 +4031,18 @@ async function readAdminAccounts(){
   // A change answered while this list was on its way may be missing from it.
   if(mutations!==ACCOUNTS.mutations)return loadAdminAccounts();
   const state=adminAccountsFromResponse(data);
-  Object.assign(ACCOUNTS,{list:state.accounts,groups:state.groups,emailAvailable:state.emailAvailable,signInUrl:state.signInUrl,
+  Object.assign(ACCOUNTS,{list:state.accounts,groups:state.groups,doors:state.doors,emailAvailable:state.emailAvailable,signInUrl:state.signInUrl,
     sender:state.sender,defaults:state.defaults,loaded:true});
   const selectable=new Set(state.accounts.filter(account=>!account.is_admin).map(account=>account.key));
   for(const key of [...ACCOUNTS.selected])if(!selectable.has(key))ACCOUNTS.selected.delete(key);
+  // A question about the selection asked against the accounts read before is asked again.
+  dropAdminAccountsBulkAsk();
   // A list reviewed against the accounts read before is reviewed again.
   if(!ACCOUNTS.applying)dropAdminAccessPlan();
   fillAdminAccountsForm();
   renderAdminAccountGroups();
   renderAdminAccounts();
+  renderAdminAccountsDoors();
   if(ACCOUNTS.retrying){ ACCOUNTS.retrying=false; $('admin-acct-q').focus(); }
   return true;
 }
@@ -4074,6 +4089,22 @@ function syncAdminAccountsAddCount(){
   const count=adminAccountLines($('admin-acct-add-text').value).length;
   const chunked=$('admin-acct-add-send').checked&&adminAccountsCanEmail()&&count>ACCOUNT_EMAIL_CHUNK;
   $('admin-acct-add-count').textContent=count?`${count} ${count===1?'person':'people'}`+(chunked?` · created and emailed ${ACCOUNT_EMAIL_CHUNK} at a time`:''):'';
+}
+// Ways in that turning access off does not close: said only for those open, and once (in the list's
+// panel while it is open, else by the switches).
+function adminAccountsDoorsText(doors){
+  const ways=[];
+  if(doors?.signUps)ways.push('sign-ups are open, so they could create a second account with another address or Google account (it would be in no group)');
+  if(doors?.guests)ways.push('guest access is on, so they could use the site as a guest');
+  if(!ways.length)return '';
+  return `${ways.join('; and ')}. To keep a control arm fully out, close ${[doors.signUps&&'sign-ups',doors.guests&&'guest access'].filter(Boolean).join(' and ')} for the study.`;
+}
+function renderAdminAccountsDoors(){
+  const text=ACCOUNTS.loaded?adminAccountsDoorsText(ACCOUNTS.doors):'';
+  for(const id of ['admin-acct-doors','admin-acct-list-doors'])
+    $(id).replaceChildren(...(text?[analyzeEl('b','','A paused participant can still get in another way:'),' '+text]:[]));
+  $('admin-acct-list-doors').hidden=!text;
+  $('admin-acct-doors').hidden=!text||!$('admin-acct-list').hidden;
 }
 // The groups wherever they are offered: the table's filter, the names suggested, the list's group.
 function renderAdminAccountGroups(){
@@ -4190,17 +4221,23 @@ function syncAdminAccountRow(key){
   row.account=ACCOUNTS.list.find(account=>account.key===key)||row.account;
   syncAdminAccountRowState(row);
 }
+// A selection is built row by row (across searches too); any change to it drops a question asked about it.
 function toggleAdminAccountSelected(key,on){
   if(on)ACCOUNTS.selected.add(key); else ACCOUNTS.selected.delete(key);
+  dropAdminAccountsBulkAsk();
   syncAdminAccountRow(key); syncAdminAccountsSelection();
 }
+// "Select all shown": exactly the rows shown, in place of any selection made before.
 function selectShownAdminAccounts(){
+  ACCOUNTS.selected.clear();
   for(const account of ACCOUNTS.list)if(!account.is_admin&&adminAccountShown(account,ACCOUNTS.query,ACCOUNTS.filter))ACCOUNTS.selected.add(account.key);
+  dropAdminAccountsBulkAsk();
   for(const key of ACCOUNTS.rows.keys())syncAdminAccountRow(key);
   syncAdminAccountsSelection();
 }
-function clearAdminAccountSelection(){
-  ACCOUNTS.selected.clear();
+function clearAdminAccountSelection(keys){
+  if(keys)for(const key of keys)ACCOUNTS.selected.delete(key); else ACCOUNTS.selected.clear();
+  dropAdminAccountsBulkAsk();
   for(const key of ACCOUNTS.rows.keys())syncAdminAccountRow(key);
   syncAdminAccountsSelection();
 }
@@ -4242,58 +4279,147 @@ function adminAccountsSkipped(data){
 function adminAccountsSkippedText(skipped){
   return skipped.length?` Skipped ${skipped.length}: `+skipped.map(item=>`${item.email} (${item.reason.replace(/[.\s]+$/,'')})`).join('; ')+'.':'';
 }
+// While a list is being applied no other change starts: it could reach the server first and be undone by Apply.
+function adminAccountsWaitForApply(){
+  if(!ACCOUNTS.applying)return false;
+  adminAccountsSay('The list is being applied: change access once it is done.','err');
+  return true;
+}
+// A change of access or of groups after Review sets the reviewed list aside, so that Apply never undoes it.
+// Said after the change's own result.
+function setAsideAdminAccessPlan(){
+  if(!ACCOUNTS.plan||ACCOUNTS.applying)return '';
+  dropAdminAccessPlan();
+  return ' The list you reviewed was set aside: press Review again.';
+}
+function adminAccountsChanging(){ return ACCOUNTS.pending.size>0||ACCOUNTS.bulkBusy; }
 async function toggleAdminAccountAccess(key){
   const account=ACCOUNTS.list.find(item=>item.key===key);
-  if(!account||account.is_admin||ACCOUNTS.pending.has(key))return;
-  const access=account.access==='on'?'off':'on', label=adminAccountLabel(account);
+  if(!account||account.is_admin||ACCOUNTS.pending.has(key)||adminAccountsWaitForApply())return;
+  const access=account.access==='on'?'off':'on', label=adminAccountLabel(account), aside=setAsideAdminAccessPlan();
   try{
     const result=await setAdminAccountsAccess([account.email],access);
-    if(result.updated.length)adminAccountsSay(access==='on'?`Access on for ${label}.`:`Access off for ${label}: signed out until it is on again.`,'ok');
-    else adminAccountsSay(`${label} was not changed: ${adminAccountSentence(result.skipped[0]?.reason||'the server skipped it')}`,'err');
-  }catch(error){ adminAccountsSay(`Could not turn access ${access} for ${label}: ${adminAccountSentence(error.message)}`,'err'); }
+    if(result.updated.length)adminAccountsSay((access==='on'?`Access on for ${label}.`:`Access off for ${label}: signed out until it is on again.`)+aside,'ok');
+    else adminAccountsSay(`${label} was not changed: ${adminAccountSentence(result.skipped[0]?.reason||'the server skipped it')}`+aside,'err');
+  }catch(error){ adminAccountsSay(`Could not turn access ${access} for ${label}: ${adminAccountSentence(error.message)}`+aside,'err'); }
 }
 function adminAccessResultText(result,access){
   const count=result.updated.length;
   const text=count?`Access turned ${access} for ${count} account${count===1?'':'s'}.`+(access==='off'?' They are signed out until it is on again.':''):'No account was changed.';
   return text+adminAccountsSkippedText(result.skipped);
 }
-async function adminAccountsBulk(access){
-  if(ACCOUNTS.bulkBusy)return;
-  const emails=ACCOUNTS.list.filter(account=>ACCOUNTS.selected.has(account.key)&&!account.is_admin).map(account=>account.email);
-  if(!emails.length)return;
+// The selected accounts a change is for (never an administrator's), or those of these keys; and which of them
+// the table does not show (a search or a group hides them).
+function adminAccountsPicked(keys){
+  const accounts=ACCOUNTS.list.filter(account=>(keys?keys.includes(account.key):ACCOUNTS.selected.has(account.key))&&!account.is_admin);
+  return {accounts,hidden:accounts.filter(account=>!ACCOUNTS.rows.has(account.key))};
+}
+// Selected rows that are not shown are named before anything is changed: a selection left from before
+// would otherwise go along with the next change. Asked in the page, under the bar.
+function askAdminAccountsBulk(ask){
+  ACCOUNTS.bulkAsk=ask;
+  renderAdminAccountsBulkAsk()?.focus();
+}
+function renderAdminAccountsBulkAsk(){
+  const box=$('admin-acct-bulk-ask'), ask=ACCOUNTS.bulkAsk;
+  if(!ask){ box.replaceChildren(); box.hidden=true; return null; }
+  const {accounts,hidden}=adminAccountsPicked(ask.keys), count=accounts.length, s=count===1?'':'s', shown=count-hidden.length;
+  const names=hidden.slice(0,8).map(account=>adminAccountLabel(account)).join(', ')+(hidden.length>8?` and ${hidden.length-8} more`:'');
+  const what={on:`Turn access on for ${count} account${s}`,off:`Turn access off for ${count} account${s}`,
+    group:`Put ${count} account${s} in the group “${String(ask.group).trim()}”`,ungroup:`Take ${count} account${s} out of ${count===1?'its':'their'} group`}[ask.action];
+  const question=analyzeEl('p','',`${what}, ${hidden.length} not shown here: ${names}?`+(ask.action==='off'?' They are signed out at once.':''));
+  question.id='admin-acct-bulk-question';
+  const all=adminAccountsButton({on:`Turn access on for all ${count}`,off:`Turn access off for all ${count}`,group:`Set the group for all ${count}`,
+    ungroup:`Take all ${count} out`}[ask.action],()=>confirmAdminAccountsBulk(false));
+  all.className+=' primary'; all.setAttribute('aria-describedby','admin-acct-bulk-question');
+  const actions=analyzeEl('div','acct-actions');
+  actions.append(all);
+  if(shown)actions.append(adminAccountsButton(`Only the ${shown} shown`,()=>confirmAdminAccountsBulk(true)));
+  actions.append(adminAccountsButton('Cancel',()=>dropAdminAccountsBulkAsk()));
+  box.replaceChildren(question,actions); box.hidden=false;
+  return all;
+}
+// The question goes; a focus inside it goes back to the button that asked it.
+function dropAdminAccountsBulkAsk(){
+  const ask=ACCOUNTS.bulkAsk; if(!ask)return;
+  const inside=$('admin-acct-bulk-ask').contains(document.activeElement);
+  ACCOUNTS.bulkAsk=null; renderAdminAccountsBulkAsk();
+  if(inside){ const from=$(ask.from); (from&&!from.disabled?from:$('admin-acct-q')).focus(); }
+}
+function confirmAdminAccountsBulk(onlyShown){
+  const ask=ACCOUNTS.bulkAsk; if(!ask)return;
+  const keys=onlyShown?ask.keys.filter(key=>ACCOUNTS.rows.has(key)):ask.keys;
+  if(ask.action==='on'||ask.action==='off')return adminAccountsBulk(ask.action,keys,ask.keys);
+  return setAdminAccountsGroup(ask.action==='ungroup',keys,ask.group,ask.keys);
+}
+// Once a change for the selection is made, those rows are no longer selected (any ticked meanwhile stay),
+// and a focus left on a bar button that is now disabled goes to the search.
+function doneAdminAccountsSelection(keys,here){
+  clearAdminAccountSelection(keys);
+  if(here&&(document.activeElement?.disabled||!$('admin-acct-bulk').contains(document.activeElement)))$('admin-acct-q').focus();
+}
+async function adminAccountsBulk(access,keys,asked){
+  if(ACCOUNTS.bulkBusy||adminAccountsWaitForApply())return;
+  const {accounts,hidden}=adminAccountsPicked(keys);
+  if(!accounts.length)return;
+  if(!keys&&hidden.length)return askAdminAccountsBulk({action:access,keys:accounts.map(account=>account.key),from:'admin-acct-'+access});
+  dropAdminAccountsBulkAsk();
+  const was=[...new Set([...accounts.map(account=>account.key),...(asked||[])])], aside=setAsideAdminAccessPlan();
   ACCOUNTS.bulkBusy=true; $('admin-acct-bulk').setAttribute('aria-busy','true');
   try{
-    const result=await setAdminAccountsAccess(emails,access);
-    adminAccountsSay(adminAccessResultText(result,access),result.updated.length&&!result.skipped.length?'ok':'err');
-  }catch(error){ adminAccountsSay(`Could not turn access ${access}: ${adminAccountSentence(error.message)}`,'err'); }
+    const result=await setAdminAccountsAccess(accounts.map(account=>account.email),access);
+    adminAccountsSay(adminAccessResultText(result,access)+aside,result.updated.length&&!result.skipped.length?'ok':'err');
+    doneAdminAccountsSelection(was,$('admin-acct-bulk').contains(document.activeElement));
+  }catch(error){ adminAccountsSay(`Could not turn access ${access}: ${adminAccountSentence(error.message)}`+aside,'err'); }
   finally{ ACCOUNTS.bulkBusy=false; $('admin-acct-bulk').removeAttribute('aria-busy'); }
 }
 // The selected rows into a group (or out of theirs); the list is read again after.
-async function setAdminAccountsGroup(remove){
-  if(ACCOUNTS.bulkBusy)return;
-  const emails=ACCOUNTS.list.filter(account=>ACCOUNTS.selected.has(account.key)&&!account.is_admin).map(account=>account.email);
-  if(!emails.length)return;
+async function setAdminAccountsGroup(remove,keys,given,asked){
+  if(ACCOUNTS.bulkBusy||adminAccountsWaitForApply())return;
+  const {accounts,hidden}=adminAccountsPicked(keys);
+  if(!accounts.length)return;
   // The name goes as typed: the server cleans it, and takes an existing group's spelling when it is that group.
-  const typed=remove?'':$('admin-acct-group-name').value;
+  const typed=remove?'':given??$('admin-acct-group-name').value;
   if(!remove&&!typed.trim()){ adminAccountsSay('Type the group’s name first (or use “Remove from group”).','err'); $('admin-acct-group-name').focus(); return; }
+  if(!keys&&hidden.length)return askAdminAccountsBulk({action:remove?'ungroup':'group',keys:accounts.map(account=>account.key),group:typed,
+    from:remove?'admin-acct-group-remove':'admin-acct-group-set'});
+  dropAdminAccountsBulkAsk();
+  const was=[...new Set([...accounts.map(account=>account.key),...(asked||[])])], aside=setAsideAdminAccessPlan();
   ACCOUNTS.bulkBusy=true; $('admin-acct-bulk').setAttribute('aria-busy','true');
   try{
-    const data=await adminAccountsRequest('/api/admin/accounts/group',{emails,group:typed});
+    const data=await adminAccountsRequest('/api/admin/accounts/group',{emails:accounts.map(account=>account.email),group:typed});
     const count=(Array.isArray(data.updated)?data.updated:[]).length, skipped=adminAccountsSkipped(data);
     const group=adminAccountGroupOf(data.group)||typed.trim(), s=count===1?'':'s';
     ACCOUNTS.mutations++;
     adminAccountsSay((remove?`${count} account${s} taken out of ${count===1?'its':'their'} group.`
       :data.group_is_new===true?`${count} account${s} now in ${group}, a new group.`
       :typeof data.group==='string'&&data.group!==typed.trim()?`${count} account${s} joined the existing group ${group}.`:`${count} account${s} now in ${group}.`)
-      +adminAccountsSkippedText(skipped),count&&!skipped.length?'ok':'err');
+      +adminAccountsSkippedText(skipped)+aside,count&&!skipped.length?'ok':'err');
     if(!remove&&count)$('admin-acct-group-name').value='';
+    doneAdminAccountsSelection(was,$('admin-acct-bulk').contains(document.activeElement));
     await loadAdminAccounts();
-  }catch(error){ adminAccountsSay(`Could not ${remove?'take the accounts out of their group':'set the group'}: ${adminAccountSentence(error.message)}`,'err'); }
+  }catch(error){ adminAccountsSay(`Could not ${remove?'take the accounts out of their group':'set the group'}: ${adminAccountSentence(error.message)}`+aside,'err'); }
   finally{ ACCOUNTS.bulkBusy=false; $('admin-acct-bulk').removeAttribute('aria-busy'); }
 }
-// "Set access from a list": one entry per line (or between semicolons), list markers dropped.
+// "Set access from a list": one entry per line (or between semicolons), list markers dropped: a number, or
+// a bullet (- * • · ◦ ‣ ▪ – —), never a ✓ or ✗, which may say who is in or out.
 function adminAccessEntries(text){
-  return String(text??'').replace(/\p{Cf}/gu,'').split(/[\r\n;]+/).map(line=>line.replace(/^\s*(?:\d{1,3}[.)]|[-*•·])\s+/,'').trim()).filter(Boolean);
+  return String(text??'').replace(/\p{Cf}/gu,'').split(/[\r\n;]+/).map(line=>line.replace(/^\s*(?:\d{1,3}[.)]|[-*•·◦‣▪–—])\s+/u,'').trim()).filter(Boolean);
+}
+// What a line has besides names, addresses and the punctuation around them: a mark (✗ ✓ × ~~…~~ * ! ?) or a
+// dash or colon with nothing after it, which may say "not today". Each is given once, as written.
+function adminAccessMarks(entry){
+  const text=String(entry??'').replace(/[^\s,;<>()[\]"]+@[^\s,;<>()[\]"]+/g,'\x01').replace(/[<>()[\]"“”„«»]/g,' ');
+  const tokens=text.match(/\x01|[\p{L}\p{N}][\p{L}\p{M}\p{N}]*(?:[.'’‐·・-][\p{L}\p{N}][\p{L}\p{M}\p{N}]*)*\.?|['’‘]|[,:|–—-]|[^\s\p{L}\p{N}\x01,:|–—'’‘-]+/gu)||[];
+  const item=token=>token==='\x01'||/^[\p{L}\p{N}]/u.test(token);
+  const marks=[];
+  tokens.forEach((token,index)=>{
+    // Words and addresses; a quote around a name; a comma anywhere; a dash, colon or bar between two of them.
+    if(item(token)||/^['’‘]$/.test(token))return;
+    if(/^[,:|–—-]$/.test(token)&&(token===','||(tokens.slice(0,index).some(item)&&tokens.slice(index+1).some(item))))return;
+    if(!marks.includes(token))marks.push(token);
+  });
+  return marks;
 }
 // The addresses in an entry, read as the server reads them: an @ with everything around it up to a
 // space, comma, semicolon, bracket or double quote (an apostrophe or a hyphen belongs to it).
@@ -4301,9 +4427,9 @@ function adminAccessEmails(entry){
   return (String(entry??'').match(/[^\s,;<>()[\]"]+@[^\s,;<>()[\]"]+/g)||[])
     .map(address=>adminAccountKey(address.replace(/^[.']+|[.']+$/g,'').replace(/^mailto:/i,'')));
 }
-// An entry without its addresses: what is left names people.
-function adminAccessRest(entry){
-  return String(entry??'').replace(/[^\s,;<>()[\]"]+@[^\s,;<>()[\]"]+/g,',').replace(/[<>()[\]"]/g,' ');
+// An entry without its addresses (each becomes a line break): what is written beside them.
+function adminAccessBeside(entry){
+  return String(entry??'').replace(/[^\s,;<>()[\]"]+@[^\s,;<>()[\]"]+/g,'\n');
 }
 // A name's words, to compare names: case, accents and word order aside. Nothing else is
 // guessed (an address before its @ is never a name).
@@ -4316,28 +4442,54 @@ function adminAccountsNamedExactly(text,list){
   if(!want)return [];
   return list.filter(account=>adminNameWords(account.name).sort().join(' ')===want);
 }
-// "Did you mean": accounts whose name has every word of the entry, or whose every word is in it
-// (titles aside). Only ever shown, never applied.
-function adminAccountsLike(text,list){
+// The accounts a name fits: theirs has every word of it, or every word of theirs is in it (titles aside).
+function adminAccountsFitting(text,list){
   const words=adminNameWords(text).filter(word=>!ACCOUNT_NAME_TITLES.has(word));
   if(!words.length)return [];
   return list.filter(account=>{
     const own=adminNameWords(account.name);
     return own.length>0&&(words.every(word=>own.includes(word))||own.every(word=>words.includes(word)));
-  }).slice(0,3);
+  });
 }
-// A name written beside an address fits that address's account when each of its words is a word of
-// the account's name or begins one ("Wang, Wei" for Wei J. Wang, "Ada L" for Ada Lovelace).
-function adminAccountNameFits(text,account){
-  const words=adminNameWords(text).filter(word=>!ACCOUNT_NAME_TITLES.has(word)), own=adminNameWords(account.name);
-  return words.length>0&&words.every(word=>own.some(part=>part.startsWith(word)));
+// "Did you mean": the first three accounts a name fits. Only ever shown, never applied.
+function adminAccountsLike(text,list){ return adminAccountsFitting(text,list).slice(0,3); }
+// A name is one person only when it is one account's full name (word order aside) and fits no other
+// account: with accounts named Smith and John Smith, "Smith" is neither's.
+function adminAccessNamed(text,list){
+  const exact=adminAccountsNamedExactly(text,list);
+  return {exact,also:exact.length?adminAccountsFitting(text,list).filter(account=>!exact.includes(account)):[]};
+}
+// The words beside a line's addresses that are not part of its accounts' names, as written: a sheet's
+// "control", "no" or "B" is not a name. A word fits when it is a word of a name or, three letters or more,
+// begins one (so "no" never stands for Noether); titles are left aside. A single letter is an initial only
+// next to a word that fits, and only with a period ("Robert J. Smith") or as the first letter of a word of
+// the name not written out ("Ada L", "Lovelace, A.").
+function adminAccessExtraWords(entry,accounts){
+  const own=accounts.flatMap(account=>adminNameWords(account.name)), text=adminAccessBeside(entry), written=new Set(adminNameWords(text));
+  const fits=word=>own.includes(word)||(word.length>=3&&own.some(part=>part.startsWith(word)));
+  const extra=[];
+  // Pieces between the addresses, | ; : tabs, brackets, and dashes between spaces (a comma does not end one).
+  for(const piece of text.split(/[\n;:|()[\]<>\t]|\s[-–—]+(?=\s|$)|^[-–—]+(?=\s)/)){
+    const items=(piece.match(/[^\s,"“”„«»]+/g)||[]).map(token=>({token,words:adminNameWords(token).filter(word=>!ACCOUNT_NAME_TITLES.has(word))}))
+      .filter(item=>item.words.length);
+    const named=items.map(item=>item.words.some(word=>word.length>1&&fits(word)));
+    items.forEach((item,index)=>{
+      const near=named[index-1]||named[index]||named[index+1];
+      const initial=word=>/^\p{L}$/u.test(word)&&near&&(/\.$/.test(item.token)||own.some(part=>part.startsWith(word)&&!written.has(part)));
+      if(!item.words.every(word=>fits(word)||initial(word)))extra.push(item.token.replace(/^[^\p{L}\p{N}]+|[^\p{L}\p{N}.]+$/gu,''));
+    });
+  }
+  return [...new Set(extra)];
 }
 // How one line of a list reads. With an address: each address must be an account's, and that
-// account is turned on; a name beside it is only compared with that account, and never adds
-// another. Without one: an exact full name only, or (at commas) several, each an exact full name.
-// A line naming no account, or a name more than one account has, turns nobody on.
+// account is turned on; what is written beside it must be that account's name (or nothing), and
+// never adds another. Without one: one person's full name only (see adminAccessNamed), or (at
+// commas) several. A line with a mark, with words that are not its account's name, naming no
+// account, or with a name that fits more than one, turns nobody on.
 function adminAccessLine(entry,list,byEmail){
   const line={entry,accounts:[],notes:[],problem:'',matches:[],suggest:[]};
+  const marks=adminAccessMarks(entry);
+  if(marks.length){ Object.assign(line,{problem:'marks',marks,named:adminNameWords(entry).length>0||adminAccessEmails(entry).length>0}); return line; }
   const emails=adminAccessEmails(entry);
   if(emails.length){
     const unknown=[];
@@ -4345,30 +4497,35 @@ function adminAccessLine(entry,list,byEmail){
       const account=byEmail.get(email);
       if(!account)unknown.push(email); else if(!line.accounts.includes(account))line.accounts.push(account);
     }
-    const found=line.accounts, rest=adminAccessRest(entry);
-    // One address: the rest of the line is one name. Several: a name per comma.
-    const names=(emails.length>1?rest.split(/[,;]/):[rest]).map(part=>part.replace(/^[\s,;:|\-–—]+|[\s,;:|\-–—]+$/g,'').replace(/\s+/g,' '))
-      .filter(part=>adminNameWords(part).length);
+    const found=line.accounts;
     if(!found.length){
       line.problem='address';
-      line.notes.push(`no account has ${unknown.length===1?'this address':'these addresses'}`+(names.length?`, and the name beside ${unknown.length===1?'it':'them'} is not used to find one`:''));
+      line.notes.push(`no account has ${unknown.length===1?'this address':'these addresses'}`
+        +(adminNameWords(adminAccessBeside(entry)).length?`, and the name beside ${unknown.length===1?'it':'them'} is not used to find one`:''));
       return line;
     }
+    // Words that are not the accounts' names (a sheet's "control", "- no", "| intervention"): nobody.
+    const extra=adminAccessExtraWords(entry,found);
+    if(extra.length){ Object.assign(line,{accounts:[],problem:'extra',extra,matches:found}); return line; }
     for(const email of unknown)line.notes.push(`no account has the address ${email}: nobody is turned on for it`);
-    for(const name of names){
-      if(found.some(account=>adminAccountNameFits(name,account)))continue;
-      line.notes.push(found.length===1?`the name “${name}” does not match this address's account (${adminAccountLabel(found[0])}): the address was used`
-        :`the name “${name}” does not match the accounts of these addresses (${found.map(account=>adminAccountLabel(account)).join(', ')}): the addresses were used`);
-    }
     return line;
   }
-  const exact=adminAccountsNamedExactly(entry,list);
-  if(exact.length===1){ line.accounts=exact; return line; }
-  if(exact.length>1){ Object.assign(line,{problem:'ambiguous',matches:exact}); return line; }
+  const whole=adminAccessNamed(entry,list);
+  if(whole.exact.length===1&&!whole.also.length){ line.accounts=whole.exact; return line; }
+  if(whole.exact.length>1){ Object.assign(line,{problem:'ambiguous',matches:whole.exact}); return line; }
+  if(whole.exact.length===1){
+    const [exact]=whole.exact;
+    Object.assign(line,{problem:'ambiguous',exact,also:whole.also,matches:[exact,...whole.also],
+      reordered:adminNameWords(entry).join(' ')!==adminNameWords(exact.name).join(' ')});
+    return line;
+  }
   const parts=entry.includes(',')?entry.split(',').map(part=>part.trim()).filter(part=>adminNameWords(part).length):[];
-  const each=parts.map(part=>adminAccountsNamedExactly(part,list));
-  if(parts.length>1&&each.every(found=>found.length===1)){ line.accounts=each.map(found=>found[0]); return line; }
-  if(parts.length>1&&each.every(found=>found.length>0)){ Object.assign(line,{problem:'ambiguous',matches:[...new Set(each.flat())]}); return line; }
+  const each=parts.map(part=>adminAccessNamed(part,list));
+  if(parts.length>1&&each.every(found=>found.exact.length>0)){
+    if(each.every(found=>found.exact.length===1&&!found.also.length)){ line.accounts=each.map(found=>found.exact[0]); return line; }
+    Object.assign(line,{problem:'ambiguous',split:true,matches:[...new Set(each.flatMap(found=>[...found.exact,...found.also]))]});
+    return line;
+  }
   Object.assign(line,{problem:'unmatched',suggest:adminAccountsLike(entry,list)});
   return line;
 }
@@ -4385,15 +4542,38 @@ function adminAccessPlan(text,list,group){
     unread:lines.filter(line=>line.problem),several:lines.filter(line=>line.accounts.length>1),noted:lines.filter(line=>!line.problem&&line.notes.length)};
 }
 function adminAccessPlanText(plan){ return `${plan.on.length} on, ${plan.off.length} off`; }
-// Why a line turns nobody on, and what to write instead.
+// "A", "A and B", "A, B and C" (or "or").
+function adminAccountsSeries(items,word){ return items.length>1?`${items.slice(0,-1).join(', ')} ${word} ${items.at(-1)}`:items[0]||''; }
+// Why a line turns nobody on, and what to write instead (after the line itself, in quotes).
 function adminAccessProblemText(line){
+  if(line.problem==='marks'){
+    const many=line.marks.length>1;
+    return `The line ${line.named?'also has':'has'} ${adminAccountsSeries(line.marks.map(mark=>`“${mark}”`),'and')}, which ${many?'are':'is'} not understood.`
+      +` Remove the mark${many?'s':''}, or leave the person off the list.`;
+  }
+  if(line.problem==='extra'){
+    const many=line.extra.length>1, one=line.matches.length===1;
+    const whose=one?`this account's name (${line.matches[0].name||'no name set'})`:`these accounts' names (${line.matches.map(account=>account.name||account.email).join(', ')})`;
+    return `The line also has ${adminAccountsSeries(line.extra.map(word=>`“${word}”`),'and')}, which ${many?'are':'is'} not part of ${whose}.`
+      +` Remove ${many?'them':'it'}, or leave ${one?'the person':'these people'} off the list.`;
+  }
+  if(line.problem==='ambiguous'&&line.exact){
+    const also=line.also.slice(0,4).map(account=>adminAccountWho(account)).concat(line.also.length>4?[`${line.also.length-4} more`]:[]);
+    return `is${line.reordered?', in another order,':''} the full name of ${adminAccountWho(line.exact)} and also fits ${adminAccountsSeries(also,'and')}: use the address of the one meant.`;
+  }
+  if(line.problem==='ambiguous'&&line.split)return `The names on this line fit ${line.matches.length} accounts (${line.matches.map(account=>account.email).join(', ')}): use the address of each person meant.`;
   if(line.problem==='ambiguous')return `${line.matches.length} accounts have this name (${line.matches.map(account=>account.email).join(', ')}): use the address of the one meant.`;
   if(line.problem==='address')return `${adminAccountSentence(line.notes[0]).replace(/^./,letter=>letter.toUpperCase())} Use the account's address as the table shows it.`;
   const who=line.suggest.map(account=>adminAccountWho(account));
-  return 'No account has this name.'+(who.length?` Did you mean ${who.length>1?`${who.slice(0,-1).join(', ')} or ${who.at(-1)}`:who[0]}?`:'')+' Use the full name as the table shows it, or the address.';
+  return 'No account has this name.'+(who.length?` Did you mean ${adminAccountsSeries(who,'or')}?`:'')+' Use the full name as the table shows it, or the address.';
 }
 // Who a line became, for "How each line was read".
 function adminAccessReadingText(line){
+  if(line.problem==='marks')return `nobody: ${adminAccountsSeries(line.marks.map(mark=>`“${mark}”`),'and')} on the line ${line.marks.length>1?'are':'is'} not understood`;
+  if(line.problem==='extra')return `nobody: ${adminAccountsSeries(line.extra.map(word=>`“${word}”`),'and')} ${line.extra.length>1?'are':'is'} not part of `
+    +(line.matches.length===1?`${adminAccountLabel(line.matches[0])}'s name`:"these accounts' names");
+  if(line.problem==='ambiguous'&&line.exact)return `nobody: the name also fits ${line.also.length===1?'another account':'other accounts'}`;
+  if(line.problem==='ambiguous'&&line.split)return 'nobody: a name on it fits more than one account';
   if(line.problem==='ambiguous')return 'nobody: more than one account has this name';
   if(line.problem==='address')return 'nobody: no account has this address';
   if(line.problem)return 'nobody: no account has this name';
@@ -4416,6 +4596,7 @@ function toggleAdminAccessList(open){
   const panel=$('admin-acct-list'), show=open===undefined?panel.hidden:!!open;
   panel.hidden=!show;
   $('admin-acct-list-open').setAttribute('aria-expanded',String(show));
+  renderAdminAccountsDoors();
   if(!show){ if(!ACCOUNTS.applying)dropAdminAccessPlan(); return; }
   // The group the table shows, or the only one there is.
   const shown=String(ACCOUNTS.filter).startsWith('=')?ACCOUNTS.filter.slice(1):'';
@@ -4436,12 +4617,15 @@ async function reviewAdminAccessList(){
   dropAdminAccessPlan();
   if(!ACCOUNTS.listGroup){ adminAccountsSay('Choose the group this list is for.','err'); $('admin-acct-list-group').focus(); return; }
   if(!adminAccessEntries($('admin-acct-list-text').value).length){ adminAccountsSay('Paste the email addresses or names of the people who should have access, one per line.','err'); return; }
+  // A change still on its way could land after the review, and Apply would undo it.
+  if(adminAccountsChanging()){ adminAccountsSay('An access change is still on its way: review the list once it is done.','err'); return; }
   const review=$('admin-acct-list-review');
   ACCOUNTS.reviewing=true; review.textContent='Reading the accounts…'; review.setAttribute('aria-busy','true');
   adminAccountsSay('');
   const fresh=await loadAdminAccounts();
   ACCOUNTS.reviewing=false; review.textContent='Review'; review.removeAttribute('aria-busy');
   if(!fresh)return;
+  if(adminAccountsChanging()){ adminAccountsSay('Access was changed while the list was being reviewed: press Review again once the change is done.','err'); return; }
   if(!ACCOUNTS.listGroup){ adminAccountsSay('That group has no accounts any more: choose another.','err'); $('admin-acct-list-group').focus(); return; }
   ACCOUNTS.plan=adminAccessPlan($('admin-acct-list-text').value,ACCOUNTS.list,ACCOUNTS.listGroup);
   renderAdminAccessPlan();
@@ -5046,6 +5230,10 @@ function clearAdminAccountSecrets(){
   ACCOUNTS.results=null; ACCOUNTS.run=null; ACCOUNTS.creating=null; ACCOUNTS.previewing=false;
   for(const reset of ACCOUNTS.resets.values())reset.row?.remove();
   ACCOUNTS.resets.clear();
+  // A selection is for one visit: one kept from before could go along with the next change.
+  ACCOUNTS.selected.clear(); ACCOUNTS.bulkAsk=null; renderAdminAccountsBulkAsk();
+  for(const key of ACCOUNTS.rows.keys())syncAdminAccountRow(key);
+  syncAdminAccountsSelection();
   if(opened&&ACCOUNTS.loaded)renderAdminAccountsTable();
   dropAdminAccountsPreview();
   if(!ACCOUNTS.applying)dropAdminAccessPlan();
@@ -5059,14 +5247,16 @@ function clearAdminAccountSecrets(){
   adminAccountsSay(`Creating accounts stopped when you left this view. ${left.length} line${left.length===1?' was':'s were'} not confirmed and ${left.length===1?'is':'are'} back in the box; anyone already created shows as “Already exists” if you retry (give them a new password from the table).`,'err','admin-acct-add-status');
 }
 function wireAdminAccounts(){
-  $('admin-acct-q').oninput=()=>{ ACCOUNTS.query=$('admin-acct-q').value; renderAdminAccountsTable(); syncAdminAccountsHead(); syncAdminAccountsSelection(); };
-  $('admin-acct-filter').onchange=()=>{ ACCOUNTS.filter=$('admin-acct-filter').value||'all'; renderAdminAccountsTable(); syncAdminAccountsHead(); syncAdminAccountsSelection(); };
-  $('admin-acct-all').onclick=selectShownAdminAccounts;
-  $('admin-acct-clear').onclick=clearAdminAccountSelection;
+  // What the table shows changes which selected rows are not shown: a question about them goes.
+  $('admin-acct-q').oninput=()=>{ ACCOUNTS.query=$('admin-acct-q').value; dropAdminAccountsBulkAsk(); renderAdminAccountsTable(); syncAdminAccountsHead(); syncAdminAccountsSelection(); };
+  $('admin-acct-filter').onchange=()=>{ ACCOUNTS.filter=$('admin-acct-filter').value||'all'; dropAdminAccountsBulkAsk(); renderAdminAccountsTable(); syncAdminAccountsHead(); syncAdminAccountsSelection(); };
+  $('admin-acct-all').onclick=()=>selectShownAdminAccounts();
+  $('admin-acct-clear').onclick=()=>clearAdminAccountSelection();
   $('admin-acct-on').onclick=()=>adminAccountsBulk('on');
   $('admin-acct-off').onclick=()=>adminAccountsBulk('off');
   $('admin-acct-group-set').onclick=()=>setAdminAccountsGroup(false);
   $('admin-acct-group-remove').onclick=()=>setAdminAccountsGroup(true);
+  $('admin-acct-group-name').oninput=()=>dropAdminAccountsBulkAsk();
   $('admin-acct-list-open').onclick=()=>toggleAdminAccessList();
   $('admin-acct-list-group').onchange=()=>{ ACCOUNTS.listGroup=$('admin-acct-list-group').value; dropAdminAccessPlan(); syncAdminAccessListGroup(); };
   $('admin-acct-list-review').onclick=reviewAdminAccessList;

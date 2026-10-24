@@ -121,11 +121,17 @@ Admin view → **Accounts** (`GET /api/admin/accounts`, administrators only;
   Accounts made this way can sign in at once (no email verification) and are
   never administrators. An address that already has an account is left as it
   is, except that it joins the group, if one is given (see **Groups**).
-  - **Cleaned off an address:** separators stuck to it (`Name:addr`,
-    `Name|addr`), Markdown and a sentence's punctuation around it, and
-    invisible characters.
-  - **Refused:** an address that is not plain ASCII, or that mail would not
-    reach exactly as written.
+  - **Taken exactly as written:** an account's address always appears on
+    its line as typed, apart from capitals and invisible characters.
+  - **What is taken off:** a separator before it (`Name:addr`, `Name, addr`,
+    `Name <addr>`), a mark wrapping it on both sides (`*addr*`, `` `addr` ``),
+    and a sentence's punctuation after it.
+  - **Refused, never guessed at:**
+    - a line where the address's start is unclear (`Name|addr`,
+      `Name -addr`, `_addr`);
+    - an address that is not plain ASCII, or that mail would not reach
+      exactly as written;
+    - a line over 1000 characters.
   - `POST /api/admin/accounts {text, preview?, group?, password_length?,
     send_email?, subject?, message?, sender_name?}` → `{results: [{email,
     name, line, status, password?, email_sent?, group?, group_joined?,
@@ -163,8 +169,15 @@ Admin view → **Accounts** (`GET /api/admin/accounts`, administrators only;
     the page never showed. Accounts outside the group are never touched; the
     console's "Set access from a list" uses it.
   - **Administrators:** an administrator's access is always on.
-  - **Guest loophole:** a paused person can still use the site as an
-    anonymous guest while guest access is on (`AGENT_MONITOR_GUEST_ACCESS`).
+  - **Other ways in:** a pause closes one account, not the site.
+    - While sign-ups are open (`AGENT_MONITOR_REGISTRATION_OPEN`), a paused
+      person can create a second account with another address or another
+      Google account. That account is in no group, so a list never turns it
+      off.
+    - While guest access is on (`AGENT_MONITOR_GUEST_ACCESS`), they can use
+      the site as an anonymous guest.
+    - To keep a study's control arm fully out, close both for the study. The
+      Accounts view says when either is open (`open_doors` in its data).
 - **Groups.** An account can be in one group, such as a field test's
   participants. It joins one through "Add accounts" with a group, or through
   `POST /api/admin/accounts/group {emails, group}` (`""` takes it out).

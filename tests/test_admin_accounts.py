@@ -485,6 +485,7 @@ def test_the_admin_api_previews_stops_and_sets_access_from_a_list(member_console
         "owner@example.test": ("on", ""), "a@example.test": ("on", "FT"), "b@example.test": ("off", "FT"),
         "c@example.test": ("on", "Other")}
     assert listed[1]["sign_in_url"] == "https://ansatze.example/proof-deadbeef/login"
+    assert listed[1]["open_doors"] == {"sign_ups": True, "guests": True}
     assert listed[1]["defaults"]["reset_subject"] == accounts_admin.RESET_SUBJECT
 
 
@@ -650,9 +651,13 @@ def test_the_migration_tolerates_another_process_adding_a_column_first(tmp_path)
 @pytest.mark.parametrize(("line", "name", "email"), [
     # Separators stuck to an address are not part of it.
     ("Ada Lovelace:ada@uni.example", "Ada Lovelace", "ada@uni.example"),
-    ("Ada Lovelace|ada@uni.example", "Ada Lovelace", "ada@uni.example"),
-    ("Ada Lovelace -ada@uni.example", "Ada Lovelace", "ada@uni.example"),
     ("Ben <mailto:ben@x.org>", "Ben", "ben@x.org"),
+    ("Ben - MAILTO:ben@x.org", "Ben", "ben@x.org"),
+    # "mailto:" inside a word is not a link's prefix: the address after the colon is the one on the line.
+    ("ada.mailto:bob@x.org", "ada.mailto", "bob@x.org"),
+    ("(see ada@uni.example).", "see", "ada@uni.example"),
+    ("'ada@uni.example'", "", "ada@uni.example"),
+    ("{ada@uni.example}", "", "ada@uni.example"),
     # Nor are Markdown and a sentence's punctuation around it.
     ("*ada@uni.example*", "", "ada@uni.example"),
     ("`ada@uni.example`", "", "ada@uni.example"),
@@ -672,11 +677,43 @@ def test_separators_markdown_and_numbering_never_reach_an_address_or_a_name(line
 
 @pytest.mark.parametrize("line", [
     "emmy\x7f@uni.example", ".emmy@uni.example", "emmy.@uni.example", "emmy@-uni.example", "emmy@uni..example",
-    "emmy@uni", "a@b@uni.example"])
+    "emmy@uni", "a@b@uni.example", "x" * 300 + "@gmail.com",
+    # Where the address starts is unclear: refused, never guessed at.
+    "Ada Lovelace|ada@uni.example", "Ada Lovelace -ada@uni.example", "_ada@uni.example", "*ada@uni.example",
+    "a/b@uni.example", "a=b@uni.example", "Name " + "y" * 996 + "@x.org"])
 def test_an_address_mail_would_not_reach_exactly_is_invalid(member_console, line):
     [result] = accounts_admin.create_accounts(accounts_admin.parse_people(line))
     assert result["status"] == "invalid", result
     assert [account["email"] for account in accounts_admin.list_accounts()] == ["owner@example.test"]
+
+
+TRICKY_LINES = [
+    "Ada Lovelace <ada@uni.example>", "ada.mailto:bob@x.org", "mailto:mailto:x@y.org", "x.mailto:y@z.org",
+    "Ben, ben@x.org; extra", "*ben@x.org", "ben@x.org*", "**ben@x.org**", "__ben@x.org__", "'o'brien@x.org'",
+    "Name:ada@uni.example:", "<<ada@uni.example>>", "ada@uni.example.", "ada@uni.example...!?", "ada@ex-ample.org-",
+    "Ada \u200bLove <a\u200bda@uni.example>", "\u202eada@uni.example", "Ada (ada@uni.example)", "[ada@uni.example](x)",
+    "ada@uni.example\tAda", "1) ada@uni.example", "José <jose@uni.example>", "ＡＢ＠example.org", "ab＠example.org",
+]
+
+
+@pytest.mark.parametrize("line", TRICKY_LINES)
+def test_every_address_taken_is_on_its_line_exactly_as_written(line):
+    import unicodedata
+
+    for person in accounts_admin.parse_people(line):
+        if person["email"]:
+            visible = "".join(char for char in person["line"] if unicodedata.category(char) != "Cf").lower()
+            assert person["email"] in visible, (line, person)
+
+
+def test_a_long_line_comes_back_whole_and_a_too_long_one_is_refused(member_console):
+    line = "Ada " + "Lovelace " * 40 + "<ada@uni.example>"
+    [person] = accounts_admin.parse_people(line)
+    assert len(line) > 300 and person["line"] == line and person["email"] == "ada@uni.example"
+    [result] = accounts_admin.create_accounts([person], preview=True)
+    assert result["line"] == line
+    [too_long] = accounts_admin.parse_people("x" * 1001 + " ada@uni.example")
+    assert too_long["error"] == "This line is too long" and too_long["email"] == ""
 
 
 def test_a_group_is_cleaned_the_same_way_twice_and_found_whatever_its_spelling(member_console):

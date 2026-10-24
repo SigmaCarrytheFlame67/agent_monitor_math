@@ -2301,6 +2301,9 @@ class Handler(RunSharingMixin, ProjectsMixin, ResearchMixin, BaseHTTPRequestHand
         return {
             "accounts": accounts,
             "groups": sorted({account["group"] for account in accounts if account["group"]}, key=str.casefold),
+            # Other ways in that a pause does not close: a new sign-up (with
+            # another address, or another Google account) and guest use.
+            "open_doors": {"sign_ups": auth.registration_open(), "guests": guest_access_enabled()},
             "email_available": auth.email_delivery_configured(),
             "sign_in_url": accounts_admin.sign_in_url(self._request_base_path()),
             "sender": {"name": str(user.get("name") or ""), "email": str(user.get("email") or "")},

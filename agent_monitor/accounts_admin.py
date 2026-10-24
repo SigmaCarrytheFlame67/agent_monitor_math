@@ -51,6 +51,7 @@ DEFAULT_PASSWORD_LENGTH = 12
 MIN_PASSWORD_LENGTH = 8
 MAX_PASSWORD_LENGTH = 32
 MAX_PEOPLE = 200
+MAX_LINE_LENGTH = 1000
 MAX_GROUP_LENGTH = 60
 DEFAULT_SUBJECT = "Your Ansätze account"
 DEFAULT_MESSAGE = """Dear {name},
@@ -81,13 +82,19 @@ Best regards,
 {sender}
 """
 PLACEHOLDERS = ("name", "email", "password", "url", "sender")
-# An address is everything around an @ up to a space or a separator (, ; :
-# | / = brackets, quotes): a hyphen or an apostrophe inside it belongs to it.
-_ADDRESS_RE = re.compile(r"[^\s,;:|/=<>()\[\]\"]+@[^\s,;:|/=<>()\[\]\"]+")
-# What may wrap an address in pasted text: Markdown, quotes, "Name -addr"
-# before it; a sentence's punctuation after it.
-_ADDRESS_OPENERS = "'*`_{-"
-_ADDRESS_CLOSERS = ".'*`_}!?-"
+# An address is everything around an @ up to a space or a character no plain
+# address has (, ; : brackets, double quotes): a hyphen or an apostrophe
+# inside it belongs to it.
+_ADDRESS_RE = re.compile(r"[^\s,;:<>()\[\]\"]+@[^\s,;:<>()\[\]\"]+")
+# A mailto: link's prefix where a link starts (never in the middle of a word).
+_MAILTO_RE = re.compile(r"(?i)(?<![^\s<(\[\"'])mailto:")
+# Marks that may wrap an address on both sides: "*a@b*", "`a@b`", "'a@b'".
+_WRAPPERS = {"*": "*", "`": "`", "'": "'", "_": "_", "{": "}"}
+# Characters an address may legally start with or hold, but which in a pasted
+# line more likely belong to what is around it ("_a@b", "-a@b", "Name|a@b"):
+# such a line is refused rather than guessed at.
+_UNCLEAR_START = "'*`_{}-!?#$%&+=^~|/"
+_UNCLEAR_INSIDE = "|/="
 # A plain address that mail goes to exactly: a dot-atom, then a host name.
 _LOCAL_RE = re.compile(r"[A-Za-z0-9!#$%&'*+=?^_`{|}~-]+(?:\.[A-Za-z0-9!#$%&'*+=?^_`{|}~-]+)*")
 _DOMAIN_RE = re.compile(r"(?:[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?\.)+[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?")
@@ -103,7 +110,23 @@ _PLACEHOLDER_RE = re.compile(r"\{(" + "|".join(PLACEHOLDERS) + r")\}")
 
 
 def _clean_name(text: str) -> str:
-    return " ".join(_BULLET_RE.sub("", text.strip()).strip(_NAME_EDGES).split())[:120]
+    name = " ".join(_BULLET_RE.sub("", text.strip()).strip(_NAME_EDGES).split())[:120]
+    return name if any(char.isalpha() for char in name) else ""
+
+
+def _address_in(token: str) -> str | None:
+    """The address in ``token`` exactly as written, or None when where it
+    starts or ends is unclear.  Only a wrapper on both sides and a
+    sentence's punctuation after it (a host name ends with a letter or a
+    digit) are taken off, so the address is always on the line as typed."""
+    token = "".join(char for char in token if unicodedata.category(char) != "Cf")
+    while len(token) > 2 and token[0] in _WRAPPERS and token.endswith(_WRAPPERS[token[0]]):
+        token = token[1:-1]
+    token = re.sub(r"[^A-Za-z0-9]+$", "", token)
+    local = token.rpartition("@")[0]
+    if not local or local[0] in _UNCLEAR_START or any(char in local for char in _UNCLEAR_INSIDE):
+        return None
+    return token
 
 
 def usable_address(email: str) -> bool:
@@ -119,26 +142,36 @@ def usable_address(email: str) -> bool:
 
 def parse_people(text: str) -> list[dict[str, str]]:
     """``[{name, email, line}]`` for each non-blank line of ``text``: the
-    line's one email address, whole, and the name before it (or after it).
-    A line with no address, or more than one, has ``email`` "" and an
-    ``error`` (reported as invalid)."""
+    line's one email address, exactly as written there (only lower-cased),
+    and the name before it (or after it).  A line with no address, more
+    than one, an address whose start or end is unclear, or a line longer
+    than 1000 characters has ``email`` "" and an ``error`` (reported as
+    invalid).  ``line`` is the whole line, so it can be pasted again."""
     people: list[dict[str, str]] = []
     for raw in str(text or "").splitlines():
         line = raw.translate(_INVISIBLE).strip()
         if not line:
             continue
-        line = re.sub(r"(?i)\bmailto:", "", line)
-        found = list(_ADDRESS_RE.finditer(line))
+        if len(line) > MAX_LINE_LENGTH:
+            people.append({"name": "", "email": "", "line": line, "error": "This line is too long"})
+            continue
+        # "mailto:" is blanked in place, so positions on the line stay as they are.
+        scan = _MAILTO_RE.sub(lambda match: " " * len(match.group(0)), line)
+        found = list(_ADDRESS_RE.finditer(scan))
         if len(found) != 1:
-            people.append({"name": "", "email": "", "line": line[:300],
+            people.append({"name": "", "email": "", "line": line,
                            "error": "More than one email address on this line" if found
                            else "No email address on this line"})
             continue
         match = found[0]
-        email = "".join(char for char in match.group(0) if unicodedata.category(char) != "Cf")
-        email = email.lstrip(_ADDRESS_OPENERS).rstrip(_ADDRESS_CLOSERS)
-        name = _clean_name(line[:match.start()]) or _clean_name(line[match.end():])
-        people.append({"name": name, "email": email.lower()[:254], "line": line[:300]})
+        email = _address_in(match.group(0))
+        visible = "".join(char for char in line if unicodedata.category(char) != "Cf").lower()
+        if email is None or email.lower() not in visible:
+            people.append({"name": "", "email": "", "line": line,
+                           "error": "Unclear where the address on this line starts or ends: put spaces around it"})
+            continue
+        name = _clean_name(scan[:match.start()]) or _clean_name(scan[match.end():])
+        people.append({"name": name, "email": email.lower(), "line": line})
     return people
 
 
@@ -270,7 +303,7 @@ def create_accounts(people: Iterable[Mapping[str, Any]], *, password_length: obj
     for person in people:
         email = str(person.get("email") or "").strip().lower()
         name = " ".join(str(person.get("name") or "").split())[:120]
-        line = str(person.get("line") or email)[:300]
+        line = str(person.get("line") or email)[:MAX_LINE_LENGTH]
         entry: dict[str, Any] = {"email": email, "name": name, "line": line}
         if stopped:
             entry.update(status="not_processed", error="Not processed: an earlier line stopped the run")
