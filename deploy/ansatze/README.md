@@ -325,7 +325,15 @@ To close it again, remove `90-registration.conf`, reload and restart; then
 Restarting stops proofs in progress, so check for active runs first.
 
 A self-registered account that is not the administrator (a "member") is
-untrusted. `agent_monitor/account_policy.py` and the run path enforce:
+untrusted. `agent_monitor/account_policy.py` and the run path enforce the
+rules below for every member except one the administrator gave **full
+access** (Admin → Accounts, or `python -m agent_monitor.accounts_admin
+full-access on <emails>`). Such an account links its own Claude Code and
+Codex and runs every engine but Hermes, including the harnesses that run
+commands on this host without a sandbox, so give it only to people you
+trust. It keeps the member rate limits and never uses the administrator's
+accounts or keys
+(OPERATIONS.md, "Accounts an administrator manages"):
 
 - **Tool-free engines only.** Members may run only the engines in
   `AGENT_MONITOR_MEMBER_ENGINES` (default `kimi,plain,math_harness`), and the

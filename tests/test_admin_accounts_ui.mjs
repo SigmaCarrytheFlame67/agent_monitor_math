@@ -226,13 +226,13 @@ function load({ user = OPERATOR } = {}) {
   const els = {}
   const $ = id => els[id] || (els[id] = Object.assign(new El('div'), { id }))
   for (const id of ['admin-acct-list', 'admin-acct-plan', 'admin-acct-results', 'admin-acct-preview', 'admin-acct-add-nomail', 'admin-acct-add-nourl', 'admin-acct-add-url', 'admin-acct-list-nogroup',
-    'admin-acct-bulk-ask', 'admin-acct-doors', 'admin-acct-list-doors'])
+    'admin-acct-bulk-ask', 'admin-acct-doors', 'admin-acct-list-doors', 'admin-acct-add-full-warn'])
     $(id).hidden = true
-  for (const id of ['admin-acct-on', 'admin-acct-off', 'admin-acct-group-set', 'admin-acct-group-remove', 'admin-acct-add-send', 'admin-acct-add-create', 'admin-acct-list-open'])
+  for (const id of ['admin-acct-on', 'admin-acct-off', 'admin-acct-group-set', 'admin-acct-group-remove', 'admin-acct-full-on', 'admin-acct-full-off', 'admin-acct-add-send', 'admin-acct-add-create', 'admin-acct-list-open'])
     $(id).disabled = true
   // The bar's controls are in the bar, as in the markup.
   $('admin-acct-bulk').append(...['admin-acct-selected', 'admin-acct-all', 'admin-acct-clear', 'admin-acct-on', 'admin-acct-off', 'admin-acct-group-name',
-    'admin-acct-group-set', 'admin-acct-group-remove'].map($))
+    'admin-acct-group-set', 'admin-acct-group-remove', 'admin-acct-full-on', 'admin-acct-full-off'].map($))
   $('admin-acct-add-length').value = '12'
   $('admin-acct-filter').value = 'all'
   $('admin-acct-list-review').className = 'acct-btn primary'
@@ -310,10 +310,10 @@ test('the list: read defensively, counted (administrators apart), with its group
   assert.equal($('admin-acct-counts').textContent, '19 accounts · 13 access on · 6 off · 2 admins')
   assert.equal(rowsOf($).length, 21)
   assert.deepEqual($('admin-acct-body').querySelector('table').querySelectorAll('th').map(th => [th.textContent, th.getAttribute('scope')]),
-    [['Select', 'col'], ['Name', 'col'], ['Email', 'col'], ['Group', 'col'], ['Created', 'col'], ['Last sign-in', 'col'], ['Access', 'col'], ['Action', 'col']])
+    [['Select', 'col'], ['Name', 'col'], ['Email', 'col'], ['Group', 'col'], ['Created', 'col'], ['Last sign-in', 'col'], ['Access', 'col'], ['Full access', 'col'], ['Action', 'col']])
   // A person: name, email, group, when created and last signed in (local time), the switch, the row action.
   assert.deepEqual(rowOf($, 'ada.lovelace@example.org').children.map(td => td.textContent),
-    ['', 'Ada Lovelace', 'ada.lovelace@example.org', 'Field test', 'Oct 20', 'Today 09:14', 'On', 'New password'])
+    ['', 'Ada Lovelace', 'ada.lovelace@example.org', 'Field test', 'Oct 20', 'Today 09:14', 'On', 'No', 'New password'])
   assert.deepEqual([rowOf($, 'emmy.noether@example.org').children[5].textContent, rowOf($, 'ramanujan@example.org').children[5].textContent,
     rowOf($, 'sophie.germain@example.org').children[5].textContent, rowOf($, 'grace.hopper@example.org').children[3].textContent], ['Yesterday 18:02', 'Oct 20 14:05', '—', '—'])
   const toggle = switchOf($, 'ada.lovelace@example.org')
@@ -331,7 +331,7 @@ test('the list: read defensively, counted (administrators apart), with its group
   step("openAdminPasswordReset('co@example.org')")
   assert.equal($('admin-acct-body').querySelector('tr.acct-reset-row'), null)
   // The groups: a filter (the counts follow it), names to pick from, the list's group.
-  assert.deepEqual(options($('admin-acct-filter')), [['all', 'All groups'], ['=Field test', 'Field test'], ['none', 'No group']])
+  assert.deepEqual(options($('admin-acct-filter')), [['all', 'All groups'], ['=Field test', 'Field test'], ['none', 'No group'], ['full', 'Full access']])
   assert.deepEqual(options($('admin-acct-groups')), [['Field test', 'Field test']])
   $('admin-acct-filter').value = '=Field test'; $('admin-acct-filter').onchange()
   assert.deepEqual([rowsOf($).length, $('admin-acct-counts').textContent], [17, 'Field test: 17 accounts · 12 access on · 5 off'])
@@ -481,7 +481,7 @@ test('selected rows are turned on or off, or put in a group, together; once a ch
   regrouped.groups = ['Day two', 'Field test']
   srv.answer(200, regrouped); await done
   assert.deepEqual([status($), $('admin-acct-group-name').value, rowOf($, 'ada.lovelace@example.org').children[3].textContent, options($('admin-acct-filter')).map(o => o[1]),
-    $('admin-acct-selected').textContent], [['3 accounts now in Day two, a new group.', 'acct-status ok'], '', 'Day two', ['All groups', 'Day two', 'Field test', 'No group'], 'None selected'])
+    $('admin-acct-selected').textContent], [['3 accounts now in Day two, a new group.', 'acct-status ok'], '', 'Day two', ['All groups', 'Day two', 'Field test', 'No group', 'Full access'], 'None selected'])
   // Typed in another spelling of a group there is: the server's spelling is the one said.
   pick(three[0])
   $('admin-acct-group-name').value = 'field TEST'
@@ -932,7 +932,7 @@ test('a new password: asked first, then shown once under its row, with the new-p
   const resetRow = address => $('admin-acct-body').querySelectorAll('tr').find(tr => tr.classList.contains('acct-reset-row') && $('admin-acct-body').querySelector('tbody').kids[$('admin-acct-body').querySelector('tbody').kids.indexOf(tr) - 1]?.dataset.email === address)
   const panel = address => resetRow(address).querySelector('div.acct-reset')
   assert.deepEqual([panel('riemann@example.org').getAttribute('role'), panel('riemann@example.org').getAttribute('aria-label'), resetRow('riemann@example.org').children[0].colSpan],
-    ['group', 'New password for Bernhard Riemann', 8])
+    ['group', 'New password for Bernhard Riemann', 9])
   assert.equal(panel('riemann@example.org').querySelector('p').textContent, 'Give Bernhard Riemann (riemann@example.org) a new random password? The current one stops working, and they are signed out at once.')
   // No email here: the option is off, and says why; its label names the message it would send.
   assert.deepEqual([panel('riemann@example.org').querySelector('label').textContent, panel('riemann@example.org').querySelector('input').disabled, panel('riemann@example.org').querySelector('p.acct-note').textContent],
@@ -1381,6 +1381,213 @@ test('round 3: ways in that a pause leaves open (sign-ups, guest access) are sai
   assert.deepEqual(view.logged, [])
 })
 
+const FULL_WARNING = "Full access lets the account link its own Claude Code and Codex and run every engine, including harnesses that run commands on this server with no sandbox: such a run could read the server's files and other accounts' data. Give it only to people you trust."
+function fullPayload() {
+  const payload = listPayload({ extra: PUBLIC })
+  for (const account of payload.accounts) account.full_access = account.is_admin || account.email === 'emmy.noether@example.org'
+  return payload
+}
+const fullOf = ($, address) => rowOf($, address).querySelector('button.acct-full-switch')
+const fullState = ($, address) => { const toggle = fullOf($, address); return [toggle.getAttribute('aria-checked'), toggle.textContent, toggle.disabled, toggle.getAttribute('aria-busy')] }
+
+test('full access: a column with a switch per row (giving it is asked first, under the row; taking it away is at once), "Always" for administrators', async () => {
+  const view = load(), { $, srv, step } = view
+  await loaded(view, fullPayload())
+  // The column: Yes or No, and Always (disabled) for an administrator; the counts say how many have it.
+  assert.deepEqual([fullState($, 'ada.lovelace@example.org'), fullState($, 'emmy.noether@example.org'), fullState($, 'admin@example.org')],
+    [['false', 'No', false, null], ['true', 'Yes', false, null], ['true', 'Always', true, null]])
+  const ada = fullOf($, 'ada.lovelace@example.org')
+  assert.deepEqual([ada.type, ada.getAttribute('role'), ada.getAttribute('aria-label'), ada.title, rowOf($, 'admin@example.org').children[7].title, fullOf($, 'emmy.noether@example.org').title],
+    ['button', 'switch', 'Full access for Ada Lovelace', 'No full access: click to give it to Ada Lovelace (asked first)', 'An administrator always has full access.',
+      'Full access: click to remove it from Emmy Noether'])
+  assert.equal($('admin-acct-counts').textContent, '19 accounts · 13 access on · 6 off · 1 full access · 1 admin')
+  // Read strictly: true only when the server says so, and always for an administrator.
+  assert.deepEqual(plain(step("adminAccountsFromResponse({accounts:[{email:'a@x.org',is_admin:true,full_access:false},{email:'b@x.org',full_access:'yes'},{email:'c@x.org',full_access:true},{email:'d@x.org'}]}).accounts.map(a=>a.full_access)")),
+    [true, false, true, false])
+  // Giving it: asked first, in a row under Ada's, with what it opens; nothing is sent yet.
+  ada.focus()
+  ada.onclick()
+  let ask = $('admin-acct-body').querySelector('tr.acct-ask-row')
+  const tbody = $('admin-acct-body').querySelector('tbody')
+  assert.deepEqual([srv.pending.length, tbody.children[tbody.children.indexOf(rowOf($, 'ada.lovelace@example.org')) + 1] === ask, ask.querySelector('td').colSpan,
+    ask.querySelector('div').getAttribute('aria-label'), ask.querySelectorAll('p').map(p => p.textContent), ask.querySelectorAll('button').map(b => [b.textContent, b.type, b.className]),
+    focused === button(ask, 'Give full access'), ada.getAttribute('aria-checked')],
+    [0, true, 9, 'Full access for Ada Lovelace', ['Give Ada Lovelace (ada.lovelace@example.org) full access?', FULL_WARNING],
+      [['Give full access', 'button', 'acct-btn primary'], ['Cancel', 'button', 'acct-btn']], true, 'false'])
+  // Cancel: the question goes, nothing is sent, the focus is back on the switch.
+  button(ask, 'Cancel').onclick()
+  assert.deepEqual([$('admin-acct-body').querySelector('tr.acct-ask-row'), srv.pending.length, focused], [null, 0, ada])
+  // Asked again and given: one request; the row changes in place; the status says what it opens.
+  ada.onclick()
+  let done = button($('admin-acct-body').querySelector('tr.acct-ask-row'), 'Give full access').onclick()
+  assert.deepEqual(plain(srv.pending.map(r => [r.url, r.method, r.body])), [['/api/admin/accounts/full-access', 'POST', { emails: ['ada.lovelace@example.org'], full_access: 'on' }]])
+  assert.deepEqual([fullState($, 'ada.lovelace@example.org'), focused, $('admin-acct-body').querySelector('tr.acct-ask-row')], [['true', 'Yes', false, 'true'], ada, null])
+  srv.answer(200, { updated: ['ada.lovelace@example.org'], skipped: [] }); await done
+  assert.deepEqual([fullState($, 'ada.lovelace@example.org'), status($), $('admin-acct-counts').textContent],
+    [['true', 'Yes', false, null], ['Full access given to Ada Lovelace: they can link their own Claude Code and Codex in Settings.', 'acct-status ok'],
+      '19 accounts · 13 access on · 6 off · 2 full access · 1 admin'])
+  // Taking it away: at once, no question.
+  done = ada.onclick()
+  assert.deepEqual([plain(srv.pending[0].body), $('admin-acct-body').querySelector('tr.acct-ask-row')], [{ emails: ['ada.lovelace@example.org'], full_access: 'off' }, null])
+  srv.answer(200, { updated: ['ada.lovelace@example.org'], skipped: [] }); await done
+  assert.deepEqual([fullState($, 'ada.lovelace@example.org'), status($)[0]], [['false', 'No', false, null], 'Full access removed from Ada Lovelace.'])
+  // Skipped by the server, or failed: the row goes back, and says why.
+  ada.onclick(); done = button($('admin-acct-body').querySelector('tr.acct-ask-row'), 'Give full access').onclick()
+  srv.answer(200, { updated: [], skipped: [{ email: 'ada.lovelace@example.org', reason: 'No account uses this email' }] }); await done
+  assert.deepEqual([fullState($, 'ada.lovelace@example.org'), status($)], [['false', 'No', false, null], ['Ada Lovelace was not changed: No account uses this email.', 'acct-status err']])
+  ada.onclick(); done = button($('admin-acct-body').querySelector('tr.acct-ask-row'), 'Give full access').onclick()
+  srv.answer(500, { error: 'database is locked' }); await done
+  assert.deepEqual([fullState($, 'ada.lovelace@example.org'), status($)[0]], [['false', 'No', false, null], 'Could not give full access to Ada Lovelace: database is locked.'])
+  // An administrator's switch does nothing, and an administrator is never sent.
+  step("toggleAdminAccountFull('admin@example.org')")
+  assert.deepEqual([srv.pending.length, plain(await step("setAdminAccountsFull(['admin@example.org'],'on')"))], [0, { updated: [], skipped: [] }])
+  // One question at a time; a search, a new list or leaving the view takes it away.
+  ada.onclick(); fullOf($, 'ramanujan@example.org').onclick()
+  ask = $('admin-acct-body').querySelectorAll('tr.acct-ask-row')
+  assert.deepEqual([ask.length, ask[0].querySelector('div').getAttribute('aria-label')], [1, 'Full access for Srinivasa Ramanujan'])
+  $('admin-acct-q').value = 'ramanujan'; $('admin-acct-q').oninput()
+  assert.deepEqual([$('admin-acct-body').querySelector('tr.acct-ask-row'), step('ACCOUNTS.fullAsk')], [null, null])
+  $('admin-acct-q').value = ''; $('admin-acct-q').oninput()
+  ada.onclick()
+  done = step('loadAdminAccounts()'); srv.answer(200, fullPayload()); await done
+  assert.equal($('admin-acct-body').querySelector('tr.acct-ask-row'), null)
+  fullOf($, 'ada.lovelace@example.org').onclick(); step('clearAdminAccountSecrets()')
+  assert.deepEqual([$('admin-acct-body').querySelector('tr.acct-ask-row'), srv.pending.length], [null, 0])
+  // The filter: the accounts with full access (an administrator always has it).
+  $('admin-acct-filter').value = 'full'; $('admin-acct-filter').onchange()
+  assert.deepEqual([rowsOf($).map(tr => tr.dataset.email), $('admin-acct-counts').textContent],
+    [['admin@example.org', 'emmy.noether@example.org'], 'Full access: 1 account · 1 access on · 0 off · 1 full access · 1 admin'])
+  $('admin-acct-q').value = 'ada'; $('admin-acct-q').oninput()
+  assert.equal($('admin-acct-body').textContent, 'No account with full access matches.')
+  assert.deepEqual(view.logged, [])
+})
+
+test('full access for the selected rows: giving it is always asked in the page (the count, what it opens, rows not shown); the selection goes after', async () => {
+  const view = load(), { $, srv } = view
+  await loaded(view, fullPayload())
+  const tick = address => { const box = rowOf($, address).querySelector('input'); box.checked = true; box.onchange() }
+  const search = text => { $('admin-acct-q').value = text; $('admin-acct-q').oninput() }
+  const ask = $('admin-acct-bulk-ask'), give = $('admin-acct-full-on'), take = $('admin-acct-full-off')
+  assert.deepEqual([give.disabled, take.disabled], [true, true])
+  tick('ada.lovelace@example.org'); tick('ramanujan@example.org')
+  assert.deepEqual([give.disabled, take.disabled], [false, false])
+  give.focus()
+  give.onclick()
+  assert.equal(srv.pending.length, 0)
+  assert.deepEqual([ask.hidden, ask.children.slice(0, 2).map(p => [p.id, p.textContent]), ask.querySelectorAll('button').map(b => b.textContent),
+    focused === button(ask, 'Give full access to 2'), button(ask, 'Give full access to 2').getAttribute('aria-describedby')],
+    [false, [['admin-acct-bulk-question', 'Give full access to 2 accounts?'], ['admin-acct-bulk-warning', FULL_WARNING]], ['Give full access to 2', 'Cancel'], true,
+      'admin-acct-bulk-question admin-acct-bulk-warning'])
+  button(ask, 'Cancel').onclick()
+  assert.deepEqual([ask.hidden, srv.pending.length, focused, $('admin-acct-selected').textContent], [true, 0, give, '2 selected'])
+  give.onclick()
+  let done = button(ask, 'Give full access to 2').onclick()
+  assert.deepEqual(plain(srv.pending.map(r => [r.url, r.body])), [['/api/admin/accounts/full-access', { emails: ['ada.lovelace@example.org', 'ramanujan@example.org'], full_access: 'on' }]])
+  srv.answer(200, { updated: ['ada.lovelace@example.org', 'ramanujan@example.org'], skipped: [] }); await done
+  assert.deepEqual([status($), fullState($, 'ramanujan@example.org')[1], $('admin-acct-selected').textContent, focused],
+    [['Full access given to 2 accounts.', 'acct-status ok'], 'Yes', 'None selected', $('admin-acct-q')])
+  // Taking it away from rows all shown: no question.
+  tick('ada.lovelace@example.org'); tick('ramanujan@example.org')
+  done = take.onclick()
+  assert.deepEqual([ask.hidden, plain(srv.pending[0].body)], [true, { emails: ['ada.lovelace@example.org', 'ramanujan@example.org'], full_access: 'off' }])
+  srv.answer(200, { updated: ['ada.lovelace@example.org'], skipped: [{ email: 'ramanujan@example.org', reason: 'No account uses this email' }] }); await done
+  assert.deepEqual(status($), ['Full access removed from 1 account. Skipped 1: ramanujan@example.org (No account uses this email).', 'acct-status err'])
+  // Rows not shown are named, with the count, for both.
+  search('Lovelace'); tick('ada.lovelace@example.org'); search('Turing'); tick('turing@example.org')
+  give.onclick()
+  assert.deepEqual([ask.children[0].textContent, ask.children[1].textContent, ask.querySelectorAll('button').map(b => b.textContent)],
+    ['Give full access to 2 accounts, 1 not shown here: Ada Lovelace?', FULL_WARNING, ['Give full access to all 2', 'Only the 1 shown', 'Cancel']])
+  done = button(ask, 'Only the 1 shown').onclick()
+  assert.deepEqual(plain(srv.pending[0].body), { emails: ['turing@example.org'], full_access: 'on' })
+  srv.answer(200, { updated: ['turing@example.org'], skipped: [] }); await done
+  assert.equal($('admin-acct-selected').textContent, 'None selected')
+  search('Lovelace'); tick('ada.lovelace@example.org'); search('Turing'); tick('turing@example.org')
+  take.onclick()
+  assert.deepEqual([ask.children[0].textContent, ask.children.length, ask.querySelectorAll('button').map(b => b.textContent)],
+    ['Remove full access from 2 accounts, 1 not shown here: Ada Lovelace?', 2, ['Remove full access from all 2', 'Only the 1 shown', 'Cancel']])
+  done = button(ask, 'Remove full access from all 2').onclick()
+  srv.answer(500, { error: 'database is locked' }); await done
+  assert.deepEqual([status($)[0], $('admin-acct-selected').textContent], ['Could not remove full access: database is locked.', '2 selected (1 not shown)'])
+  assert.deepEqual(view.logged, [])
+})
+
+test('full access for added accounts: a checkbox with what it opens; new accounts get it, existing ones on the list never do (said in the preview and the run)', async () => {
+  const view = load(), { $, srv, step } = view
+  await loaded(view, fullPayload())
+  const full = $('admin-acct-add-full'), warn = $('admin-acct-add-full-warn')
+  assert.deepEqual([full.checked, warn.hidden, warn.textContent], [false, true, FULL_WARNING])
+  $('admin-acct-add-text').value = 'Maryam Mirzakhani - maryam@example.org\nemmy.noether@example.org\nada.lovelace@example.org'
+  $('admin-acct-add-group').value = GROUP
+  // Unticked: nothing about full access is sent.
+  let done = $('admin-acct-add-create').onclick()
+  assert.equal('full_access' in srv.pending[0].body, false)
+  srv.answer(200, { results: previewOf(view, { 'emmy.noether@example.org': 'exists', 'ada.lovelace@example.org': 'exists' }, GROUP) }); await done
+  // Ticked: what it opens shows under it, and the preview is asked again.
+  full.checked = true; full.onchange()
+  assert.deepEqual([warn.hidden, $('admin-acct-preview').hidden], [false, true])
+  done = $('admin-acct-add-create').onclick()
+  assert.equal(srv.pending[0].body.full_access, true)
+  const results = previewOf(view, { 'emmy.noether@example.org': 'exists', 'ada.lovelace@example.org': 'exists' }, GROUP)
+  // Ada exists without full access: the list does not give it to her (who registered her address may not be her).
+  results[0].full_access = true; results[2].full_access_skipped = true
+  srv.answer(200, { results }); await done
+  const preview = $('admin-acct-preview')
+  assert.deepEqual([preview.children[3].textContent, preview.querySelector('tbody').children.map(tr => tr.children[2].textContent)],
+    ['New accounts get full access. 1 existing account is not given full access by a list: check that it is the right person, then give it from the table.',
+      ['New account · joins Field test · full access', 'Already exists · joins Field test', 'Already exists · joins Field test · full access not given (check, then use the table)']])
+  // The run: full access in each request; the status counts it.
+  done = confirmButton($).onclick()
+  assert.equal(srv.pending[0].body.full_access, true)
+  srv.answer(200, { results: [
+    { email: 'maryam@example.org', name: 'Maryam Mirzakhani', line: 'Maryam Mirzakhani - maryam@example.org', status: 'created', password: 'Mm1', group: GROUP, full_access: true },
+    { email: 'emmy.noether@example.org', name: '', line: 'emmy.noether@example.org', status: 'exists', error: 'An account with this email already exists', group: GROUP, group_joined: true },
+    { email: 'ada.lovelace@example.org', name: '', line: 'ada.lovelace@example.org', status: 'exists', error: 'An account with this email already exists', group: GROUP, group_joined: true, full_access_skipped: true }] })
+  await flush()
+  assert.deepEqual(srv.pending.map(r => [r.url, r.method]), [['/api/admin/accounts', 'GET']])
+  srv.answer(200, fullPayload()); await done
+  assert.equal(status($, 'admin-acct-add-status')[0], '1 created with full access, 2 already existed, 2 existing added to Field test, 1 existing not given full access (check it, then use the table).')
+  assert.deepEqual($('admin-acct-results').querySelector('tbody').children.map(tr => tr.children[2].textContent), ['CreatedIn Field testFull access',
+    'Already existsAn account with this email already existsAdded to Field test', 'Already existsAn account with this email already existsAdded to Field testFull access not given (check, then use the table)'])
+  assert.equal(plain(step("adminAccountsCreatedText({rows:[{status:'exists',full_access_skipped:true},{status:'exists',full_access_skipped:true}],total:2,fullAccess:true,group:''})")),
+    '0 created, 2 already existed, 2 existing not given full access (check them, then use the table).')
+  // Full access the server could not give: said in the status and on the row, with where to give it.
+  $('admin-acct-add-text').value = 'Hilda Geiringer - hilda@example.org'
+  done = $('admin-acct-add-create').onclick(); srv.answer(200, { results: previewOf(view, {}, GROUP) }); await done
+  done = confirmButton($).onclick()
+  srv.answer(200, { results: [{ email: 'hilda@example.org', name: 'Hilda Geiringer', line: 'Hilda Geiringer - hilda@example.org', status: 'created', password: 'Hg1', group: GROUP,
+    full_access_error: 'Could not be given full access; try again from the table' }] })
+  await flush(); srv.answer(200, fullPayload()); await done
+  assert.equal(status($, 'admin-acct-add-status')[0], '1 created, 1 not given full access (give it from the table).')
+  assert.equal($('admin-acct-results').querySelector('tbody').children.at(-1).children[2].textContent, 'CreatedIn Field testCould not be given full access; try again from the table')
+  // Unticked, what it opens is not shown.
+  full.checked = false; full.onchange()
+  assert.equal(warn.hidden, true)
+  assert.deepEqual(view.logged, [])
+})
+
+test('full access outside Accounts: the engine and harness choices a full-access account may use; the Admin tab and pages stay the administrator\'s', () => {
+  const context = vm.createContext({})
+  vm.runInContext(['let CURRENT_USER=null;', constant('CGM_MAX_MODEL'), fn('viewerIsAdmin'), fn('viewerHasFullAccess'), fn('modelVisual')].join('\n'), context)
+  const as = user => { vm.runInContext(`CURRENT_USER=${JSON.stringify(user)}`, context); return plain(vm.runInContext('[viewerIsAdmin(),viewerHasFullAccess(),modelVisual("gpt-5.4").provider]', context)) }
+  assert.deepEqual([as({ id: 1, is_admin: true }), as({ id: 2, is_admin: false, full_access: true }), as({ id: 3, guest: true, full_access: true }), as({ id: 4, is_admin: false }), as(null)], [
+    [true, false, 'OpenAI · Codex-ready'], [false, true, 'OpenAI · Codex-ready'], [false, false, 'OpenAI'], [false, false, 'OpenAI'], [false, false, 'OpenAI']])
+  // The gates the server opens to full access: the Base URL of an OpenAI-compatible endpoint, the formal harness and its engines.
+  assert.match(fn('renderSettingsModal'), /const baseField=\(viewerIsAdmin\(\)\|\|viewerHasFullAccess\(\)\)&&p\.base_var\?/)
+  assert.match(fn('syncLeanPipelineEmptyState'), /\(viewerIsAdmin\(\)\|\|viewerHasFullAccess\(\)\?' Retry Verify, or choose an available Harness\.':' Retry Verify\.'\)/)
+  assert.match(fn('syncLeanControls'), /const harness=viewerIsAdmin\(\)\|\|viewerHasFullAccess\(\);/)
+  assert.match(fn('fillLeanEngines'), /leanEngines=viewerIsAdmin\(\)\|\|viewerHasFullAccess\(\)\?\(list\|\|\[\]\):\[\];/)
+  assert.equal((consoleScript.match(/viewerHasFullAccess\(\)/g) || []).length, 6)
+  // What stays the administrator's: the curator, the accounts, legacy runs, the Admin tab and its pages; Analyze and
+  // Readability follow the server's "available" (a runner that needs setup is shown to the administrator only).
+  assert.match(fn('analyzeOffered'), /return !!e\.available\|\|viewerIsAdmin\(\);/)
+  assert.match(fn('readabilityOffered'), /return !!e\.available\|\|viewerIsAdmin\(\);/)
+  assert.match(consoleScript, /const curator=viewerIsAdmin\(\);/)
+  assert.match(fn('readAdminAccounts'), /if\(!viewerIsAdmin\(\)\)return false;/)
+  assert.match(consoleScript, /return run\.owner_id==null\?viewerIsAdmin\(\):run\.owner_id===CURRENT_USER\.id\|\|viewerIsAdmin\(\);/)
+  assert.match(fn('loadAdmin'), /if\(!CURRENT_USER\?\.is_admin\)return;/)
+  assert.match(consoleScript, /\$\('hub-admin-tab'\)\.style\.display=u\.is_admin&&!u\.guest\?'':'none';/)
+})
+
 test('hostile names, addresses and server messages are set as text', async () => {
   const view = load(), { $, srv } = view
   const evil = '<img src=x onerror="alert(1)">'
@@ -1472,7 +1679,7 @@ test('the Accounts section comes first in the admin view, with plain buttons, st
   assert.ok(pane.indexOf('id="admin-accounts"') > 0 && pane.indexOf('id="admin-accounts"') < pane.indexOf('id="admin-filters"'))
   assert.match(section, /<div class="hub-section-h"><b id="admin-acct-title">Accounts<\/b><span class="acct-counts" id="admin-acct-counts"><\/span><\/div>/)
   const buttons = section.match(/<button\b[^>]*>/g)
-  assert.equal(buttons.length, 10)
+  assert.equal(buttons.length, 12)
   assert.deepEqual(buttons.filter(tag => !tag.includes('type="button"')), [])
   // Nothing to add or apply until the list is read; email waits for it too.
   for (const id of ['admin-acct-list-open', 'admin-acct-add-create']) assert.match(section, new RegExp(`id="${id}"[^>]*disabled`))
@@ -1487,11 +1694,11 @@ test('the Accounts section comes first in the admin view, with plain buttons, st
   // ...kept in sight beside the passwords wherever the section is scrolled.
   assert.match(html, /#admin-acct-session \{ position: sticky; top: 0; z-index: 5;[^}]*background: color-mix\(in srgb, var\(--warn\) 14%, var\(--bg2\)\);/)
   assert.match(section, /<p class="acct-warn" id="admin-acct-session" role="alert" hidden><b>Your session has ended\.<\/b> Copy the passwords shown here first \(they cannot be shown again\), then sign in again\.<\/p>/)
-  assert.match(section, /<select id="admin-acct-filter" aria-label="Show the accounts of a group"><option value="all">All groups<\/option><option value="none">No group<\/option><\/select>/)
+  assert.match(section, /<select id="admin-acct-filter" aria-label="Show the accounts of a group, or those with full access"><option value="all">All groups<\/option><option value="none">No group<\/option><option value="full">Full access<\/option><\/select>/)
   assert.match(section, /<datalist id="admin-acct-groups"><\/datalist>/)
   // Under the bar: the question about selected rows not shown (round 3, #4), and the ways in a pause leaves open;
   // the same note in the list's panel.
-  assert.match(section, /id="admin-acct-group-remove" disabled>Remove from group<\/button>\n\s*<\/div>\n\s*<div class="acct-warn acct-ask" id="admin-acct-bulk-ask" role="group" aria-label="Selected accounts not shown" hidden><\/div>\n\s*<p class="acct-doors" id="admin-acct-doors" hidden><\/p>/)
+  assert.match(section, /id="admin-acct-group-remove" disabled>Remove from group<\/button>\n\s*<span class="acct-bulk-space" aria-hidden="true"><\/span>\n\s*<button type="button" class="acct-btn" id="admin-acct-full-on" disabled>Give full access<\/button>\n\s*<button type="button" class="acct-btn" id="admin-acct-full-off" disabled>Remove full access<\/button>\n\s*<\/div>\n\s*<div class="acct-warn acct-ask" id="admin-acct-bulk-ask" role="group" aria-label="Confirm the change for the selected accounts" hidden><\/div>\n\s*<p class="acct-doors" id="admin-acct-doors" hidden><\/p>/)
   assert.match(section, / Administrators always keep access\.<\/p>\n\s*<p class="acct-doors" id="admin-acct-list-doors" hidden><\/p>\n\s*<textarea class="acct-mono" id="admin-acct-list-text"/)
   assert.match(html, /\.acct-ask\[hidden\] \{ display: none; \}/)
   assert.match(section, /<input type="number" id="admin-acct-add-length" min="8" max="32" step="1" value="12"/)
@@ -1500,9 +1707,9 @@ test('the Accounts section comes first in the admin view, with plain buttons, st
   for (const banned of [/\blocalStorage\b/, /\bsessionStorage\b/, /\bindexedDB\b/, /\bconsole\.[a-z]/, /\blocation\b/, /\bhistory\./, /innerHTML/, /insertAdjacentHTML/, /outerHTML/, /document\.write/])
     assert.doesNotMatch(block, banned)
   assert.deepEqual([...new Set(block.match(/'\/api\/[^']*'/g))].sort(),
-    ["'/api/admin/accounts'", "'/api/admin/accounts/access'", "'/api/admin/accounts/group'", "'/api/admin/accounts/password'"])
+    ["'/api/admin/accounts'", "'/api/admin/accounts/access'", "'/api/admin/accounts/full-access'", "'/api/admin/accounts/group'", "'/api/admin/accounts/password'"])
   assert.equal(block.match(/fetch\(/g).length, 1)
   // The Admin tab gets the hub's own width; a new-password panel stays in view in a table that scrolls sideways.
   assert.match(html, /\.modal\.monitor-hub:has\(#hub-admin-pane\.active\) \{ width: min\(1220px, 100%\); \}/)
-  assert.match(html, /\.acct-table-wrap \{ container-type: inline-size; \}\n\.acct-reset-row \.acct-reset \{ position: sticky; left: 9px; box-sizing: border-box; max-width: calc\(100cqi - 18px\); \}/)
+  assert.match(html, /\.acct-table-wrap \{ container-type: inline-size; \}\n\.acct-reset-row \.acct-reset, \.acct-ask-row \.acct-reset \{ position: sticky; left: 9px; box-sizing: border-box; max-width: calc\(100cqi - 18px\); \}/)
 })

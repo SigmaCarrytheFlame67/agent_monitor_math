@@ -2319,6 +2319,7 @@ class Handler(RunSharingMixin, ProjectsMixin, ResearchMixin, BaseHTTPRequestHand
         emailing each new person their sign-in details; with ``preview``,
         only what it would do), ``/access`` (turn access on or off; with
         ``others: "off"`` and a ``group``, everyone else in the group off),
+        ``/full-access`` (give accounts full access, or take it back),
         ``/group`` (put accounts in a group) and ``/password`` (a new random
         password).  The passwords are in this response only."""
         from agent_monitor import accounts_admin, auth
@@ -2351,7 +2352,7 @@ class Handler(RunSharingMixin, ProjectsMixin, ResearchMixin, BaseHTTPRequestHand
                 group, group_is_new = accounts_admin.resolve_group(body.get("group"))
                 results = accounts_admin.create_accounts(accounts_admin.parse_people(text),
                                                          password_length=body.get("password_length"), preview=preview,
-                                                         group=group)
+                                                         group=group, full_access=body.get("full_access") is True)
                 for result in results:
                     if send_email and not preview and result["status"] == "created":
                         result["email_sent"] = accounts_admin.send_invite(
@@ -2380,6 +2381,16 @@ class Handler(RunSharingMixin, ProjectsMixin, ResearchMixin, BaseHTTPRequestHand
                 logger.info("[ADMIN] %s turned access %s for %d account(s)%s", user.get("email"), access,
                             len(payload["updated"]),
                             f" and off for {len(payload['turned_off'])} other(s)" if others == "off" else "")
+            elif path == "/api/admin/accounts/full-access":
+                emails = body.get("emails")
+                state = body.get("full_access")
+                if not isinstance(emails, list) or not all(isinstance(email, str) for email in emails):
+                    raise ValueError("emails must be a list of email addresses")
+                if state not in ("on", "off"):
+                    raise ValueError('full_access must be "on" or "off"')
+                payload = accounts_admin.set_full_access(emails, on=state == "on")
+                logger.info("[ADMIN] %s turned full access %s for %d account(s)", user.get("email"), state,
+                            len(payload["updated"]))
             elif path == "/api/admin/accounts/group":
                 emails = body.get("emails")
                 if not isinstance(emails, list) or not all(isinstance(email, str) for email in emails):
@@ -2429,8 +2440,9 @@ class Handler(RunSharingMixin, ProjectsMixin, ResearchMixin, BaseHTTPRequestHand
     def _deny_member(
         self, user: dict, capability: str, *, explanation: str | None = None
     ) -> bool:
-        """Reject host-level capabilities for self-registered accounts."""
-        if not account_policy.is_member(user):
+        """Reject host-level capabilities for self-registered accounts
+        (not for one an administrator gave full access)."""
+        if not account_policy.is_restricted(user):
             return False
         self._send(
             403,
@@ -3379,10 +3391,12 @@ class Handler(RunSharingMixin, ProjectsMixin, ResearchMixin, BaseHTTPRequestHand
                     else account_policy.admin_only_engine_view(engine)
                     for engine in engines
                 ]
-            elif account_policy.is_member(user):
+            elif account_policy.is_restricted(user):
                 # Local harnesses are administrator-only; the rest bill an API
                 # key (the CGM harness only the member's own, never Kimi K3).
                 engines = [account_policy.member_engine_view(engine) for engine in engines]
+            elif account_policy.has_full_access(user):
+                engines = [account_policy.full_access_engine_view(engine) for engine in engines]
             # The Analyze and Readability engines carry this viewer's policy
             # for their mode, so the browser offers a mode only as this
             # server accepts it.
@@ -3467,7 +3481,7 @@ class Handler(RunSharingMixin, ProjectsMixin, ResearchMixin, BaseHTTPRequestHand
         if path == "/api/settings/codex/status":
             if self._deny_guest(user, "account connections"):
                 return
-            if account_policy.is_member(user):
+            if account_policy.is_restricted(user):
                 self._send(200, json.dumps(_member_subscription_status("codex"), ensure_ascii=False))
                 return
             from agent_monitor import codex_login
@@ -3478,7 +3492,7 @@ class Handler(RunSharingMixin, ProjectsMixin, ResearchMixin, BaseHTTPRequestHand
         if path == "/api/settings/codex/login/poll":
             if self._deny_guest(user, "account connections"):
                 return
-            if account_policy.is_member(user):
+            if account_policy.is_restricted(user):
                 self._send(200, json.dumps(_member_subscription_status("codex"), ensure_ascii=False))
                 return
             from agent_monitor import codex_login
@@ -3489,7 +3503,7 @@ class Handler(RunSharingMixin, ProjectsMixin, ResearchMixin, BaseHTTPRequestHand
         if path == "/api/settings/claude/status":
             if self._deny_guest(user, "account connections"):
                 return
-            if account_policy.is_member(user):
+            if account_policy.is_restricted(user):
                 self._send(200, json.dumps(_member_subscription_status("claude"), ensure_ascii=False))
                 return
             from agent_monitor import claude_login
@@ -3500,7 +3514,7 @@ class Handler(RunSharingMixin, ProjectsMixin, ResearchMixin, BaseHTTPRequestHand
         if path == "/api/settings/claude/login/poll":
             if self._deny_guest(user, "account connections"):
                 return
-            if account_policy.is_member(user):
+            if account_policy.is_restricted(user):
                 self._send(200, json.dumps(_member_subscription_status("claude"), ensure_ascii=False))
                 return
             from agent_monitor import claude_login
@@ -3613,7 +3627,7 @@ class Handler(RunSharingMixin, ProjectsMixin, ResearchMixin, BaseHTTPRequestHand
                 # refuses it to members), so a member is offered none.
                 engines = (
                     []
-                    if account_policy.is_member(user)
+                    if account_policy.is_restricted(user)
                     else lean_verify.harness_engines(user, model=model_options["selected"])
                 )
                 formal_options = {
@@ -3651,7 +3665,7 @@ class Handler(RunSharingMixin, ProjectsMixin, ResearchMixin, BaseHTTPRequestHand
                     model_options = lean_verify.harness_model_options(user, run_record)
                     engines = (
                         []
-                        if account_policy.is_member(user)
+                        if account_policy.is_restricted(user)
                         else lean_verify.harness_engines(user, run_record)
                     )
                     cached["engines"] = engines
@@ -4059,8 +4073,8 @@ class Handler(RunSharingMixin, ProjectsMixin, ResearchMixin, BaseHTTPRequestHand
         if user is None:
             return
 
-        if path in ("/api/admin/accounts", "/api/admin/accounts/access", "/api/admin/accounts/group",
-                    "/api/admin/accounts/password"):
+        if path in ("/api/admin/accounts", "/api/admin/accounts/access", "/api/admin/accounts/full-access",
+                    "/api/admin/accounts/group", "/api/admin/accounts/password"):
             if not self._require_operator(user):
                 return
             self._admin_accounts_post(path, body if isinstance(body, dict) else {}, user)
@@ -4764,7 +4778,7 @@ class Handler(RunSharingMixin, ProjectsMixin, ResearchMixin, BaseHTTPRequestHand
                 explanation=account_policy.subscription_notes()["codex"],
             ):
                 return
-            if account_policy.is_member(user):
+            if account_policy.is_restricted(user):
                 # A member links no account, so there is no login to cancel;
                 # logout only removes a sign-in stored before the policy.
                 if path.endswith("/logout"):
@@ -4800,7 +4814,7 @@ class Handler(RunSharingMixin, ProjectsMixin, ResearchMixin, BaseHTTPRequestHand
                 explanation=account_policy.subscription_notes()["claude"],
             ):
                 return
-            if account_policy.is_member(user):
+            if account_policy.is_restricted(user):
                 # As for the member's status, claude_login is never reached:
                 # its CLI probes create an account home.  Logout only removes
                 # a sign-in stored before the policy.
@@ -4965,7 +4979,7 @@ class Handler(RunSharingMixin, ProjectsMixin, ResearchMixin, BaseHTTPRequestHand
             # reached here by Compile or Check), and a tool-free project run
             # off it, keep their Formal stages.
             if route == "api_key" or (
-                not account_policy.is_member(user)
+                not account_policy.is_restricted(user)
                 and not job_manager.tool_free_run(rid, run_record)
             ):
                 auto_pipeline.refresh_formal(

@@ -22,6 +22,20 @@ Ansatz Readability (``readability``) follows the same rules with its own
 switch (``AGENT_MONITOR_READABILITY_ENABLED``) and command override
 (``READABILITY_CMD``), and runs Kimi K3 only: sponsored, or on the member's
 own Kimi key.
+
+An administrator can give a member **full access** (Admin → Accounts; the
+``full_access`` column).  Such an account is not *restricted*
+(:func:`is_restricted`): it may link its own Claude Code and Codex
+subscriptions, run Max on them, and run every engine, including the
+coding-agent harnesses that run local tools on the host without an OS
+sandbox.  It still runs on its own keys and its own linked accounts, never
+the administrator's; it keeps the member rate limits and feedback caps; it
+reaches the sponsored Kimi K3 service only through the engines every member
+may use it with (:data:`MEMBER_SPONSORED_ENGINES`); it never runs Hermes,
+which runs inside the console process with the server's own environment
+(:data:`OPERATOR_ONLY_ENGINES`); and it does not see the server's keys, open
+the administrator's pages, write the operator's library, or count as an
+operator in projects or the research atlas.
 """
 from __future__ import annotations
 
@@ -47,6 +61,13 @@ _COMMAND_OVERRIDES = {
 # Engines a member runs only on its own provider keys: never the sponsored
 # Kimi route, Max or a subscription.
 OWN_KEY_ENGINES = frozenset({"math_harness"})
+# The engines through which any member, full access or not, may reach the
+# sponsored Kimi K3 service (jobs.start_job refuses the others).
+MEMBER_SPONSORED_ENGINES = frozenset({"kimi", "plain", "analyze", "readability"})
+# Engines that run inside the console process, where their tools see the
+# server's own environment (its keys and secrets) rather than a scrubbed
+# child environment: the administrator's alone, even with full access.
+OPERATOR_ONLY_ENGINES = frozenset({"hermes"})
 # Where a member can choose a model from its own keys, as the notes name them.
 _OWN_KEY_CHOICES = (("math_harness", "Ansatz CGM"), ("plain", "Plain"))
 
@@ -121,6 +142,17 @@ def is_member(user: dict[str, Any] | None) -> bool:
     return bool(user) and not user.get("guest") and not user.get("is_admin")
 
 
+def has_full_access(user: dict[str, Any] | None) -> bool:
+    """A member an administrator gave full access (see the module notes)."""
+    return is_member(user) and bool((user or {}).get("full_access"))
+
+
+def is_restricted(user: dict[str, Any] | None) -> bool:
+    """A member held to the tool-free engines, API keys and no subscriptions:
+    every member except one given full access."""
+    return is_member(user) and not bool((user or {}).get("full_access"))
+
+
 def _analyze_enabled() -> bool:
     from agent_monitor.analyze import limits as analyze_limits
 
@@ -167,6 +199,12 @@ def member_engine_allowlist() -> frozenset[str]:
 
 def _engine_refusal(engine: str) -> tuple[str, str]:
     """Why members may not run ``engine`` here, as (error, catalog hint)."""
+    if engine in OPERATOR_ONLY_ENGINES:
+        return (
+            "That engine runs inside the console process with the server's own keys, "
+            "so it is limited to the site administrator",
+            "Administrator only on this site: this harness runs inside the console",
+        )
     if engine not in MEMBER_ELIGIBLE_ENGINES:
         return (
             _LOCAL_TOOLS_ERROR,
@@ -220,7 +258,9 @@ def member_analyze_sponsored_only(user: dict[str, Any] | None) -> bool:
 
 def member_engine_error(user: dict[str, Any] | None, engine: str) -> str | None:
     """Why ``user`` may not run ``engine``, or None when it may."""
-    if not is_member(user) or engine in member_engine_allowlist():
+    if has_full_access(user) and engine in OPERATOR_ONLY_ENGINES:
+        return _engine_refusal(engine)[0]
+    if not is_restricted(user) or engine in member_engine_allowlist():
         return None
     return _engine_refusal(engine)[0]
 
@@ -238,14 +278,14 @@ def member_run_model(
     nothing else runs, a saved default the engine accepts stays, so the
     refusal names the key it needs (a new account's default is Kimi K3).
     """
-    if engine == READABILITY_ENGINE and is_member(user) and not str(model or "").strip():
+    if engine == READABILITY_ENGINE and is_restricted(user) and not str(model or "").strip():
         # Readability runs Kimi K3 only (the included one or the member's own key).
         from agent_monitor.kimi_k3 import MODEL_ID
 
         return MODEL_ID
     if (
         str(model or "").strip()
-        or not is_member(user)
+        or not is_restricted(user)
         or engine not in {*dict(_OWN_KEY_CHOICES), ANALYZE_ENGINE}
     ):
         return model
@@ -295,7 +335,7 @@ def member_model_error(
         if selected and selected != MODEL_ID:
             return ANALYZE_SPONSORED_ONLY_NOTE
         return None
-    if engine == READABILITY_ENGINE:
+    if engine == READABILITY_ENGINE and is_restricted(user):
         from agent_monitor.kimi_k3 import MODEL_ID
 
         if selected and selected != MODEL_ID:
@@ -306,7 +346,16 @@ def member_model_error(
     from agent_monitor import cgm_max
 
     if cgm_max.is_max_model(selected):
-        return str(cgm_max.plan_for(user)["reason"])
+        return str(cgm_max.plan_for(user)["reason"]) or None
+    if has_full_access(user):
+        # Its own keys or linked subscriptions, with the account's default
+        # model when none is named; never the sponsored Kimi K3 route.
+        if selected.startswith("kimi-"):
+            return (
+                "Kimi K3 runs on the included Ansatz CGM · Kimi K3 engine; the Ansatz "
+                "CGM harness uses a model from your own API keys or linked accounts"
+            )
+        return None
     if not selected:
         return "Choose a model from your own API keys to run the Ansatz CGM harness"
     if selected.startswith("kimi-"):
@@ -320,14 +369,17 @@ def member_model_error(
 def member_route_error(
     user: dict[str, Any] | None, auth_route: str | None
 ) -> str | None:
-    """Why a member may not start a run billed to ``auth_route``, or None."""
+    """Why a member may not start a run billed to ``auth_route``, or None.
+    An account given full access uses its own linked subscriptions."""
     if not is_member(user):
         return None
     route = str(auth_route or "").strip().lower()
     from agent_monitor import cgm_max
 
     if route == cgm_max.ROUTE:
-        return str(cgm_max.plan_for(user)["reason"])
+        return str(cgm_max.plan_for(user)["reason"]) or None
+    if has_full_access(user):
+        return None
     kind = _SUBSCRIPTION_ROUTES.get(route)
     return subscription_notes()[kind] if kind else None
 
@@ -339,9 +391,9 @@ def member_continuation_error(
 
     A run billed to a subscription or to Max (a member's own, started before
     subscriptions became administrator-only) stays the administrator's to
-    continue.
+    continue.  An account given full access continues its own.
     """
-    if not is_member(user):
+    if not is_restricted(user):
         return None
     route = str(auth_route or "").strip().lower()
     from agent_monitor import cgm_max
@@ -449,6 +501,14 @@ def admin_only_engine_view(engine: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def full_access_engine_view(engine: dict[str, Any]) -> dict[str, Any]:
+    """How the engine catalog presents ``engine`` to an account given full
+    access: as to the administrator, except the engines that stay theirs."""
+    if engine.get("id") in OPERATOR_ONLY_ENGINES:
+        return admin_only_engine_view(engine)
+    return engine
+
+
 def member_engine_view(engine: dict[str, Any]) -> dict[str, Any]:
     """How the engine catalog presents ``engine`` to a member."""
     if engine.get("id") not in member_engine_allowlist():
@@ -470,7 +530,7 @@ def subscription_policy(user: dict[str, Any] | None) -> dict[str, str]:
     """Who may sign in with each account subscription, for the Settings UI."""
     if user is not None and user.get("guest"):
         state = "sign_in"
-    elif is_member(user):
+    elif is_restricted(user):
         state = "admin_only"
     else:
         state = "available"

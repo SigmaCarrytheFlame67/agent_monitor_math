@@ -312,7 +312,7 @@ def _analyze_model(user: dict[str, Any] | None, model: str | None) -> str:
         # Public mode: the saved default would be the server's (see
         # account_policy.member_analyze_sponsored_only).
         return GUEST_DEFAULT_MODEL
-    if account_policy.is_member(user):
+    if account_policy.is_restricted(user):
         # As for a blank Plain model: the model the console's Analyze form
         # offers, not a saved default (a new account's Kimi K3) that the
         # member's keys cannot run.
@@ -342,7 +342,7 @@ def _readability_model(
         return GUEST_DEFAULT_MODEL
     if requested:
         return requested
-    if user is not None and not account_policy.is_member(user) and str(auth_route or "") in {
+    if user is not None and not account_policy.is_restricted(user) and str(auth_route or "") in {
         "codex_subscription", "claude_subscription",
     }:
         return _saved_default_model(user, engine=_READABILITY_ENGINE, auth_route=auth_route) or GUEST_DEFAULT_MODEL
@@ -1266,10 +1266,11 @@ def _configure_auth_route(
     _scrub_provider_route_env(configured)
     if user_id is None:
         raise ValueError("A signed-in ProvingConsole account is required for subscription mode")
-    from agent_monitor.auth import is_operator_account
+    from agent_monitor.auth import may_use_own_subscriptions
 
-    if not is_operator_account(user_id):
-        # Subscriptions and Max are the administrator's alone, whichever path
+    if not may_use_own_subscriptions(user_id):
+        # Subscriptions and Max are the administrator's, and those of accounts
+        # given full access (each on its own linked accounts), whichever path
         # (run, continuation, DAG or Formal work) asks: the stored role decides,
         # so a sign-in a member linked before that policy is never used.
         raise ValueError(
@@ -1613,7 +1614,7 @@ def start_job(
             raise ValueError(
                 f"Guest {engine} is unavailable while {override} is overridden"
             )
-    elif account_policy.is_member(user):
+    elif account_policy.is_restricted(user):
         # Self-registered accounts are untrusted: tool-free engines only,
         # billed to their own key or the sponsored route, never a subscription
         # (the own-key CGM harness never takes Kimi K3 or Max either).
@@ -1636,7 +1637,7 @@ def start_job(
         not str(model or "").strip()
         and user is not None
         and not is_guest
-        and not account_policy.is_member(user)
+        and not account_policy.is_restricted(user)
     ):
         # A blank model (the Projects page's "Default account model", or an
         # API caller's) is the saved default, as it is for members.  Resolved
@@ -1714,6 +1715,19 @@ def start_job(
         sponsored_kimi = _apply_sponsored_kimi_route(
             extra_env, engine="plain" if engine == "kimi" else engine, model=model
         )
+    if (
+        sponsored_kimi
+        and account_policy.is_member(user)
+        and engine not in account_policy.MEMBER_SPONSORED_ENGINES
+    ):
+        # A member reaches the sponsored Kimi K3 service only through the
+        # included engines, full access or not: here also when a blank model
+        # resolved to a Kimi default.
+        raise ValueError(
+            "Kimi K3 runs on the included Ansatz CGM · Kimi K3 engine; for this engine "
+            "choose a model from your own API keys or linked accounts, or add your own "
+            "Kimi API key in Settings"
+        )
     if engine in _MANUSCRIPT_ENGINES and not sponsored_kimi and _is_kimi_model(model):
         # Own-key Kimi manuscript runs use the operator's endpoint, like the kimi engine.
         extra_env["AGENT_MONITOR_KIMI_BASE_URL"] = _operator_kimi_base()
@@ -1749,7 +1763,7 @@ def start_job(
             env=extra_env,
             # A member's runtime (and a tool-free run's) is always the API
             # route, whatever the account stored.
-            enforce_account_runtime=not (account_policy.is_member(user) or tool_free),
+            enforce_account_runtime=not (account_policy.is_restricted(user) or tool_free),
         )
     if route not in auth_modes and route != cgm_max.ROUTE:
         raise ValueError(
@@ -6059,12 +6073,14 @@ def _member_continuation_model(
 
 
 def _owner_user(owner_id: int | None) -> dict[str, Any] | None:
-    """The account for a background follow-up, with its administrator role."""
+    """The account for a background follow-up, with its administrator role
+    and whether it has full access."""
     if owner_id is None:
         return None
-    from agent_monitor.auth import is_operator_account
+    from agent_monitor.auth import is_full_access_account, is_operator_account
 
-    return {"id": owner_id, "is_admin": is_operator_account(int(owner_id))}
+    return {"id": owner_id, "is_admin": is_operator_account(int(owner_id)),
+            "full_access": is_full_access_account(int(owner_id))}
 
 
 def tool_free_run(run_id: str, run: dict[str, Any]) -> bool:

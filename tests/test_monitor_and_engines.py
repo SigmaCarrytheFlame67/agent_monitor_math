@@ -6105,13 +6105,14 @@ class HumanInterventionRegressionTests(unittest.TestCase):
                     )
 
             self.assertEqual(result, {"ok": True})
-            # The follow-up carries the owner's real role (61 is no operator).
+            # The follow-up carries the owner's real role (61 is no operator,
+            # and has no full access).
             resume.assert_called_once_with(
                 run_id,
                 message="First correction\n\nSecond correction",
                 model="gpt-test",
                 max_iterations=7,
-                user={"id": 61, "is_admin": False},
+                user={"id": 61, "is_admin": False, "full_access": False},
                 problems_recorded=True,
             )
             self.assertFalse((workspace / jobs._PENDING_FEEDBACK_FILENAME).exists())

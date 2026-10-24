@@ -2794,9 +2794,9 @@ def _llm_environment(
         }.get(selected_runtime, "api_key")
         owner_id = (user or {}).get("id") or (run_record or {}).get("owner_id")
         if route != "api_key" and owner_id is not None:
-            from agent_monitor.auth import is_operator_account
+            from agent_monitor.auth import may_use_own_subscriptions
 
-            if not is_operator_account(owner_id):
+            if not may_use_own_subscriptions(owner_id):
                 # A member's runtime is always the API route: a setting stored
                 # before subscriptions became administrator-only never counts.
                 route = "api_key"
@@ -4996,7 +4996,7 @@ def _codex_subscription_interaction(
     """
     if (user or {}).get("guest") or (run_record or {}).get("guest"):
         raise ValueError("Guest Formal actions use the included Kimi service")
-    if account_policy.is_member(user):
+    if account_policy.is_restricted(user):
         raise ValueError(_MEMBER_LEAN_AGENT_ERROR)
     from agent_monitor import codex_login
     from agent_monitor.cli_events import CLIEventParser
@@ -5158,7 +5158,7 @@ def _answer_lean_question(
             raise
         from agent_monitor.jobs import _is_kimi_model
 
-        if _is_kimi_model(effective_model) or account_policy.is_member(user):
+        if _is_kimi_model(effective_model) or account_policy.is_restricted(user):
             raise
         result = _codex_subscription_interaction(
             workspace=workspace,
@@ -5234,7 +5234,7 @@ def _revise_with_feedback_impl(
         if env.get("AGENT_MONITOR_CLAUDE_SUBSCRIPTION") == "1":
             raise
         # A member keeps the model's own error: the fallback is a local agent.
-        if _is_kimi_model(effective_model) or account_policy.is_member(user):
+        if _is_kimi_model(effective_model) or account_policy.is_restricted(user):
             raise
         codex_model = _codex_route_model(user, run_record, effective_model)
         codex_result = _codex_subscription_interaction(

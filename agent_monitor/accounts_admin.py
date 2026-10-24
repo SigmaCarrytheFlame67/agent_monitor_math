@@ -18,6 +18,10 @@ command line too (``python -m agent_monitor.accounts_admin --help``).
 * :func:`set_group` puts accounts in a group (a field test's participants,
   say), so that "everyone else" means everyone else in that group, never
   every member of the site.
+* :func:`set_full_access` gives an account full access, or takes it back:
+  it may then link its own Claude Code and Codex and run every engine,
+  including the harnesses that run local tools on this host
+  (``account_policy``).
 * :func:`new_password` gives an account a new random password (signed out);
   never an administrator's.
 * :func:`sign_in_url` is the sign-in address an invitation names: the site's
@@ -238,6 +242,7 @@ def list_accounts() -> list[dict[str, Any]]:
     with closing(auth._conn()) as conn:
         rows = conn.execute(
             "SELECT u.id, u.email, u.name, u.is_admin, u.created_at, u.access_paused_at, u.account_group,"
+            " u.full_access,"
             " COALESCE(u.last_sign_in_at,"
             " (SELECT MAX(s.created_at) FROM sessions s WHERE s.user_id=u.id)) AS last_sign_in_at"
             " FROM users u WHERE u.is_guest=0 ORDER BY u.id"
@@ -251,8 +256,25 @@ def list_accounts() -> list[dict[str, Any]]:
         "access": "off" if row["access_paused_at"] and not row["is_admin"] else "on",
         "access_paused_at": row["access_paused_at"] if not row["is_admin"] else None,
         "group": row["account_group"] or "",
+        "full_access": bool(row["is_admin"] or row["full_access"]),
         "last_sign_in_at": row["last_sign_in_at"],
     } for row in rows]
+
+
+def _grant_full_access(email: str) -> bool | None:
+    """Give a non-administrator account full access: True when that changed
+    it, False when it had it already, None for an administrator (who always
+    has it)."""
+    with closing(auth._conn()) as conn, conn:
+        conn.execute("BEGIN IMMEDIATE")
+        row = conn.execute("SELECT id, is_admin, full_access FROM users WHERE email=? AND is_guest=0",
+                           (email,)).fetchone()
+        if row is None or row["is_admin"]:
+            return None
+        if row["full_access"]:
+            return False
+        conn.execute("UPDATE users SET full_access=1 WHERE id=?", (row["id"],))
+    return True
 
 
 def _join_group(email: str, group: str) -> bool | None:
@@ -272,7 +294,7 @@ def _join_group(email: str, group: str) -> bool | None:
 
 
 def create_accounts(people: Iterable[Mapping[str, Any]], *, password_length: object = None,
-                    preview: bool = False, group: object = None) -> list[dict[str, Any]]:
+                    preview: bool = False, group: object = None, full_access: bool = False) -> list[dict[str, Any]]:
     """Create an account for each person (``{name, email, line?}``) with a
     random password.  Returns, in order, ``{email, name, line, status,
     password?, error?}`` where ``status`` is ``created`` (with its password,
@@ -284,7 +306,11 @@ def create_accounts(people: Iterable[Mapping[str, Any]], *, password_length: obj
 
     With ``group``, new accounts are put in it, and so is an existing
     account that is not an administrator's (``group_joined`` when that
-    changes its group); nothing else about an existing account changes."""
+    changes its group).  With ``full_access``, new accounts get full access;
+    an existing account never does here (``full_access_skipped``): whoever
+    registered that address first may not be the person on the list, so it is
+    given from the table once checked.  Nothing else about an existing
+    account changes."""
     length = _clean_length(password_length)
     group, _new = resolve_group(group)
     people = list(people)
@@ -294,8 +320,9 @@ def create_accounts(people: Iterable[Mapping[str, Any]], *, password_length: obj
         # The first account of a site becomes its administrator: never one made here.
         if not auth._registered_user_exists(conn):
             raise ValueError("Create the administrator's own account first")
-        existing = {row["email"]: (bool(row["is_admin"]), row["account_group"] or "")
-                    for row in conn.execute("SELECT email, is_admin, account_group FROM users WHERE is_guest=0")
+        existing = {row["email"]: (bool(row["is_admin"]), row["account_group"] or "", bool(row["full_access"]))
+                    for row in conn.execute("SELECT email, is_admin, account_group, full_access FROM users"
+                                            " WHERE is_guest=0")
                     } if preview else {}
     results: list[dict[str, Any]] = []
     seen: set[str] = set()
@@ -320,15 +347,19 @@ def create_accounts(people: Iterable[Mapping[str, Any]], *, password_length: obj
             seen.add(email)
             if email in existing:
                 entry.update(status="exists", error="An account with this email already exists")
-                is_admin, current = existing[email]
+                is_admin, current, has_full = existing[email]
                 if group and not is_admin:
                     entry["group"] = group
                     if current != group:
                         entry["group_joined"] = True
+                if full_access and not is_admin and not has_full:
+                    entry["full_access_skipped"] = True
             else:
                 entry.update(status="new")
                 if group:
                     entry["group"] = group
+                if full_access:
+                    entry["full_access"] = True
         else:
             seen.add(email)
             password = generate_password(length)
@@ -358,6 +389,21 @@ def create_accounts(people: Iterable[Mapping[str, Any]], *, password_length: obj
                         entry["group"] = group
                         if joined and entry["status"] == "exists":
                             entry["group_joined"] = True
+            if full_access and entry["status"] == "created":
+                try:
+                    granted = _grant_full_access(email)
+                except Exception:  # noqa: BLE001 - the account (and its password) stand regardless
+                    logger.exception("[ADMIN] giving an account full access failed")
+                    entry["full_access_error"] = "Could not be given full access; try again from the table"
+                else:
+                    if granted is not None:
+                        entry["full_access"] = True
+            elif full_access and entry["status"] == "exists":
+                with closing(auth._conn()) as conn:
+                    row = conn.execute("SELECT is_admin, full_access FROM users WHERE email=? AND is_guest=0",
+                                       (email,)).fetchone()
+                if row is not None and not row["is_admin"] and not row["full_access"]:
+                    entry["full_access_skipped"] = True
         results.append(entry)
     return results
 
@@ -424,6 +470,32 @@ def set_access(emails: Iterable[str], *, on: bool, others_off: bool = False, gro
     if others_off:
         result["turned_off"] = turned_off
     return result
+
+
+def set_full_access(emails: Iterable[str], *, on: bool) -> dict[str, Any]:
+    """Give these accounts full access, or take it back.  Returns
+    ``{"updated": [emails], "skipped": [{email, reason}]}``; administrators
+    (who always have it), guests and unknown addresses are skipped.  Taking
+    it back applies from the account's next request; a run it already
+    started finishes."""
+    updated: list[str] = []
+    skipped: list[dict[str, str]] = []
+    wanted = list(dict.fromkeys(str(email or "").strip().lower() for email in emails if str(email or "").strip()))
+    if len(wanted) > MAX_PEOPLE * 5:
+        raise ValueError("Too many accounts in one request")
+    with closing(auth._conn()) as conn, conn:
+        conn.execute("BEGIN IMMEDIATE")
+        for email in wanted:
+            row = _account(conn, email)
+            if row is None:
+                skipped.append({"email": email, "reason": "No account uses this email"})
+                continue
+            if row["is_admin"]:
+                skipped.append({"email": email, "reason": "An administrator always has full access"})
+                continue
+            conn.execute("UPDATE users SET full_access=? WHERE id=?", (1 if on else 0, row["id"]))
+            updated.append(email)
+    return {"updated": updated, "skipped": skipped}
 
 
 def set_group(emails: Iterable[str], group: object) -> dict[str, Any]:
@@ -558,9 +630,16 @@ def main(argv: list[str] | None = None) -> int:
     create.add_argument("--sender", default="", help="the name the emails are signed with (needed with --send-email)")
     create.add_argument("--reply-to", default="", help="the address replies go to (needed with --send-email)")
     create.add_argument("--group", default="", help="put the new (and existing) accounts in this group")
+    create.add_argument("--full-access", action="store_true",
+                        help="give the new accounts full access: their own Claude Code and Codex, and every "
+                             "engine, including harnesses that run local tools on this host (an address that "
+                             "already has an account gets it only with the full-access command)")
     for name, help_text in (("on", "turn access on"), ("off", "turn access off (signs the person out)")):
         sub = commands.add_parser(name, help=help_text)
         sub.add_argument("emails", nargs="+")
+    full = commands.add_parser("full-access", help="give accounts full access, or take it back")
+    full.add_argument("state", choices=("on", "off"))
+    full.add_argument("emails", nargs="+")
     grouping = commands.add_parser("group", help="put accounts in a group ('' takes them out)")
     grouping.add_argument("group")
     grouping.add_argument("emails", nargs="+")
@@ -578,6 +657,7 @@ def main(argv: list[str] | None = None) -> int:
         for account in list_accounts():
             print(f"{account['access']:3}  {_shown(account['email'])}  {_shown(account['name'])}"
                   + (f"  [{_shown(account['group'])}]" if account["group"] else "")
+                  + ("  (full access)" if account["full_access"] and not account["is_admin"] else "")
                   + ("  (administrator)" if account["is_admin"] else ""))
         return 0
     if args.command == "create":
@@ -594,7 +674,7 @@ def main(argv: list[str] | None = None) -> int:
                 return 2
         with open(args.file, encoding="utf-8-sig") as handle:
             results = create_accounts(parse_people(handle.read()), password_length=args.password_length,
-                                      group=args.group)
+                                      group=args.group, full_access=args.full_access)
         # Every password is out before the first email is tried, so a run
         # stopped while mailing loses none of them.
         print(json.dumps(results, ensure_ascii=False, indent=1), flush=True)
@@ -610,6 +690,10 @@ def main(argv: list[str] | None = None) -> int:
         return 0 if ok else 1
     if args.command in ("on", "off"):
         result = set_access(args.emails, on=args.command == "on")
+        print(json.dumps(result, ensure_ascii=False, indent=1))
+        return 0 if result["updated"] and not result["skipped"] else 1
+    if args.command == "full-access":
+        result = set_full_access(args.emails, on=args.state == "on")
         print(json.dumps(result, ensure_ascii=False, indent=1))
         return 0 if result["updated"] and not result["skipped"] else 1
     if args.command == "group":

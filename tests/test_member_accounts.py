@@ -1556,10 +1556,11 @@ def test_queued_feedback_runs_one_author_at_a_time(monkeypatch, tmp_path):
     # 5's starts and 7's waits, in order.
     jobs._launch_pending_feedback("plain_run", owner_id=1, model=None, max_iterations=4)
     jobs._launch_pending_feedback("plain_run", owner_id=1, model=None, max_iterations=4)
-    assert seen == [({"id": 1, "is_admin": True}, "Legacy."), ({"id": 5, "is_admin": False}, "B.")]
+    assert seen == [({"id": 1, "is_admin": True, "full_access": False}, "Legacy."),
+                    ({"id": 5, "is_admin": False, "full_access": False}, "B.")]
     refuse.clear()
     jobs._launch_pending_feedback("plain_run", owner_id=1, model=None, max_iterations=4)
-    assert seen[-1] == ({"id": 7, "is_admin": False}, "A.\n\nC.")
+    assert seen[-1] == ({"id": 7, "is_admin": False, "full_access": False}, "A.\n\nC.")
     assert not jobs.feedback_pending("plain_run")
 
 
@@ -1683,7 +1684,8 @@ def test_queued_feedback_continues_with_the_owners_real_role(monkeypatch, tmp_pa
     for owner_id in (1, 5):
         jobs._queue_human_feedback(workspace, "Try induction.")
         jobs._launch_pending_feedback("plain_run", owner_id=owner_id, model=None, max_iterations=4)
-    assert seen == [{"id": 1, "is_admin": True}, {"id": 5, "is_admin": False}]
+    assert seen == [{"id": 1, "is_admin": True, "full_access": False},
+                    {"id": 5, "is_admin": False, "full_access": False}]
     # Feedback whose follow-up lost the run to another continuation stays queued.
     monkeypatch.setattr(
         jobs, "continue_run",

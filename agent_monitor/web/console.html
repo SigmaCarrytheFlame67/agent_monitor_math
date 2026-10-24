@@ -1183,6 +1183,8 @@ button.start { height: 52px; padding: 11px 25px; border-radius: 13px; font-size:
 .acct-bulk.has-selection { border-color: color-mix(in srgb, var(--accent) 45%, var(--border)); background: color-mix(in srgb, var(--accent) 7%, var(--panel2)); }
 .acct-bulk.has-selection .acct-bulk-count { color: var(--fg); font-weight: 600; }
 .acct-bulk-gap { width: 1px; align-self: stretch; margin: 2px 2px; background: var(--border); }
+/* Space, not a line, before full access: the bar wraps there on most screens, and a line would end the row above. */
+.acct-bulk-space { width: 4px; }
 .acct-status { font-size: 11px; line-height: 1.5; color: var(--muted); margin: 0 0 8px; overflow-wrap: anywhere; }
 .acct-status:empty { display: none; }
 .acct-status.ok { color: var(--ok); }
@@ -1211,6 +1213,9 @@ button.start { height: 52px; padding: 11px 25px; border-radius: 13px; font-size:
 .acct-switch:disabled { cursor: not-allowed; opacity: .55; }
 .acct-switch[aria-busy="true"] { cursor: progress; }
 .acct-switch[aria-busy="true"] .acct-track { opacity: .6; }
+/* Full access: its own switch, in the warning colour when on (it opens more than access does). */
+.acct-table td.acct-full { white-space: nowrap; }
+.acct-switch.acct-full-switch[aria-checked="true"] .acct-track { background: var(--warn); }
 @media (forced-colors: active) { .acct-track { border: 1px solid CanvasText; } .acct-track::after { background: CanvasText; } .acct-switch[aria-checked="true"] .acct-track { background: Highlight; } }
 .acct-panel { display: grid; gap: 8px; margin-bottom: 10px; padding: 12px; border: 1px solid var(--border); border-radius: 12px; background: var(--panel2); }
 .acct-panel[hidden], .acct-plan[hidden], .acct-results[hidden], .acct-note[hidden] { display: none; }
@@ -1236,6 +1241,7 @@ button.start { height: 52px; padding: 11px 25px; border-radius: 13px; font-size:
 .acct-ask { display: grid; gap: 8px; margin: 0 0 8px; font-size: 12px; }
 .acct-ask[hidden] { display: none; }
 .acct-ask p { margin: 0; overflow-wrap: anywhere; }
+.acct-ask .acct-ask-warning { font-size: 11px; line-height: 1.5; color: var(--fg); }
 .acct-doors { margin: 0 0 8px; padding: 7px 10px; border: 1px solid var(--border); border-left: 3px solid color-mix(in srgb, var(--warn) 75%, var(--border)); border-radius: 8px; background: var(--panel); color: var(--muted); font-size: 11px; line-height: 1.5; }
 .acct-doors b { color: var(--fg); }
 .acct-panel .acct-doors { margin: 0; }
@@ -1269,11 +1275,12 @@ button.start { height: 52px; padding: 11px 25px; border-radius: 13px; font-size:
 .acct-res-invalid, .acct-res-failed { color: var(--err); }
 .acct-res-exists, .acct-res-duplicate { color: var(--muted); }
 .acct-err-line { display: block; max-width: 280px; white-space: normal; font-size: 10px; font-weight: 400; color: var(--muted); }
-.acct-reset-row td { white-space: normal; background: color-mix(in srgb, var(--accent) 5%, var(--panel2)); }
+.acct-reset-row td, .acct-ask-row td { white-space: normal; background: color-mix(in srgb, var(--accent) 5%, var(--panel2)); }
+.acct-ask-row td { background: color-mix(in srgb, var(--warn) 7%, var(--panel2)); }
 .acct-reset { display: grid; gap: 8px; padding: 4px 2px; font-size: 11px; line-height: 1.5; color: var(--muted); }
 /* A new-password panel stays in the visible part of a table that scrolls sideways (a phone). */
 .acct-table-wrap { container-type: inline-size; }
-.acct-reset-row .acct-reset { position: sticky; left: 9px; box-sizing: border-box; max-width: calc(100cqi - 18px); }
+.acct-reset-row .acct-reset, .acct-ask-row .acct-reset { position: sticky; left: 9px; box-sizing: border-box; max-width: calc(100cqi - 18px); }
 .acct-reset b { color: var(--fg); }
 .acct-reset-pw { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; color: var(--fg); }
 .acct-reset-pw .acct-pw { font-size: 14px; padding: 3px 8px; border: 1px solid var(--border); border-radius: 7px; background: var(--panel); }
@@ -1306,7 +1313,7 @@ button.start { height: 52px; padding: 11px 25px; border-radius: 13px; font-size:
 /* The Admin tab's tables need the hub's own width (.modal's 720px wins elsewhere). */
 .modal.monitor-hub { transition: width .28s var(--ease), transform .38s var(--ease), opacity .38s var(--ease); }
 .modal.monitor-hub:has(#hub-admin-pane.active) { width: min(1220px, 100%); }
-@media (max-width: 760px) { .acct-form { grid-template-columns: 1fr; } .acct-bulk-gap { display: none; } }
+@media (max-width: 760px) { .acct-form { grid-template-columns: 1fr; } .acct-bulk-gap, .acct-bulk-space { display: none; } }
 .monitor-empty { padding: 24px; border: 1px dashed var(--border); border-radius: 12px; color: var(--dim); text-align: center; font-size: 12px; }
 @media (max-width: 900px) { .choice-dock { grid-template-columns: 1fr 1fr; } .engine-menu, .model-menu { width: min(650px,calc(100vw - 275px)); } .metric-grid { grid-template-columns: repeat(2,minmax(0,1fr)); } .hub-layout { grid-template-columns: 1fr; } .hub-nav { border-right: 0; border-bottom: 1px solid var(--border); flex-direction: row; overflow-x: auto; } .hub-nav button { width: auto; white-space: nowrap; } }
 @media (max-width: 620px) { #view-landing { padding: 24px 12px; } .choice-dock { grid-template-columns: 1fr; } .engine-menu, .model-menu { position: fixed; left: 12px; right: 12px; bottom: 18px; width: auto; max-height: 66vh; grid-template-columns: 1fr; } .model-custom-row { grid-column: 1; } button.start { width: 100%; } .health-grid { grid-template-columns: 1fr; } .metric-grid { grid-template-columns: 1fr 1fr; } .usage-row { grid-template-columns: 90px 1fr; } .usage-row .usage-num:nth-last-child(-n+2) { display: none; } }
@@ -2393,7 +2400,7 @@ body { background:var(--bg); }
             <p class="acct-warn" id="admin-acct-session" role="alert" hidden><b>Your session has ended.</b> Copy the passwords shown here first (they cannot be shown again), then sign in again.</p>
             <div class="acct-toolbar">
               <input type="search" id="admin-acct-q" placeholder="Search name or email…" aria-label="Search accounts by name or email" autocomplete="off" spellcheck="false"/>
-              <select id="admin-acct-filter" aria-label="Show the accounts of a group"><option value="all">All groups</option><option value="none">No group</option></select>
+              <select id="admin-acct-filter" aria-label="Show the accounts of a group, or those with full access"><option value="all">All groups</option><option value="none">No group</option><option value="full">Full access</option></select>
               <button type="button" class="acct-btn" id="admin-acct-list-open" aria-expanded="false" aria-controls="admin-acct-list" disabled>Set access from a list…</button>
             </div>
             <div class="acct-bulk" id="admin-acct-bulk" role="group" aria-label="Selected accounts">
@@ -2407,8 +2414,11 @@ body { background:var(--bg); }
               <input type="text" id="admin-acct-group-name" list="admin-acct-groups" placeholder="Group name" aria-label="Group for the selected accounts" autocomplete="off" spellcheck="false"/>
               <button type="button" class="acct-btn" id="admin-acct-group-set" disabled>Set group</button>
               <button type="button" class="acct-btn" id="admin-acct-group-remove" disabled>Remove from group</button>
+              <span class="acct-bulk-space" aria-hidden="true"></span>
+              <button type="button" class="acct-btn" id="admin-acct-full-on" disabled>Give full access</button>
+              <button type="button" class="acct-btn" id="admin-acct-full-off" disabled>Remove full access</button>
             </div>
-            <div class="acct-warn acct-ask" id="admin-acct-bulk-ask" role="group" aria-label="Selected accounts not shown" hidden></div>
+            <div class="acct-warn acct-ask" id="admin-acct-bulk-ask" role="group" aria-label="Confirm the change for the selected accounts" hidden></div>
             <p class="acct-doors" id="admin-acct-doors" hidden></p>
             <datalist id="admin-acct-groups"></datalist>
             <div class="acct-panel" id="admin-acct-list" hidden>
@@ -2434,6 +2444,8 @@ body { background:var(--bg); }
                     <label class="acct-check off" id="admin-acct-add-send-label"><input type="checkbox" id="admin-acct-add-send" disabled/> Email each person their sign-in details</label>
                     <p class="acct-note" id="admin-acct-add-nomail" hidden>This site cannot send email (SMTP is not set up) — copy the details below and send them yourself.</p>
                     <p class="acct-note" id="admin-acct-add-nourl" hidden>Emails need the site's address (AGENT_MONITOR_APP_URL), which is not set. Messages copied from here say “(the site's address)” instead.</p>
+                    <label class="acct-check" id="admin-acct-add-full-label"><input type="checkbox" id="admin-acct-add-full"/> <span>Full access <small class="acct-dim">· their own Claude Code and Codex, and every engine; for new accounts only (an existing one gets it from the table)</small></span></label>
+                    <p class="acct-warn" id="admin-acct-add-full-warn" hidden></p>
                   </div>
                   <div class="acct-form-col">
                     <label class="acct-field">Sender name <input type="text" id="admin-acct-add-sender" autocomplete="off"/></label>
@@ -2753,8 +2765,8 @@ function modelVisual(id){
   if(s.includes('claude')||['sonnet','opus','fable'].includes(s))return {tone:'25 92% 57%',mark:'CL',glyph:'🟧',provider:'Anthropic'};
   if(s.includes('gemini'))return {tone:'145 68% 44%',mark:'GM',glyph:'🟩',provider:'Google'};
   if(s.includes('grok'))return {tone:'282 76% 61%',mark:'GX',glyph:'🟪',provider:'xAI'};
-  // Codex itself runs for the operator alone.
-  if(s.includes('gpt')||s.includes('codex'))return {tone:'218 88% 59%',mark:'CX',glyph:'🔵',provider:viewerIsAdmin()?'OpenAI · Codex-ready':'OpenAI'};
+  // Codex itself runs for the operator, and for an account given full access (on its own linked Codex).
+  if(s.includes('gpt')||s.includes('codex'))return {tone:'218 88% 59%',mark:'CX',glyph:'🔵',provider:viewerIsAdmin()||viewerHasFullAccess()?'OpenAI · Codex-ready':'OpenAI'};
   return {tone:'265 76% 62%',mark:'AI',glyph:'🎨',provider:'Custom provider'};
 }
 function positionControlPanel(panel,trigger){
@@ -3112,8 +3124,8 @@ function renderSettingsModal(){
   const providerCatalog=isGuest?(SETTINGS.providers||[]).filter(p=>['kimi','openai'].includes(p.id)):(SETTINGS.providers||[]);
   const providers=providerCatalog.map(p=>{
     const v=providerVisual(p.id), sponsored=p.id==='kimi'&&(p.sponsored_available||GUEST_POLICY?.hosted_guest_available), ownKey=p.api_key_set&&!(isGuest&&sponsored&&!p.api_key_masked), state=ownKey?'own key configured':(sponsored?'included':'not configured');
-    // Only the operator chooses endpoints: other accounts' runs use the provider's.
-    const baseField=viewerIsAdmin()&&p.base_var?`<label class="settings-field"><span class="settings-field-label">Base URL <em>OpenAI-compatible endpoint</em></span><div class="settings-input-wrap"><input data-key="${LIB_ESC(p.base_var)}" value="${LIB_ESC(p.base_url||'')}" spellcheck="false"/></div></label>`:'';
+    // Only the operator and accounts given full access choose endpoints: other accounts' runs use the provider's.
+    const baseField=(viewerIsAdmin()||viewerHasFullAccess())&&p.base_var?`<label class="settings-field"><span class="settings-field-label">Base URL <em>OpenAI-compatible endpoint</em></span><div class="settings-input-wrap"><input data-key="${LIB_ESC(p.base_var)}" value="${LIB_ESC(p.base_url||'')}" spellcheck="false"/></div></label>`:'';
     const optionFields=isGuest?'':(p.settings||[]).map(opt=>{ const choices=(opt.choices||[]).map(choice=>`<option value="${LIB_ESC(choice)}" ${String(choice)===String(opt.value)?'selected':''}>${LIB_ESC(choice)}</option>`).join(''); return `<label class="settings-field"><span class="settings-field-label">${LIB_ESC(opt.label||opt.var)} <em>${LIB_ESC(opt.var)}</em></span><div class="settings-input-wrap">${opt.type==='select'?`<select data-key="${LIB_ESC(opt.var)}">${choices}</select>`:`<input data-key="${LIB_ESC(opt.var)}" value="${LIB_ESC(opt.value||'')}"/>`}</div></label>`; }).join('');
     const compatibility=!isGuest&&p.compatibility_note?`<div class="provider-compatibility">Compatibility: ${LIB_ESC(p.compatibility_note)}</div>`:'';
     const advanced=(baseField||optionFields||compatibility)?`<details class="provider-advanced" ${p.id==='kimi'?'open':''}><summary>Advanced endpoint &amp; compatibility</summary>${baseField}${optionFields}${compatibility}</details>`:'';
@@ -3884,7 +3896,8 @@ $('admin-q').oninput=()=>{ clearTimeout(ADMIN.timer); ADMIN.timer=setTimeout(()=
    copied), or another run, clears it. Server text is set as text. ── */
 const ACCOUNTS={list:[],groups:[],loaded:false,loading:null,emailAvailable:false,signInUrl:null,sender:{name:'',email:''},
   defaults:{subject:'',message:'',reset_subject:'',reset_message:'',password_length:12},query:'',filter:'all',
-  selected:new Set(),bulkAsk:null,doors:{signUps:false,guests:false},pending:new Map(),rows:new Map(),seq:0,mutations:0,generation:0,bulkBusy:false,
+  selected:new Set(),bulkAsk:null,doors:{signUps:false,guests:false},pending:new Map(),fullPending:new Map(),fullAsk:null,fullAskRow:null,fullAskFocus:null,
+  rows:new Map(),seq:0,mutations:0,generation:0,bulkBusy:false,
   plan:null,planApply:null,listGroup:'',reviewing:false,applying:false,preview:null,previewHead:null,previewing:false,previewSeq:0,
   results:null,run:null,creating:null,resets:new Map(),retrying:false,formFilled:false,addOpened:false};
 // With email on, people are created (and emailed) five at a time, one request
@@ -3896,6 +3909,9 @@ const ACCOUNT_PREVIEW_LABEL={new:'New account',exists:'Already exists',duplicate
 const ACCOUNT_MONTHS=['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
 const ACCOUNT_NAME_TITLES=new Set(['prof','professor','dr','mr','mrs','ms','mx']);
 const ACCOUNT_ADMIN_NOTE='Administrators always have access; it cannot be turned off.';
+const ACCOUNT_ADMIN_FULL_NOTE='An administrator always has full access.';
+// What full access opens, said where it is given: the form's checkbox, a switch turned on, a change for the selection.
+const ACCOUNT_FULL_WARNING="Full access lets the account link its own Claude Code and Codex and run every engine, including harnesses that run commands on this server with no sandbox: such a run could read the server's files and other accounts' data. Give it only to people you trust.";
 const ACCOUNT_NO_URL="Emails need the site's address (AGENT_MONITOR_APP_URL), which is not set";
 // The server's own texts (accounts_admin.py): a message sent by hand always has
 // one, with the {password} in it, even when the page could not read them.
@@ -3927,7 +3943,8 @@ function adminAccountsFromResponse(data){
     seen.add(key);
     const admin=!!raw.is_admin;
     accounts.push({id:raw.id??null,email,key,name:text(raw.name).trim(),is_admin:admin,group:adminAccountGroupOf(raw.group),created_at:text(raw.created_at),
-      access:admin||raw.access!=='off'?'on':'off',access_paused_at:admin?'':text(raw.access_paused_at),last_sign_in_at:text(raw.last_sign_in_at)});
+      access:admin||raw.access!=='off'?'on':'off',access_paused_at:admin?'':text(raw.access_paused_at),last_sign_in_at:text(raw.last_sign_in_at),
+      full_access:admin||raw.full_access===true});
   }
   // The server's groups, in its order and spelling; any account's group it did not list, after them.
   const listed=(Array.isArray(data?.groups)?data.groups:[]).map(adminAccountGroupOf).filter(Boolean);
@@ -3946,20 +3963,28 @@ function adminAccountAccess(account){
   if(account.is_admin)return 'on';
   return ACCOUNTS.pending.get(account.key)||account.access;
 }
-// The table's group filter: "all", "none" (no group), or "=" and a group's name.
+// Full access, likewise (an administrator always has it).
+function adminAccountFullAccess(account){
+  if(account.is_admin)return true;
+  const pending=ACCOUNTS.fullPending.get(account.key);
+  return pending?pending==='on':!!account.full_access;
+}
+// The table's filter: "all", "none" (no group), "=" and a group's name, or "full" (the accounts with full access).
 function adminAccountInFilter(account,filter){
   if(filter==='none')return !account.group;
+  if(filter==='full')return adminAccountFullAccess(account);
   if(String(filter).startsWith('='))return account.group===String(filter).slice(1);
   return true;
 }
-function adminAccountFilterName(filter){ return filter==='none'?'No group':String(filter).startsWith('=')?String(filter).slice(1):''; }
+function adminAccountFilterName(filter){ return filter==='none'?'No group':filter==='full'?'Full access':String(filter).startsWith('=')?String(filter).slice(1):''; }
 // The accounts whose access can change (administrators' is always on, so they are counted apart).
 function adminAccountCounts(list){
   const people=list.filter(account=>!account.is_admin), on=people.filter(account=>adminAccountAccess(account)==='on').length;
-  return {total:people.length,on,off:people.length-on,admins:list.length-people.length};
+  return {total:people.length,on,off:people.length-on,full:people.filter(account=>adminAccountFullAccess(account)).length,admins:list.length-people.length};
 }
 function adminAccountCountsText(counts,shown,scope){
   let text=`${scope?scope+': ':''}${counts.total} account${counts.total===1?'':'s'} · ${counts.on} access on · ${counts.off} off`;
+  if(counts.full)text+=` · ${counts.full} full access`;
   if(counts.admins)text+=` · ${counts.admins} admin${counts.admins===1?'':'s'}`;
   return shown==null?text:`${text} · ${shown} shown`;
 }
@@ -4035,8 +4060,8 @@ async function readAdminAccounts(){
     sender:state.sender,defaults:state.defaults,loaded:true});
   const selectable=new Set(state.accounts.filter(account=>!account.is_admin).map(account=>account.key));
   for(const key of [...ACCOUNTS.selected])if(!selectable.has(key))ACCOUNTS.selected.delete(key);
-  // A question about the selection asked against the accounts read before is asked again.
-  dropAdminAccountsBulkAsk();
+  // A question about the selection, or a row's, asked against the accounts read before is asked again.
+  dropAdminAccountsBulkAsk(); dropAdminAccountFullAsk();
   // A list reviewed against the accounts read before is reviewed again.
   if(!ACCOUNTS.applying)dropAdminAccessPlan();
   fillAdminAccountsForm();
@@ -4110,7 +4135,8 @@ function renderAdminAccountsDoors(){
 function renderAdminAccountGroups(){
   const groups=ACCOUNTS.groups, filter=$('admin-acct-filter');
   if(String(ACCOUNTS.filter).startsWith('=')&&!groups.includes(ACCOUNTS.filter.slice(1)))ACCOUNTS.filter='all';
-  filter.replaceChildren(adminAccountOption('all','All groups'),...groups.map(group=>adminAccountOption('='+group,group)),adminAccountOption('none','No group'));
+  filter.replaceChildren(adminAccountOption('all','All groups'),...groups.map(group=>adminAccountOption('='+group,group)),adminAccountOption('none','No group'),
+    adminAccountOption('full','Full access'));
   filter.value=ACCOUNTS.filter;
   $('admin-acct-groups').replaceChildren(...groups.map(group=>adminAccountOption(group,group)));
   syncAdminAccessListGroup();
@@ -4136,15 +4162,17 @@ function syncAdminAccountsHead(){
 function renderAdminAccountsTable(){
   const body=$('admin-acct-body'), active=document.activeElement;
   let focus=null, resetFocus=null;
-  for(const [key,row] of ACCOUNTS.rows)for(const part of ['box','toggle','reset'])if(row[part]===active)focus=[key,part];
+  for(const [key,row] of ACCOUNTS.rows)for(const part of ['box','toggle','full','reset'])if(row[part]===active)focus=[key,part];
   for(const reset of ACCOUNTS.resets.values())if(active&&reset.row?.contains(active))resetFocus=reset;
+  const askFocus=!!(active&&ACCOUNTS.fullAskRow?.contains(active));
   ACCOUNTS.rows=new Map();
   for(const reset of ACCOUNTS.resets.values())reset.row=null;
   if(!ACCOUNTS.list.length){ body.replaceChildren(analyzeEl('div','monitor-empty','No accounts yet: add them below.')); return; }
   const shown=adminAccountsShown();
-  if(!shown.length){ body.replaceChildren(analyzeEl('div','monitor-empty',ACCOUNTS.filter==='all'?'No account matches this search.':'No account of this group matches.')); return; }
+  if(!shown.length){ dropAdminAccountFullAsk(); body.replaceChildren(analyzeEl('div','monitor-empty',ACCOUNTS.filter==='all'?'No account matches this search.'
+    :ACCOUNTS.filter==='full'?'No account with full access matches.':'No account of this group matches.')); return; }
   const table=analyzeEl('table','admin-table acct-table'), thead=analyzeEl('thead'), head=analyzeEl('tr'), rows=analyzeEl('tbody');
-  for(const [label,cls,hidden] of [['Select','acct-sel',true],['Name'],['Email'],['Group'],['Created'],['Last sign-in'],['Access'],['Action','acct-act',true]]){
+  for(const [label,cls,hidden] of [['Select','acct-sel',true],['Name'],['Email'],['Group'],['Created'],['Last sign-in'],['Access'],['Full access','acct-full'],['Action','acct-act',true]]){
     const cell=analyzeEl('th',cls); cell.setAttribute('scope','col');
     if(hidden)cell.append(analyzeEl('span','sr-only',label)); else cell.textContent=label;
     head.append(cell);
@@ -4153,13 +4181,16 @@ function renderAdminAccountsTable(){
   for(const account of shown){
     const row=adminAccountRow(account), reset=ACCOUNTS.resets.get(account.key);
     ACCOUNTS.rows.set(account.key,row); rows.append(row.tr);
+    if(ACCOUNTS.fullAsk===account.key)rows.append(adminAccountFullAskRow(account));
     if(reset)rows.append(adminPasswordResetRow(reset));
   }
+  if(ACCOUNTS.fullAsk&&!ACCOUNTS.rows.has(ACCOUNTS.fullAsk))Object.assign(ACCOUNTS,{fullAsk:null,fullAskRow:null,fullAskFocus:null});
   table.append(analyzeEl('caption','sr-only','Accounts'),thead,rows);
   const wrap=analyzeEl('div','admin-table-wrap acct-table-wrap'); wrap.append(table);
   body.replaceChildren(wrap);
   const again=focus&&ACCOUNTS.rows.get(focus[0]);
   if(again)again[focus[1]].focus();
+  else if(askFocus&&ACCOUNTS.fullAskFocus)ACCOUNTS.fullAskFocus.focus();
   else resetFocus?.focus?.focus();
 }
 function adminAccountIsOwn(account){
@@ -4192,6 +4223,13 @@ function adminAccountRow(account){
   if(account.is_admin){ toggle.disabled=true; access.title=ACCOUNT_ADMIN_NOTE; }
   toggle.onclick=()=>toggleAdminAccountAccess(account.key);
   access.append(toggle);
+  // Full access: a switch of its own ("Always" for an administrator); giving it is asked first, under the row.
+  const fullCell=analyzeEl('td','acct-full'), full=analyzeEl('button','acct-switch acct-full-switch'), fullTrack=analyzeEl('span','acct-track'), fullState=analyzeEl('span','acct-state');
+  full.type='button'; full.setAttribute('role','switch'); full.setAttribute('aria-label','Full access for '+label);
+  fullTrack.setAttribute('aria-hidden','true'); full.append(fullTrack,fullState);
+  if(account.is_admin){ full.disabled=true; fullCell.title=ACCOUNT_ADMIN_FULL_NOTE; }
+  full.onclick=()=>toggleAdminAccountFull(account.key);
+  fullCell.append(full);
   const act=analyzeEl('td','acct-act'), reset=adminAccountsButton('New password',()=>openAdminPasswordReset(account.key));
   reset.className+=' acct-mini';
   // The server sets no administrator's password: theirs is changed from the sign-in page.
@@ -4201,8 +4239,8 @@ function adminAccountRow(account){
       :'An administrator’s password is not changed here: they can use “Forgot password?” on the sign-in page.';
   }else reset.title='Give '+label+' a new random password';
   act.append(reset);
-  tr.append(pick,name,email,group,created,seen,access,act);
-  const row={tr,box,toggle,state,reset,account};
+  tr.append(pick,name,email,group,created,seen,access,fullCell,act);
+  const row={tr,box,toggle,state,full,fullState,reset,account};
   syncAdminAccountRowState(row);
   return row;
 }
@@ -4214,6 +4252,11 @@ function syncAdminAccountRowState(row){
   row.state.textContent=on?'On':'Off';
   const since=account.access_paused_at?' since '+adminAccountWhen(account.access_paused_at,true).replace(/^(Today|Yesterday)/,word=>word.toLowerCase()):'';
   row.toggle.title=account.is_admin?ACCOUNT_ADMIN_NOTE:on?`Access on: click to turn it off (signs ${label} out at once)`:`Access off${since}: click to turn it on`;
+  const full=adminAccountFullAccess(account);
+  row.full.setAttribute('aria-checked',String(full));
+  if(ACCOUNTS.fullPending.has(account.key))row.full.setAttribute('aria-busy','true'); else row.full.removeAttribute('aria-busy');
+  row.fullState.textContent=account.is_admin?'Always':full?'Yes':'No';
+  row.full.title=account.is_admin?ACCOUNT_ADMIN_FULL_NOTE:full?`Full access: click to remove it from ${label}`:`No full access: click to give it to ${label} (asked first)`;
   row.box.checked=ACCOUNTS.selected.has(account.key);
 }
 function syncAdminAccountRow(key){
@@ -4245,7 +4288,7 @@ function syncAdminAccountsSelection(){
   const count=ACCOUNTS.selected.size, hidden=[...ACCOUNTS.selected].filter(key=>!ACCOUNTS.rows.has(key)).length;
   $('admin-acct-selected').textContent=count?`${count} selected`+(hidden?` (${hidden} not shown)`:''):'None selected';
   $('admin-acct-bulk').classList.toggle('has-selection',count>0);
-  for(const id of ['admin-acct-on','admin-acct-off','admin-acct-group-set','admin-acct-group-remove'])$(id).disabled=!count;
+  for(const id of ['admin-acct-on','admin-acct-off','admin-acct-group-set','admin-acct-group-remove','admin-acct-full-on','admin-acct-full-off'])$(id).disabled=!count;
 }
 // Turns access on or off for these accounts (administrators are never sent).
 // Their rows show the change at once, and keep it once the server confirms it.
@@ -4315,7 +4358,8 @@ function adminAccountsPicked(keys){
   return {accounts,hidden:accounts.filter(account=>!ACCOUNTS.rows.has(account.key))};
 }
 // Selected rows that are not shown are named before anything is changed: a selection left from before
-// would otherwise go along with the next change. Asked in the page, under the bar.
+// would otherwise go along with the next change. Giving full access is always asked, with what it opens.
+// Asked in the page, under the bar.
 function askAdminAccountsBulk(ask){
   ACCOUNTS.bulkAsk=ask;
   renderAdminAccountsBulkAsk()?.focus();
@@ -4326,17 +4370,21 @@ function renderAdminAccountsBulkAsk(){
   const {accounts,hidden}=adminAccountsPicked(ask.keys), count=accounts.length, s=count===1?'':'s', shown=count-hidden.length;
   const names=hidden.slice(0,8).map(account=>adminAccountLabel(account)).join(', ')+(hidden.length>8?` and ${hidden.length-8} more`:'');
   const what={on:`Turn access on for ${count} account${s}`,off:`Turn access off for ${count} account${s}`,
-    group:`Put ${count} account${s} in the group “${String(ask.group).trim()}”`,ungroup:`Take ${count} account${s} out of ${count===1?'its':'their'} group`}[ask.action];
-  const question=analyzeEl('p','',`${what}, ${hidden.length} not shown here: ${names}?`+(ask.action==='off'?' They are signed out at once.':''));
+    group:`Put ${count} account${s} in the group “${String(ask.group).trim()}”`,ungroup:`Take ${count} account${s} out of ${count===1?'its':'their'} group`,
+    'full-on':`Give full access to ${count} account${s}`,'full-off':`Remove full access from ${count} account${s}`}[ask.action];
+  const question=analyzeEl('p','',(hidden.length?`${what}, ${hidden.length} not shown here: ${names}?`:`${what}?`)+(ask.action==='off'?' They are signed out at once.':''));
   question.id='admin-acct-bulk-question';
+  const parts=[question], giving=ask.action==='full-on';
+  if(giving){ const warning=analyzeEl('p','acct-ask-warning',ACCOUNT_FULL_WARNING); warning.id='admin-acct-bulk-warning'; parts.push(warning); }
   const all=adminAccountsButton({on:`Turn access on for all ${count}`,off:`Turn access off for all ${count}`,group:`Set the group for all ${count}`,
-    ungroup:`Take all ${count} out`}[ask.action],()=>confirmAdminAccountsBulk(false));
-  all.className+=' primary'; all.setAttribute('aria-describedby','admin-acct-bulk-question');
+    ungroup:`Take all ${count} out`,'full-on':`Give full access to ${hidden.length?'all ':''}${count}`,'full-off':`Remove full access from all ${count}`}[ask.action],
+    ()=>confirmAdminAccountsBulk(false));
+  all.className+=' primary'; all.setAttribute('aria-describedby','admin-acct-bulk-question'+(giving?' admin-acct-bulk-warning':''));
   const actions=analyzeEl('div','acct-actions');
   actions.append(all);
-  if(shown)actions.append(adminAccountsButton(`Only the ${shown} shown`,()=>confirmAdminAccountsBulk(true)));
+  if(hidden.length&&shown)actions.append(adminAccountsButton(`Only the ${shown} shown`,()=>confirmAdminAccountsBulk(true)));
   actions.append(adminAccountsButton('Cancel',()=>dropAdminAccountsBulkAsk()));
-  box.replaceChildren(question,actions); box.hidden=false;
+  box.replaceChildren(...parts,actions); box.hidden=false;
   return all;
 }
 // The question goes; a focus inside it goes back to the button that asked it.
@@ -4350,6 +4398,7 @@ function confirmAdminAccountsBulk(onlyShown){
   const ask=ACCOUNTS.bulkAsk; if(!ask)return;
   const keys=onlyShown?ask.keys.filter(key=>ACCOUNTS.rows.has(key)):ask.keys;
   if(ask.action==='on'||ask.action==='off')return adminAccountsBulk(ask.action,keys,ask.keys);
+  if(ask.action==='full-on'||ask.action==='full-off')return adminAccountsBulkFull(ask.action.slice(5),keys,ask.keys);
   return setAdminAccountsGroup(ask.action==='ungroup',keys,ask.group,ask.keys);
 }
 // Once a change for the selection is made, those rows are no longer selected (any ticked meanwhile stay),
@@ -4399,6 +4448,92 @@ async function setAdminAccountsGroup(remove,keys,given,asked){
     doneAdminAccountsSelection(was,$('admin-acct-bulk').contains(document.activeElement));
     await loadAdminAccounts();
   }catch(error){ adminAccountsSay(`Could not ${remove?'take the accounts out of their group':'set the group'}: ${adminAccountSentence(error.message)}`+aside,'err'); }
+  finally{ ACCOUNTS.bulkBusy=false; $('admin-acct-bulk').removeAttribute('aria-busy'); }
+}
+// Full access (its own Claude Code and Codex, every engine) for these accounts, on or off; administrators
+// always have it and are never sent. Their rows show the change at once, and keep it once the server confirms it.
+async function setAdminAccountsFull(emails,value){
+  const keys=[...new Set(emails.map(adminAccountKey))].filter(key=>ACCOUNTS.list.some(account=>account.key===key&&!account.is_admin));
+  if(!keys.length)return {updated:[],skipped:[]};
+  for(const key of keys){ ACCOUNTS.fullPending.set(key,value); syncAdminAccountRow(key); }
+  syncAdminAccountsHead();
+  try{
+    const sent=keys.map(key=>ACCOUNTS.list.find(account=>account.key===key).email);
+    const data=await adminAccountsRequest('/api/admin/accounts/full-access',{emails:sent,full_access:value});
+    const updated=new Set((Array.isArray(data.updated)?data.updated:[]).map(adminAccountKey));
+    for(const account of ACCOUNTS.list)if(keys.includes(account.key)&&updated.has(account.key))account.full_access=value==='on';
+    ACCOUNTS.mutations++;
+    return {updated:keys.filter(key=>updated.has(key)),skipped:adminAccountsSkipped(data)};
+  }finally{
+    for(const key of keys){ ACCOUNTS.fullPending.delete(key); syncAdminAccountRow(key); }
+    syncAdminAccountsHead();
+  }
+}
+function adminFullResultText(result,value){
+  const count=result.updated.length;
+  return (count?`Full access ${value==='on'?'given to':'removed from'} ${count} account${count===1?'':'s'}.`:'No account was changed.')+adminAccountsSkippedText(result.skipped);
+}
+// A row's switch: full access is given once asked (under the row, with what it opens), and taken away at once.
+function toggleAdminAccountFull(key){
+  const account=ACCOUNTS.list.find(item=>item.key===key);
+  if(!account||account.is_admin||ACCOUNTS.fullPending.has(key))return;
+  if(adminAccountFullAccess(account)){ dropAdminAccountFullAsk(); return changeAdminAccountFull(key,'off'); }
+  if(ACCOUNTS.fullAsk===key){ ACCOUNTS.fullAskFocus?.focus(); return; }
+  dropAdminAccountFullAsk();
+  ACCOUNTS.fullAsk=key;
+  ACCOUNTS.rows.get(key)?.tr.after(adminAccountFullAskRow(account));
+  ACCOUNTS.fullAskFocus?.focus();
+}
+function adminAccountFullAskRow(account){
+  const label=adminAccountLabel(account);
+  const tr=analyzeEl('tr','acct-ask-row'), cell=analyzeEl('td'), panel=analyzeEl('div','acct-reset');
+  cell.colSpan=9; panel.setAttribute('role','group'); panel.setAttribute('aria-label','Full access for '+label);
+  const question=analyzeEl('p'), warning=analyzeEl('p','acct-warn',ACCOUNT_FULL_WARNING);
+  question.append('Give ',analyzeEl('b','',label),` (${account.email}) full access?`);
+  const go=adminAccountsButton('Give full access',()=>confirmAdminAccountFull(account.key)), cancel=adminAccountsButton('Cancel',()=>dropAdminAccountFullAsk(true));
+  go.className+=' primary';
+  const actions=analyzeEl('div','acct-actions'); actions.append(go,cancel);
+  panel.append(question,warning,actions); cell.append(panel); tr.append(cell);
+  Object.assign(ACCOUNTS,{fullAskRow:tr,fullAskFocus:go});
+  return tr;
+}
+// The question under a row goes (Cancel, another switch, a search, a new list); a focus in it goes back to the switch.
+function dropAdminAccountFullAsk(back){
+  const key=ACCOUNTS.fullAsk; if(!key)return;
+  const inside=!!ACCOUNTS.fullAskRow?.contains(document.activeElement);
+  ACCOUNTS.fullAskRow?.remove();
+  Object.assign(ACCOUNTS,{fullAsk:null,fullAskRow:null,fullAskFocus:null});
+  if(inside||back)(ACCOUNTS.rows.get(key)?.full||$('admin-acct-q')).focus();
+}
+function confirmAdminAccountFull(key){
+  if(ACCOUNTS.fullAsk!==key)return;
+  dropAdminAccountFullAsk(true);
+  return changeAdminAccountFull(key,'on');
+}
+async function changeAdminAccountFull(key,value){
+  const account=ACCOUNTS.list.find(item=>item.key===key); if(!account)return;
+  const label=adminAccountLabel(account);
+  try{
+    const result=await setAdminAccountsFull([account.email],value);
+    if(result.updated.length)adminAccountsSay(value==='on'?`Full access given to ${label}: they can link their own Claude Code and Codex in Settings.`:`Full access removed from ${label}.`,'ok');
+    else adminAccountsSay(`${label} was not changed: ${adminAccountSentence(result.skipped[0]?.reason||'the server skipped it')}`,'err');
+  }catch(error){ adminAccountsSay(`Could not ${value==='on'?'give':'remove'} full access ${value==='on'?'to':'from'} ${label}: ${adminAccountSentence(error.message)}`,'err'); }
+}
+// Full access for the selected rows: giving it is always asked first (the count, what it opens, the rows not
+// shown); taking it away only when rows are not shown. The selection goes once it is done.
+async function adminAccountsBulkFull(value,keys,asked){
+  if(ACCOUNTS.bulkBusy)return;
+  const {accounts,hidden}=adminAccountsPicked(keys);
+  if(!accounts.length)return;
+  if(!keys&&(value==='on'||hidden.length))return askAdminAccountsBulk({action:'full-'+value,keys:accounts.map(account=>account.key),from:'admin-acct-full-'+value});
+  dropAdminAccountsBulkAsk();
+  const was=[...new Set([...accounts.map(account=>account.key),...(asked||[])])];
+  ACCOUNTS.bulkBusy=true; $('admin-acct-bulk').setAttribute('aria-busy','true');
+  try{
+    const result=await setAdminAccountsFull(accounts.map(account=>account.email),value);
+    adminAccountsSay(adminFullResultText(result,value),result.updated.length&&!result.skipped.length?'ok':'err');
+    doneAdminAccountsSelection(was,$('admin-acct-bulk').contains(document.activeElement));
+  }catch(error){ adminAccountsSay(`Could not ${value==='on'?'give':'remove'} full access: ${adminAccountSentence(error.message)}`,'err'); }
   finally{ ACCOUNTS.bulkBusy=false; $('admin-acct-bulk').removeAttribute('aria-busy'); }
 }
 // "Set access from a list": one entry per line (or between semicolons), list markers dropped: a number, or
@@ -4731,12 +4866,13 @@ function adminAccountsForm(){
   // A box holding only spaces or line breaks is an empty one: the default text, here and on the server.
   // The group goes as typed: the server cleans it, and says which group it is.
   return {lines:adminAccountLines($('admin-acct-add-text').value),password_length:Number($('admin-acct-add-length').value),
-    wants_email:wanted,send_email:wanted&&adminAccountsCanEmail(),group:$('admin-acct-add-group').value,
+    wants_email:wanted,send_email:wanted&&adminAccountsCanEmail(),group:$('admin-acct-add-group').value,full_access:!!$('admin-acct-add-full').checked,
     subject:subject.trim()?subject:'',message:message.trim()?message:'',sender_name:$('admin-acct-add-sender').value.trim()};
 }
 function adminAccountsBody(form,lines){
   const body={text:lines.join('\n'),password_length:form.password_length,send_email:form.send_email,subject:form.subject,message:form.message,sender_name:form.sender_name};
   if(form.group.trim())body.group=form.group;
+  if(form.full_access)body.full_access=true;
   return body;
 }
 // What a message sent by hand says, as the server would fill it in: an invitation from
@@ -4760,7 +4896,8 @@ function adminAccountResult(raw){
   const known=['created','exists','invalid','duplicate'].includes(raw?.status);
   const row={email:text(raw?.email).trim(),name:text(raw?.name).trim(),line:text(raw?.line),status:known?raw.status:'invalid',
     error:text(raw?.error)||(known?'':'The server gave no status for this line.'),group:adminAccountGroupOf(raw?.group),
-    group_joined:raw?.group_joined===true,group_error:text(raw?.group_error)};
+    group_joined:raw?.group_joined===true,group_error:text(raw?.group_error),full_access:raw?.full_access===true,full_access_skipped:raw?.full_access_skipped===true,
+    full_access_error:text(raw?.full_access_error)};
   if(row.status==='created'&&typeof raw.password==='string'&&raw.password)row.password=raw.password;
   if(typeof raw?.email_sent==='boolean')row.email_sent=raw.email_sent;
   return row;
@@ -4771,7 +4908,7 @@ function adminAccountsMerge(rows,results,letter){
   const seen=new Set(rows.filter(row=>row.status==='created'||row.status==='exists').map(row=>adminAccountKey(row.email))), added=[];
   for(const raw of results){
     const row=adminAccountResult(raw), key=adminAccountKey(row.email);
-    if(row.status==='exists'&&seen.has(key))Object.assign(row,{status:'duplicate',error:'Listed more than once',group_joined:false});
+    if(row.status==='exists'&&seen.has(key))Object.assign(row,{status:'duplicate',error:'Listed more than once',group_joined:false,full_access_skipped:false});
     if(row.status==='created'||row.status==='exists')seen.add(key);
     Object.assign(row,{letter,saved:row.email_sent===true});
     rows.push(row); added.push(row);
@@ -4791,6 +4928,7 @@ function syncAdminAccountsCreating(){
   if(busy||ACCOUNTS.previewing)button.setAttribute('aria-busy','true'); else button.removeAttribute('aria-busy');
   for(const id of ['admin-acct-add-text','admin-acct-add-length','admin-acct-add-group'])$(id).readOnly=busy;
   $('admin-acct-add-send').disabled=busy||!adminAccountsCanEmail();
+  $('admin-acct-add-full').disabled=busy;
 }
 // "Create accounts" first asks the server what the list would do (nothing is made or sent),
 // with the same text and options, so that its refusals come before anything is made.
@@ -4824,18 +4962,22 @@ function adminAccountPreviewRow(raw){
   const text=value=>value==null?'':String(value);
   const known=['new','exists','duplicate','invalid'].includes(raw?.status);
   return {email:text(raw?.email).trim(),name:text(raw?.name).trim(),line:text(raw?.line),status:known?raw.status:'invalid',
-    error:text(raw?.error)||(known?'':'The server gave no status for this line.'),group_joined:raw?.group_joined===true};
+    error:text(raw?.error)||(known?'':'The server gave no status for this line.'),group_joined:raw?.group_joined===true,
+    full_access:raw?.full_access===true,full_access_skipped:raw?.full_access_skipped===true};
 }
 // Why a line is invalid, without the line itself (shown beside it).
 function adminAccountPreviewReason(row){
   const error=row.error||'No valid email address on this line', suffix=': '+row.line.slice(0,200);
   return row.line&&error.endsWith(suffix)?error.slice(0,-suffix.length):error;
 }
-function adminAccountPreviewWhat(row,group){
+function adminAccountPreviewWhat(row,group,full){
   if(row.status==='invalid')return `Invalid: ${adminAccountPreviewReason(row)}`;
-  if(row.status==='new'&&group)return `New account · joins ${group}`;
-  if(row.status==='exists'&&row.group_joined)return `Already exists · joins ${group}`;
-  return ACCOUNT_PREVIEW_LABEL[row.status];
+  const what=[ACCOUNT_PREVIEW_LABEL[row.status]];
+  if((row.status==='new'&&group)||(row.status==='exists'&&row.group_joined))what.push(`joins ${group}`);
+  if(row.status==='new'&&(full||row.full_access))what.push('full access');
+  // A list never gives an existing account full access: who registered the address may not be the person listed.
+  if(row.status==='exists'&&row.full_access_skipped)what.push('full access not given (check, then use the table)');
+  return what.join(' · ');
 }
 // What the list would do: a summary, each line as the server read it, then Create or Edit list.
 function renderAdminAccountsPreview(){
@@ -4859,13 +5001,18 @@ function renderAdminAccountsPreview(){
     parts.push(analyzeEl('p','acct-note',preview.groupIsNew?`${group} is a new group: new accounts join it; ${added}.`
       :typed!==group?`New accounts join the existing group ${group} (you typed “${typed}”); ${added}.`:`New accounts join ${group}; ${added}.`));
   }
+  if(preview.form.full_access){
+    const skipped=rows.filter(row=>row.full_access_skipped).length;
+    parts.push(analyzeEl('p','acct-note acct-full-note','New accounts get full access.'+(skipped?` ${skipped} existing account${skipped===1?' is':'s are'} not given full access by a list:`
+      +` check that ${skipped===1?'it is':'each is'} the right person, then give it from the table.`:'')));
+  }
   const table=analyzeEl('table','admin-table acct-preview-table'), thead=analyzeEl('thead'), labels=analyzeEl('tr'), body=analyzeEl('tbody');
   for(const label of ['Name','Email','What will happen','From the line']){ const cell=analyzeEl('th','',label); cell.setAttribute('scope','col'); labels.append(cell); }
   thead.append(labels);
   for(const row of rows){
     const tr=analyzeEl('tr');
     tr.append(analyzeEl('td','acct-name',row.name||'—'),analyzeEl('td','acct-email',row.email||'—'),
-      analyzeEl('td','acct-res-'+row.status,adminAccountPreviewWhat(row,group)),analyzeEl('td','acct-line',row.line));
+      analyzeEl('td','acct-res-'+row.status,adminAccountPreviewWhat(row,group,preview.form.full_access)),analyzeEl('td','acct-line',row.line));
     body.append(tr);
   }
   table.append(analyzeEl('caption','sr-only','What the list would do, line by line'),thead,body);
@@ -4891,7 +5038,7 @@ async function createAdminAccounts(){
   // The group as the preview showed it, in the server's spelling.
   const form={...preview.form,group:preview.group}, letter=preview.letter, total=form.lines.length, generation=ACCOUNTS.generation;
   dropAdminAccountsPreview();
-  const run={total,rows:[],unprocessed:[],stop:null,emailRequested:form.send_email,group:form.group};
+  const run={total,rows:[],unprocessed:[],stop:null,emailRequested:form.send_email,group:form.group,fullAccess:!!form.full_access};
   ACCOUNTS.run=run; ACCOUNTS.results=ACCOUNTS.results||{rows:[]};
   ACCOUNTS.creating={lines:form.lines,done:0};
   syncAdminAccountsCreating(); renderAdminAccountResults();
@@ -4935,13 +5082,18 @@ async function createAdminAccounts(){
 // What "Create accounts" did; after a stop, where and how to retry.
 function adminAccountsCreatedText(run){
   const count=status=>run.rows.filter(row=>row.status===status).length, created=count('created');
-  const parts=[`${created} created`];
+  // Full access the server could not give is said, with where to give it.
+  const fullLost=run.rows.filter(row=>row.full_access_error).length;
+  const parts=[`${created} created`+(run.fullAccess&&created&&!fullLost?' with full access':'')];
   if(count('exists'))parts.push(`${count('exists')} already existed`);
   if(count('duplicate'))parts.push(`${count('duplicate')} listed twice`);
   if(count('invalid'))parts.push(`${count('invalid')} invalid`);
   const joined=run.rows.filter(row=>row.group_joined).length, lost=run.rows.filter(row=>row.group_error).length;
   if(joined)parts.push(`${joined} existing added to ${run.group}`);
   if(lost)parts.push(`${lost} not put in ${run.group} (use Set group)`);
+  const skippedFull=run.rows.filter(row=>row.full_access_skipped).length;
+  if(skippedFull)parts.push(`${skippedFull} existing not given full access (check ${skippedFull===1?'it':'them'}, then use the table)`);
+  if(fullLost)parts.push(`${fullLost} not given full access (give it from the table)`);
   if(run.emailRequested&&created){
     const sent=run.rows.filter(row=>row.email_sent===true).length;
     parts.push(`${sent} email${sent===1?'':'s'} sent`+(created>sent?` (${created-sent} not: copy their details below)`:''));
@@ -5005,6 +5157,9 @@ function adminAccountResultRow(row,index){
   if(row.group_joined)status.append(analyzeEl('span','acct-err-line',`Added to ${row.group}`));
   else if(row.status==='created'&&row.group)status.append(analyzeEl('span','acct-err-line',`In ${row.group}`));
   if(row.group_error)status.append(analyzeEl('span','acct-err-line acct-res-failed',row.group_error));
+  if(row.full_access_skipped)status.append(analyzeEl('span','acct-err-line','Full access not given (check, then use the table)'));
+  else if(row.status==='created'&&row.full_access)status.append(analyzeEl('span','acct-err-line','Full access'));
+  if(row.full_access_error)status.append(analyzeEl('span','acct-err-line acct-res-failed',row.full_access_error));
   if(row.password)password.append(analyzeEl('code','acct-pw',row.password)); else password.textContent='—';
   if(row.status!=='created')sent.textContent='—';
   else{
@@ -5110,7 +5265,7 @@ function redrawAdminPasswordReset(key,focus){
 function adminPasswordResetRow(reset){
   const key=reset.key, label=reset.name||reset.email;
   const tr=analyzeEl('tr','acct-reset-row'), cell=analyzeEl('td'), panel=analyzeEl('div','acct-reset');
-  cell.colSpan=8; panel.setAttribute('role','group'); panel.setAttribute('aria-label','New password for '+label);
+  cell.colSpan=9; panel.setAttribute('role','group'); panel.setAttribute('aria-label','New password for '+label);
   let focus;
   if(reset.stage==='done'){
     const line=analyzeEl('div','acct-reset-pw'), copy=adminAccountsButton('Copy',()=>copyAdminResetPassword(key));
@@ -5231,7 +5386,7 @@ function clearAdminAccountSecrets(){
   for(const reset of ACCOUNTS.resets.values())reset.row?.remove();
   ACCOUNTS.resets.clear();
   // A selection is for one visit: one kept from before could go along with the next change.
-  ACCOUNTS.selected.clear(); ACCOUNTS.bulkAsk=null; renderAdminAccountsBulkAsk();
+  ACCOUNTS.selected.clear(); ACCOUNTS.bulkAsk=null; renderAdminAccountsBulkAsk(); dropAdminAccountFullAsk();
   for(const key of ACCOUNTS.rows.keys())syncAdminAccountRow(key);
   syncAdminAccountsSelection();
   if(opened&&ACCOUNTS.loaded)renderAdminAccountsTable();
@@ -5248,8 +5403,8 @@ function clearAdminAccountSecrets(){
 }
 function wireAdminAccounts(){
   // What the table shows changes which selected rows are not shown: a question about them goes.
-  $('admin-acct-q').oninput=()=>{ ACCOUNTS.query=$('admin-acct-q').value; dropAdminAccountsBulkAsk(); renderAdminAccountsTable(); syncAdminAccountsHead(); syncAdminAccountsSelection(); };
-  $('admin-acct-filter').onchange=()=>{ ACCOUNTS.filter=$('admin-acct-filter').value||'all'; dropAdminAccountsBulkAsk(); renderAdminAccountsTable(); syncAdminAccountsHead(); syncAdminAccountsSelection(); };
+  $('admin-acct-q').oninput=()=>{ ACCOUNTS.query=$('admin-acct-q').value; dropAdminAccountsBulkAsk(); dropAdminAccountFullAsk(); renderAdminAccountsTable(); syncAdminAccountsHead(); syncAdminAccountsSelection(); };
+  $('admin-acct-filter').onchange=()=>{ ACCOUNTS.filter=$('admin-acct-filter').value||'all'; dropAdminAccountsBulkAsk(); dropAdminAccountFullAsk(); renderAdminAccountsTable(); syncAdminAccountsHead(); syncAdminAccountsSelection(); };
   $('admin-acct-all').onclick=()=>selectShownAdminAccounts();
   $('admin-acct-clear').onclick=()=>clearAdminAccountSelection();
   $('admin-acct-on').onclick=()=>adminAccountsBulk('on');
@@ -5257,6 +5412,11 @@ function wireAdminAccounts(){
   $('admin-acct-group-set').onclick=()=>setAdminAccountsGroup(false);
   $('admin-acct-group-remove').onclick=()=>setAdminAccountsGroup(true);
   $('admin-acct-group-name').oninput=()=>dropAdminAccountsBulkAsk();
+  $('admin-acct-full-on').onclick=()=>adminAccountsBulkFull('on');
+  $('admin-acct-full-off').onclick=()=>adminAccountsBulkFull('off');
+  // Full access for the new accounts: what it opens is said under the box while it is ticked.
+  $('admin-acct-add-full-warn').textContent=ACCOUNT_FULL_WARNING;
+  $('admin-acct-add-full').onchange=()=>{ $('admin-acct-add-full-warn').hidden=!$('admin-acct-add-full').checked; dropAdminAccountsPreview(); };
   $('admin-acct-list-open').onclick=()=>toggleAdminAccessList();
   $('admin-acct-list-group').onchange=()=>{ ACCOUNTS.listGroup=$('admin-acct-list-group').value; dropAdminAccessPlan(); syncAdminAccessListGroup(); };
   $('admin-acct-list-review').onclick=reviewAdminAccessList;
@@ -8288,14 +8448,15 @@ function syncLeanPipelineEmptyState(state){
   const title=$('lean-progress-title'), message=$('lean-progress-detail');
   const beforeSource=['error','skipped','stale'].includes(lifecycle)&&!outcome;
   if(title)title.textContent=beforeSource?'Formal translation failed':'Formal verification failed';
-  if(message)message.textContent=(beforeSource?'No Proof.lean was produced. ':'Lean did not verify this proof. ')+detail+(viewerIsAdmin()?' Retry Verify, or choose an available Harness.':' Retry Verify.');
+  if(message)message.textContent=(beforeSource?'No Proof.lean was produced. ':'Lean did not verify this proof. ')+detail+(viewerIsAdmin()||viewerHasFullAccess()?' Retry Verify, or choose an available Harness.':' Retry Verify.');
   return true;
 }
 function leanEditorText(){ return $('lean-code')?.value||''; }
 function syncLeanControls(){
   const guest=Boolean(CURRENT_USER?.guest);
-  /* The coding-agent Harness is the operator's: guests must sign in, members get 403. */
-  const harness=viewerIsAdmin();
+  /* The coding-agent Harness is the operator's, and an account's given full access: guests must sign in,
+     other members get 403. */
+  const harness=viewerIsAdmin()||viewerHasFullAccess();
   const pipeline=lastSandboxRun?.run_id===runId?lastSandboxRun?.auto_pipeline:null;
   const pipelineRunning=guest&&pipeline?.status==='running';
   /* The server refuses a new harness while the pipeline may still run its Lean stage. */
@@ -8669,7 +8830,7 @@ function fillLeanModels(list, preferred){
   sel.disabled=!models.length;
 }
 function fillLeanEngines(list,preferred=''){
-  leanEngines=viewerIsAdmin()?(list||[]):[];
+  leanEngines=viewerIsAdmin()||viewerHasFullAccess()?(list||[]):[];
   const sel=$('lean-engine'); if(!sel)return;
   const keep=runId?leanEngineByRun.get(runId):'';
   sel.innerHTML=leanEngines.map(e=>{
@@ -8970,6 +9131,12 @@ function analyzeEngineEntry(){ return ENGINES.find(e=>e&&e.id==='analyze'&&Array
 function analyzePolicy(){ const e=analyzeEngineEntry(); return e&&e.analyze&&typeof e.analyze==='object'?e.analyze:null; }
 function viewerIsGuest(){ try{ return !!CURRENT_USER?.guest; }catch(e){ return false; } }
 function viewerIsAdmin(){ try{ return !!CURRENT_USER?.is_admin&&!CURRENT_USER?.guest; }catch(e){ return false; } }
+/* An account an administrator gave full access: its own Claude Code and Codex, every engine and harness,
+   so it sees the engine and harness choices the server lets it use. Never a guest; the Admin tab, the
+   accounts and the curator stay the administrator's. (Analyze and Readability follow the server's
+   "available": a full-access account gets the real catalog, and a runner that still needs setup is the
+   administrator's to see.) */
+function viewerHasFullAccess(){ try{ return !!CURRENT_USER?.full_access&&!CURRENT_USER?.guest; }catch(e){ return false; } }
 function analyzeOffered(){
   const e=analyzeEngineEntry();
   if(!e||!analyzePolicy())return false;

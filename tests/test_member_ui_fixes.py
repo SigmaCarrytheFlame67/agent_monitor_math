@@ -263,14 +263,18 @@ class LeanRefusalTests(unittest.TestCase):
         )
 
 
-_VIEWERS = "[['admin',{id:1,is_admin:true,guest:false}],['member',{id:4,is_admin:false,guest:false}],['guest',{id:9,is_admin:false,guest:true}]]"
+_VIEWERS = (
+    "[['admin',{id:1,is_admin:true,guest:false}],['member',{id:4,is_admin:false,guest:false}],['guest',{id:9,is_admin:false,guest:true}],"
+    "['full',{id:5,is_admin:false,guest:false,full_access:true}],['guest_full',{id:10,is_admin:false,guest:true,full_access:true}]]"
+)
 
 
 class MemberFormalHarnessTests(unittest.TestCase):
-    """The coding-agent Formal harness is the operator's: the server refuses
-    it to members (403) as well as to guests."""
+    """The coding-agent Formal harness is the operator's, and an account's an
+    administrator gave full access: the server refuses it to other members
+    (403) as well as to guests (even one flagged with full access)."""
 
-    def test_only_the_operator_is_offered_the_formal_harness(self) -> None:
+    def test_only_the_operator_and_full_access_accounts_are_offered_the_formal_harness(self) -> None:
         program = (
             r"""
 let CURRENT_USER=null, runId=null, lastSandboxRun=null, leanEngines=[];
@@ -280,7 +284,7 @@ function $(id){ return els[id]||(els[id]={id,textContent:'',title:'',disabled:fa
 function escapeHtml(v){ return String(v); }
 function fillLeanModels(){}
 """
-            + "\n".join(_js_function(name) for name in ("viewerIsAdmin", "syncLeanControls", "fillLeanEngines"))
+            + "\n".join(_js_function(name) for name in ("viewerIsAdmin", "viewerHasFullAccess", "syncLeanControls", "fillLeanEngines"))
             + r"""
 const engines=[{id:'codex',label:'Codex CLI',available:true,auth_detail:'OpenAI API key'}];
 const out={};
@@ -295,24 +299,26 @@ console.log(JSON.stringify(out));
 """
         )
         out = _run_node(program)
-        self.assertEqual(
-            out["admin"],
-            {"harness": ["", False], "engine": ["", False], "offered": 1, "mapped": True, "others": [False] * 5},
-        )
-        for viewer in ("member", "guest"):
+        for viewer in ("admin", "full"):
+            self.assertEqual(
+                out[viewer],
+                {"harness": ["", False], "engine": ["", False], "offered": 1, "mapped": True, "others": [False] * 5},
+                viewer,
+            )
+        for viewer in ("member", "guest", "guest_full"):
             self.assertEqual(
                 out[viewer],
                 {"harness": ["none", True], "engine": ["none", True], "offered": 0, "mapped": False, "others": [False] * 5},
                 viewer,
             )
 
-    def test_a_formal_failure_suggests_the_harness_only_to_the_operator(self) -> None:
+    def test_a_formal_failure_suggests_the_harness_only_to_the_operator_and_full_access_accounts(self) -> None:
         program = (
             r"""
 const els={}; function $(id){ return els[id]||(els[id]={textContent:''}); }
 let CURRENT_USER=null; function setLeanBadge(){} function leanStatus(){}
 """
-            + "\n".join(_js_function(name) for name in ("viewerIsAdmin", "pipelineStageVisualStatus", "syncLeanPipelineEmptyState"))
+            + "\n".join(_js_function(name) for name in ("viewerIsAdmin", "viewerHasFullAccess", "pipelineStageVisualStatus", "syncLeanPipelineEmptyState"))
             + r"""
 const out={};
 for(const [label,user] of """ + _VIEWERS + r"""){
@@ -323,15 +329,18 @@ console.log(JSON.stringify(out));
 """
         )
         out = _run_node(program)
-        self.assertTrue(out["admin"].endswith(" Retry Verify, or choose an available Harness."), out["admin"])
-        for viewer in ("member", "guest"):
+        for viewer in ("admin", "full"):
+            self.assertTrue(out[viewer].endswith(" Retry Verify, or choose an available Harness."), out[viewer])
+        for viewer in ("member", "guest", "guest_full"):
             self.assertTrue(out[viewer].endswith(" Retry Verify."), out[viewer])
             self.assertNotIn("Harness", out[viewer])
 
-    def test_only_the_operator_reads_openai_models_as_codex_ready(self) -> None:
+    def test_only_the_operator_and_full_access_accounts_read_openai_models_as_codex_ready(self) -> None:
         program = (
             "let CURRENT_USER=null, CGM_MAX_MODEL='max';\n"
             + _js_function("viewerIsAdmin")
+            + "\n"
+            + _js_function("viewerHasFullAccess")
             + "\n"
             + _js_function("modelVisual")
             + r"""
@@ -341,7 +350,8 @@ console.log(JSON.stringify(out));
 """
         )
         self.assertEqual(
-            _run_node(program), {"admin": "OpenAI · Codex-ready", "member": "OpenAI", "guest": "OpenAI"}
+            _run_node(program),
+            {"admin": "OpenAI · Codex-ready", "member": "OpenAI", "guest": "OpenAI", "full": "OpenAI · Codex-ready", "guest_full": "OpenAI"},
         )
 
 
