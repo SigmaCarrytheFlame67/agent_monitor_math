@@ -832,11 +832,12 @@ def _claude_account_ready(user: dict[str, Any] | None) -> bool:
     if not user or user.get("id") is None:
         return False
     from agent_monitor import claude_login
-    from agent_monitor.auth import is_operator_account
+    from agent_monitor.auth import may_use_own_subscriptions
 
-    # Only the administrator may use a subscription, so a member's sign-in
-    # from before that policy never pulls its DAG work off the API route.
-    return is_operator_account(user["id"]) and claude_login.account_login_ready(
+    # Only the administrator (or an account given full access) may use a
+    # subscription, so another member's sign-in from before that policy never
+    # pulls its DAG work off the API route.
+    return may_use_own_subscriptions(user["id"]) and claude_login.account_login_ready(
         claude_login.account_home(user["id"])
     )
 
@@ -904,10 +905,10 @@ def _codex_account_ready(user: dict[str, Any] | None) -> bool:
     if not user or user.get("id") is None:
         return False
     from agent_monitor import codex_login
-    from agent_monitor.auth import is_operator_account
+    from agent_monitor.auth import may_use_own_subscriptions
 
-    # As for Claude: an API failure never falls back to a member's sign-in.
-    return is_operator_account(user["id"]) and codex_login.account_login_ready(
+    # As for Claude: an API failure never falls back to a restricted member's sign-in.
+    return may_use_own_subscriptions(user["id"]) and codex_login.account_login_ready(
         codex_login.account_home(user["id"])
     )
 
@@ -1921,7 +1922,7 @@ def generate(
     # Only a legacy run (no recorded route) may pick a subscription by model
     # name or account preference, and never a member's: subscriptions are the
     # administrator's, even a sign-in a member linked before that policy.
-    may_pick_subscription = recorded_route is None and not account_policy.is_member(user)
+    may_pick_subscription = recorded_route is None and not account_policy.is_restricted(user)
     use_codex = recorded_route == "codex_subscription" or (
         requested_codex and allow_codex_fallback and may_pick_subscription
     )

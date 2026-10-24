@@ -207,7 +207,7 @@ console.log(JSON.stringify(cases));
         self.assertEqual(output["ok"], "failed")
 
     def test_harness_selector_is_isolated_per_run_and_fails_closed(self) -> None:
-        source = _js_function("viewerIsAdmin") + "\n" + _js_function("fillLeanEngines")
+        source = _js_function("viewerIsAdmin") + "\n" + _js_function("viewerHasFullAccess") + "\n" + _js_function("fillLeanEngines")
         output = _run_node(
             """
 let leanEngines=[];
@@ -236,7 +236,15 @@ runId='run-c'; fillLeanEngines([{id:'codex',label:'Codex',available:false}], 'co
 const closed=select.value, html=select.innerHTML;
 CURRENT_USER={id:8,guest:true}; runId='run-g';
 fillLeanEngines(engines,'codex');
-console.log(JSON.stringify({firstA,firstB,restoredA,closed,html,guest:select.value,guestEngines:leanEngines.length,guestMapped:leanEngineByRun.has('run-g')}));
+const guest=select.value, guestEngines=leanEngines.length, guestMapped=leanEngineByRun.has('run-g');
+// A guest flagged with full access still gets none; a member does only when given full access.
+CURRENT_USER={id:8,guest:true,full_access:true}; runId='run-g2'; fillLeanEngines(engines,'codex');
+const guestFull=leanEngines.length;
+CURRENT_USER={id:9,guest:false,is_admin:false}; runId='run-m'; fillLeanEngines(engines,'codex');
+const member=leanEngines.length;
+CURRENT_USER={id:10,guest:false,is_admin:false,full_access:true}; runId='run-f'; fillLeanEngines(engines,'codex');
+const full=[select.value,leanEngines.length];
+console.log(JSON.stringify({firstA,firstB,restoredA,closed,html,guest,guestEngines,guestMapped,guestFull,member,full}));
 """
         )
         self.assertEqual(output["firstA"], "codex")
@@ -247,6 +255,10 @@ console.log(JSON.stringify({firstA,firstB,restoredA,closed,html,guest:select.val
         self.assertEqual(output["guest"], "")
         self.assertEqual(output["guestEngines"], 0)
         self.assertFalse(output["guestMapped"])
+        self.assertEqual(output["guestFull"], 0)
+        # A member gets none either, unless an administrator gave the account full access.
+        self.assertEqual(output["member"], 0)
+        self.assertEqual(output["full"], ["codex", 2])
 
     def test_pipeline_visual_status_uses_proof_outcome_not_lifecycle(self) -> None:
         source = _js_function("pipelineStageVisualStatus")
@@ -277,6 +289,7 @@ console.log(JSON.stringify({
         source = "\n".join(
             (
                 _js_function("viewerIsAdmin"),
+                _js_function("viewerHasFullAccess"),
                 _js_function("pipelineStageVisualStatus"),
                 _js_function("syncLeanPipelineEmptyState"),
             )
@@ -305,7 +318,10 @@ const startup={badge,meta,title:elements['lean-progress-title'].textContent,deta
 CURRENT_USER={id:8,guest:true};
 run({status:'error',detail:'node exited 127'});
 const guestStartup={badge,title:elements['lean-progress-title'].textContent,detail:elements['lean-progress-detail'].textContent};
-console.log(JSON.stringify({incomplete,failed,startup,guestStartup}));
+CURRENT_USER={id:9,guest:false,is_admin:false,full_access:true};
+run({status:'error',detail:'node exited 127'});
+const fullStartup=elements['lean-progress-detail'].textContent;
+console.log(JSON.stringify({incomplete,failed,startup,guestStartup,fullStartup}));
 """
         )
         self.assertEqual(output["incomplete"]["badge"], "incomplete")
@@ -321,6 +337,8 @@ console.log(JSON.stringify({incomplete,failed,startup,guestStartup}));
         self.assertEqual(output["guestStartup"]["title"], "Formal translation failed")
         self.assertIn("Retry Verify", output["guestStartup"]["detail"])
         self.assertNotIn("Harness", output["guestStartup"]["detail"])
+        # An account given full access may choose a Harness, as the operator may.
+        self.assertIn("choose an available Harness", output["fullStartup"])
 
     def test_run_switch_resets_old_pipeline_and_formal_dag_is_disclaimed(self) -> None:
         self.assertIn("lastSandboxRun=null;\n  leanRefreshSeq++", HTML)

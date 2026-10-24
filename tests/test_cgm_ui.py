@@ -618,8 +618,9 @@ console.log(JSON.stringify(out));
 
     def test_guest_lean_and_dag_actions_follow_the_policy(self) -> None:
         sync = _js_function("syncLeanControls")
-        # Harness selector and button stay the operator's, never a guest's ...
-        self.assertIn("const harness=viewerIsAdmin();", sync)
+        # Harness selector and button stay the operator's (and a full-access account's), never a guest's ...
+        self.assertIn("const harness=viewerIsAdmin()||viewerHasFullAccess();", sync)
+        self.assertIn("!!CURRENT_USER?.full_access&&!CURRENT_USER?.guest", _js_function("viewerHasFullAccess"))
         self.assertIn("btn.disabled=!harness||", sync)
         self.assertIn("btn.style.display=harness?'':'none'", sync)
         self.assertIn("engineSelect.disabled=!harness", sync)

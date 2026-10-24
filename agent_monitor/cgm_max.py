@@ -80,7 +80,7 @@ def plan_for(user: Mapping[str, Any] | None) -> dict[str, Any]:
         return plan
     from agent_monitor import account_policy
 
-    if account_policy.is_member(user):
+    if account_policy.is_restricted(user):
         plan["reason"] = (
             "Max runs on linked Claude Code and Codex subscriptions, which are "
             "limited to the site administrator"

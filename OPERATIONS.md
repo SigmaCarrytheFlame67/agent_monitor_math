@@ -96,7 +96,9 @@ what members can do" in `deploy/ansatze/README.md`). Self-registered members
 are untrusted: `agent_monitor/account_policy.py` keeps them on the tool-free
 engines (`kimi`, `plain`, and `math_harness` on their own API keys only)
 without subscriptions, subagents or custom provider endpoints, because ordinary
-local harnesses do not isolate hostile prompts from the host. Enrollment
+local harnesses do not isolate hostile prompts from the host. An administrator
+can lift that for chosen accounts with **full access** (see "Accounts an
+administrator manages"). Enrollment
 changes require a daemon reload and service restart after
 confirming no proof processes are active. `AGENT_MONITOR_REGISTRATION_EMAIL_SUFFIXES`
 (for example `.edu`) limits which addresses may sign up, and
@@ -186,14 +188,41 @@ Admin view → **Accounts** (`GET /api/admin/accounts`, administrators only;
     the stored `group` and `group_is_new`.
   - **Scope:** a group only scopes "everyone else" for access, and changes
     nothing else. "Everyone else off" for a group nobody is in is refused.
+- **Full access.** `POST /api/admin/accounts/full-access {emails,
+  full_access: "on" | "off"}`, or `full_access: true` when adding accounts.
+  Adding gives it to new accounts only: an address that already had an
+  account comes back `full_access_skipped`, because whoever registered it
+  first may not be the person on the list. Give it from the table once
+  checked.
+  - **What it lifts:** an account with full access is no longer restricted
+    (`account_policy.is_restricted`). It may link its own Claude Code and
+    Codex in Settings, run Max on them, and run every engine except Hermes.
+    That includes the coding-agent harnesses, which run commands on this
+    host with no OS sandbox: such a run, or a prompt injection in what it
+    reads, can read the server's files and other accounts' data. Give it
+    only to people you trust. It may also use and verify custom provider
+    endpoints.
+  - **What it keeps:** it always runs on its own keys and linked accounts,
+    never the administrator's. It keeps the member rate limits and feedback
+    caps. It reaches the sponsored Kimi K3 only through the engines every
+    member may (Kimi K3, Plain, Analyze, Readability), so never through the
+    CGM or coding harnesses. Hermes stays the administrator's: it runs
+    inside the console process, where its tools see the server's own
+    environment. It
+    never sees the server's keys, opens the admin pages, writes the
+    operator's library or research atlas, or counts as an operator in
+    projects (which stay tool-free once a non-administrator writes in them).
+  - **Taking it back:** applies from the account's next request; runs it
+    already started finish.
 - **New password.** `POST /api/admin/accounts/password {email,
   send_email?}`: a new random password, shown once; the person is signed out.
   The email uses its own new-password message. Never for an administrator's
   account: they use "Forgot password" or `agent-monitor set-password` on the
   server.
 - **From the server.** `python -m agent_monitor.accounts_admin list | create
-  <file> [--group … --send-email --url … --sender … --reply-to …] | on
-  <emails> | off <emails> | group <group> <emails> | password <email>`. On
+  <file> [--group … --full-access --send-email --url … --sender … --reply-to …]
+  | on <emails> | off <emails> | full-access on|off <emails> | group <group>
+  <emails> | password <email>`. On
   ansatze.ai:
 
   ```bash
@@ -281,7 +310,8 @@ ceilings, so an environment value can only lower them.
   `gpt-6-astra`, `gpt-6.1-sol`, `gpt-6-sol`, `gpt-5.6-sol` it offers, answers
   the worker and repair calls; both at maximum effort, with the run mode fixed.
   The console offers it only when both accounts are linked, which on this site
-  means the administrator; members and guests are refused, and Max is never
+  means the administrator, or an account given full access on its own linked
+  accounts; other members and guests are refused, and Max is never
   billed to an API key. Each call sees only its own account: Codex calls get
   `CODEX_HOME` and the service `HOME`, never `CLAUDE_CONFIG_DIR`, and Claude
   calls never get `CODEX_HOME`. Each call may take 1800 s and the run 10800 s

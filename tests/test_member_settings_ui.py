@@ -387,10 +387,11 @@ console.log(JSON.stringify(out));
             ],
         )
 
-    def test_only_the_operator_is_offered_a_provider_base_url(self) -> None:
+    def test_only_the_operator_and_full_access_accounts_are_offered_a_provider_base_url(self) -> None:
         # A member's runs use the provider's standard endpoint whatever it
-        # stores (the server refuses a custom base), so it gets no field.
-        source = "\n".join(_js_function(name) for name in ("viewerIsAdmin", "renderSettingsModal"))
+        # stores (the server refuses a custom base), so it gets no field; an
+        # account an administrator gave full access may set one, as the operator may.
+        source = "\n".join(_js_function(name) for name in ("viewerIsAdmin", "viewerHasFullAccess", "renderSettingsModal"))
         program = f"""
 const LIB_ESC=value=>String(value);
 const els={{}};
@@ -403,7 +404,7 @@ const provider=(id,base_var,base_url)=>({{id,label:id,key_var:id.toUpperCase()+'
 const SETTINGS={{providers:[provider('openai','OPENAI_BASE_URL','https://api.openai.com/v1'),provider('kimi','KIMI_API_BASE','https://kimi.example/v1')]}};
 {source}
 const out=[];
-for(const user of [{{is_admin:false}},{{is_admin:true}},{{is_admin:false,guest:true}}]){{
+for(const user of [{{is_admin:false}},{{is_admin:true}},{{is_admin:false,guest:true}},{{is_admin:false,full_access:true}},{{is_admin:false,guest:true,full_access:true}}]){{
   CURRENT_USER=user; renderSettingsModal();
   const html=els['settings-body'].innerHTML;
   out.push([html.includes('data-key="OPENAI_BASE_URL"'),html.includes('data-key="KIMI_API_BASE"'),html.includes('data-key="OPENAI_API_KEY"')]);
@@ -412,7 +413,7 @@ console.log(JSON.stringify(out));
 """
         self.assertEqual(
             _run(program),
-            [[False, False, True], [True, True, True], [False, False, True]],
+            [[False, False, True], [True, True, True], [False, False, True], [True, True, True], [False, False, True]],
         )
 
     def test_continue_is_sent_once_and_reports_an_already_running_run(self) -> None:

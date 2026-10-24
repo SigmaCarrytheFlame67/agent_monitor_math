@@ -245,6 +245,11 @@ def restrict_account_base_urls(
     """
     if user is None or (bool(user.get("is_admin")) and not user.get("guest")):
         return env
+    from agent_monitor import account_policy
+
+    if account_policy.has_full_access(user):
+        # It already runs local tools on this host, so the endpoint it chose stands.
+        return env
     server = _read_env_file()
     for name in _account_base_vars():
         value = str(env.get(name) or "").strip().rstrip("/")
@@ -646,9 +651,11 @@ def get_settings(user: dict[str, Any] | None = None) -> dict[str, Any]:
 
     from agent_monitor import account_policy
 
-    # A member cannot connect or use a subscription, so its runtime is always
-    # the API route and its (never linked) account homes are not probed.
+    # A restricted member cannot connect or use a subscription, so its runtime
+    # is always the API route and its (never linked) account homes are not
+    # probed.  No member, full access or not, sees the server's keys.
     member = account_policy.is_member(user)
+    restricted = account_policy.is_restricted(user)
     general_env = env
     if member:
         # Public mode lends a member the server's provider keys and endpoints
@@ -679,13 +686,13 @@ def get_settings(user: dict[str, Any] | None = None) -> dict[str, Any]:
                 provider["base_url"] = ""
         if not own_base("AGENT_MONITOR_BASE_URL"):
             general_env = {**env, "AGENT_MONITOR_BASE_URL": ""}
-    runtime = "api" if member else account_runtime(user, env=env)
+    runtime = "api" if restricted else account_runtime(user, env=env)
     use_codex = runtime == "codex"
     use_claude = runtime == "claude"
     codex_connected = False
     codex_reauth_required = False
     codex_models: list[str] = []
-    if user is not None and not user.get("guest") and not member:
+    if user is not None and not user.get("guest") and not restricted:
         try:
             from agent_monitor import codex_login
 
@@ -702,7 +709,7 @@ def get_settings(user: dict[str, Any] | None = None) -> dict[str, Any]:
     # is never used, but it stays on the server until removed.  Look for its
     # credential file only: no CLI probe, and no account home is created.
     stored_logins: dict[str, bool] = {}
-    if member:
+    if restricted:
         try:
             from agent_monitor import claude_login, codex_login
 
@@ -716,7 +723,7 @@ def get_settings(user: dict[str, Any] | None = None) -> dict[str, Any]:
     claude_connected = False
     claude_reauth_required = False
     claude_models: list[str] = []
-    if user is not None and not user.get("guest") and not member:
+    if user is not None and not user.get("guest") and not restricted:
         try:
             from agent_monitor import claude_login
 
@@ -836,7 +843,7 @@ def get_settings(user: dict[str, Any] | None = None) -> dict[str, Any]:
         "claude_reauth_required": claude_reauth_required,
         "cgm_max": cgm_max_plan,
         "subscription_policy": account_policy.subscription_policy(user),
-        "subscription_notes": account_policy.subscription_notes() if member else {},
+        "subscription_notes": account_policy.subscription_notes() if restricted else {},
         "subscription_stored": stored_logins,
         "auth_mode": auth_mode,
         "general": {
@@ -880,7 +887,7 @@ def save_settings(body: dict[str, Any], user: dict[str, Any] | None = None) -> d
     if runtime is not None and runtime != "api":
         from agent_monitor import account_policy
 
-        if account_policy.is_member(user):
+        if account_policy.is_restricted(user):
             # Subscription sign-in is administrator-only, so a member's runs
             # always bill an API key; keep the stored runtime consistent.
             runtime = "api"
@@ -915,7 +922,7 @@ def save_settings(body: dict[str, Any], user: dict[str, Any] | None = None) -> d
         from agent_monitor.auth import set_user_env
 
         allowed = _known_env_keys()
-        if account_policy.is_member(user):
+        if account_policy.is_restricted(user):
             clear += _member_base_url_clears(int(user["id"]), updates)
         if user.get("guest"):
             requested = set(updates) | set(clear)
@@ -1041,8 +1048,16 @@ def verify_provider(
     if is_guest and provider_id not in GUEST_PROVIDER_IDS:
         raise ValueError("That provider requires a signed-in account")
     # The server-level check (no user) and the admin account are the operator;
-    # every other account may verify keys only against built-in endpoints.
-    operator = user is None or (bool(user.get("is_admin")) and not is_guest)
+    # with an account given full access, they may verify a custom endpoint
+    # (the key always comes from the account's own settings); every other
+    # account may verify keys only against built-in endpoints.
+    from agent_monitor import account_policy
+
+    operator = (
+        user is None
+        or (bool(user.get("is_admin")) and not is_guest)
+        or account_policy.has_full_access(user)
+    )
 
     env = resolved_user_env(user) if user is not None else _read_env_file()
     key = (api_key or "").strip() or env.get(spec["key_var"]) or ""

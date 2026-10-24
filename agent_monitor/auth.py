@@ -236,17 +236,19 @@ def _migrate_user_roles(conn: sqlite3.Connection) -> None:
 
 def _migrate_access_pause(conn: sqlite3.Connection) -> None:
     """Add the time an administrator paused an account's access (NULL: on),
-    when the account last signed in (kept after its sessions end), and the
-    group an administrator put it in (a field test's participants, say)."""
+    when the account last signed in (kept after its sessions end), the group
+    an administrator put it in (a field test's participants, say), and
+    whether an administrator gave it full access (account_policy)."""
     columns = {
         str(row["name"])
         for row in conn.execute("PRAGMA table_info(users)").fetchall()
     }
-    for column in ("access_paused_at", "last_sign_in_at", "account_group"):
+    for column, kind in (("access_paused_at", "TEXT"), ("last_sign_in_at", "TEXT"), ("account_group", "TEXT"),
+                         ("full_access", "INTEGER NOT NULL DEFAULT 0")):
         if column in columns:
             continue
         try:
-            conn.execute(f"ALTER TABLE users ADD COLUMN {column} TEXT")
+            conn.execute(f"ALTER TABLE users ADD COLUMN {column} {kind}")
         except sqlite3.OperationalError as exc:
             # Another process (the console, the command line) added it first.
             if "duplicate column name" not in str(exc):
@@ -422,6 +424,8 @@ def _user_dict(row: sqlite3.Row | None) -> dict[str, Any] | None:
         "picture": row["picture"],
         "is_admin": bool(row["is_admin"]) and not is_guest,
         "guest": is_guest,
+        # Given by an administrator (account_policy.has_full_access).
+        "full_access": bool("full_access" in row.keys() and row["full_access"]) and not is_guest,
     }
 
 
@@ -441,6 +445,29 @@ def is_operator_account(user_id: int | None) -> bool:
     except Exception:  # noqa: BLE001 - fail closed
         return False
     return bool(row is not None and row["is_admin"] and not row["is_guest"])
+
+
+def is_full_access_account(user_id: int | None) -> bool:
+    """Whether ``user_id`` is a registered account an administrator gave full
+    access (never a guest).  Fails closed, like :func:`is_operator_account`."""
+    if user_id is None:
+        return False
+    try:
+        with closing(_conn()) as conn:
+            row = conn.execute(
+                "SELECT full_access, is_guest FROM users WHERE id=?", (int(user_id),)
+            ).fetchone()
+    except Exception:  # noqa: BLE001 - fail closed
+        return False
+    return bool(row is not None and row["full_access"] and not row["is_guest"])
+
+
+def may_use_own_subscriptions(user_id: int | None) -> bool:
+    """Whether runs of ``user_id`` may use the Claude Code and Codex
+    subscriptions that account linked itself: an administrator, or an
+    account given full access.  The stored role decides, so a sign-in linked
+    by an account without it is never used."""
+    return is_operator_account(user_id) or is_full_access_account(user_id)
 
 
 def _registered_user_exists(conn: sqlite3.Connection) -> bool:

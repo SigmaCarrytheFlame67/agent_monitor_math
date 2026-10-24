@@ -1199,8 +1199,9 @@ def viewer_policy(user: Mapping[str, Any] | None, *, guest_runs_per_hour: int = 
         "enabled": refusal is None,
         "reason": str(refusal) if refusal is not None else None,
         "role": role,
+        # An account given full access may use its own linked subscriptions.
         "routes": (["sponsored_kimi"] if sponsored_only
-                   else ["sponsored_kimi", "api_key"] if role == "member"
+                   else ["sponsored_kimi", "api_key"] if account_policy.is_restricted(dict(user or {}))
                    else ["sponsored_kimi", "api_key", "codex_subscription", "claude_subscription"]),
         "sponsored": GATE.snapshot(guest=role == "guest"),
         "caps": {
