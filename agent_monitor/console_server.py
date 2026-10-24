@@ -2291,6 +2291,118 @@ class Handler(RunSharingMixin, ProjectsMixin, ResearchMixin, BaseHTTPRequestHand
             return None
         return user
 
+    def _accounts_payload(self, user: dict) -> dict:
+        """``GET /api/admin/accounts``: every registered account and its access,
+        and what an invitation needs (whether the site can send email, the
+        sign-in address, the operator as sender, the default message)."""
+        from agent_monitor import accounts_admin, auth
+
+        accounts = accounts_admin.list_accounts()
+        return {
+            "accounts": accounts,
+            "groups": sorted({account["group"] for account in accounts if account["group"]}, key=str.casefold),
+            # Other ways in that a pause does not close: a new sign-up (with
+            # another address, or another Google account) and guest use.
+            "open_doors": {"sign_ups": auth.registration_open(), "guests": guest_access_enabled()},
+            "email_available": auth.email_delivery_configured(),
+            "sign_in_url": accounts_admin.sign_in_url(self._request_base_path()),
+            "sender": {"name": str(user.get("name") or ""), "email": str(user.get("email") or "")},
+            "defaults": {"subject": accounts_admin.DEFAULT_SUBJECT, "message": accounts_admin.DEFAULT_MESSAGE,
+                         "reset_subject": accounts_admin.RESET_SUBJECT,
+                         "reset_message": accounts_admin.RESET_MESSAGE,
+                         "password_length": accounts_admin.DEFAULT_PASSWORD_LENGTH,
+                         "placeholders": list(accounts_admin.PLACEHOLDERS)},
+        }
+
+    def _admin_accounts_post(self, path: str, body: dict, user: dict) -> None:
+        """``POST /api/admin/accounts`` (create from a pasted list, optionally
+        emailing each new person their sign-in details; with ``preview``,
+        only what it would do), ``/access`` (turn access on or off; with
+        ``others: "off"`` and a ``group``, everyone else in the group off),
+        ``/group`` (put accounts in a group) and ``/password`` (a new random
+        password).  The passwords are in this response only."""
+        from agent_monitor import accounts_admin, auth
+
+        sender_name = " ".join(str(body.get("sender_name") or user.get("name") or user.get("email") or "").split())[:120]
+        reply_to = str(user.get("email") or "") or None
+        subject = str(body.get("subject") or "")[:200] or None
+        message = str(body.get("message") or "")[:10_000]
+        message = message if message.strip() else None
+        send_email = body.get("send_email") is True
+        url = accounts_admin.sign_in_url(self._request_base_path())
+        email_available = auth.email_delivery_configured()
+        refusal = None
+        if send_email and not email_available:
+            refusal = "This site cannot send email (SMTP is not set up); send the details yourself"
+        elif send_email and not url:
+            refusal = ("Emails need the site's address (AGENT_MONITOR_APP_URL), which is not set; "
+                       "send the details yourself")
+        elif send_email and path == "/api/admin/accounts" and message and "{password}" not in message:
+            refusal = "The message must contain {password}: without it nobody could sign in"
+        if refusal:
+            self._send(400, json.dumps({"error": refusal}), headers={"Cache-Control": "no-store"})
+            return
+        try:
+            if path == "/api/admin/accounts":
+                text = body.get("text")
+                if not isinstance(text, str) or not text.strip():
+                    raise ValueError("Paste one person per line: 'Name - email', 'Name <email>' or 'email'")
+                preview = body.get("preview") is True
+                group, group_is_new = accounts_admin.resolve_group(body.get("group"))
+                results = accounts_admin.create_accounts(accounts_admin.parse_people(text),
+                                                         password_length=body.get("password_length"), preview=preview,
+                                                         group=group)
+                for result in results:
+                    if send_email and not preview and result["status"] == "created":
+                        result["email_sent"] = accounts_admin.send_invite(
+                            email=result["email"], name=result["name"], password=result["password"], url=url,
+                            sender_name=sender_name, reply_to=reply_to, subject=subject, message=message)
+                if not preview:
+                    logger.info("[ADMIN] %s created %d account(s)", user.get("email"),
+                                sum(1 for result in results if result["status"] == "created"))
+                payload: dict = {"results": results, "email_available": email_available, "group": group,
+                                 "group_is_new": group_is_new}
+                stopped = next((result["error"] for result in results if result["status"] == "not_processed"), None)
+                if stopped:
+                    payload["stopped"] = stopped
+            elif path == "/api/admin/accounts/access":
+                emails = body.get("emails")
+                access = body.get("access")
+                others = body.get("others")
+                if not isinstance(emails, list) or not all(isinstance(email, str) for email in emails):
+                    raise ValueError("emails must be a list of email addresses")
+                if access not in ("on", "off"):
+                    raise ValueError('access must be "on" or "off"')
+                if others not in (None, "off"):
+                    raise ValueError('others may only be "off"')
+                payload = accounts_admin.set_access(emails, on=access == "on", others_off=others == "off",
+                                                    group=body.get("group"))
+                logger.info("[ADMIN] %s turned access %s for %d account(s)%s", user.get("email"), access,
+                            len(payload["updated"]),
+                            f" and off for {len(payload['turned_off'])} other(s)" if others == "off" else "")
+            elif path == "/api/admin/accounts/group":
+                emails = body.get("emails")
+                if not isinstance(emails, list) or not all(isinstance(email, str) for email in emails):
+                    raise ValueError("emails must be a list of email addresses")
+                payload = accounts_admin.set_group(emails, body.get("group"))
+                logger.info("[ADMIN] %s set the group of %d account(s)", user.get("email"), len(payload["updated"]))
+            else:
+                email = str(body.get("email") or "").strip().lower()
+                password = accounts_admin.new_password(email, password_length=body.get("password_length"))
+                payload = {"email": email, "password": password}
+                if send_email:
+                    # A new password has its own message (the add form's says the account was created).
+                    account = next((item for item in accounts_admin.list_accounts() if item["email"] == email), {})
+                    payload["email_sent"] = accounts_admin.send_invite(
+                        email=email, name=str(account.get("name") or ""), password=password, url=url,
+                        sender_name=sender_name, reply_to=reply_to, subject=accounts_admin.RESET_SUBJECT,
+                        message=accounts_admin.RESET_MESSAGE)
+                logger.info("[ADMIN] %s set a new password for one account", user.get("email"))
+        except ValueError as exc:
+            self._send(400, json.dumps({"error": str(exc)}, ensure_ascii=False), headers={"Cache-Control": "no-store"})
+            return
+        self._send(200, json.dumps(payload, ensure_ascii=False), headers={"Cache-Control": "no-store"})
+
     def _require_operator(self, user: dict) -> bool:
         """Admin-only endpoints: enforced here, never by the UI alone."""
         if _is_operator_user(user):
@@ -3309,6 +3421,13 @@ class Handler(RunSharingMixin, ProjectsMixin, ResearchMixin, BaseHTTPRequestHand
             self._send(200, json.dumps({"jobs": job_manager.list_jobs(owner_id=owner)}))
             return
 
+        if path == "/api/admin/accounts":
+            if not self._require_operator(user):
+                return
+            self._send(200, json.dumps(self._accounts_payload(user), ensure_ascii=False),
+                       headers={"Cache-Control": "no-store"})
+            return
+
         if path in ("/api/admin/usage", "/api/admin/runs"):
             if not self._require_operator(user):
                 return
@@ -3938,6 +4057,13 @@ class Handler(RunSharingMixin, ProjectsMixin, ResearchMixin, BaseHTTPRequestHand
             return
         user = upload_user if accepts_attachments else self._require_user(path)
         if user is None:
+            return
+
+        if path in ("/api/admin/accounts", "/api/admin/accounts/access", "/api/admin/accounts/group",
+                    "/api/admin/accounts/password"):
+            if not self._require_operator(user):
+                return
+            self._admin_accounts_post(path, body if isinstance(body, dict) else {}, user)
             return
 
         if path == "/api/analyze/resolve":

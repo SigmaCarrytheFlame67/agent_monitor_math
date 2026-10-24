@@ -113,6 +113,27 @@ class EmailDeliveryUnavailable(RuntimeError):
     """Sign-up needs a verification email, but outgoing mail is not configured."""
 
 
+ACCESS_PAUSED_ENV = "AGENT_MONITOR_ACCESS_PAUSED_MESSAGE"
+ACCESS_PAUSED_MESSAGE = (
+    "Your access to this site is paused for now. Please check with the organizers or the site administrator."
+)
+
+
+class AccessPaused(PermissionError):
+    """The password was right, but an administrator has paused this account's access."""
+
+
+def access_paused_message() -> str:
+    return (os.environ.get(ACCESS_PAUSED_ENV) or "").strip()[:500] or ACCESS_PAUSED_MESSAGE
+
+
+def _check_access(row: sqlite3.Row) -> None:
+    """Refuse a sign-in to an account whose access an administrator paused
+    (an administrator's own access is never paused)."""
+    if row["access_paused_at"] and not row["is_admin"]:
+        raise AccessPaused(access_paused_message())
+
+
 def registration_email_suffixes() -> tuple[str, ...]:
     """Domain suffixes new accounts must use, such as (".edu",); empty allows any."""
     suffixes = []
@@ -213,6 +234,25 @@ def _migrate_user_roles(conn: sqlite3.Connection) -> None:
     conn.execute("UPDATE users SET is_admin=0 WHERE is_guest=1 AND is_admin!=0")
 
 
+def _migrate_access_pause(conn: sqlite3.Connection) -> None:
+    """Add the time an administrator paused an account's access (NULL: on),
+    when the account last signed in (kept after its sessions end), and the
+    group an administrator put it in (a field test's participants, say)."""
+    columns = {
+        str(row["name"])
+        for row in conn.execute("PRAGMA table_info(users)").fetchall()
+    }
+    for column in ("access_paused_at", "last_sign_in_at", "account_group"):
+        if column in columns:
+            continue
+        try:
+            conn.execute(f"ALTER TABLE users ADD COLUMN {column} TEXT")
+        except sqlite3.OperationalError as exc:
+            # Another process (the console, the command line) added it first.
+            if "duplicate column name" not in str(exc):
+                raise
+
+
 def _migrate_email_verification(conn: sqlite3.Connection) -> None:
     """Add verification state; accounts that predate it count as verified."""
     columns = {
@@ -297,6 +337,7 @@ def _conn() -> sqlite3.Connection:
                 # users table, which does not yet have the is_guest column.
                 _migrate_user_roles(conn)
                 _migrate_email_verification(conn)
+                _migrate_access_pause(conn)
                 conn.execute(
                     "CREATE INDEX IF NOT EXISTS idx_users_is_guest ON users(is_guest)"
                 )
@@ -359,10 +400,12 @@ def _insert_session(
     expires = datetime.now(timezone.utc) + (
         ttl if ttl is not None else timedelta(days=SESSION_TTL_DAYS)
     )
+    now = _now()
     conn.execute(
         "INSERT INTO sessions (token_hash, user_id, created_at, expires_at) VALUES (?,?,?,?)",
-        (_token_hash(token), user_id, _now(), expires.isoformat()),
+        (_token_hash(token), user_id, now, expires.isoformat()),
     )
+    conn.execute("UPDATE users SET last_sign_in_at=? WHERE id=? AND is_guest=0", (now, user_id))
     conn.execute("DELETE FROM sessions WHERE expires_at < ?", (_now(),))
     _purge_expired_guest_accounts(conn)
     return token
@@ -502,6 +545,7 @@ def login(email: str, password: str) -> dict[str, Any]:
     with closing(_conn()) as conn, conn:
         row = _authenticated_user(conn, email, password)
     _check_verified(row)
+    _check_access(row)
     return _user_dict(row)  # type: ignore[return-value]
 
 
@@ -515,6 +559,7 @@ def login_and_create_session(email: str, password: str) -> tuple[dict[str, Any],
         conn.execute("BEGIN IMMEDIATE")
         row = _authenticated_user(conn, email, password)
         _check_verified(row)
+        _check_access(row)
         token = _insert_session(conn, int(row["id"]))
     account = _user_dict(row)
     assert account is not None
@@ -563,6 +608,9 @@ def user_for_token(token: str | None) -> dict[str, Any] | None:
             and not row["is_guest"]
             and not row["email_verified_at"]
         ):
+            row = None
+        if row is not None and row["access_paused_at"] and not row["is_admin"]:
+            # Paused by an administrator: signed out until access is on again.
             row = None
     return _user_dict(row)
 
@@ -1012,6 +1060,8 @@ def login_with_google(
         row = conn.execute(
             "SELECT * FROM users WHERE google_sub=? OR email=?", (sub, email)
         ).fetchone()
+        if row is not None:
+            _check_access(row)
     return _user_dict(row)  # type: ignore[return-value]
 
 def _reset_expiry(value: str) -> datetime | None:
@@ -1131,13 +1181,28 @@ def _send_reset_email(to_email: str, reset_link: str) -> bool:
     )
 
 
-def _send_email(to_email: str, subject: str, body: str, *, purpose: str) -> bool:
-    """Send one email with authenticated, certificate-verified STARTTLS."""
-    msg = EmailMessage()
-    msg["Subject"] = subject
-    msg["From"] = os.environ.get("SMTP_FROM_EMAIL", "noreply@example.com")
-    msg["To"] = to_email
-    msg.set_content(body)
+def _send_email(to_email: str, subject: str, body: str, *, purpose: str, from_name: str | None = None,
+                reply_to: str | None = None) -> bool:
+    """Send one email with authenticated, certificate-verified STARTTLS
+    (``from_name`` shown with the site's sender address, replies to
+    ``reply_to``).  Never raises: False when the mail was not accepted."""
+    from email.utils import formataddr, parseaddr
+
+    try:
+        msg = EmailMessage()
+        msg["Subject"] = subject
+        sender = os.environ.get("SMTP_FROM_EMAIL", "noreply@example.com")
+        display = " ".join(str(from_name or "").split())[:120]
+        # SMTP_FROM_EMAIL may be "Name <address>" itself: the name given here replaces its own.
+        msg["From"] = formataddr((display, parseaddr(sender)[1] or sender)) if display else sender
+        msg["To"] = to_email
+        if reply_to and _EMAIL_RE.match(reply_to.strip()):
+            msg["Reply-To"] = reply_to.strip()
+        msg.set_content(body)
+    except Exception as exc:  # noqa: BLE001
+        logger.error("[AUTH] %s email could not be written for %s (%s)", purpose.capitalize(), to_email,
+                     type(exc).__name__)
+        return False
 
     server = (os.environ.get("SMTP_SERVER") or "").strip()
     user = (os.environ.get("SMTP_USERNAME") or "").strip()

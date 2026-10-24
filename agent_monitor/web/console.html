@@ -1163,6 +1163,150 @@ button.start { height: 52px; padding: 11px 25px; border-radius: 13px; font-size:
 .admin-pager { display: flex; justify-content: space-between; align-items: center; margin-top: 8px; font-size: 11px; color: var(--dim); }
 .admin-pager button { font: inherit; font-size: 11px; padding: 5px 10px; border: 1px solid var(--border); border-radius: 8px; background: var(--panel2); color: var(--fg); cursor: pointer; }
 .admin-pager button:disabled { opacity: .4; cursor: default; }
+/* Admin · Accounts: invited people's accounts and their daily access. */
+.acct-section > .hub-section-h { flex-wrap: wrap; gap: 4px 12px; }
+.acct-counts { font-size: 11px; color: var(--muted); font-variant-numeric: tabular-nums; }
+.acct-toolbar { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-bottom: 8px; }
+.acct-toolbar input[type=search] { flex: 1 1 220px; min-width: 0; font: inherit; font-size: 11px; padding: 7px 9px; border: 1px solid var(--border); border-radius: 8px; background: var(--panel2); color: var(--fg); }
+.acct-section select { font: inherit; font-size: 11px; padding: 6px 8px; border: 1px solid var(--border); border-radius: 8px; background: var(--panel2); color: var(--fg); min-width: 0; max-width: 100%; }
+.acct-section .acct-bulk input[type=text] { width: 150px; font-size: 11px; padding: 5px 8px; background: var(--panel2); }
+.acct-btn { font: inherit; font-size: 11px; font-weight: 600; padding: 6px 10px; border: 1px solid var(--border); border-radius: 8px; background: var(--panel2); color: var(--fg); cursor: pointer; white-space: nowrap; transition: border-color .15s var(--ease), background .15s var(--ease); }
+.acct-btn:hover:not(:disabled) { border-color: var(--border2); background: color-mix(in srgb, var(--accent) 7%, var(--panel2)); }
+.acct-btn:disabled { opacity: .45; cursor: default; }
+.acct-btn.primary { background: var(--accent); border-color: var(--accent); color: var(--on-accent); }
+.acct-btn.primary:hover:not(:disabled) { background: color-mix(in srgb, var(--accent) 86%, var(--fg)); }
+.acct-btn[aria-busy="true"] { cursor: progress; opacity: .75; }
+.acct-btn.acct-mini { font-size: 10px; padding: 4px 8px; }
+.acct-section :is(.acct-btn, .acct-switch, input, textarea, summary):focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.acct-bulk { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; padding: 6px 6px 6px 10px; margin-bottom: 8px; border: 1px solid var(--border); border-radius: 10px; background: color-mix(in srgb, var(--panel2) 55%, transparent); }
+.acct-bulk-count { font-size: 11px; color: var(--muted); margin-right: auto; font-variant-numeric: tabular-nums; }
+.acct-bulk.has-selection { border-color: color-mix(in srgb, var(--accent) 45%, var(--border)); background: color-mix(in srgb, var(--accent) 7%, var(--panel2)); }
+.acct-bulk.has-selection .acct-bulk-count { color: var(--fg); font-weight: 600; }
+.acct-bulk-gap { width: 1px; align-self: stretch; margin: 2px 2px; background: var(--border); }
+.acct-status { font-size: 11px; line-height: 1.5; color: var(--muted); margin: 0 0 8px; overflow-wrap: anywhere; }
+.acct-status:empty { display: none; }
+.acct-status.ok { color: var(--ok); }
+.acct-status.err { color: var(--err); }
+/* The tables' visually hidden labels are clipped by their own scrolling box. */
+.acct-section .admin-table-wrap { position: relative; }
+.acct-table td { vertical-align: middle; }
+.acct-table .acct-sel { width: 30px; padding-right: 2px; }
+.acct-section input[type=checkbox] { width: 14px; height: 14px; margin: 0; accent-color: var(--accent); cursor: pointer; vertical-align: middle; }
+.acct-section input[type=checkbox]:disabled { cursor: not-allowed; opacity: .4; }
+.acct-table td.acct-name { font-weight: 600; max-width: 200px; overflow: hidden; text-overflow: ellipsis; }
+.acct-table td.acct-email { color: var(--muted); max-width: 240px; overflow: hidden; text-overflow: ellipsis; }
+.acct-table td.acct-when { color: var(--muted); font-family: var(--mono); font-size: 10px; }
+.acct-table td.acct-group { color: var(--muted); max-width: 160px; overflow: hidden; text-overflow: ellipsis; }
+.acct-table tr.acct-off td.acct-name { color: var(--muted); }
+.acct-table tr.acct-selected td { background: color-mix(in srgb, var(--accent) 9%, transparent); }
+.acct-table .acct-act { text-align: right; }
+.acct-dim { color: var(--dim); font-weight: 400; }
+.acct-switch { display: inline-flex; align-items: center; gap: 7px; padding: 3px 5px 3px 2px; margin: -3px 0; border: 0; border-radius: 999px; background: transparent; color: var(--fg); font: inherit; font-size: 11px; font-weight: 600; cursor: pointer; }
+.acct-track { position: relative; flex: none; width: 30px; height: 17px; border-radius: 999px; background: color-mix(in srgb, var(--dim) 72%, var(--panel2)); transition: background .18s var(--ease); }
+.acct-track::after { content: ""; position: absolute; top: 2px; left: 2px; width: 13px; height: 13px; border-radius: 50%; background: #fff; box-shadow: 0 1px 3px rgb(0 0 0 / .32); transition: transform .18s var(--ease); }
+.acct-switch[aria-checked="true"] .acct-track { background: var(--accent); }
+.acct-switch[aria-checked="true"] .acct-track::after { transform: translateX(13px); }
+.acct-switch[aria-checked="false"] .acct-state { color: var(--muted); }
+.acct-state { min-width: 20px; text-align: left; }
+.acct-switch:disabled { cursor: not-allowed; opacity: .55; }
+.acct-switch[aria-busy="true"] { cursor: progress; }
+.acct-switch[aria-busy="true"] .acct-track { opacity: .6; }
+@media (forced-colors: active) { .acct-track { border: 1px solid CanvasText; } .acct-track::after { background: CanvasText; } .acct-switch[aria-checked="true"] .acct-track { background: Highlight; } }
+.acct-panel { display: grid; gap: 8px; margin-bottom: 10px; padding: 12px; border: 1px solid var(--border); border-radius: 12px; background: var(--panel2); }
+.acct-panel[hidden], .acct-plan[hidden], .acct-results[hidden], .acct-note[hidden] { display: none; }
+.acct-label { font-size: 11px; line-height: 1.5; color: var(--muted); }
+.acct-label b { color: var(--fg); }
+.acct-section textarea, .acct-section input[type=text], .acct-section input[type=number] { width: 100%; min-width: 0; font: inherit; font-size: 12px; font-weight: 400; padding: 7px 9px; border: 1px solid var(--border); border-radius: 8px; background: var(--panel); color: var(--fg); }
+.acct-section textarea { resize: vertical; line-height: 1.5; }
+.acct-section textarea.acct-mono { font-family: var(--mono); font-size: 11px; }
+.acct-section textarea[readonly] { opacity: .7; }
+.acct-section ::placeholder { color: var(--dim); }
+.acct-actions { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.acct-plan { display: grid; gap: 6px; padding: 11px 12px; border: 1px solid color-mix(in srgb, var(--accent) 42%, var(--border)); border-radius: 10px; background: var(--panel); font-size: 11px; line-height: 1.5; color: var(--muted); }
+.acct-plan:focus { outline: none; }
+.acct-plan:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.acct-plan-total { font-size: 16px; font-weight: 700; letter-spacing: -.01em; color: var(--fg); }
+.acct-plan-line b { color: var(--fg); }
+.acct-warn { padding: 8px 10px; border: 1px solid color-mix(in srgb, var(--warn) 50%, var(--border)); border-radius: 9px; background: color-mix(in srgb, var(--warn) 10%, var(--panel)); color: var(--fg); font-size: 11px; line-height: 1.5; }
+.acct-warn b { font-weight: 700; }
+/* The session ended with passwords still shown: kept in sight wherever the section is scrolled (opaque, above the table). */
+#admin-acct-session { position: sticky; top: 0; z-index: 5; margin: 0 0 10px; font-size: 12px; background: color-mix(in srgb, var(--warn) 14%, var(--bg2)); box-shadow: 0 6px 16px rgba(0,0,0,.16); }
+.acct-note-box { padding: 8px 10px; border: 1px solid var(--border); border-radius: 9px; background: var(--panel2); color: var(--fg); font-size: 11px; line-height: 1.5; }
+/* Selected rows not shown, named before a change for the selection; ways in that a pause leaves open. */
+.acct-ask { display: grid; gap: 8px; margin: 0 0 8px; font-size: 12px; }
+.acct-ask[hidden] { display: none; }
+.acct-ask p { margin: 0; overflow-wrap: anywhere; }
+.acct-doors { margin: 0 0 8px; padding: 7px 10px; border: 1px solid var(--border); border-left: 3px solid color-mix(in srgb, var(--warn) 75%, var(--border)); border-radius: 8px; background: var(--panel); color: var(--muted); font-size: 11px; line-height: 1.5; }
+.acct-doors b { color: var(--fg); }
+.acct-panel .acct-doors { margin: 0; }
+.acct-plan-list { margin: 4px 0 0 18px; display: grid; gap: 3px; overflow-wrap: anywhere; }
+.acct-lines { margin: 4px 0 0 16px; font-family: var(--mono); font-size: 10px; color: var(--muted); }
+.acct-add { margin-top: 14px; border: 1px solid var(--border); border-radius: 12px; background: var(--panel2); }
+.acct-add > summary { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 10px; padding: 11px 13px; cursor: pointer; list-style: none; border-radius: 12px; }
+.acct-add > summary::-webkit-details-marker { display: none; }
+.acct-add > summary::before { content: "▸"; color: var(--dim); font-size: 11px; transition: transform .15s var(--ease); }
+.acct-add[open] > summary::before { transform: rotate(90deg); }
+.acct-add > summary b { font-size: 13px; }
+.acct-add > summary span { font-size: 11px; color: var(--muted); }
+.acct-add-body { display: grid; gap: 12px; padding: 2px 13px 13px; }
+.acct-form { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; }
+.acct-form-col { display: grid; gap: 9px; align-content: start; }
+.acct-field { display: grid; gap: 4px; font-size: 11px; font-weight: 600; color: var(--muted); }
+.acct-field small { font-weight: 400; color: var(--dim); }
+.acct-inline { display: flex; align-items: center; gap: 8px; }
+.acct-section .acct-inline input { width: 72px; }
+.acct-check { display: flex; align-items: flex-start; gap: 7px; font-size: 12px; line-height: 1.4; color: var(--fg); cursor: pointer; }
+.acct-check input { margin-top: 2px !important; flex: none; }
+.acct-check.off { color: var(--dim); cursor: not-allowed; }
+.acct-note { font-size: 11px; line-height: 1.5; color: var(--muted); }
+.acct-note code { font-family: var(--mono); font-size: 10px; padding: 1px 4px; border-radius: 4px; border: 1px solid var(--border); background: var(--panel); color: var(--fg); }
+.acct-results { display: grid; gap: 8px; }
+.acct-results-head { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 10px; }
+.acct-results-head b { font-size: 13px; }
+.acct-results-table td { vertical-align: top; }
+.acct-pw { font-family: var(--mono); font-size: 12px; font-weight: 500; letter-spacing: .02em; color: var(--fg); user-select: all; }
+.acct-res-created { color: var(--ok); font-weight: 600; }
+.acct-res-invalid, .acct-res-failed { color: var(--err); }
+.acct-res-exists, .acct-res-duplicate { color: var(--muted); }
+.acct-err-line { display: block; max-width: 280px; white-space: normal; font-size: 10px; font-weight: 400; color: var(--muted); }
+.acct-reset-row td { white-space: normal; background: color-mix(in srgb, var(--accent) 5%, var(--panel2)); }
+.acct-reset { display: grid; gap: 8px; padding: 4px 2px; font-size: 11px; line-height: 1.5; color: var(--muted); }
+/* A new-password panel stays in the visible part of a table that scrolls sideways (a phone). */
+.acct-table-wrap { container-type: inline-size; }
+.acct-reset-row .acct-reset { position: sticky; left: 9px; box-sizing: border-box; max-width: calc(100cqi - 18px); }
+.acct-reset b { color: var(--fg); }
+.acct-reset-pw { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; color: var(--fg); }
+.acct-reset-pw .acct-pw { font-size: 14px; padding: 3px 8px; border: 1px solid var(--border); border-radius: 7px; background: var(--panel); }
+.acct-copy-buffer { position: fixed; top: 0; left: -9999px; opacity: 0; pointer-events: none; }
+.acct-url b { font-family: var(--mono); font-size: 10px; font-weight: 500; color: var(--fg); overflow-wrap: anywhere; }
+.acct-preview { display: grid; gap: 8px; padding: 12px; border: 1px solid color-mix(in srgb, var(--accent) 42%, var(--border)); border-radius: 12px; background: var(--panel); }
+.acct-preview[hidden] { display: none; }
+.acct-preview-head { margin: 0; font-size: 15px; font-weight: 700; letter-spacing: -.01em; color: var(--fg); }
+.acct-preview-head:focus { outline: none; }
+.acct-preview-head:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; border-radius: 4px; }
+.acct-preview-table td { vertical-align: top; }
+.acct-preview-table td.acct-line { max-width: 320px; white-space: normal; overflow-wrap: anywhere; font-family: var(--mono); font-size: 10px; color: var(--dim); }
+.acct-res-new { color: var(--accent); font-weight: 600; }
+.acct-readings summary { cursor: pointer; color: var(--muted); }
+.acct-readings ul { margin: 6px 0 0 18px; display: grid; gap: 2px; }
+.acct-reading-entry { font-family: var(--mono); font-size: 10px; color: var(--fg); }
+/* Narrow (a phone): the preview's and the results' rows become blocks, so that
+   what will happen and the password are never off to the side. */
+.acct-preview, .acct-results { container-type: inline-size; }
+@container (max-width: 560px) {
+  .acct-preview-table thead, .acct-results-table thead { display: none; }
+  .acct-preview-table, .acct-preview-table tbody, .acct-preview-table tr, .acct-preview-table td,
+  .acct-results-table, .acct-results-table tbody, .acct-results-table tr, .acct-results-table td { display: block; }
+  .acct-preview-table tr, .acct-results-table tr { padding: 8px 10px; border-bottom: 1px solid var(--border); }
+  .acct-preview-table tr:last-child, .acct-results-table tr:last-child { border-bottom: 0; }
+  .acct-preview-table td, .acct-results-table td { padding: 1px 0; border: 0; white-space: normal; overflow-wrap: anywhere; max-width: none; }
+  .acct-preview-table td.acct-name, .acct-results-table td.acct-name { font-weight: 600; }
+}
+.admin-usage-h { margin-top: 28px; }
+/* The Admin tab's tables need the hub's own width (.modal's 720px wins elsewhere). */
+.modal.monitor-hub { transition: width .28s var(--ease), transform .38s var(--ease), opacity .38s var(--ease); }
+.modal.monitor-hub:has(#hub-admin-pane.active) { width: min(1220px, 100%); }
+@media (max-width: 760px) { .acct-form { grid-template-columns: 1fr; } .acct-bulk-gap { display: none; } }
 .monitor-empty { padding: 24px; border: 1px dashed var(--border); border-radius: 12px; color: var(--dim); text-align: center; font-size: 12px; }
 @media (max-width: 900px) { .choice-dock { grid-template-columns: 1fr 1fr; } .engine-menu, .model-menu { width: min(650px,calc(100vw - 275px)); } .metric-grid { grid-template-columns: repeat(2,minmax(0,1fr)); } .hub-layout { grid-template-columns: 1fr; } .hub-nav { border-right: 0; border-bottom: 1px solid var(--border); flex-direction: row; overflow-x: auto; } .hub-nav button { width: auto; white-space: nowrap; } }
 @media (max-width: 620px) { #view-landing { padding: 24px 12px; } .choice-dock { grid-template-columns: 1fr; } .engine-menu, .model-menu { position: fixed; left: 12px; right: 12px; bottom: 18px; width: auto; max-height: 66vh; grid-template-columns: 1fr; } .model-custom-row { grid-column: 1; } button.start { width: 100%; } .health-grid { grid-template-columns: 1fr; } .metric-grid { grid-template-columns: 1fr 1fr; } .usage-row { grid-template-columns: 90px 1fr; } .usage-row .usage-num:nth-last-child(-n+2) { display: none; } }
@@ -2243,7 +2387,70 @@ body { background:var(--bg); }
         <section class="hub-pane active" id="hub-overview-pane"><h3 class="hub-title">Workspace overview</h3><p class="hub-sub">Runs, authentication, reusable context and engine health in one place.</p><div id="hub-overview-body"><div class="monitor-empty">Loading account telemetry…</div></div></section>
         <section class="hub-pane" id="hub-usage-pane"><h3 class="hub-title">Usage</h3><p class="hub-sub">Token, cost and latency totals collected from your saved runs.</p><div id="hub-usage-body"><div class="monitor-empty">Loading usage…</div></div></section>
         <section class="hub-pane" id="hub-library-pane"><div class="hub-library-head"><div><h3 class="hub-title" id="hub-library-title">Memory</h3><p class="hub-sub" id="hub-library-sub">Reusable context injected into enabled runs.</p></div><label class="lib-auto" id="lib-auto-wrap"><input type="checkbox" id="lib-auto-memory"/> Auto-save run memories</label></div><div id="lib-list" class="lib-list"></div><div class="lib-tool-runner" id="lib-tool-runner"><div class="lib-tool-runner-head"><div class="copy"><div class="title" id="lib-tool-runner-title">Try tool</div><div class="sub">Trusted built-in · schema checked · read-only · bounded</div></div><button id="lib-tool-runner-close" title="Close">×</button></div><textarea id="lib-tool-runner-input" spellcheck="false" aria-label="Tool input JSON"></textarea><div class="lib-tool-runner-actions"><button id="lib-tool-runner-reset">Reset example</button><button class="primary" id="lib-tool-runner-run">Run tool</button></div><pre class="lib-tool-result" id="lib-tool-result"></pre></div><div class="lib-form" id="lib-form"><div class="lib-form-title" id="lib-form-title">Add item</div><input id="lib-name" placeholder="Name"/><input id="lib-desc" placeholder="Short description shown to agents"/><textarea id="lib-content" rows="7" placeholder="Content"></textarea><div class="lib-tool-policy" id="lib-tool-policy"><label class="check"><input type="checkbox" id="lib-tool-readonly" checked/> Read-only tool</label><label>Approval<select id="lib-tool-approval"><option value="auto">Auto (read-only)</option><option value="prompt">Ask before every call</option><option value="writes">Ask for writes</option></select></label><label>Timeout (seconds)<input type="number" id="lib-tool-timeout" min="1" max="300" value="120"/></label></div><div class="lib-form-row"><span class="hint" id="lib-hint"></span><button id="lib-reset">Clear</button><button class="primary" id="lib-save">Save</button></div></div></section>
-        <section class="hub-pane" id="hub-admin-pane"><h3 class="hub-title">Admin · all accounts</h3><p class="hub-sub">Usage and runs across every user, including guests. Visible to admins only.</p>
+        <section class="hub-pane" id="hub-admin-pane"><h3 class="hub-title">Admin · all accounts</h3><p class="hub-sub">Accounts and their access, then usage and runs across every user, including guests. Visible to admins only.</p>
+          <div class="hub-section acct-section" id="admin-accounts">
+            <div class="hub-section-h"><b id="admin-acct-title">Accounts</b><span class="acct-counts" id="admin-acct-counts"></span></div>
+            <p class="acct-warn" id="admin-acct-session" role="alert" hidden><b>Your session has ended.</b> Copy the passwords shown here first (they cannot be shown again), then sign in again.</p>
+            <div class="acct-toolbar">
+              <input type="search" id="admin-acct-q" placeholder="Search name or email…" aria-label="Search accounts by name or email" autocomplete="off" spellcheck="false"/>
+              <select id="admin-acct-filter" aria-label="Show the accounts of a group"><option value="all">All groups</option><option value="none">No group</option></select>
+              <button type="button" class="acct-btn" id="admin-acct-list-open" aria-expanded="false" aria-controls="admin-acct-list" disabled>Set access from a list…</button>
+            </div>
+            <div class="acct-bulk" id="admin-acct-bulk" role="group" aria-label="Selected accounts">
+              <span class="acct-bulk-count" id="admin-acct-selected">None selected</span>
+              <button type="button" class="acct-btn" id="admin-acct-all">Select all shown</button>
+              <button type="button" class="acct-btn" id="admin-acct-clear">Clear</button>
+              <span class="acct-bulk-gap" aria-hidden="true"></span>
+              <button type="button" class="acct-btn" id="admin-acct-on" disabled>Turn access on</button>
+              <button type="button" class="acct-btn" id="admin-acct-off" disabled>Turn access off</button>
+              <span class="acct-bulk-gap" aria-hidden="true"></span>
+              <input type="text" id="admin-acct-group-name" list="admin-acct-groups" placeholder="Group name" aria-label="Group for the selected accounts" autocomplete="off" spellcheck="false"/>
+              <button type="button" class="acct-btn" id="admin-acct-group-set" disabled>Set group</button>
+              <button type="button" class="acct-btn" id="admin-acct-group-remove" disabled>Remove from group</button>
+            </div>
+            <div class="acct-warn acct-ask" id="admin-acct-bulk-ask" role="group" aria-label="Selected accounts not shown" hidden></div>
+            <p class="acct-doors" id="admin-acct-doors" hidden></p>
+            <datalist id="admin-acct-groups"></datalist>
+            <div class="acct-panel" id="admin-acct-list" hidden>
+              <label class="acct-field acct-inline" for="admin-acct-list-group">Group <select id="admin-acct-list-group"><option value="">Choose a group…</option></select></label>
+              <p class="acct-warn" id="admin-acct-list-nogroup" hidden>A list needs a group: it turns off the accounts of that group that it does not name, and leaves every other account alone. No account is in a group yet: give the workshop’s accounts one with “Group” under Add accounts below, or select their rows and use “Set group”.</p>
+              <p class="acct-label"><b>Who should have access today?</b> Paste their email addresses or names, one per line. <span id="admin-acct-list-scope">Everyone else in the group is turned off; accounts outside it are not touched.</span> Administrators always keep access.</p>
+              <p class="acct-doors" id="admin-acct-list-doors" hidden></p>
+              <textarea class="acct-mono" id="admin-acct-list-text" rows="5" spellcheck="false" autocomplete="off" aria-label="Who should have access today, one per line" placeholder="ada@example.org&#10;Emmy Noether&#10;Srinivasa Ramanujan &lt;ramanujan@example.org&gt;"></textarea>
+              <div class="acct-actions"><button type="button" class="acct-btn primary" id="admin-acct-list-review">Review</button><button type="button" class="acct-btn" id="admin-acct-list-cancel">Cancel</button></div>
+              <div class="acct-plan" id="admin-acct-plan" tabindex="-1" aria-label="Access from the list" hidden></div>
+            </div>
+            <p class="acct-status" id="admin-acct-status" role="status" aria-live="polite"></p>
+            <div id="admin-acct-body"><div class="monitor-empty">Loading accounts…</div></div>
+            <details class="acct-add" id="admin-acct-add">
+              <summary><b>Add accounts</b><span>Generated passwords; email each person their sign-in details</span></summary>
+              <div class="acct-add-body">
+                <div class="acct-form">
+                  <div class="acct-form-col">
+                    <label class="acct-field" for="admin-acct-add-text">People, one per line <small>Name - email · Name &lt;email&gt; · Name, email · email</small></label>
+                    <textarea class="acct-mono" id="admin-acct-add-text" rows="8" spellcheck="false" autocomplete="off" placeholder="Ada Lovelace - ada@example.org&#10;Emmy Noether &lt;emmy@example.org&gt;&#10;Srinivasa Ramanujan, ramanujan@example.org&#10;hilbert@example.org"></textarea>
+                    <label class="acct-field">Group (optional) <small>New accounts join it; listed accounts that already exist are added to it.</small><input type="text" id="admin-acct-add-group" list="admin-acct-groups" placeholder="e.g. Field test" autocomplete="off" spellcheck="false"/></label>
+                    <label class="acct-field acct-inline" for="admin-acct-add-length">Password length <input type="number" id="admin-acct-add-length" min="8" max="32" step="1" value="12" inputmode="numeric"/></label>
+                    <label class="acct-check off" id="admin-acct-add-send-label"><input type="checkbox" id="admin-acct-add-send" disabled/> Email each person their sign-in details</label>
+                    <p class="acct-note" id="admin-acct-add-nomail" hidden>This site cannot send email (SMTP is not set up) — copy the details below and send them yourself.</p>
+                    <p class="acct-note" id="admin-acct-add-nourl" hidden>Emails need the site's address (AGENT_MONITOR_APP_URL), which is not set. Messages copied from here say “(the site's address)” instead.</p>
+                  </div>
+                  <div class="acct-form-col">
+                    <label class="acct-field">Sender name <input type="text" id="admin-acct-add-sender" autocomplete="off"/></label>
+                    <label class="acct-field">Subject <input type="text" id="admin-acct-add-subject" autocomplete="off"/></label>
+                    <label class="acct-field">Message <textarea id="admin-acct-add-message" rows="10" spellcheck="true"></textarea></label>
+                    <p class="acct-note acct-url" id="admin-acct-add-url" hidden>Sign-in address for <code>{url}</code>: <b id="admin-acct-add-url-value"></b></p>
+                    <p class="acct-note">Filled in for each person: <code>{name}</code> <code>{email}</code> <code>{password}</code> <code>{url}</code> <code>{sender}</code></p>
+                  </div>
+                </div>
+                <div class="acct-actions"><button type="button" class="acct-btn primary" id="admin-acct-add-create" disabled>Create accounts</button><span class="acct-note" id="admin-acct-add-count"></span></div>
+                <p class="acct-status" id="admin-acct-add-status" role="status" aria-live="polite"></p>
+                <div class="acct-preview" id="admin-acct-preview" hidden></div>
+                <div class="acct-results" id="admin-acct-results" hidden></div>
+              </div>
+            </details>
+          </div>
+          <div class="hub-section-h admin-usage-h"><b>Usage and runs</b></div>
           <div class="admin-filters" id="admin-filters">
             <span class="admin-presets" id="admin-presets"><button data-days="7">7d</button><button data-days="30" class="on">30d</button><button data-days="90">90d</button><button data-days="0">All</button></span>
             <input type="date" id="admin-from" aria-label="From date"/><input type="date" id="admin-to" aria-label="To date"/>
@@ -2294,11 +2501,15 @@ function ensurePdfWorker(){
 const THEME_KEY='proving-console-theme';
 const RUN_TUNING_KEY='proving-console-run-tuning-v1';
 const pcUrl=p=>(window.__pcUrl?window.__pcUrl(p):p);
-/* Session guard: any 401 from the API sends the user to /login (skipped in public mode). */
+/* Session guard: any 401 from the API sends the user to /login (skipped in public mode),
+   except while the admin view holds passwords shown once: it says to copy them first. */
 const _fetch=window.fetch.bind(window);
 window.fetch=async(...a)=>{
   const r=await _fetch(...a);
-  if(r.status===401&&!String(a[0]).includes('/api/auth/')&&!window.__PC_PUBLIC__)location.href=pcUrl('/login');
+  if(r.status===401&&!String(a[0]).includes('/api/auth/')&&!window.__PC_PUBLIC__){
+    if(typeof adminAccountsAtRisk==='function'&&adminAccountsAtRisk())adminAccountsSessionEnded();
+    else location.href=pcUrl('/login');
+  }
   return r;
 };
 let ENGINES=[], SETTINGS=null, SETTINGS_RUNTIME_BASELINE=null, engine='kimi';
@@ -3347,9 +3558,19 @@ function openLibrary(tab='overview'){
   switchHub(typeof tab==='string'?tab:'overview');
   Promise.all([loadLibrary(),loadMonitor()]);
 }
-function closeLibrary(){ $('library-modal').classList.remove('open'); }
+// Closing the view clears the Accounts section's one-time passwords (asking first
+// while some are being made, or one shown was neither emailed nor copied).
+// False when the operator stays.
+function closeLibrary(){
+  if(!adminAccountsMayLeave())return false;
+  $('library-modal').classList.remove('open');
+  clearAdminAccountSecrets();
+  return true;
+}
 function switchHub(tab){
-  hubTab=tab||'overview';
+  const next=tab||'overview';
+  if(hubTab==='admin'&&next!=='admin'){ if(!adminAccountsMayLeave())return; clearAdminAccountSecrets(); }
+  hubTab=next;
   if(hubTab!=='tool')closeToolRunner();
   $('lib-tabs').querySelectorAll('button[data-hub]').forEach(b=>b.classList.toggle('active',b.dataset.hub===hubTab));
   document.querySelectorAll('#library-modal .hub-pane').forEach(p=>p.classList.remove('active'));
@@ -3363,6 +3584,8 @@ function switchHub(tab){
     $('agent-body').innerHTML='<div class="monitor-empty">Loading agent profile…</div>';
     reloadAgentCfg();
   }else if(hubTab==='admin'){
+    // The accounts load alongside the usage, not before it.
+    loadAdminAccounts();
     loadAdmin();
   }
 }
@@ -3641,7 +3864,7 @@ async function loadAdminRuns(){
       <td>${r.deleted?'<span class="admin-tag">deleted</span>':`<a data-admin-run="${LIB_ESC(r.run_id)}">Open</a>`}</td>
     </tr>`).join('')}</tbody></table></div>
     <div class="admin-pager"><span>${fmtInt(data.offset+1)}–${fmtInt(data.offset+runs.length)} of ${fmtInt(data.total)}</span><span><button id="admin-prev" ${data.offset?'':'disabled'}>← Newer</button> <button id="admin-next" ${data.offset+runs.length<data.total?'':'disabled'}>Older →</button></span></div>`;
-  body.querySelectorAll('[data-admin-run]').forEach(a=>a.onclick=()=>{ closeLibrary(); selectRun(a.dataset.adminRun,null); goSession('sandbox'); });
+  body.querySelectorAll('[data-admin-run]').forEach(a=>a.onclick=()=>{ if(!closeLibrary())return; selectRun(a.dataset.adminRun,null); goSession('sandbox'); });
   $('admin-prev').onclick=()=>{ ADMIN.offset=Math.max(0,ADMIN.offset-ADMIN.limit); loadAdminRuns(); };
   $('admin-next').onclick=()=>{ ADMIN.offset+=ADMIN.limit; loadAdminRuns(); };
 }
@@ -3650,6 +3873,1403 @@ $('admin-presets').querySelectorAll('button').forEach(b=>b.onclick=()=>{ adminSe
 ['admin-user','admin-engine','admin-model','admin-billing','admin-guests'].forEach(id=>$(id).onchange=loadAdmin);
 ['admin-status','admin-deleted'].forEach(id=>$(id).onchange=()=>{ ADMIN.offset=0; loadAdminRuns(); });
 $('admin-q').oninput=()=>{ clearTimeout(ADMIN.timer); ADMIN.timer=setTimeout(()=>{ ADMIN.offset=0; loadAdminRuns(); },250); };
+/* ── admin: accounts. The operator adds accounts with generated passwords (the
+   server checks each list before anything is made), emails each person their
+   sign-in details when the site can, puts accounts in groups, and turns each
+   person's access on or off: one at a time, several at once, or for a group
+   from a pasted list. /api/admin/accounts*, operator only.
+   A one-time password lives only in ACCOUNTS.results / ACCOUNTS.resets and on
+   the page while this view is open: never in a URL, browser storage or the
+   console. Leaving the view (asked first while one is neither emailed nor
+   copied), or another run, clears it. Server text is set as text. ── */
+const ACCOUNTS={list:[],groups:[],loaded:false,loading:null,emailAvailable:false,signInUrl:null,sender:{name:'',email:''},
+  defaults:{subject:'',message:'',reset_subject:'',reset_message:'',password_length:12},query:'',filter:'all',
+  selected:new Set(),bulkAsk:null,doors:{signUps:false,guests:false},pending:new Map(),rows:new Map(),seq:0,mutations:0,generation:0,bulkBusy:false,
+  plan:null,planApply:null,listGroup:'',reviewing:false,applying:false,preview:null,previewHead:null,previewing:false,previewSeq:0,
+  results:null,run:null,creating:null,resets:new Map(),retrying:false,formFilled:false,addOpened:false};
+// With email on, people are created (and emailed) five at a time, one request
+// after another: each email is its own SMTP session, and one long request could
+// outlast a proxy's timeout and lose the passwords it made.
+const ACCOUNT_EMAIL_CHUNK=5;
+const ACCOUNT_STATUS_LABEL={created:'Created',exists:'Already exists',invalid:'Invalid',duplicate:'Listed twice'};
+const ACCOUNT_PREVIEW_LABEL={new:'New account',exists:'Already exists',duplicate:'Listed twice',invalid:'Invalid'};
+const ACCOUNT_MONTHS=['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+const ACCOUNT_NAME_TITLES=new Set(['prof','professor','dr','mr','mrs','ms','mx']);
+const ACCOUNT_ADMIN_NOTE='Administrators always have access; it cannot be turned off.';
+const ACCOUNT_NO_URL="Emails need the site's address (AGENT_MONITOR_APP_URL), which is not set";
+// The server's own texts (accounts_admin.py): a message sent by hand always has
+// one, with the {password} in it, even when the page could not read them.
+const ACCOUNT_INVITE_TEXT={subject:'Your Ansätze account',message:'Dear {name},\n\nAn account has been created for you on Ansätze.\n\nSign in at: {url}\nEmail: {email}\nPassword: {password}\n\nPlease keep these details to yourself. If you have any questions, reply to this email.\n\nBest regards,\n{sender}\n'};
+const ACCOUNT_RESET_TEXT={subject:'Your new Ansätze password',message:'Dear {name},\n\nHere is a new password for your Ansätze account.\n\nSign in at: {url}\nEmail: {email}\nPassword: {password}\n\nPlease keep it to yourself. If you have any questions, reply to this email.\n\nBest regards,\n{sender}\n'};
+function adminAccountKey(email){ return String(email??'').trim().toLowerCase(); }
+function adminAccountFold(text){ return String(text??'').normalize('NFKD').replace(/\p{M}+/gu,'').toLowerCase(); }
+function adminAccountLabel(account){ return account.name||account.email; }
+// An account as a list's reader needs it to tell people apart: its name and its address.
+function adminAccountWho(account){ return account.name?`${account.name} (${account.email})`:account.email; }
+function adminAccountSentence(text){ return String(text??'').trim().replace(/[.\s]+$/,'')+'.'; }
+// A group's name exactly as the server gives it (it does all the cleaning).
+function adminAccountGroupOf(value){ return typeof value==='string'?value:''; }
+function adminAccountsButton(label,onclick){
+  const button=analyzeEl('button','acct-btn',label);
+  button.type='button'; button.onclick=onclick;
+  return button;
+}
+function adminAccountOption(value,label){ const option=analyzeEl('option','',label); option.value=value; return option; }
+// The list as the server sends it, read defensively: guests are never listed, an
+// administrator's access is always on, the form's defaults stay within bounds.
+function adminAccountsFromResponse(data){
+  const text=value=>value==null?'':String(value);
+  const accounts=[], seen=new Set();
+  for(const raw of Array.isArray(data?.accounts)?data.accounts:[]){
+    if(!raw||typeof raw!=='object'||raw.guest)continue;
+    const email=text(raw.email).trim(), key=adminAccountKey(email);
+    if(!key||seen.has(key))continue;
+    seen.add(key);
+    const admin=!!raw.is_admin;
+    accounts.push({id:raw.id??null,email,key,name:text(raw.name).trim(),is_admin:admin,group:adminAccountGroupOf(raw.group),created_at:text(raw.created_at),
+      access:admin||raw.access!=='off'?'on':'off',access_paused_at:admin?'':text(raw.access_paused_at),last_sign_in_at:text(raw.last_sign_in_at)});
+  }
+  // The server's groups, in its order and spelling; any account's group it did not list, after them.
+  const listed=(Array.isArray(data?.groups)?data.groups:[]).map(adminAccountGroupOf).filter(Boolean);
+  const groups=[...new Set([...listed,...accounts.map(account=>account.group).filter(group=>group&&!listed.includes(group)).sort()])];
+  const defaults=data?.defaults&&typeof data.defaults==='object'?data.defaults:{}, length=Number(defaults.password_length);
+  const url=typeof data?.sign_in_url==='string'?data.sign_in_url.trim():'';
+  // Other ways in that turning access off does not close (open sign-ups, guest use).
+  const doors={signUps:data?.open_doors?.sign_ups===true,guests:data?.open_doors?.guests===true};
+  return {accounts,groups,doors,emailAvailable:data?.email_available===true,signInUrl:url||null,
+    sender:{name:text(data?.sender?.name).trim(),email:text(data?.sender?.email).trim()},
+    defaults:{subject:text(defaults.subject),message:text(defaults.message),reset_subject:text(defaults.reset_subject),reset_message:text(defaults.reset_message),
+      password_length:Number.isInteger(length)&&length>=8&&length<=32?length:12}};
+}
+// What a row shows: the access asked for while that change is on its way.
+function adminAccountAccess(account){
+  if(account.is_admin)return 'on';
+  return ACCOUNTS.pending.get(account.key)||account.access;
+}
+// The table's group filter: "all", "none" (no group), or "=" and a group's name.
+function adminAccountInFilter(account,filter){
+  if(filter==='none')return !account.group;
+  if(String(filter).startsWith('='))return account.group===String(filter).slice(1);
+  return true;
+}
+function adminAccountFilterName(filter){ return filter==='none'?'No group':String(filter).startsWith('=')?String(filter).slice(1):''; }
+// The accounts whose access can change (administrators' is always on, so they are counted apart).
+function adminAccountCounts(list){
+  const people=list.filter(account=>!account.is_admin), on=people.filter(account=>adminAccountAccess(account)==='on').length;
+  return {total:people.length,on,off:people.length-on,admins:list.length-people.length};
+}
+function adminAccountCountsText(counts,shown,scope){
+  let text=`${scope?scope+': ':''}${counts.total} account${counts.total===1?'':'s'} · ${counts.on} access on · ${counts.off} off`;
+  if(counts.admins)text+=` · ${counts.admins} admin${counts.admins===1?'':'s'}`;
+  return shown==null?text:`${text} · ${shown} shown`;
+}
+// In the group shown, and every word of the search in the name or the address (accents ignored).
+function adminAccountShown(account,query,filter){
+  if(!adminAccountInFilter(account,filter))return false;
+  const words=adminAccountFold(query).split(/\s+/).filter(Boolean);
+  const haystack=adminAccountFold(account.name)+' '+adminAccountFold(account.email);
+  return words.every(word=>haystack.includes(word));
+}
+// The rows drawn: those the search and the group show, and every one whose new password is open.
+function adminAccountsShown(){
+  return ACCOUNTS.list.filter(account=>ACCOUNTS.resets.has(account.key)||adminAccountShown(account,ACCOUNTS.query,ACCOUNTS.filter));
+}
+function adminAccountDate(value){
+  if(!value)return null;
+  const date=new Date(String(value).trim().replace(' ','T').replace(/(\.\d{3})\d+/,'$1'));
+  return Number.isNaN(date.getTime())?null:date;
+}
+// Local time: "Oct 20" for a date; "Today 09:14", "Yesterday 18:02" or "Oct 20 14:05" with the time.
+function adminAccountWhen(value,withTime,now){
+  if(!value)return '';
+  const date=adminAccountDate(value);
+  if(!date)return String(value).slice(0,16).replace('T',' ');
+  now=now||new Date();
+  const pad=n=>String(n).padStart(2,'0'), clock=`${pad(date.getHours())}:${pad(date.getMinutes())}`;
+  const day=d=>new Date(d.getFullYear(),d.getMonth(),d.getDate()).getTime();
+  const ago=Math.round((day(now)-day(date))/86400000);
+  if(withTime&&ago===0)return 'Today '+clock;
+  if(withTime&&ago===1)return 'Yesterday '+clock;
+  const text=`${ACCOUNT_MONTHS[date.getMonth()]} ${date.getDate()}`+(date.getFullYear()===now.getFullYear()?'':`, ${date.getFullYear()}`);
+  return withTime?`${text} ${clock}`:text;
+}
+function adminAccountsSay(text,tone,id){
+  const el=$(id||'admin-acct-status'); if(!el)return;
+  el.textContent=text||''; el.className='acct-status'+(tone?' '+tone:'');
+}
+// One request: its JSON answer, or an Error carrying the server's own message.
+async function adminAccountsRequest(path,body){
+  const options=body===undefined?{cache:'no-store'}:{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)};
+  let response;
+  try{ response=await fetch(path,options); }
+  catch(error){ throw new Error(`The server could not be reached (${error?.message||'network error'})`); }
+  const data=await response.json().catch(()=>null);
+  if(!response.ok)throw new Error(String(data?.error||`The server answered ${response.status}`));
+  if(!data||typeof data!=='object')throw new Error('The server sent an unexpected answer');
+  return data;
+}
+// Reads the list again. True once the list in hand is the server's (a read
+// overtaken by a newer one answers with that one's outcome).
+function loadAdminAccounts(){
+  const read=readAdminAccounts();
+  ACCOUNTS.loading=read;
+  return read;
+}
+async function readAdminAccounts(){
+  if(!viewerIsAdmin())return false;
+  const seq=++ACCOUNTS.seq, mutations=ACCOUNTS.mutations;
+  if(!ACCOUNTS.loaded)$('admin-acct-body').replaceChildren(analyzeEl('div','monitor-empty','Loading accounts…'));
+  let data;
+  try{ data=await adminAccountsRequest('/api/admin/accounts'); }
+  catch(error){
+    if(seq!==ACCOUNTS.seq)return ACCOUNTS.loading;
+    if(ACCOUNTS.loaded)adminAccountsSay('Could not read the accounts again: '+adminAccountSentence(error.message),'err');
+    else renderAdminAccountsUnavailable(error.message);
+    return false;
+  }
+  if(seq!==ACCOUNTS.seq)return ACCOUNTS.loading;
+  // A change answered while this list was on its way may be missing from it.
+  if(mutations!==ACCOUNTS.mutations)return loadAdminAccounts();
+  const state=adminAccountsFromResponse(data);
+  Object.assign(ACCOUNTS,{list:state.accounts,groups:state.groups,doors:state.doors,emailAvailable:state.emailAvailable,signInUrl:state.signInUrl,
+    sender:state.sender,defaults:state.defaults,loaded:true});
+  const selectable=new Set(state.accounts.filter(account=>!account.is_admin).map(account=>account.key));
+  for(const key of [...ACCOUNTS.selected])if(!selectable.has(key))ACCOUNTS.selected.delete(key);
+  // A question about the selection asked against the accounts read before is asked again.
+  dropAdminAccountsBulkAsk();
+  // A list reviewed against the accounts read before is reviewed again.
+  if(!ACCOUNTS.applying)dropAdminAccessPlan();
+  fillAdminAccountsForm();
+  renderAdminAccountGroups();
+  renderAdminAccounts();
+  renderAdminAccountsDoors();
+  if(ACCOUNTS.retrying){ ACCOUNTS.retrying=false; $('admin-acct-q').focus(); }
+  return true;
+}
+// The first read failed: nothing can be added or applied until one succeeds.
+function renderAdminAccountsUnavailable(message){
+  const box=analyzeEl('div','monitor-empty'), retry=adminAccountsButton('Try again',()=>{ ACCOUNTS.retrying=true; loadAdminAccounts(); });
+  box.append(analyzeEl('span','',`Accounts unavailable: ${adminAccountSentence(message)} `),retry);
+  $('admin-acct-body').replaceChildren(box);
+  syncAdminAccountsReady();
+  if(ACCOUNTS.retrying){ ACCOUNTS.retrying=false; retry.focus(); }
+}
+function syncAdminAccountsReady(){
+  for(const id of ['admin-acct-add-create','admin-acct-list-open']){
+    const button=$(id);
+    button.disabled=!ACCOUNTS.loaded; button.title=ACCOUNTS.loaded?'':'The accounts have not loaded yet';
+  }
+}
+// The form starts from the server's defaults once; later reads keep the operator's edits.
+function fillAdminAccountsForm(){
+  if(!ACCOUNTS.formFilled){
+    ACCOUNTS.formFilled=true;
+    $('admin-acct-add-length').value=String(ACCOUNTS.defaults.password_length);
+    $('admin-acct-add-subject').value=ACCOUNTS.defaults.subject||ACCOUNT_INVITE_TEXT.subject;
+    $('admin-acct-add-message').value=ACCOUNTS.defaults.message||ACCOUNT_INVITE_TEXT.message;
+    $('admin-acct-add-sender').value=ACCOUNTS.sender.name||ACCOUNTS.sender.email;
+  }
+  syncAdminAccountsReady();
+  syncAdminAccountsEmail();
+  syncAdminAccountsAddCount();
+}
+// Email goes out only when the site can send it and knows its own address (the messages name it).
+function adminAccountsCanEmail(){ return ACCOUNTS.loaded&&ACCOUNTS.emailAvailable&&!!ACCOUNTS.signInUrl; }
+function syncAdminAccountsEmail(){
+  const can=adminAccountsCanEmail(), send=$('admin-acct-add-send');
+  if(!can&&send.checked){ send.checked=false; dropAdminAccountsPreview(); }
+  send.disabled=!can||!!ACCOUNTS.creating;
+  $('admin-acct-add-send-label').classList.toggle('off',!can);
+  $('admin-acct-add-nomail').hidden=!ACCOUNTS.loaded||ACCOUNTS.emailAvailable;
+  $('admin-acct-add-nourl').hidden=!ACCOUNTS.loaded||!!ACCOUNTS.signInUrl;
+  $('admin-acct-add-url').hidden=!ACCOUNTS.signInUrl;
+  $('admin-acct-add-url-value').textContent=ACCOUNTS.signInUrl||'';
+}
+function syncAdminAccountsAddCount(){
+  const count=adminAccountLines($('admin-acct-add-text').value).length;
+  const chunked=$('admin-acct-add-send').checked&&adminAccountsCanEmail()&&count>ACCOUNT_EMAIL_CHUNK;
+  $('admin-acct-add-count').textContent=count?`${count} ${count===1?'person':'people'}`+(chunked?` · created and emailed ${ACCOUNT_EMAIL_CHUNK} at a time`:''):'';
+}
+// Ways in that turning access off does not close: said only for those open, and once (in the list's
+// panel while it is open, else by the switches).
+function adminAccountsDoorsText(doors){
+  const ways=[];
+  if(doors?.signUps)ways.push('sign-ups are open, so they could create a second account with another address or Google account (it would be in no group)');
+  if(doors?.guests)ways.push('guest access is on, so they could use the site as a guest');
+  if(!ways.length)return '';
+  return `${ways.join('; and ')}. To keep a control arm fully out, close ${[doors.signUps&&'sign-ups',doors.guests&&'guest access'].filter(Boolean).join(' and ')} for the study.`;
+}
+function renderAdminAccountsDoors(){
+  const text=ACCOUNTS.loaded?adminAccountsDoorsText(ACCOUNTS.doors):'';
+  for(const id of ['admin-acct-doors','admin-acct-list-doors'])
+    $(id).replaceChildren(...(text?[analyzeEl('b','','A paused participant can still get in another way:'),' '+text]:[]));
+  $('admin-acct-list-doors').hidden=!text;
+  $('admin-acct-doors').hidden=!text||!$('admin-acct-list').hidden;
+}
+// The groups wherever they are offered: the table's filter, the names suggested, the list's group.
+function renderAdminAccountGroups(){
+  const groups=ACCOUNTS.groups, filter=$('admin-acct-filter');
+  if(String(ACCOUNTS.filter).startsWith('=')&&!groups.includes(ACCOUNTS.filter.slice(1)))ACCOUNTS.filter='all';
+  filter.replaceChildren(adminAccountOption('all','All groups'),...groups.map(group=>adminAccountOption('='+group,group)),adminAccountOption('none','No group'));
+  filter.value=ACCOUNTS.filter;
+  $('admin-acct-groups').replaceChildren(...groups.map(group=>adminAccountOption(group,group)));
+  syncAdminAccessListGroup();
+}
+function renderAdminAccounts(){
+  renderAdminAccountsTable();
+  syncAdminAccountsHead();
+  syncAdminAccountsSelection();
+  if(!ACCOUNTS.addOpened){
+    ACCOUNTS.addOpened=true;
+    // Nobody invited yet: the form is the place to start.
+    if(!ACCOUNTS.list.some(account=>!account.is_admin))$('admin-acct-add').open=true;
+  }
+}
+// The counts follow the group shown, and say how many rows the search leaves.
+function syncAdminAccountsHead(){
+  const scoped=ACCOUNTS.list.filter(account=>adminAccountInFilter(account,ACCOUNTS.filter));
+  const shown=adminAccountFold(ACCOUNTS.query).trim()?scoped.filter(account=>adminAccountShown(account,ACCOUNTS.query,ACCOUNTS.filter)).length:null;
+  $('admin-acct-counts').textContent=ACCOUNTS.loaded?adminAccountCountsText(adminAccountCounts(scoped),shown,adminAccountFilterName(ACCOUNTS.filter)):'';
+}
+// The table is drawn again for a new list, a search or a group only; a change of
+// access or of the selection updates its row in place (syncAdminAccountRow).
+function renderAdminAccountsTable(){
+  const body=$('admin-acct-body'), active=document.activeElement;
+  let focus=null, resetFocus=null;
+  for(const [key,row] of ACCOUNTS.rows)for(const part of ['box','toggle','reset'])if(row[part]===active)focus=[key,part];
+  for(const reset of ACCOUNTS.resets.values())if(active&&reset.row?.contains(active))resetFocus=reset;
+  ACCOUNTS.rows=new Map();
+  for(const reset of ACCOUNTS.resets.values())reset.row=null;
+  if(!ACCOUNTS.list.length){ body.replaceChildren(analyzeEl('div','monitor-empty','No accounts yet: add them below.')); return; }
+  const shown=adminAccountsShown();
+  if(!shown.length){ body.replaceChildren(analyzeEl('div','monitor-empty',ACCOUNTS.filter==='all'?'No account matches this search.':'No account of this group matches.')); return; }
+  const table=analyzeEl('table','admin-table acct-table'), thead=analyzeEl('thead'), head=analyzeEl('tr'), rows=analyzeEl('tbody');
+  for(const [label,cls,hidden] of [['Select','acct-sel',true],['Name'],['Email'],['Group'],['Created'],['Last sign-in'],['Access'],['Action','acct-act',true]]){
+    const cell=analyzeEl('th',cls); cell.setAttribute('scope','col');
+    if(hidden)cell.append(analyzeEl('span','sr-only',label)); else cell.textContent=label;
+    head.append(cell);
+  }
+  thead.append(head);
+  for(const account of shown){
+    const row=adminAccountRow(account), reset=ACCOUNTS.resets.get(account.key);
+    ACCOUNTS.rows.set(account.key,row); rows.append(row.tr);
+    if(reset)rows.append(adminPasswordResetRow(reset));
+  }
+  table.append(analyzeEl('caption','sr-only','Accounts'),thead,rows);
+  const wrap=analyzeEl('div','admin-table-wrap acct-table-wrap'); wrap.append(table);
+  body.replaceChildren(wrap);
+  const again=focus&&ACCOUNTS.rows.get(focus[0]);
+  if(again)again[focus[1]].focus();
+  else resetFocus?.focus?.focus();
+}
+function adminAccountIsOwn(account){
+  try{ return !!CURRENT_USER&&((CURRENT_USER.id!=null&&account.id===CURRENT_USER.id)||(!!CURRENT_USER.email&&account.key===adminAccountKey(CURRENT_USER.email))); }
+  catch(error){ return false; }
+}
+function adminAccountRow(account){
+  const label=adminAccountLabel(account), own=adminAccountIsOwn(account);
+  const tr=analyzeEl('tr','acct-row'); tr.dataset.email=account.key;
+  const pick=analyzeEl('td','acct-sel'), box=analyzeEl('input');
+  box.type='checkbox'; box.setAttribute('aria-label','Select '+label);
+  if(account.is_admin){ box.disabled=true; box.title=ACCOUNT_ADMIN_NOTE; }
+  box.onchange=()=>toggleAdminAccountSelected(account.key,box.checked);
+  pick.append(box);
+  const name=analyzeEl('td','acct-name'); name.title=label;
+  name.append(analyzeEl('span',account.name?'':'acct-dim',account.name||'—'));
+  if(account.is_admin)name.append(' ',analyzeEl('span','admin-tag','admin'));
+  if(own)name.append(' ',analyzeEl('span','admin-tag','you'));
+  const email=analyzeEl('td','acct-email',account.email); email.title=account.email;
+  const group=analyzeEl('td','acct-group'+(account.group?'':' acct-dim'),account.group||'—');
+  if(account.group)group.title=account.group;
+  const created=analyzeEl('td','acct-when',adminAccountWhen(account.created_at,false)||'—');
+  if(account.created_at)created.title='Created '+account.created_at;
+  const seen=analyzeEl('td','acct-when',adminAccountWhen(account.last_sign_in_at,true)||'—');
+  seen.title=account.last_sign_in_at?'Last signed in '+account.last_sign_in_at:'No sign-in on record';
+  const access=analyzeEl('td','acct-access'), toggle=analyzeEl('button','acct-switch'), track=analyzeEl('span','acct-track'), state=analyzeEl('span','acct-state');
+  toggle.type='button'; toggle.setAttribute('role','switch'); toggle.setAttribute('aria-label','Access for '+label);
+  track.setAttribute('aria-hidden','true'); toggle.append(track,state);
+  // A disabled control shows no tooltip in some browsers: its cell explains too.
+  if(account.is_admin){ toggle.disabled=true; access.title=ACCOUNT_ADMIN_NOTE; }
+  toggle.onclick=()=>toggleAdminAccountAccess(account.key);
+  access.append(toggle);
+  const act=analyzeEl('td','acct-act'), reset=adminAccountsButton('New password',()=>openAdminPasswordReset(account.key));
+  reset.className+=' acct-mini';
+  // The server sets no administrator's password: theirs is changed from the sign-in page.
+  if(account.is_admin){
+    reset.disabled=true;
+    reset.title=own?'Your own account: change its password from the sign-in page (Forgot password?).'
+      :'An administrator’s password is not changed here: they can use “Forgot password?” on the sign-in page.';
+  }else reset.title='Give '+label+' a new random password';
+  act.append(reset);
+  tr.append(pick,name,email,group,created,seen,access,act);
+  const row={tr,box,toggle,state,reset,account};
+  syncAdminAccountRowState(row);
+  return row;
+}
+function syncAdminAccountRowState(row){
+  const account=row.account, on=adminAccountAccess(account)==='on', label=adminAccountLabel(account);
+  row.tr.className='acct-row'+(on?'':' acct-off')+(account.is_admin?' acct-admin':'')+(ACCOUNTS.selected.has(account.key)?' acct-selected':'');
+  row.toggle.setAttribute('aria-checked',String(on));
+  if(ACCOUNTS.pending.has(account.key))row.toggle.setAttribute('aria-busy','true'); else row.toggle.removeAttribute('aria-busy');
+  row.state.textContent=on?'On':'Off';
+  const since=account.access_paused_at?' since '+adminAccountWhen(account.access_paused_at,true).replace(/^(Today|Yesterday)/,word=>word.toLowerCase()):'';
+  row.toggle.title=account.is_admin?ACCOUNT_ADMIN_NOTE:on?`Access on: click to turn it off (signs ${label} out at once)`:`Access off${since}: click to turn it on`;
+  row.box.checked=ACCOUNTS.selected.has(account.key);
+}
+function syncAdminAccountRow(key){
+  const row=ACCOUNTS.rows.get(key); if(!row)return;
+  row.account=ACCOUNTS.list.find(account=>account.key===key)||row.account;
+  syncAdminAccountRowState(row);
+}
+// A selection is built row by row (across searches too); any change to it drops a question asked about it.
+function toggleAdminAccountSelected(key,on){
+  if(on)ACCOUNTS.selected.add(key); else ACCOUNTS.selected.delete(key);
+  dropAdminAccountsBulkAsk();
+  syncAdminAccountRow(key); syncAdminAccountsSelection();
+}
+// "Select all shown": exactly the rows shown, in place of any selection made before.
+function selectShownAdminAccounts(){
+  ACCOUNTS.selected.clear();
+  for(const account of ACCOUNTS.list)if(!account.is_admin&&adminAccountShown(account,ACCOUNTS.query,ACCOUNTS.filter))ACCOUNTS.selected.add(account.key);
+  dropAdminAccountsBulkAsk();
+  for(const key of ACCOUNTS.rows.keys())syncAdminAccountRow(key);
+  syncAdminAccountsSelection();
+}
+function clearAdminAccountSelection(keys){
+  if(keys)for(const key of keys)ACCOUNTS.selected.delete(key); else ACCOUNTS.selected.clear();
+  dropAdminAccountsBulkAsk();
+  for(const key of ACCOUNTS.rows.keys())syncAdminAccountRow(key);
+  syncAdminAccountsSelection();
+}
+function syncAdminAccountsSelection(){
+  const count=ACCOUNTS.selected.size, hidden=[...ACCOUNTS.selected].filter(key=>!ACCOUNTS.rows.has(key)).length;
+  $('admin-acct-selected').textContent=count?`${count} selected`+(hidden?` (${hidden} not shown)`:''):'None selected';
+  $('admin-acct-bulk').classList.toggle('has-selection',count>0);
+  for(const id of ['admin-acct-on','admin-acct-off','admin-acct-group-set','admin-acct-group-remove'])$(id).disabled=!count;
+}
+// Turns access on or off for these accounts (administrators are never sent).
+// Their rows show the change at once, and keep it once the server confirms it.
+async function setAdminAccountsAccess(emails,access){
+  const keys=[...new Set(emails.map(adminAccountKey))].filter(key=>ACCOUNTS.list.some(account=>account.key===key&&!account.is_admin));
+  if(!keys.length)return {updated:[],skipped:[]};
+  for(const key of keys){ ACCOUNTS.pending.set(key,access); syncAdminAccountRow(key); }
+  syncAdminAccountsHead();
+  try{
+    const sent=keys.map(key=>ACCOUNTS.list.find(account=>account.key===key).email);
+    const data=await adminAccountsRequest('/api/admin/accounts/access',{emails:sent,access});
+    const updated=new Set((Array.isArray(data.updated)?data.updated:[]).map(adminAccountKey));
+    const skipped=adminAccountsSkipped(data);
+    const now=new Date().toISOString();
+    for(const account of ACCOUNTS.list){
+      if(!keys.includes(account.key)||!updated.has(account.key))continue;
+      account.access_paused_at=access==='off'?account.access_paused_at||now:'';
+      account.access=access;
+    }
+    ACCOUNTS.mutations++;
+    return {updated:keys.filter(key=>updated.has(key)),skipped};
+  }finally{
+    for(const key of keys){ ACCOUNTS.pending.delete(key); syncAdminAccountRow(key); }
+    syncAdminAccountsHead();
+  }
+}
+function adminAccountsSkipped(data){
+  return (Array.isArray(data?.skipped)?data.skipped:[]).filter(item=>item&&typeof item==='object')
+    .map(item=>({email:String(item.email??''),reason:String(item.reason??'')}));
+}
+function adminAccountsSkippedText(skipped){
+  return skipped.length?` Skipped ${skipped.length}: `+skipped.map(item=>`${item.email} (${item.reason.replace(/[.\s]+$/,'')})`).join('; ')+'.':'';
+}
+// While a list is being applied no other change starts: it could reach the server first and be undone by Apply.
+function adminAccountsWaitForApply(){
+  if(!ACCOUNTS.applying)return false;
+  adminAccountsSay('The list is being applied: change access once it is done.','err');
+  return true;
+}
+// A change of access or of groups after Review sets the reviewed list aside, so that Apply never undoes it.
+// Said after the change's own result.
+function setAsideAdminAccessPlan(){
+  if(!ACCOUNTS.plan||ACCOUNTS.applying)return '';
+  dropAdminAccessPlan();
+  return ' The list you reviewed was set aside: press Review again.';
+}
+function adminAccountsChanging(){ return ACCOUNTS.pending.size>0||ACCOUNTS.bulkBusy; }
+async function toggleAdminAccountAccess(key){
+  const account=ACCOUNTS.list.find(item=>item.key===key);
+  if(!account||account.is_admin||ACCOUNTS.pending.has(key)||adminAccountsWaitForApply())return;
+  const access=account.access==='on'?'off':'on', label=adminAccountLabel(account), aside=setAsideAdminAccessPlan();
+  try{
+    const result=await setAdminAccountsAccess([account.email],access);
+    if(result.updated.length)adminAccountsSay((access==='on'?`Access on for ${label}.`:`Access off for ${label}: signed out until it is on again.`)+aside,'ok');
+    else adminAccountsSay(`${label} was not changed: ${adminAccountSentence(result.skipped[0]?.reason||'the server skipped it')}`+aside,'err');
+  }catch(error){ adminAccountsSay(`Could not turn access ${access} for ${label}: ${adminAccountSentence(error.message)}`+aside,'err'); }
+}
+function adminAccessResultText(result,access){
+  const count=result.updated.length;
+  const text=count?`Access turned ${access} for ${count} account${count===1?'':'s'}.`+(access==='off'?' They are signed out until it is on again.':''):'No account was changed.';
+  return text+adminAccountsSkippedText(result.skipped);
+}
+// The selected accounts a change is for (never an administrator's), or those of these keys; and which of them
+// the table does not show (a search or a group hides them).
+function adminAccountsPicked(keys){
+  const accounts=ACCOUNTS.list.filter(account=>(keys?keys.includes(account.key):ACCOUNTS.selected.has(account.key))&&!account.is_admin);
+  return {accounts,hidden:accounts.filter(account=>!ACCOUNTS.rows.has(account.key))};
+}
+// Selected rows that are not shown are named before anything is changed: a selection left from before
+// would otherwise go along with the next change. Asked in the page, under the bar.
+function askAdminAccountsBulk(ask){
+  ACCOUNTS.bulkAsk=ask;
+  renderAdminAccountsBulkAsk()?.focus();
+}
+function renderAdminAccountsBulkAsk(){
+  const box=$('admin-acct-bulk-ask'), ask=ACCOUNTS.bulkAsk;
+  if(!ask){ box.replaceChildren(); box.hidden=true; return null; }
+  const {accounts,hidden}=adminAccountsPicked(ask.keys), count=accounts.length, s=count===1?'':'s', shown=count-hidden.length;
+  const names=hidden.slice(0,8).map(account=>adminAccountLabel(account)).join(', ')+(hidden.length>8?` and ${hidden.length-8} more`:'');
+  const what={on:`Turn access on for ${count} account${s}`,off:`Turn access off for ${count} account${s}`,
+    group:`Put ${count} account${s} in the group “${String(ask.group).trim()}”`,ungroup:`Take ${count} account${s} out of ${count===1?'its':'their'} group`}[ask.action];
+  const question=analyzeEl('p','',`${what}, ${hidden.length} not shown here: ${names}?`+(ask.action==='off'?' They are signed out at once.':''));
+  question.id='admin-acct-bulk-question';
+  const all=adminAccountsButton({on:`Turn access on for all ${count}`,off:`Turn access off for all ${count}`,group:`Set the group for all ${count}`,
+    ungroup:`Take all ${count} out`}[ask.action],()=>confirmAdminAccountsBulk(false));
+  all.className+=' primary'; all.setAttribute('aria-describedby','admin-acct-bulk-question');
+  const actions=analyzeEl('div','acct-actions');
+  actions.append(all);
+  if(shown)actions.append(adminAccountsButton(`Only the ${shown} shown`,()=>confirmAdminAccountsBulk(true)));
+  actions.append(adminAccountsButton('Cancel',()=>dropAdminAccountsBulkAsk()));
+  box.replaceChildren(question,actions); box.hidden=false;
+  return all;
+}
+// The question goes; a focus inside it goes back to the button that asked it.
+function dropAdminAccountsBulkAsk(){
+  const ask=ACCOUNTS.bulkAsk; if(!ask)return;
+  const inside=$('admin-acct-bulk-ask').contains(document.activeElement);
+  ACCOUNTS.bulkAsk=null; renderAdminAccountsBulkAsk();
+  if(inside){ const from=$(ask.from); (from&&!from.disabled?from:$('admin-acct-q')).focus(); }
+}
+function confirmAdminAccountsBulk(onlyShown){
+  const ask=ACCOUNTS.bulkAsk; if(!ask)return;
+  const keys=onlyShown?ask.keys.filter(key=>ACCOUNTS.rows.has(key)):ask.keys;
+  if(ask.action==='on'||ask.action==='off')return adminAccountsBulk(ask.action,keys,ask.keys);
+  return setAdminAccountsGroup(ask.action==='ungroup',keys,ask.group,ask.keys);
+}
+// Once a change for the selection is made, those rows are no longer selected (any ticked meanwhile stay),
+// and a focus left on a bar button that is now disabled goes to the search.
+function doneAdminAccountsSelection(keys,here){
+  clearAdminAccountSelection(keys);
+  if(here&&(document.activeElement?.disabled||!$('admin-acct-bulk').contains(document.activeElement)))$('admin-acct-q').focus();
+}
+async function adminAccountsBulk(access,keys,asked){
+  if(ACCOUNTS.bulkBusy||adminAccountsWaitForApply())return;
+  const {accounts,hidden}=adminAccountsPicked(keys);
+  if(!accounts.length)return;
+  if(!keys&&hidden.length)return askAdminAccountsBulk({action:access,keys:accounts.map(account=>account.key),from:'admin-acct-'+access});
+  dropAdminAccountsBulkAsk();
+  const was=[...new Set([...accounts.map(account=>account.key),...(asked||[])])], aside=setAsideAdminAccessPlan();
+  ACCOUNTS.bulkBusy=true; $('admin-acct-bulk').setAttribute('aria-busy','true');
+  try{
+    const result=await setAdminAccountsAccess(accounts.map(account=>account.email),access);
+    adminAccountsSay(adminAccessResultText(result,access)+aside,result.updated.length&&!result.skipped.length?'ok':'err');
+    doneAdminAccountsSelection(was,$('admin-acct-bulk').contains(document.activeElement));
+  }catch(error){ adminAccountsSay(`Could not turn access ${access}: ${adminAccountSentence(error.message)}`+aside,'err'); }
+  finally{ ACCOUNTS.bulkBusy=false; $('admin-acct-bulk').removeAttribute('aria-busy'); }
+}
+// The selected rows into a group (or out of theirs); the list is read again after.
+async function setAdminAccountsGroup(remove,keys,given,asked){
+  if(ACCOUNTS.bulkBusy||adminAccountsWaitForApply())return;
+  const {accounts,hidden}=adminAccountsPicked(keys);
+  if(!accounts.length)return;
+  // The name goes as typed: the server cleans it, and takes an existing group's spelling when it is that group.
+  const typed=remove?'':given??$('admin-acct-group-name').value;
+  if(!remove&&!typed.trim()){ adminAccountsSay('Type the group’s name first (or use “Remove from group”).','err'); $('admin-acct-group-name').focus(); return; }
+  if(!keys&&hidden.length)return askAdminAccountsBulk({action:remove?'ungroup':'group',keys:accounts.map(account=>account.key),group:typed,
+    from:remove?'admin-acct-group-remove':'admin-acct-group-set'});
+  dropAdminAccountsBulkAsk();
+  const was=[...new Set([...accounts.map(account=>account.key),...(asked||[])])], aside=setAsideAdminAccessPlan();
+  ACCOUNTS.bulkBusy=true; $('admin-acct-bulk').setAttribute('aria-busy','true');
+  try{
+    const data=await adminAccountsRequest('/api/admin/accounts/group',{emails:accounts.map(account=>account.email),group:typed});
+    const count=(Array.isArray(data.updated)?data.updated:[]).length, skipped=adminAccountsSkipped(data);
+    const group=adminAccountGroupOf(data.group)||typed.trim(), s=count===1?'':'s';
+    ACCOUNTS.mutations++;
+    adminAccountsSay((remove?`${count} account${s} taken out of ${count===1?'its':'their'} group.`
+      :data.group_is_new===true?`${count} account${s} now in ${group}, a new group.`
+      :typeof data.group==='string'&&data.group!==typed.trim()?`${count} account${s} joined the existing group ${group}.`:`${count} account${s} now in ${group}.`)
+      +adminAccountsSkippedText(skipped)+aside,count&&!skipped.length?'ok':'err');
+    if(!remove&&count)$('admin-acct-group-name').value='';
+    doneAdminAccountsSelection(was,$('admin-acct-bulk').contains(document.activeElement));
+    await loadAdminAccounts();
+  }catch(error){ adminAccountsSay(`Could not ${remove?'take the accounts out of their group':'set the group'}: ${adminAccountSentence(error.message)}`+aside,'err'); }
+  finally{ ACCOUNTS.bulkBusy=false; $('admin-acct-bulk').removeAttribute('aria-busy'); }
+}
+// "Set access from a list": one entry per line (or between semicolons), list markers dropped: a number, or
+// a bullet (- * • · ◦ ‣ ▪ – —), never a ✓ or ✗, which may say who is in or out.
+function adminAccessEntries(text){
+  return String(text??'').replace(/\p{Cf}/gu,'').split(/[\r\n;]+/).map(line=>line.replace(/^\s*(?:\d{1,3}[.)]|[-*•·◦‣▪–—])\s+/u,'').trim()).filter(Boolean);
+}
+// What a line has besides names, addresses and the punctuation around them: a mark (✗ ✓ × ~~…~~ * ! ?) or a
+// dash or colon with nothing after it, which may say "not today". Each is given once, as written.
+function adminAccessMarks(entry){
+  const text=String(entry??'').replace(/[^\s,;<>()[\]"]+@[^\s,;<>()[\]"]+/g,'\x01').replace(/[<>()[\]"“”„«»]/g,' ');
+  const tokens=text.match(/\x01|[\p{L}\p{N}][\p{L}\p{M}\p{N}]*(?:[.'’‐·・-][\p{L}\p{N}][\p{L}\p{M}\p{N}]*)*\.?|['’‘]|[,:|–—-]|[^\s\p{L}\p{N}\x01,:|–—'’‘-]+/gu)||[];
+  const item=token=>token==='\x01'||/^[\p{L}\p{N}]/u.test(token);
+  const marks=[];
+  tokens.forEach((token,index)=>{
+    // Words and addresses; a quote around a name; a comma anywhere; a dash, colon or bar between two of them.
+    if(item(token)||/^['’‘]$/.test(token))return;
+    if(/^[,:|–—-]$/.test(token)&&(token===','||(tokens.slice(0,index).some(item)&&tokens.slice(index+1).some(item))))return;
+    if(!marks.includes(token))marks.push(token);
+  });
+  return marks;
+}
+// The addresses in an entry, read as the server reads them: an @ with everything around it up to a
+// space, comma, semicolon, bracket or double quote (an apostrophe or a hyphen belongs to it).
+function adminAccessEmails(entry){
+  return (String(entry??'').match(/[^\s,;<>()[\]"]+@[^\s,;<>()[\]"]+/g)||[])
+    .map(address=>adminAccountKey(address.replace(/^[.']+|[.']+$/g,'').replace(/^mailto:/i,'')));
+}
+// An entry without its addresses (each becomes a line break): what is written beside them.
+function adminAccessBeside(entry){
+  return String(entry??'').replace(/[^\s,;<>()[\]"]+@[^\s,;<>()[\]"]+/g,'\n');
+}
+// A name's words, to compare names: case, accents and word order aside. Nothing else is
+// guessed (an address before its @ is never a name).
+function adminNameWords(text){
+  return adminAccountFold(text).replace(/[^\p{L}\p{N}]+/gu,' ').trim().split(' ').filter(Boolean);
+}
+// The accounts with exactly this full name: the same words, in any order ("Lovelace, Ada" is Ada Lovelace).
+function adminAccountsNamedExactly(text,list){
+  const want=adminNameWords(text).sort().join(' ');
+  if(!want)return [];
+  return list.filter(account=>adminNameWords(account.name).sort().join(' ')===want);
+}
+// The accounts a name fits: theirs has every word of it, or every word of theirs is in it (titles aside).
+function adminAccountsFitting(text,list){
+  const words=adminNameWords(text).filter(word=>!ACCOUNT_NAME_TITLES.has(word));
+  if(!words.length)return [];
+  return list.filter(account=>{
+    const own=adminNameWords(account.name);
+    return own.length>0&&(words.every(word=>own.includes(word))||own.every(word=>words.includes(word)));
+  });
+}
+// "Did you mean": the first three accounts a name fits. Only ever shown, never applied.
+function adminAccountsLike(text,list){ return adminAccountsFitting(text,list).slice(0,3); }
+// A name is one person only when it is one account's full name (word order aside) and fits no other
+// account: with accounts named Smith and John Smith, "Smith" is neither's.
+function adminAccessNamed(text,list){
+  const exact=adminAccountsNamedExactly(text,list);
+  return {exact,also:exact.length?adminAccountsFitting(text,list).filter(account=>!exact.includes(account)):[]};
+}
+// The words beside a line's addresses that are not part of its accounts' names, as written: a sheet's
+// "control", "no" or "B" is not a name. A word fits when it is a word of a name or, three letters or more,
+// begins one (so "no" never stands for Noether); titles are left aside. A single letter is an initial only
+// next to a word that fits, and only with a period ("Robert J. Smith") or as the first letter of a word of
+// the name not written out ("Ada L", "Lovelace, A.").
+function adminAccessExtraWords(entry,accounts){
+  const own=accounts.flatMap(account=>adminNameWords(account.name)), text=adminAccessBeside(entry), written=new Set(adminNameWords(text));
+  const fits=word=>own.includes(word)||(word.length>=3&&own.some(part=>part.startsWith(word)));
+  const extra=[];
+  // Pieces between the addresses, | ; : tabs, brackets, and dashes between spaces (a comma does not end one).
+  for(const piece of text.split(/[\n;:|()[\]<>\t]|\s[-–—]+(?=\s|$)|^[-–—]+(?=\s)/)){
+    const items=(piece.match(/[^\s,"“”„«»]+/g)||[]).map(token=>({token,words:adminNameWords(token).filter(word=>!ACCOUNT_NAME_TITLES.has(word))}))
+      .filter(item=>item.words.length);
+    const named=items.map(item=>item.words.some(word=>word.length>1&&fits(word)));
+    items.forEach((item,index)=>{
+      const near=named[index-1]||named[index]||named[index+1];
+      const initial=word=>/^\p{L}$/u.test(word)&&near&&(/\.$/.test(item.token)||own.some(part=>part.startsWith(word)&&!written.has(part)));
+      if(!item.words.every(word=>fits(word)||initial(word)))extra.push(item.token.replace(/^[^\p{L}\p{N}]+|[^\p{L}\p{N}.]+$/gu,''));
+    });
+  }
+  return [...new Set(extra)];
+}
+// How one line of a list reads. With an address: each address must be an account's, and that
+// account is turned on; what is written beside it must be that account's name (or nothing), and
+// never adds another. Without one: one person's full name only (see adminAccessNamed), or (at
+// commas) several. A line with a mark, with words that are not its account's name, naming no
+// account, or with a name that fits more than one, turns nobody on.
+function adminAccessLine(entry,list,byEmail){
+  const line={entry,accounts:[],notes:[],problem:'',matches:[],suggest:[]};
+  const marks=adminAccessMarks(entry);
+  if(marks.length){ Object.assign(line,{problem:'marks',marks,named:adminNameWords(entry).length>0||adminAccessEmails(entry).length>0}); return line; }
+  const emails=adminAccessEmails(entry);
+  if(emails.length){
+    const unknown=[];
+    for(const email of emails){
+      const account=byEmail.get(email);
+      if(!account)unknown.push(email); else if(!line.accounts.includes(account))line.accounts.push(account);
+    }
+    const found=line.accounts;
+    if(!found.length){
+      line.problem='address';
+      line.notes.push(`no account has ${unknown.length===1?'this address':'these addresses'}`
+        +(adminNameWords(adminAccessBeside(entry)).length?`, and the name beside ${unknown.length===1?'it':'them'} is not used to find one`:''));
+      return line;
+    }
+    // Words that are not the accounts' names (a sheet's "control", "- no", "| intervention"): nobody.
+    const extra=adminAccessExtraWords(entry,found);
+    if(extra.length){ Object.assign(line,{accounts:[],problem:'extra',extra,matches:found}); return line; }
+    for(const email of unknown)line.notes.push(`no account has the address ${email}: nobody is turned on for it`);
+    return line;
+  }
+  const whole=adminAccessNamed(entry,list);
+  if(whole.exact.length===1&&!whole.also.length){ line.accounts=whole.exact; return line; }
+  if(whole.exact.length>1){ Object.assign(line,{problem:'ambiguous',matches:whole.exact}); return line; }
+  if(whole.exact.length===1){
+    const [exact]=whole.exact;
+    Object.assign(line,{problem:'ambiguous',exact,also:whole.also,matches:[exact,...whole.also],
+      reordered:adminNameWords(entry).join(' ')!==adminNameWords(exact.name).join(' ')});
+    return line;
+  }
+  const parts=entry.includes(',')?entry.split(',').map(part=>part.trim()).filter(part=>adminNameWords(part).length):[];
+  const each=parts.map(part=>adminAccessNamed(part,list));
+  if(parts.length>1&&each.every(found=>found.exact.length>0)){
+    if(each.every(found=>found.exact.length===1&&!found.also.length)){ line.accounts=each.map(found=>found.exact[0]); return line; }
+    Object.assign(line,{problem:'ambiguous',split:true,matches:[...new Set(each.flatMap(found=>[...found.exact,...found.also]))]});
+    return line;
+  }
+  Object.assign(line,{problem:'unmatched',suggest:adminAccountsLike(entry,list)});
+  return line;
+}
+// Who has access once a list is applied to a group: everyone its lines name on (in the group or
+// not), everyone else in the group off, every other account untouched.
+function adminAccessPlan(text,list,group){
+  const byEmail=new Map(list.map(account=>[account.key,account]));
+  const lines=adminAccessEntries(text).map(entry=>adminAccessLine(entry,list,byEmail));
+  const chosen=new Set(lines.flatMap(line=>line.accounts.map(account=>account.key)));
+  const listed=list.filter(account=>!account.is_admin&&chosen.has(account.key));
+  const off=list.filter(account=>!account.is_admin&&account.group===group&&!chosen.has(account.key));
+  return {group,entries:lines.length,lines,on:listed,off,turnOn:listed.filter(account=>account.access!=='on'),turnOff:off.filter(account=>account.access!=='off'),
+    outside:listed.filter(account=>account.group!==group),admins:list.filter(account=>account.is_admin&&chosen.has(account.key)),
+    unread:lines.filter(line=>line.problem),several:lines.filter(line=>line.accounts.length>1),noted:lines.filter(line=>!line.problem&&line.notes.length)};
+}
+function adminAccessPlanText(plan){ return `${plan.on.length} on, ${plan.off.length} off`; }
+// "A", "A and B", "A, B and C" (or "or").
+function adminAccountsSeries(items,word){ return items.length>1?`${items.slice(0,-1).join(', ')} ${word} ${items.at(-1)}`:items[0]||''; }
+// Why a line turns nobody on, and what to write instead (after the line itself, in quotes).
+function adminAccessProblemText(line){
+  if(line.problem==='marks'){
+    const many=line.marks.length>1;
+    return `The line ${line.named?'also has':'has'} ${adminAccountsSeries(line.marks.map(mark=>`“${mark}”`),'and')}, which ${many?'are':'is'} not understood.`
+      +` Remove the mark${many?'s':''}, or leave the person off the list.`;
+  }
+  if(line.problem==='extra'){
+    const many=line.extra.length>1, one=line.matches.length===1;
+    const whose=one?`this account's name (${line.matches[0].name||'no name set'})`:`these accounts' names (${line.matches.map(account=>account.name||account.email).join(', ')})`;
+    return `The line also has ${adminAccountsSeries(line.extra.map(word=>`“${word}”`),'and')}, which ${many?'are':'is'} not part of ${whose}.`
+      +` Remove ${many?'them':'it'}, or leave ${one?'the person':'these people'} off the list.`;
+  }
+  if(line.problem==='ambiguous'&&line.exact){
+    const also=line.also.slice(0,4).map(account=>adminAccountWho(account)).concat(line.also.length>4?[`${line.also.length-4} more`]:[]);
+    return `is${line.reordered?', in another order,':''} the full name of ${adminAccountWho(line.exact)} and also fits ${adminAccountsSeries(also,'and')}: use the address of the one meant.`;
+  }
+  if(line.problem==='ambiguous'&&line.split)return `The names on this line fit ${line.matches.length} accounts (${line.matches.map(account=>account.email).join(', ')}): use the address of each person meant.`;
+  if(line.problem==='ambiguous')return `${line.matches.length} accounts have this name (${line.matches.map(account=>account.email).join(', ')}): use the address of the one meant.`;
+  if(line.problem==='address')return `${adminAccountSentence(line.notes[0]).replace(/^./,letter=>letter.toUpperCase())} Use the account's address as the table shows it.`;
+  const who=line.suggest.map(account=>adminAccountWho(account));
+  return 'No account has this name.'+(who.length?` Did you mean ${adminAccountsSeries(who,'or')}?`:'')+' Use the full name as the table shows it, or the address.';
+}
+// Who a line became, for "How each line was read".
+function adminAccessReadingText(line){
+  if(line.problem==='marks')return `nobody: ${adminAccountsSeries(line.marks.map(mark=>`“${mark}”`),'and')} on the line ${line.marks.length>1?'are':'is'} not understood`;
+  if(line.problem==='extra')return `nobody: ${adminAccountsSeries(line.extra.map(word=>`“${word}”`),'and')} ${line.extra.length>1?'are':'is'} not part of `
+    +(line.matches.length===1?`${adminAccountLabel(line.matches[0])}'s name`:"these accounts' names");
+  if(line.problem==='ambiguous'&&line.exact)return `nobody: the name also fits ${line.also.length===1?'another account':'other accounts'}`;
+  if(line.problem==='ambiguous'&&line.split)return 'nobody: a name on it fits more than one account';
+  if(line.problem==='ambiguous')return 'nobody: more than one account has this name';
+  if(line.problem==='address')return 'nobody: no account has this address';
+  if(line.problem)return 'nobody: no account has this name';
+  return line.accounts.map(account=>adminAccountWho(account)).join(', ')+(line.notes.length?` (${line.notes.join('; ')})`:'');
+}
+// The list's group: required; there is none to choose until an account is in one.
+function syncAdminAccessListGroup(){
+  const select=$('admin-acct-list-group'), groups=ACCOUNTS.groups, none=ACCOUNTS.loaded&&!groups.length;
+  if(!groups.includes(ACCOUNTS.listGroup))ACCOUNTS.listGroup='';
+  select.replaceChildren(adminAccountOption('','Choose a group…'),...groups.map(group=>adminAccountOption(group,group)));
+  select.value=ACCOUNTS.listGroup;
+  select.disabled=none;
+  $('admin-acct-list-nogroup').hidden=!none;
+  $('admin-acct-list-review').disabled=none;
+  $('admin-acct-list-scope').textContent=ACCOUNTS.listGroup
+    ?`Everyone else in ${ACCOUNTS.listGroup} is turned off; accounts outside the group are not touched.`
+    :'Everyone else in the group is turned off; accounts outside it are not touched.';
+}
+function toggleAdminAccessList(open){
+  const panel=$('admin-acct-list'), show=open===undefined?panel.hidden:!!open;
+  panel.hidden=!show;
+  $('admin-acct-list-open').setAttribute('aria-expanded',String(show));
+  renderAdminAccountsDoors();
+  if(!show){ if(!ACCOUNTS.applying)dropAdminAccessPlan(); return; }
+  // The group the table shows, or the only one there is.
+  const shown=String(ACCOUNTS.filter).startsWith('=')?ACCOUNTS.filter.slice(1):'';
+  if(shown&&ACCOUNTS.groups.includes(shown))ACCOUNTS.listGroup=shown;
+  else if(!ACCOUNTS.listGroup&&ACCOUNTS.groups.length===1)ACCOUNTS.listGroup=ACCOUNTS.groups[0];
+  syncAdminAccessListGroup();
+  (ACCOUNTS.groups.length&&!ACCOUNTS.listGroup?$('admin-acct-list-group'):$('admin-acct-list-text')).focus();
+}
+function dropAdminAccessPlan(){
+  if(!ACCOUNTS.plan)return;
+  const inside=$('admin-acct-plan').contains(document.activeElement);
+  ACCOUNTS.plan=null; renderAdminAccessPlan();
+  if(inside)$('admin-acct-list-review').focus();
+}
+// Review reads the accounts again first, so that the plan is the server's list as it is now.
+async function reviewAdminAccessList(){
+  if(ACCOUNTS.applying||ACCOUNTS.reviewing)return;
+  dropAdminAccessPlan();
+  if(!ACCOUNTS.listGroup){ adminAccountsSay('Choose the group this list is for.','err'); $('admin-acct-list-group').focus(); return; }
+  if(!adminAccessEntries($('admin-acct-list-text').value).length){ adminAccountsSay('Paste the email addresses or names of the people who should have access, one per line.','err'); return; }
+  // A change still on its way could land after the review, and Apply would undo it.
+  if(adminAccountsChanging()){ adminAccountsSay('An access change is still on its way: review the list once it is done.','err'); return; }
+  const review=$('admin-acct-list-review');
+  ACCOUNTS.reviewing=true; review.textContent='Reading the accounts…'; review.setAttribute('aria-busy','true');
+  adminAccountsSay('');
+  const fresh=await loadAdminAccounts();
+  ACCOUNTS.reviewing=false; review.textContent='Review'; review.removeAttribute('aria-busy');
+  if(!fresh)return;
+  if(adminAccountsChanging()){ adminAccountsSay('Access was changed while the list was being reviewed: press Review again once the change is done.','err'); return; }
+  if(!ACCOUNTS.listGroup){ adminAccountsSay('That group has no accounts any more: choose another.','err'); $('admin-acct-list-group').focus(); return; }
+  ACCOUNTS.plan=adminAccessPlan($('admin-acct-list-text').value,ACCOUNTS.list,ACCOUNTS.listGroup);
+  renderAdminAccessPlan();
+  $('admin-acct-plan').focus();
+}
+// The confirmation shown before a list is applied: "12 on, 5 off", who changes, what was not understood.
+function renderAdminAccessPlan(){
+  const box=$('admin-acct-plan'), plan=ACCOUNTS.plan;
+  // One primary action at a time: Review, then Apply.
+  $('admin-acct-list-review').classList.toggle('primary',!plan);
+  ACCOUNTS.planApply=null;
+  if(!plan){ box.replaceChildren(); box.hidden=true; return; }
+  const names=list=>list.map(account=>adminAccountLabel(account)).join(', ');
+  const line=(label,text,cls)=>{ const p=analyzeEl('p','acct-plan-line'+(cls?' '+cls:'')); p.append(analyzeEl('b','',label),' '+text); return p; };
+  const parts=[analyzeEl('p','acct-plan-total',adminAccessPlanText(plan)),
+    analyzeEl('p','acct-plan-line',`In ${plan.group}: everyone the list does not name is turned off. Accounts outside the group are not touched.`)];
+  const unchanged=plan.on.length+plan.off.length-plan.turnOn.length-plan.turnOff.length;
+  if(plan.turnOn.length)parts.push(line(`Turn on (${plan.turnOn.length}):`,names(plan.turnOn)));
+  if(plan.turnOff.length)parts.push(line(`Turn off (${plan.turnOff.length}):`,names(plan.turnOff)+' — signed out at once.'));
+  if(!plan.turnOn.length&&!plan.turnOff.length)parts.push(analyzeEl('p','acct-plan-line','Every account already has this access: nothing changes.'));
+  else if(unchanged)parts.push(analyzeEl('p','acct-plan-line',`${unchanged} other account${unchanged===1?'':'s'} already as listed.`));
+  if(plan.outside.length)parts.push(line(`Not in ${plan.group} (${plan.outside.length}):`,names(plan.outside)+` — listed, so ${plan.outside.length===1?'it is':'they are'} turned on; ${plan.outside.length===1?'its':'their'} group does not change.`,'acct-warn'));
+  if(plan.admins.length)parts.push(analyzeEl('p','acct-plan-line',`Administrators keep access anyway: ${names(plan.admins)}.`));
+  // What was not understood, line by line: each box says what Apply does with those lines.
+  const lines=(title,items,text,cls)=>{
+    const div=analyzeEl('div',cls), list=analyzeEl('ul','acct-plan-list');
+    div.append(analyzeEl('b','',title));
+    for(const item of items){ const li=analyzeEl('li'); li.append(analyzeEl('span','acct-reading-entry',`“${item.entry}”`),' '+text(item)); list.append(li); }
+    div.append(list); return div;
+  };
+  if(plan.unread.length)parts.push(lines(`Nobody is turned on for ${plan.unread.length===1?'this line':`these ${plan.unread.length} lines`}:`,plan.unread,adminAccessProblemText,'acct-warn'));
+  if(plan.several.length)parts.push(lines(`One line, several people — check (${plan.several.length}):`,plan.several,item=>'→ '+item.accounts.map(account=>adminAccountWho(account)).join(', ')+'.','acct-warn'));
+  if(plan.noted.length)parts.push(lines(`Notes (${plan.noted.length}):`,plan.noted,item=>'→ '+item.accounts.map(account=>adminAccountWho(account)).join(', ')+': '+item.notes.join('; ')+'.','acct-note-box'));
+  // Who each line became: open whenever a line has a warning or a note.
+  const readings=analyzeEl('details','acct-readings'), list=analyzeEl('ul');
+  for(const item of plan.lines){
+    const li=analyzeEl('li');
+    li.append(analyzeEl('span','acct-reading-entry',`“${item.entry}”`),' → '+adminAccessReadingText(item));
+    list.append(li);
+  }
+  readings.append(analyzeEl('summary','',`How each line was read (${plan.lines.length})`),list);
+  readings.open=!!(plan.unread.length||plan.several.length||plan.noted.length);
+  const actions=analyzeEl('div','acct-actions');
+  const apply=adminAccountsButton(`Apply: ${adminAccessPlanText(plan)}`,applyAdminAccessPlan);
+  apply.className+=' primary';
+  const back=adminAccountsButton('Edit the list',()=>{ if(ACCOUNTS.applying)return; dropAdminAccessPlan(); $('admin-acct-list-text').focus(); });
+  actions.append(apply,back);
+  box.replaceChildren(...parts,readings,actions); box.hidden=false;
+  ACCOUNTS.planApply=apply;
+}
+// One request: the listed accounts on, and in the same transaction every other account
+// of the group off, including any the page has not seen. The table is read again after.
+async function applyAdminAccessPlan(){
+  const plan=ACCOUNTS.plan, button=ACCOUNTS.planApply;
+  if(!plan||ACCOUNTS.applying)return;
+  ACCOUNTS.applying=true;
+  // The button says so where it is, and keeps the focus.
+  if(button){ button.textContent='Applying…'; button.setAttribute('aria-busy','true'); }
+  let data=null, failure=null;
+  try{ data=await adminAccountsRequest('/api/admin/accounts/access',{emails:plan.on.map(account=>account.email),access:'on',others:'off',group:plan.group}); }
+  catch(error){ failure=error; }
+  ACCOUNTS.applying=false;
+  if(failure){
+    if(button){ button.textContent=`Apply: ${adminAccessPlanText(plan)}`; button.removeAttribute('aria-busy'); }
+    adminAccountsSay(`Could not set access from the list: ${adminAccountSentence(failure.message)}`,'err');
+    if(ACCOUNTS.plan===plan&&button)button.focus(); else $('admin-acct-list-review').focus();
+    return;
+  }
+  const turnedOff=(Array.isArray(data.turned_off)?data.turned_off:[]).map(String), skipped=adminAccountsSkipped(data);
+  // Turned off by the server but not in the plan: accounts that joined the group since the review.
+  const unseen=turnedOff.filter(email=>!plan.off.some(account=>account.key===adminAccountKey(email)));
+  ACCOUNTS.mutations++;
+  toggleAdminAccessList(false);
+  $('admin-acct-list-open').focus();
+  const fresh=await loadAdminAccounts();
+  const members=ACCOUNTS.list.filter(account=>!account.is_admin&&account.group===plan.group);
+  const counts=fresh?`${members.filter(account=>account.access==='on').length} on, ${members.filter(account=>account.access!=='on').length} off`:adminAccessPlanText(plan);
+  let text=`Access set from the list for ${plan.group}: ${counts}`+(turnedOff.length?` (${turnedOff.length} turned off just now)`:'')+'.';
+  if(plan.outside.length)text+=` Turned on outside the group: ${plan.outside.map(account=>adminAccountLabel(account)).join(', ')}.`;
+  if(unseen.length)text+=` ${unseen.length===1?'One was':`${unseen.length} were`} not in the reviewed list (added to the group since): ${unseen.join(', ')}.`;
+  adminAccountsSay(text+adminAccountsSkippedText(skipped),skipped.length?'err':'ok');
+}
+// The pasted people, one per non-blank line, as the server reads them (characters nobody sees left out).
+function adminAccountLines(text){
+  return String(text??'').split(/\r\n|[\n\r\v\f\x1c-\x1e\x85\p{Zl}\p{Zp}]/u).map(line=>line.replace(/\p{Cf}/gu,'').trim()).filter(Boolean);
+}
+function adminAccountChunks(lines,sendEmail){
+  if(!lines.length)return [];
+  if(!sendEmail)return [lines];
+  const chunks=[];
+  for(let start=0;start<lines.length;start+=ACCOUNT_EMAIL_CHUNK)chunks.push(lines.slice(start,start+ACCOUNT_EMAIL_CHUNK));
+  return chunks;
+}
+function adminAccountsProgress(first,last,total){
+  return first===last?`Creating ${first} of ${total}…`:`Creating ${first}–${last} of ${total}…`;
+}
+// The subject as the server sends it: spaces collapsed, at most 200 characters.
+function adminAccountSubject(subject,fallback){
+  return String(subject??'').split(/\s+/).filter(Boolean).join(' ').slice(0,200)||String(fallback??'');
+}
+function adminAccountsForm(){
+  const wanted=!!$('admin-acct-add-send').checked, subject=$('admin-acct-add-subject').value, message=$('admin-acct-add-message').value;
+  // A box holding only spaces or line breaks is an empty one: the default text, here and on the server.
+  // The group goes as typed: the server cleans it, and says which group it is.
+  return {lines:adminAccountLines($('admin-acct-add-text').value),password_length:Number($('admin-acct-add-length').value),
+    wants_email:wanted,send_email:wanted&&adminAccountsCanEmail(),group:$('admin-acct-add-group').value,
+    subject:subject.trim()?subject:'',message:message.trim()?message:'',sender_name:$('admin-acct-add-sender').value.trim()};
+}
+function adminAccountsBody(form,lines){
+  const body={text:lines.join('\n'),password_length:form.password_length,send_email:form.send_email,subject:form.subject,message:form.message,sender_name:form.sender_name};
+  if(form.group.trim())body.group=form.group;
+  return body;
+}
+// What a message sent by hand says, as the server would fill it in: an invitation from
+// this form (or the defaults), or the new-password message; signed by the sender (or the operator).
+function adminAccountsLetter(form,kind){
+  const sender=String(form.sender_name??'').split(/\s+/).filter(Boolean).join(' ').slice(0,120)||ACCOUNTS.sender.name||ACCOUNTS.sender.email;
+  if(kind==='reset')return {subject:ACCOUNTS.defaults.reset_subject||ACCOUNT_RESET_TEXT.subject,message:ACCOUNTS.defaults.reset_message||ACCOUNT_RESET_TEXT.message,sender,url:ACCOUNTS.signInUrl};
+  return {subject:adminAccountSubject(form.subject,ACCOUNTS.defaults.subject||ACCOUNT_INVITE_TEXT.subject),
+    message:String(form.message??'').slice(0,10000)||ACCOUNTS.defaults.message||ACCOUNT_INVITE_TEXT.message,sender,url:ACCOUNTS.signInUrl};
+}
+function adminAccountsFormProblem(form){
+  if(!ACCOUNTS.loaded)return 'The accounts have not loaded yet: try again in a moment.';
+  if(!form.lines.length)return 'Add at least one person, one per line.';
+  if(!Number.isInteger(form.password_length)||form.password_length<8||form.password_length>32)return 'Password length must be a whole number from 8 to 32.';
+  if(form.wants_email&&!form.send_email)return `${ACCOUNTS.emailAvailable?ACCOUNT_NO_URL:'This site cannot send email (SMTP is not set up)'}: untick “Email each person their sign-in details” to create the accounts without email.`;
+  if(form.message&&!form.message.includes('{password}'))return 'The message has no {password}: add it, or nobody would get a password.';
+  return '';
+}
+function adminAccountResult(raw){
+  const text=value=>value==null?'':String(value);
+  const known=['created','exists','invalid','duplicate'].includes(raw?.status);
+  const row={email:text(raw?.email).trim(),name:text(raw?.name).trim(),line:text(raw?.line),status:known?raw.status:'invalid',
+    error:text(raw?.error)||(known?'':'The server gave no status for this line.'),group:adminAccountGroupOf(raw?.group),
+    group_joined:raw?.group_joined===true,group_error:text(raw?.group_error)};
+  if(row.status==='created'&&typeof raw.password==='string'&&raw.password)row.password=raw.password;
+  if(typeof raw?.email_sent==='boolean')row.email_sent=raw.email_sent;
+  return row;
+}
+// Adds one answer's results to a run, in order. Someone named again in a later
+// request is "Listed twice", as a single request would say.
+function adminAccountsMerge(rows,results,letter){
+  const seen=new Set(rows.filter(row=>row.status==='created'||row.status==='exists').map(row=>adminAccountKey(row.email))), added=[];
+  for(const raw of results){
+    const row=adminAccountResult(raw), key=adminAccountKey(row.email);
+    if(row.status==='exists'&&seen.has(key))Object.assign(row,{status:'duplicate',error:'Listed more than once',group_joined:false});
+    if(row.status==='created'||row.status==='exists')seen.add(key);
+    Object.assign(row,{letter,saved:row.email_sent===true});
+    rows.push(row); added.push(row);
+  }
+  return added;
+}
+// A line the server did not reach, for the box: as it was sent (its own copy when the answer has none).
+function adminAccountLineOf(raw,sent){
+  if(typeof raw?.line==='string'&&raw.line.trim())return raw.line.trim();
+  if(sent)return sent;
+  const name=String(raw?.name??'').trim(), email=String(raw?.email??'').trim();
+  return name&&email?`${name} <${email}>`:email||name;
+}
+function syncAdminAccountsCreating(){
+  const busy=!!ACCOUNTS.creating, button=$('admin-acct-add-create');
+  button.textContent=busy?'Creating…':ACCOUNTS.previewing?'Checking the list…':'Create accounts';
+  if(busy||ACCOUNTS.previewing)button.setAttribute('aria-busy','true'); else button.removeAttribute('aria-busy');
+  for(const id of ['admin-acct-add-text','admin-acct-add-length','admin-acct-add-group'])$(id).readOnly=busy;
+  $('admin-acct-add-send').disabled=busy||!adminAccountsCanEmail();
+}
+// "Create accounts" first asks the server what the list would do (nothing is made or sent),
+// with the same text and options, so that its refusals come before anything is made.
+async function previewAdminAccounts(){
+  if(ACCOUNTS.creating||ACCOUNTS.previewing)return;
+  const form=adminAccountsForm(), problem=adminAccountsFormProblem(form);
+  if(problem){ adminAccountsSay(problem,'err','admin-acct-add-status'); return; }
+  dropAdminAccountsPreview();
+  const generation=ACCOUNTS.generation, stamp=++ACCOUNTS.previewSeq;
+  ACCOUNTS.previewing=true; syncAdminAccountsCreating();
+  adminAccountsSay('Checking the list…','','admin-acct-add-status');
+  let data=null, failure='';
+  try{
+    data=await adminAccountsRequest('/api/admin/accounts',{...adminAccountsBody(form,form.lines),preview:true});
+    if(!Array.isArray(data.results))failure='The server sent an unexpected answer';
+  }catch(error){ failure=error.message; }
+  ACCOUNTS.previewing=false; syncAdminAccountsCreating();
+  // The view was left, or the form changed, meanwhile: this answer is for a list no longer there.
+  if(generation!==ACCOUNTS.generation)return;
+  if(stamp!==ACCOUNTS.previewSeq){ adminAccountsSay('The list changed while it was being checked: press “Create accounts” to check it again.','','admin-acct-add-status'); return; }
+  if(failure){ adminAccountsSay(`Could not check the list: ${adminAccountSentence(failure)}`,'err','admin-acct-add-status'); return; }
+  if(typeof data.email_available==='boolean')ACCOUNTS.emailAvailable=data.email_available;
+  // The group as the server will use it: its spelling of an existing group, or a new one.
+  ACCOUNTS.preview={form,letter:adminAccountsLetter(form),rows:data.results.map(raw=>adminAccountPreviewRow(raw)),
+    group:typeof data.group==='string'?data.group:form.group.trim(),groupIsNew:data.group_is_new===true};
+  adminAccountsSay('','','admin-acct-add-status');
+  renderAdminAccountsPreview();
+  ACCOUNTS.previewHead?.focus();
+}
+function adminAccountPreviewRow(raw){
+  const text=value=>value==null?'':String(value);
+  const known=['new','exists','duplicate','invalid'].includes(raw?.status);
+  return {email:text(raw?.email).trim(),name:text(raw?.name).trim(),line:text(raw?.line),status:known?raw.status:'invalid',
+    error:text(raw?.error)||(known?'':'The server gave no status for this line.'),group_joined:raw?.group_joined===true};
+}
+// Why a line is invalid, without the line itself (shown beside it).
+function adminAccountPreviewReason(row){
+  const error=row.error||'No valid email address on this line', suffix=': '+row.line.slice(0,200);
+  return row.line&&error.endsWith(suffix)?error.slice(0,-suffix.length):error;
+}
+function adminAccountPreviewWhat(row,group){
+  if(row.status==='invalid')return `Invalid: ${adminAccountPreviewReason(row)}`;
+  if(row.status==='new'&&group)return `New account · joins ${group}`;
+  if(row.status==='exists'&&row.group_joined)return `Already exists · joins ${group}`;
+  return ACCOUNT_PREVIEW_LABEL[row.status];
+}
+// What the list would do: a summary, each line as the server read it, then Create or Edit list.
+function renderAdminAccountsPreview(){
+  const box=$('admin-acct-preview'), preview=ACCOUNTS.preview;
+  ACCOUNTS.previewHead=null;
+  // One primary action at a time: the form's, then the preview's.
+  $('admin-acct-add-create').classList.toggle('primary',!preview);
+  if(!preview){ box.replaceChildren(); box.hidden=true; return; }
+  const rows=preview.rows, count=status=>rows.filter(row=>row.status===status).length, fresh=count('new');
+  const group=preview.group, typed=preview.form.group.trim(), joined=rows.filter(row=>row.group_joined).length, exists=count('exists');
+  const summary=[`${fresh} new account${fresh===1?'':'s'}`,`${exists} already exist${exists===1?'s':''}`,`${count('invalid')} invalid`];
+  if(count('duplicate'))summary.push(`${count('duplicate')} listed twice`);
+  const head=analyzeEl('h4','acct-preview-head',summary.join(' · ')); head.tabIndex=-1;
+  const parts=[head];
+  if(preview.form.send_email){
+    const reply=ACCOUNTS.sender.email?`, replies to ${ACCOUNTS.sender.email}`:'';
+    parts.push(analyzeEl('p','acct-note',`Each new person will be emailed from "${preview.letter.sender} via Ansätze"${reply}, sign-in address ${preview.letter.url}.`));
+  }else parts.push(analyzeEl('p','acct-note','Nobody will be emailed: the results will show each new password, to copy and send yourself.'));
+  if(group){
+    const added=`${joined} existing account${joined===1?'':'s'} will be added to it`;
+    parts.push(analyzeEl('p','acct-note',preview.groupIsNew?`${group} is a new group: new accounts join it; ${added}.`
+      :typed!==group?`New accounts join the existing group ${group} (you typed “${typed}”); ${added}.`:`New accounts join ${group}; ${added}.`));
+  }
+  const table=analyzeEl('table','admin-table acct-preview-table'), thead=analyzeEl('thead'), labels=analyzeEl('tr'), body=analyzeEl('tbody');
+  for(const label of ['Name','Email','What will happen','From the line']){ const cell=analyzeEl('th','',label); cell.setAttribute('scope','col'); labels.append(cell); }
+  thead.append(labels);
+  for(const row of rows){
+    const tr=analyzeEl('tr');
+    tr.append(analyzeEl('td','acct-name',row.name||'—'),analyzeEl('td','acct-email',row.email||'—'),
+      analyzeEl('td','acct-res-'+row.status,adminAccountPreviewWhat(row,group)),analyzeEl('td','acct-line',row.line));
+    body.append(tr);
+  }
+  table.append(analyzeEl('caption','sr-only','What the list would do, line by line'),thead,body);
+  const wrap=analyzeEl('div','admin-table-wrap'); wrap.append(table);
+  const go=adminAccountsButton(`Create ${fresh} account${fresh===1?'':'s'}`+(preview.form.send_email?' and email them':''),()=>createAdminAccounts());
+  go.className+=' primary';
+  if(!fresh){ go.disabled=true; go.title='The list has no new account to create'; }
+  const edit=adminAccountsButton('Edit list',()=>{ dropAdminAccountsPreview(); $('admin-acct-add-text').focus(); });
+  const actions=analyzeEl('div','acct-actions'); actions.append(go,edit);
+  box.replaceChildren(...parts,wrap,actions); box.hidden=false;
+  ACCOUNTS.previewHead=head;
+}
+// Any change to the form makes a preview stale (and any answer on its way for it).
+function dropAdminAccountsPreview(){
+  ACCOUNTS.previewSeq++;
+  if(!ACCOUNTS.preview)return;
+  ACCOUNTS.preview=null; renderAdminAccountsPreview();
+}
+// The real run, for the list the preview showed. Earlier results stay shown.
+async function createAdminAccounts(){
+  const preview=ACCOUNTS.preview;
+  if(ACCOUNTS.creating||!preview)return;
+  // The group as the preview showed it, in the server's spelling.
+  const form={...preview.form,group:preview.group}, letter=preview.letter, total=form.lines.length, generation=ACCOUNTS.generation;
+  dropAdminAccountsPreview();
+  const run={total,rows:[],unprocessed:[],stop:null,emailRequested:form.send_email,group:form.group};
+  ACCOUNTS.run=run; ACCOUNTS.results=ACCOUNTS.results||{rows:[]};
+  ACCOUNTS.creating={lines:form.lines,done:0};
+  syncAdminAccountsCreating(); renderAdminAccountResults();
+  $('admin-acct-add-create').focus();
+  for(const chunk of adminAccountChunks(form.lines,form.send_email)){
+    const done=ACCOUNTS.creating.done;
+    adminAccountsSay(form.send_email?adminAccountsProgress(done+1,done+chunk.length,total):`Creating ${total} account${total===1?'':'s'}…`,'','admin-acct-add-status');
+    let data=null, failure='';
+    try{
+      data=await adminAccountsRequest('/api/admin/accounts',adminAccountsBody(form,chunk));
+      if(!Array.isArray(data.results))failure='The server sent an unexpected answer';
+    }catch(error){ failure=error.message; }
+    // The view was left meanwhile: clearAdminAccountSecrets said what was not done.
+    if(generation!==ACCOUNTS.generation)return;
+    if(failure){ Object.assign(run,{unprocessed:form.lines.slice(done),stop:{kind:'request',message:failure,from:done+1,to:done+chunk.length}}); break; }
+    if(typeof data.email_available==='boolean')ACCOUNTS.emailAvailable=data.email_available;
+    if(typeof data.group==='string')run.group=data.group;
+    // Lines the server did not reach (an error stopped it part way) come back for a retry.
+    const answered=[], left=[], first=[];
+    data.results.forEach((raw,index)=>{
+      if(raw?.status==='not_processed'){ left.push(adminAccountLineOf(raw,data.results.length===chunk.length?chunk[index]:'')); first.push(done+index+1); }
+      else answered.push(raw);
+    });
+    ACCOUNTS.results.rows.push(...adminAccountsMerge(run.rows,answered,letter));
+    ACCOUNTS.creating.done=done+chunk.length;
+    if(left.length||data.stopped){
+      Object.assign(run,{unprocessed:[...left,...form.lines.slice(done+chunk.length)],
+        stop:{kind:'server',message:String(data.stopped||'The server stopped part way'),from:first.length?first[0]:done+chunk.length+1}});
+      break;
+    }
+    renderAdminAccountResults();
+  }
+  ACCOUNTS.creating=null;
+  // The box keeps only the lines not processed, ready to retry.
+  $('admin-acct-add-text').value=run.unprocessed.join('\n');
+  syncAdminAccountsCreating(); syncAdminAccountsEmail(); syncAdminAccountsAddCount();
+  adminAccountsSay(adminAccountsCreatedText(run),run.stop?'err':'ok','admin-acct-add-status');
+  renderAdminAccountResults();
+  if(run.rows.some(row=>row.status==='created'||row.group_joined))loadAdminAccounts();
+}
+// What "Create accounts" did; after a stop, where and how to retry.
+function adminAccountsCreatedText(run){
+  const count=status=>run.rows.filter(row=>row.status===status).length, created=count('created');
+  const parts=[`${created} created`];
+  if(count('exists'))parts.push(`${count('exists')} already existed`);
+  if(count('duplicate'))parts.push(`${count('duplicate')} listed twice`);
+  if(count('invalid'))parts.push(`${count('invalid')} invalid`);
+  const joined=run.rows.filter(row=>row.group_joined).length, lost=run.rows.filter(row=>row.group_error).length;
+  if(joined)parts.push(`${joined} existing added to ${run.group}`);
+  if(lost)parts.push(`${lost} not put in ${run.group} (use Set group)`);
+  if(run.emailRequested&&created){
+    const sent=run.rows.filter(row=>row.email_sent===true).length;
+    parts.push(`${sent} email${sent===1?'':'s'} sent`+(created>sent?` (${created-sent} not: copy their details below)`:''));
+  }
+  const text=parts.join(', ')+'.';
+  if(!run.stop)return text;
+  const {kind,message,from,to}=run.stop, left=run.unprocessed.length, retry='press “Create accounts” to retry';
+  const lines=(a,b)=>a===b?`line ${a}`:`lines ${a}–${b}`;
+  if(kind==='request'){
+    if(!run.rows.length&&from===1&&to===run.total)return `Could not create accounts: ${adminAccountSentence(message)}`;
+    const back=lines(from,run.total);
+    return `Stopped at ${lines(from,to)} of ${run.total}: ${adminAccountSentence(message)} ${back[0].toUpperCase()+back.slice(1)} ${from===run.total?'is':'are'} back in the box: ${retry}. `
+      +'Anyone the stopped request did create then shows as “Already exists”: give them a new password from the table.'+(run.rows.length?` Before the stop: ${text}`:'');
+  }
+  return `The server stopped at line ${from} of ${run.total}: ${adminAccountSentence(message)} The ${left} line${left===1?'':'s'} it did not process ${left===1?'is':'are'} back in the box: ${retry}.`
+    +(run.rows.length?` Before the stop: ${text}`:'');
+}
+// The results of every "Create accounts" since this view opened, shown once.
+function renderAdminAccountResults(){
+  const box=$('admin-acct-results'), results=ACCOUNTS.results, run=ACCOUNTS.run, active=document.activeElement;
+  // Drawn again after every request of a run: the focus goes back to the same control.
+  const focused=active&&box.contains(active)?active.dataset?.focus||'':'';
+  if(!results||!results.rows.length){ box.replaceChildren(); box.hidden=true; return; }
+  const created=results.rows.filter(row=>row.status==='created'&&row.password), byHand=created.filter(row=>row.email_sent!==true);
+  const head=analyzeEl('div','acct-results-head');
+  head.append(analyzeEl('b','','New accounts'),analyzeEl('span','acct-note',`${created.length} created · ${results.rows.length} line${results.rows.length===1?'':'s'} answered`));
+  const parts=[head];
+  if(created.length)parts.push(analyzeEl('p','acct-warn','Passwords are shown only now. Copy them before you leave this view: they cannot be shown again (you can still give anyone a new password from the table above).'));
+  const actions=analyzeEl('div','acct-actions');
+  const csv=adminAccountsButton('Copy as CSV',()=>copyAdminAccounts('csv'));
+  const mails=adminAccountsButton('Copy emails',()=>copyAdminAccounts('emails'));
+  const clear=adminAccountsButton('Clear results',clearAdminAccountResults);
+  csv.disabled=!created.length; csv.title='name,email,password of each new account';
+  mails.disabled=!byHand.length;
+  mails.title=byHand.length?`The filled-in message for each new account not emailed (${byHand.length}), to send by hand`:created.length?'Everyone new was emailed':'No new accounts';
+  Object.assign(csv.dataset,{focus:'csv'}); Object.assign(mails.dataset,{focus:'emails'}); Object.assign(clear.dataset,{focus:'clear'});
+  actions.append(csv,mails,clear);
+  const table=analyzeEl('table','admin-table acct-results-table'), thead=analyzeEl('thead'), labels=analyzeEl('tr'), rows=analyzeEl('tbody');
+  for(const label of ['Name','Email','Status','Password','Email sent']){ const cell=analyzeEl('th','',label); cell.setAttribute('scope','col'); labels.append(cell); }
+  thead.append(labels);
+  results.rows.forEach((row,index)=>rows.append(adminAccountResultRow(row,index)));
+  table.append(analyzeEl('caption','sr-only','New accounts and their passwords'),thead,rows);
+  const wrap=analyzeEl('div','admin-table-wrap'); wrap.append(table);
+  parts.push(actions,wrap);
+  if(run&&run.unprocessed.length&&run.rows.length){
+    const note=analyzeEl('div','acct-warn'), list=analyzeEl('ul','acct-lines');
+    note.append(analyzeEl('b','',`Not processed (${run.unprocessed.length}):`),' back in the box above, ready to retry.');
+    for(const line of run.unprocessed)list.append(analyzeEl('li','',line));
+    note.append(list); parts.push(note);
+  }
+  box.replaceChildren(...parts); box.hidden=false;
+  if(focused){
+    const again=box.querySelectorAll('button').find(button=>button.dataset.focus===focused);
+    (again&&!again.disabled?again:!csv.disabled?csv:clear).focus();
+  }
+}
+function adminAccountResultRow(row,index){
+  const tr=analyzeEl('tr'), status=analyzeEl('td','acct-res-'+row.status), password=analyzeEl('td'), sent=analyzeEl('td');
+  status.append(analyzeEl('span','',ACCOUNT_STATUS_LABEL[row.status]||row.status));
+  if(row.error)status.append(analyzeEl('span','acct-err-line',row.error));
+  if(row.group_joined)status.append(analyzeEl('span','acct-err-line',`Added to ${row.group}`));
+  else if(row.status==='created'&&row.group)status.append(analyzeEl('span','acct-err-line',`In ${row.group}`));
+  if(row.group_error)status.append(analyzeEl('span','acct-err-line acct-res-failed',row.group_error));
+  if(row.password)password.append(analyzeEl('code','acct-pw',row.password)); else password.textContent='—';
+  if(row.status!=='created')sent.textContent='—';
+  else{
+    sent.append(analyzeEl('span',row.email_sent===true?'acct-res-created':row.email_sent===false?'acct-res-failed':'acct-dim',
+      row.email_sent===true?'Sent':row.email_sent===false?'Not sent':'Not asked'));
+    if(row.email_sent!==true&&row.password){
+      const copy=adminAccountsButton('Copy message',()=>copyAdminAccountMessage(row));
+      copy.className+=' acct-mini'; copy.dataset.focus='message:'+index; sent.append(' ',copy);
+    }
+  }
+  tr.append(analyzeEl('td','acct-name',row.name||'—'),analyzeEl('td','acct-email',row.email||'—'),status,password,sent);
+  return tr;
+}
+// name,email,password for each new account. A cell a spreadsheet would read as
+// a formula is quoted with a leading apostrophe.
+function adminAccountsCsv(rows){
+  const cell=value=>{
+    let text=String(value??'');
+    if(/^[=+\-@\t\r]/.test(text))text="'"+text;
+    return /[",\r\n]/.test(text)?`"${text.replace(/"/g,'""')}"`:text;
+  };
+  return ['name,email,password',...rows.filter(row=>row.status==='created'&&row.password).map(row=>[row.name,row.email,row.password].map(cell).join(','))].join('\n')+'\n';
+}
+// The message with its placeholders filled in, as the server fills them.
+function adminAccountMessage(template,values){
+  const fill={name:values.name||String(values.email??'').split('@')[0],email:values.email||'',password:values.password||'',
+    url:values.url||"(the site's address)",sender:values.sender||''};
+  return String(template??'').replace(/\{(name|email|password|url|sender)\}/g,(match,key)=>fill[key]);
+}
+// A To: address as mail programs read it: a name with a comma (or another special) in quotes.
+function adminAccountAddress(name,email){
+  if(!name)return email;
+  return /[\][\\()<>@,:;".]/.test(name)?`"${name.replace(/[\\"]/g,'\\$&')}" <${email}>`:`${name} <${email}>`;
+}
+function adminAccountEmailText(row,letter){
+  const body=adminAccountMessage(letter.message,{name:row.name,email:row.email,password:row.password,url:letter.url,sender:letter.sender});
+  return `To: ${adminAccountAddress(row.name,row.email)}\nSubject: ${letter.subject}\n\n${body.trimEnd()}\n`;
+}
+// "Copy emails": each new person's filled-in message not emailed, to send by hand.
+function adminAccountsEmailsText(rows){
+  return rows.filter(row=>row.status==='created'&&row.password&&row.email_sent!==true)
+    .map(row=>adminAccountEmailText(row,row.letter)).join('\n'+'-'.repeat(40)+'\n\n');
+}
+async function adminCopyText(text){
+  try{ if(navigator.clipboard?.writeText){ await navigator.clipboard.writeText(text); return true; } }catch(error){}
+  // No Clipboard API (a page served over plain http): a passing, off-screen text area.
+  const area=document.createElement('textarea'), active=document.activeElement;
+  area.value=text; area.readOnly=true; area.className='acct-copy-buffer';
+  document.body.append(area); area.select();
+  let copied=false;
+  try{ copied=document.execCommand('copy'); }catch(error){}
+  area.remove(); active?.focus?.();
+  return !!copied;
+}
+async function copyAdminAccounts(kind){
+  const rows=ACCOUNTS.results?.rows; if(!rows)return;
+  const copying=rows.filter(row=>row.status==='created'&&row.password&&(kind==='csv'||row.email_sent!==true));
+  if(!copying.length)return;
+  const copied=await adminCopyText(kind==='csv'?adminAccountsCsv(rows):adminAccountsEmailsText(rows));
+  if(copied)copying.forEach(row=>{ row.saved=true; });
+  const count=copying.length;
+  adminAccountsSay(!copied?'Copying failed: select the text in the table and copy it yourself.'
+    :kind==='csv'?`Copied ${count} account${count===1?'':'s'} as CSV (name,email,password).`:`Copied ${count} message${count===1?'':'s'} to send by hand.`,copied?'ok':'err','admin-acct-add-status');
+}
+async function copyAdminAccountMessage(row){
+  if(!ACCOUNTS.results?.rows.includes(row))return;
+  const copied=await adminCopyText(adminAccountEmailText(row,row.letter));
+  if(copied)row.saved=true;
+  adminAccountsSay(copied?`Copied the message for ${adminAccountLabel(row)}.`:'Copying failed: select the text in the table and copy it yourself.',copied?'ok':'err','admin-acct-add-status');
+}
+// New passwords on this page that were neither emailed nor copied (they cannot be shown again).
+function adminAccountsUnsaved(){
+  const rows=(ACCOUNTS.results?.rows||[]).filter(row=>row.status==='created'&&row.password&&!row.saved).length;
+  return rows+[...ACCOUNTS.resets.values()].filter(reset=>reset.stage==='done'&&!reset.saved).length;
+}
+function adminAccountsUnsavedText(count){
+  return `${count} new password${count===1?' shown here was':'s shown here were'} neither emailed nor copied, and cannot be shown again.`;
+}
+function clearAdminAccountResults(){
+  if(ACCOUNTS.creating)return;
+  const unsaved=(ACCOUNTS.results?.rows||[]).filter(row=>row.status==='created'&&row.password&&!row.saved).length;
+  if(unsaved&&!confirm(`${adminAccountsUnsavedText(unsaved)} Clear the results anyway?`))return;
+  ACCOUNTS.results=null; ACCOUNTS.run=null; renderAdminAccountResults();
+  adminAccountsSay('Results cleared.','','admin-acct-add-status');
+  $('admin-acct-add-create').focus();
+}
+// "New password": asked first, then shown once under the account's row. Each row has
+// its own panel, so a password shown stays until its "Done".
+function openAdminPasswordReset(key){
+  const account=ACCOUNTS.list.find(item=>item.key===key);
+  if(!account||account.is_admin)return;
+  if(!ACCOUNTS.resets.has(key))ACCOUNTS.resets.set(key,{key,email:account.email,name:account.name,stage:'confirm',busy:false,sendEmail:false,error:'',saved:false,row:null,focus:null});
+  redrawAdminPasswordReset(key,true);
+}
+function redrawAdminPasswordReset(key,focus){
+  const reset=ACCOUNTS.resets.get(key); if(!reset)return;
+  if(reset.row){ reset.row.remove(); reset.row=null; }
+  const row=ACCOUNTS.rows.get(key);
+  if(row)row.tr.after(adminPasswordResetRow(reset));
+  else renderAdminAccountsTable();
+  if(focus)reset.focus?.focus();
+}
+function adminPasswordResetRow(reset){
+  const key=reset.key, label=reset.name||reset.email;
+  const tr=analyzeEl('tr','acct-reset-row'), cell=analyzeEl('td'), panel=analyzeEl('div','acct-reset');
+  cell.colSpan=8; panel.setAttribute('role','group'); panel.setAttribute('aria-label','New password for '+label);
+  let focus;
+  if(reset.stage==='done'){
+    const line=analyzeEl('div','acct-reset-pw'), copy=adminAccountsButton('Copy',()=>copyAdminResetPassword(key));
+    line.append(analyzeEl('span','',`New password for ${label}:`),analyzeEl('code','acct-pw',reset.password),copy);
+    const emailed=reset.email_sent===true?`It was emailed to ${reset.email} (the new-password message).`:reset.email_sent===false?'The email could not be sent: send the details yourself.':'It was not emailed.';
+    const note=analyzeEl('p','acct-warn',`Shown only now: copy it before you leave this view. ${emailed} ${label} was signed out, and the old password no longer works.`);
+    const actions=analyzeEl('div','acct-actions');
+    if(reset.email_sent!==true)actions.append(adminAccountsButton('Copy email text',()=>copyAdminResetEmail(key)));
+    actions.append(adminAccountsButton('Done',()=>closeAdminPasswordReset(key)));
+    panel.append(line,note,actions);
+    focus=copy;
+  }else{
+    const question=analyzeEl('p'), can=adminAccountsCanEmail();
+    question.append('Give ',analyzeEl('b','',label),` (${reset.email}) a new random password? The current one stops working, and they are signed out at once.`);
+    const check=analyzeEl('label','acct-check'+(can?'':' off')), box=analyzeEl('input');
+    box.type='checkbox'; box.checked=reset.sendEmail&&can; box.disabled=!can||reset.busy;
+    box.onchange=()=>{ reset.sendEmail=box.checked; };
+    check.append(box,' Email them the new-password message');
+    panel.append(question,check);
+    if(!can)panel.append(analyzeEl('p','acct-note',(ACCOUNTS.emailAvailable?ACCOUNT_NO_URL:'This site cannot send email (SMTP is not set up)')+': copy the new password and send it yourself.'));
+    const actions=analyzeEl('div','acct-actions');
+    const go=adminAccountsButton(reset.busy?'Setting…':'Set new password',()=>confirmAdminPasswordReset(key)), cancel=adminAccountsButton('Cancel',()=>closeAdminPasswordReset(key));
+    go.className+=' primary';
+    if(reset.busy){ go.setAttribute('aria-busy','true'); cancel.disabled=true; }
+    actions.append(go,cancel); panel.append(actions);
+    if(reset.error)panel.append(analyzeEl('p','acct-status err',reset.error));
+    focus=go;
+  }
+  cell.append(panel); tr.append(cell);
+  Object.assign(reset,{row:tr,focus});
+  return tr;
+}
+// The server sends its own new-password message (only the sender's name comes from the form).
+async function confirmAdminPasswordReset(key){
+  const reset=ACCOUNTS.resets.get(key);
+  if(!reset||reset.stage!=='confirm'||reset.busy)return;
+  const form=adminAccountsForm(), generation=ACCOUNTS.generation, label=reset.name||reset.email;
+  const length=Number.isInteger(form.password_length)&&form.password_length>=8&&form.password_length<=32?form.password_length:ACCOUNTS.defaults.password_length;
+  const sendEmail=reset.sendEmail&&adminAccountsCanEmail();
+  const body={email:reset.email,password_length:length,send_email:sendEmail};
+  if(sendEmail)body.sender_name=form.sender_name;
+  Object.assign(reset,{busy:true,error:''});
+  redrawAdminPasswordReset(key,true);
+  adminAccountsSay(`Setting a new password for ${label}…`);
+  let data=null, failure='';
+  try{
+    data=await adminAccountsRequest('/api/admin/accounts/password',body);
+    if(typeof data.password!=='string'||!data.password)failure='The server sent no password';
+  }catch(error){ failure=error.message; }
+  if(generation!==ACCOUNTS.generation||ACCOUNTS.resets.get(key)!==reset)return;
+  if(failure){
+    Object.assign(reset,{busy:false,error:`Could not set a new password: ${adminAccountSentence(failure)}`});
+    redrawAdminPasswordReset(key,true); adminAccountsSay(reset.error,'err');
+    return;
+  }
+  const sent=typeof data.email_sent==='boolean'?data.email_sent:undefined;
+  Object.assign(reset,{busy:false,stage:'done',password:data.password,email_sent:sent,saved:sent===true,letter:adminAccountsLetter(form,'reset')});
+  ACCOUNTS.mutations++;
+  redrawAdminPasswordReset(key,true);
+  adminAccountsSay(`New password set for ${label}`+(sent===true?' and emailed.':sent===false?', but the email could not be sent.':'.'),sent===false?'err':'ok');
+}
+function closeAdminPasswordReset(key){
+  const reset=ACCOUNTS.resets.get(key);
+  if(!reset||reset.busy)return;
+  if(reset.stage==='done'&&!reset.saved&&!confirm(`The new password for ${reset.name||reset.email} was neither emailed nor copied, and cannot be shown again. Close it anyway?`))return;
+  ACCOUNTS.resets.delete(key);
+  reset.row?.remove();
+  const row=ACCOUNTS.rows.get(key);
+  // A row shown only for its panel goes with it; the focus goes to the row's button, or else the search.
+  if(row&&!adminAccountShown(row.account,ACCOUNTS.query,ACCOUNTS.filter))renderAdminAccountsTable();
+  (ACCOUNTS.rows.get(key)?.reset||$('admin-acct-q')).focus();
+}
+async function copyAdminResetPassword(key){
+  const reset=ACCOUNTS.resets.get(key); if(!reset?.password)return;
+  const copied=await adminCopyText(reset.password);
+  if(copied)reset.saved=true;
+  adminAccountsSay(copied?`Copied the new password for ${reset.name||reset.email}.`:'Copying failed: select the password and copy it yourself.',copied?'ok':'err');
+}
+async function copyAdminResetEmail(key){
+  const reset=ACCOUNTS.resets.get(key); if(!reset?.password)return;
+  const copied=await adminCopyText(adminAccountEmailText({name:reset.name,email:reset.email,password:reset.password},reset.letter));
+  if(copied)reset.saved=true;
+  adminAccountsSay(copied?`Copied the new-password message for ${reset.name||reset.email}, to send by hand.`:'Copying failed: select the password and copy it yourself.',copied?'ok':'err');
+}
+// Asked before leaving the view while accounts are being made, or a password shown here
+// was neither emailed nor copied.
+function adminAccountsMayLeave(){
+  const unsaved=adminAccountsUnsaved();
+  if(ACCOUNTS.creating||[...ACCOUNTS.resets.values()].some(reset=>reset.busy))
+    return confirm('Accounts are still being created, or a password set: if you leave now, the passwords not shown yet cannot be shown again'
+      +(unsaved?`, and ${unsaved} new password${unsaved===1?' shown here was':'s shown here were'} neither emailed nor copied`:'')+'. Leave anyway?');
+  return !unsaved||confirm(`${adminAccountsUnsavedText(unsaved)} Leave anyway?`);
+}
+// The page itself asks before it goes (a reload, a closed tab) while a password is at risk.
+function adminAccountsAtRisk(){
+  try{ return !!ACCOUNTS.creating||[...ACCOUNTS.resets.values()].some(reset=>reset.busy)||adminAccountsUnsaved()>0; }
+  catch(error){ return false; }
+}
+function adminAccountsBeforeUnload(event){
+  if(!adminAccountsAtRisk())return undefined;
+  event.preventDefault(); event.returnValue='';
+  return '';
+}
+// The session ended (a 401) while passwords are at risk here: no redirect; the view says what to do.
+function adminAccountsSessionEnded(){
+  const notice=$('admin-acct-session');
+  if(notice)notice.hidden=false;
+}
+// Leaving the view, or another run: the one-time passwords leave the page and memory.
+function clearAdminAccountSecrets(){
+  ACCOUNTS.generation++;
+  const creating=ACCOUNTS.creating, opened=ACCOUNTS.resets.size;
+  // Who now has a password nobody knows: said, so that each can be given a new one.
+  const lost=[...(ACCOUNTS.results?.rows||[]).filter(row=>row.status==='created'&&row.password&&!row.saved).map(row=>row.email),
+    ...[...ACCOUNTS.resets.values()].filter(reset=>reset.stage==='done'&&!reset.saved).map(reset=>reset.email)];
+  if(lost.length)adminAccountsSay(`The new password${lost.length===1?' of':'s of'} ${lost.join(', ')} ${lost.length===1?'was':'were'} cleared without being emailed or copied: give ${lost.length===1?'this account':'these accounts'} a new password from the table.`,'err');
+  ACCOUNTS.results=null; ACCOUNTS.run=null; ACCOUNTS.creating=null; ACCOUNTS.previewing=false;
+  for(const reset of ACCOUNTS.resets.values())reset.row?.remove();
+  ACCOUNTS.resets.clear();
+  // A selection is for one visit: one kept from before could go along with the next change.
+  ACCOUNTS.selected.clear(); ACCOUNTS.bulkAsk=null; renderAdminAccountsBulkAsk();
+  for(const key of ACCOUNTS.rows.keys())syncAdminAccountRow(key);
+  syncAdminAccountsSelection();
+  if(opened&&ACCOUNTS.loaded)renderAdminAccountsTable();
+  dropAdminAccountsPreview();
+  if(!ACCOUNTS.applying)dropAdminAccessPlan();
+  renderAdminAccountResults();
+  syncAdminAccountsCreating();
+  if(!creating){ adminAccountsSay('','','admin-acct-add-status'); return; }
+  // Left mid-way: the lines not answered yet go back in the box for a retry.
+  const left=creating.lines.slice(creating.done);
+  $('admin-acct-add-text').value=left.join('\n');
+  syncAdminAccountsEmail(); syncAdminAccountsAddCount();
+  adminAccountsSay(`Creating accounts stopped when you left this view. ${left.length} line${left.length===1?' was':'s were'} not confirmed and ${left.length===1?'is':'are'} back in the box; anyone already created shows as “Already exists” if you retry (give them a new password from the table).`,'err','admin-acct-add-status');
+}
+function wireAdminAccounts(){
+  // What the table shows changes which selected rows are not shown: a question about them goes.
+  $('admin-acct-q').oninput=()=>{ ACCOUNTS.query=$('admin-acct-q').value; dropAdminAccountsBulkAsk(); renderAdminAccountsTable(); syncAdminAccountsHead(); syncAdminAccountsSelection(); };
+  $('admin-acct-filter').onchange=()=>{ ACCOUNTS.filter=$('admin-acct-filter').value||'all'; dropAdminAccountsBulkAsk(); renderAdminAccountsTable(); syncAdminAccountsHead(); syncAdminAccountsSelection(); };
+  $('admin-acct-all').onclick=()=>selectShownAdminAccounts();
+  $('admin-acct-clear').onclick=()=>clearAdminAccountSelection();
+  $('admin-acct-on').onclick=()=>adminAccountsBulk('on');
+  $('admin-acct-off').onclick=()=>adminAccountsBulk('off');
+  $('admin-acct-group-set').onclick=()=>setAdminAccountsGroup(false);
+  $('admin-acct-group-remove').onclick=()=>setAdminAccountsGroup(true);
+  $('admin-acct-group-name').oninput=()=>dropAdminAccountsBulkAsk();
+  $('admin-acct-list-open').onclick=()=>toggleAdminAccessList();
+  $('admin-acct-list-group').onchange=()=>{ ACCOUNTS.listGroup=$('admin-acct-list-group').value; dropAdminAccessPlan(); syncAdminAccessListGroup(); };
+  $('admin-acct-list-review').onclick=reviewAdminAccessList;
+  $('admin-acct-list-cancel').onclick=()=>{ toggleAdminAccessList(false); $('admin-acct-list-open').focus(); };
+  $('admin-acct-list-text').oninput=()=>{ if(!ACCOUNTS.applying)dropAdminAccessPlan(); };
+  // Any change to the form makes a preview stale.
+  for(const id of ['admin-acct-add-text','admin-acct-add-group','admin-acct-add-length','admin-acct-add-subject','admin-acct-add-message','admin-acct-add-sender'])
+    $(id).oninput=()=>{ dropAdminAccountsPreview(); syncAdminAccountsAddCount(); };
+  $('admin-acct-add-send').onchange=()=>{ dropAdminAccountsPreview(); syncAdminAccountsAddCount(); };
+  $('admin-acct-add-create').onclick=previewAdminAccounts;
+  if(typeof window!=='undefined'&&window.addEventListener)window.addEventListener('beforeunload',adminAccountsBeforeUnload);
+}
+wireAdminAccounts();
 $('lib-tabs').querySelectorAll('button[data-hub]').forEach(b=>b.onclick=()=>switchHub(b.dataset.hub));
 $('lib-auto-memory').onchange=async e=>{ await fetch('/api/library/settings',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({auto_memory:e.target.checked})}); await loadLibrary(); await loadMonitor(); };
 document.getElementById('lib-tool-readonly').onchange=e=>{ if(!e.target.checked&&document.getElementById('lib-tool-approval').value==='auto')document.getElementById('lib-tool-approval').value='prompt'; };
@@ -3995,6 +5615,8 @@ async function loadRuns(){
 function selectRun(rid,jid){
   if(runId!==rid){
     chatAttachments.clear();$('chat-input').value='';const monitorView=$('view-monitor');if(monitorView)monitorView.scrollTop=0;
+    // Another run: the admin view's one-time passwords are not kept.
+    if(typeof clearAdminAccountSecrets==='function')clearAdminAccountSecrets();
     // The Ask panel (readability.js) starts empty for another run.
     if(typeof resetManuscriptAsk==='function')resetManuscriptAsk(rid);
   }
