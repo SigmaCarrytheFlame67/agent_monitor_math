@@ -256,6 +256,25 @@ Admin view → **Accounts** (`GET /api/admin/accounts`, administrators only;
     running this release. Until the deploy has finished, a pause written
     from the command line is not enforced.
 
+## Lean and DAG views after a follow-up
+
+A run's automatic Lean and DAG views (`auto_pipeline.json` in its workspace)
+are paid model calls on the run's own route. When a follow-up of any engine
+ends, they are derived again only when something is missing:
+
+- **Unchanged proof, every view produced:** if the follow-up left `proof.md`
+  (or `proof.tex`) as it was (one that failed, say) and every view now
+  recorded for that proof was produced, no new pass starts; it would only
+  repeat the paid calls. The views count whether the run's last full pass
+  produced them or a Lean Check, Compile or Lean-harness run did since.
+  A Lean result of incomplete, unfaithful or compiled counts as produced, and
+  so does a DAG built from the text when its model call failed; refresh those
+  from the Lean and DAG tabs.
+- **Changed proof, or a view that failed or is blocked:** derived again, as
+  before.
+- **Run's own pass still running when the follow-up ends:** an unchanged proof
+  is never derived again (unchanged behaviour).
+
 ## Ansatz CGM runs
 
 The `kimi` and `math_harness` engines run the CGM pipeline in

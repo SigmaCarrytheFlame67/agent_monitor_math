@@ -320,6 +320,52 @@ def _finish(workspace: Path) -> None:
     _mutate(workspace, update)
 
 
+# A stage whose view was produced (formal stages are "off" for an informal-only
+# run). Its outcome may still be "attention" (Lean unfaithful, say), and
+# "parsed" is a DAG built from the text when its model call failed; neither is
+# retried by a follow-up (the Lean and DAG tabs refresh them on request).
+_PRODUCED_STAGE_STATUSES = frozenset({"done", "parsed", "off"})
+
+
+def _derived_current_source(
+    state: dict[str, Any] | None,
+    workspace: Path,
+    run_record: dict[str, Any] | None,
+) -> bool:
+    """Whether every derived view of the run's current proof is recorded as
+    produced.
+
+    ``derived_signature`` names the proof the last full pass derived; only
+    _run writes it, once its batch has ended (a formal-only refresh never
+    does).  The stages are judged as they are recorded now, whether by that
+    pass or since by a Lean action (Check, Compile, a Lean harness): every
+    one produced, none in error or blocked.  The pass must have ended (no
+    restart cut it short, no newer request pending), and formalization must
+    be asked for as it is now.  Anything else is derived again, as before.
+    """
+    if not isinstance(state, dict):
+        return False
+    if str(state.get("status") or "") not in {"done", "partial"}:
+        return False
+    if state.get("interruption") or state.get("pending_refresh"):
+        return False
+    stages = state.get("stages")
+    if not isinstance(stages, dict):
+        return False
+    for name in ("informal_dag", "lean", "formal_dag", "coverage"):
+        stage = stages.get(name)
+        if not isinstance(stage, dict):
+            return False
+        if str(stage.get("status") or "") not in _PRODUCED_STAGE_STATUSES:
+            return False
+        if _stage_outcome(name, stage) in {"error", "blocked"}:
+            return False
+    if bool(state.get("formalize", True)) != formalization_requested(run_record):
+        return False
+    derived = str(state.get("derived_signature") or "")
+    return bool(derived) and derived == _source_signature(workspace, run_record)
+
+
 def _prepare_pending_refresh(workspace: Path) -> None:
     """Reset derived stages before consuming one coalesced newer proof."""
     def update(state: dict[str, Any]) -> None:
@@ -329,6 +375,7 @@ def _prepare_pending_refresh(workspace: Path) -> None:
         state.pop("finished_at", None)
         state.pop("proof_outcome", None)
         state.pop("pending_refresh", None)
+        state.pop("derived_signature", None)
         for stage in ("informal_dag", "lean", "formal_dag", "coverage"):
             stage_state = state.setdefault("stages", {}).setdefault(stage, {})
             stage_state["status"] = "waiting"
@@ -1509,6 +1556,8 @@ def _run(
         user = _run_user(owner_id, record)
         _run_batch(workspace, record, user, model, engine)
         processed_sig = sig
+        # The proof this full pass derived (see _derived_current_source).
+        _mutate(workspace, lambda state: state.update({"derived_signature": sig}))
         if (user or {}).get("guest"):
             _finish(workspace)
             return
@@ -1526,6 +1575,7 @@ def _run(
             def rerun(state: dict[str, Any]) -> None:
                 state["rerun_count"] = int(state.get("rerun_count") or 0) + 1
                 state["source_signature"] = final_sig
+                state.pop("derived_signature", None)
                 for stage in ("informal_dag", "lean", "formal_dag", "coverage"):
                     stage_state = state.setdefault("stages", {}).setdefault(stage, {})
                     stage_state["status"] = "waiting"
@@ -1537,6 +1587,9 @@ def _run(
             _mutate(workspace, rerun)
             _run_batch(workspace, record, user, model, engine)
             processed_sig = final_sig
+            _mutate(
+                workspace, lambda state: state.update({"derived_signature": final_sig})
+            )
         _finish(workspace)
     finally:
         key = str(workspace.resolve())
@@ -1581,7 +1634,12 @@ def start(
     model: str | None,
     engine: str,
 ) -> dict[str, Any]:
-    """Start the durable sidecar once for a run and return its initial state."""
+    """Start the durable sidecar once for a run and return its initial state.
+
+    When no pass is alive and the last one already produced every derived
+    view of the run's current proof, return that pass's state instead and
+    start nothing (see _derived_current_source).
+    """
     if str(engine or "").strip().lower() == "readability" or is_readability_run(_run_record(run_id)):
         # A readability run has no proof: no derived views, no model calls.
         return {
@@ -1626,6 +1684,14 @@ def start(
             )
             return load_state(workspace) or {}
         _PENDING_START.pop(key, None)
+        record = _run_record(run_id)
+        previous = load_state(workspace)
+        if _derived_current_source(previous, workspace, record):
+            # Every view of exactly this proof is already there (a follow-up
+            # that published nothing new, say): another pass would only repeat
+            # its paid model calls.  A pass still alive also skips an unchanged
+            # proof when it ends (the pending refresh in _run).
+            return previous
         initial = {
             "version": 2,
             "run_id": run_id,
@@ -1662,7 +1728,6 @@ def start(
                 },
             },
         }
-        record = _run_record(run_id)
         analysis = is_analysis_run(record)
         if analysis:
             initial["run_kind"] = "analyze"
@@ -1764,6 +1829,7 @@ def mark_stale(workspace: Path, detail: str = "proof.md was edited") -> None:
     """Mark derived views stale after a manual Sandbox edit."""
     def update(state: dict[str, Any]) -> None:
         state["status"] = "stale"
+        state.pop("derived_signature", None)
         for name in ("informal_dag", "lean", "formal_dag", "coverage"):
             stage = state.setdefault("stages", {}).setdefault(name, {})
             stage.update(

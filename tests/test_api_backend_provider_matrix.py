@@ -464,6 +464,71 @@ class ApiBackendProviderMatrixTests(unittest.TestCase):
                     {"input_tokens": 2000, "cache_read_tokens": 1536, "reasoning_tokens": 200},
                 )
 
+    def test_kimi_reasoning_tokens_reach_a_cgm_runs_usage(self) -> None:
+        # Kimi usage names reasoning ``reasoning_tokens`` (kimi_k3.response_usage),
+        # not ``reasoning_output_tokens``; a Kimi CGM run books it all the same.
+        from agent_monitor.cli_events import CLIEventParser
+        from agent_monitor.runners import math_harness_runner
+
+        reply = {
+            "model": "kimi-k3",
+            "choices": [
+                {"message": {"role": "assistant", "content": "Proof text"}, "finish_reason": "stop"}
+            ],
+            "usage": {
+                "prompt_tokens": 2000,
+                "completion_tokens": 300,
+                "prompt_tokens_details": {"cached_tokens": 1536},
+                "completion_tokens_details": {"reasoning_tokens": 200},
+            },
+        }
+        with (
+            patch.dict(api_backend.os.environ, _OWNER_ENV, clear=True),
+            patch("agent_monitor.settings._http_json", return_value=(200, reply)),
+        ):
+            result = api_backend.api_chat("System", "User", model="kimi-k3")
+        self.assertEqual(result.usage.get("reasoning_tokens"), 200)
+        events: list[dict] = []
+        math_harness_runner._emit_stage_usage(
+            "worker-1", math_harness_runner._clean_usage(result.usage), out=events.append
+        )
+        parser = CLIEventParser("codex", source_engine="kimi")
+        parser.feed("".join(json.dumps(event) + "\n" for event in events))
+        self.assertEqual(
+            {
+                name: parser.usage[name]
+                for name in ("input_tokens", "output_tokens", "cache_read_tokens", "reasoning_tokens")
+            },
+            {"input_tokens": 2000, "output_tokens": 300, "cache_read_tokens": 1536, "reasoning_tokens": 200},
+        )
+
+    def test_a_turns_reasoning_is_booked_once_under_either_name(self) -> None:
+        from agent_monitor.cli_events import CLIEventParser
+
+        cases = {
+            "codex": ({"reasoning_output_tokens": 200}, 200),
+            "kimi": ({"reasoning_tokens": 200}, 200),
+            "both": ({"reasoning_output_tokens": 200, "reasoning_tokens": 200}, 200),
+            # One name is read (usage_ledger.cli_usage's order), never both added.
+            "both, unequal": ({"reasoning_output_tokens": 150, "reasoning_tokens": 200}, 200),
+            "kimi zero": ({"reasoning_output_tokens": 150, "reasoning_tokens": 0}, 150),
+            "codex zero": ({"reasoning_output_tokens": 0, "reasoning_tokens": 200}, 200),
+            "neither": ({}, 0),
+        }
+        for name, (reasoning, expected) in cases.items():
+            with self.subTest(name):
+                parser = CLIEventParser("codex", source_engine="kimi")
+                event = {
+                    "type": "turn.completed",
+                    "usage": {"input_tokens": 10, "output_tokens": 300, **reasoning},
+                }
+                parser.feed(json.dumps(event) + "\n")
+                # Reasoning is a part of the output, never added to it.
+                self.assertEqual(
+                    (parser.usage["output_tokens"], parser.usage["reasoning_tokens"]),
+                    (300, expected),
+                )
+
 
 class ApiBackendPerCallParameterTests(unittest.TestCase):
     """Per-call knobs are explicit arguments, so concurrent callers never
