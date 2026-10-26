@@ -168,11 +168,18 @@ class CLIEventParser:
             input_tokens = int(u.get("input_tokens") or 0)
             if u.get("input_excludes_cache") is True:
                 input_tokens += cached + written
+            # Reasoning is part of output_tokens, never priced on top. Codex
+            # names it reasoning_output_tokens; Kimi usage (api_backend, the
+            # CGM harness) and OpenHands usage name it reasoning_tokens. One
+            # name is read, in usage_ledger.cli_usage's order.
+            reasoning = int(
+                u.get("reasoning_tokens") or u.get("reasoning_output_tokens") or 0
+            )
             self.usage["input_tokens"] += input_tokens
             self.usage["cache_read_tokens"] += cached
             self.usage["cache_write_tokens"] += written
             self.usage["output_tokens"] += int(u.get("output_tokens") or 0)
-            self.usage["reasoning_tokens"] += int(u.get("reasoning_output_tokens") or 0)
+            self.usage["reasoning_tokens"] += reasoning
             self._log(
                 f"· usage in {input_tokens} / out {u.get('output_tokens', 0)}"
             )
@@ -181,7 +188,7 @@ class CLIEventParser:
                 output_tokens=int(u.get("output_tokens") or 0),
                 cache_read=cached,
                 cache_write=written,
-                reasoning=int(u.get("reasoning_output_tokens") or 0),
+                reasoning=reasoning,
             )
         elif t in {"turn.failed", "turn.cancelled"}:
             detail = ev.get("error") or ev.get("message") or t

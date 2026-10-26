@@ -39,7 +39,8 @@ _DELETED_RUNS: set[str] = set()
 _STOP_EVENTS: dict[str, threading.Event] = {}
 _PROCS: dict[str, Any] = {}  # run_id -> subprocess.Popen
 _RECONCILE_LOCK = threading.Lock()
-_RUN_WRITE_LOCK = threading.Lock()
+# Re-entrant: a read-modify-write of one record holds it around _write_run.
+_RUN_WRITE_LOCK = threading.RLock()
 _HERMES_HEARTBEAT_S = 2.0
 # Problem IDs become run-record and cache filenames, so they must never carry a
 # path separator or a traversal segment.
@@ -974,6 +975,31 @@ def ensure_problems(run: dict[str, Any], run_id: str | None = None) -> list[dict
             seen.add(text)
             problems.append({"text": text, "source": "human", "ts": msg.get("ts") or _now()})
     return problems
+
+
+def _problems_with_recorded(problems: list[Any], run_id: str) -> list[Any]:
+    """``problems`` followed by the record's entries it lacks, in their order.
+
+    A follow-up keeps the problem list it started with, while feedback sent
+    during it is appended to the record (``send_human_message`` queues it for
+    the next turn).  The follow-up holds ``_RUN_WRITE_LOCK`` from this read
+    through its write; ``send_human_message`` and the stop and failure
+    handlers read and write under the same lock, so no write drops another's
+    change.
+    """
+    try:
+        record = _load_run_record(run_id)
+    except (OSError, ValueError):  # missing or unreadable: nothing to keep
+        record = {}
+    recorded = record.get("problems") if isinstance(record, dict) else None
+    merged = list(problems)
+    seen = {_problem_item_text(item) for item in merged}
+    for item in recorded if isinstance(recorded, list) else []:
+        text = _problem_item_text(item)
+        if text and text not in seen:
+            seen.add(text)
+            merged.append(item)
+    return merged
 
 
 def _upsert_manifest(run: dict[str, Any]) -> None:
@@ -2903,10 +2929,11 @@ def _execute_job_body(
             # readability run has no proof and no derived views.
             _notify_guest_completion(run_id, owner_id, ws)
     except StopRequested:
-        stopped_run = _load_run_record(run_id)
-        stopped_run["status"] = "stopped"
-        stopped_run["updated_at"] = _now()
-        _write_run(stopped_run)
+        with _RUN_WRITE_LOCK:  # no stale copy over a message recorded meanwhile
+            stopped_run = _load_run_record(run_id)
+            stopped_run["status"] = "stopped"
+            stopped_run["updated_at"] = _now()
+            _write_run(stopped_run)
         _update_job(job_id, status="stopped")
         _append_chat(run_id, "system", "■ run stopped by user")
     except Exception as exc:  # noqa: BLE001
@@ -6394,18 +6421,21 @@ def send_human_message(
     user_entry = _append_chat(
         run_id, "user", display_message, attachments=attached, ledger_text=message
     )
-    try:
-        run_data = _load_run_record(run_id)
-    except FileNotFoundError:
-        run_data = {"run_id": run_id}
-    problems = ensure_problems(run_data, run_id)
-    effective_model = _continuation_model(run_data, model)
-    if not any(_problem_item_text(p) == message for p in problems):
-        problems.append({"text": message, "source": "human", "ts": _now()})
-    run_data["problems"] = problems
-    run_data["problem_text_preview"] = _session_title(problems, run_data.get("problem_text") or message)
-    if run_data.get("run_id"):
-        _write_run(run_data)
+    # Read and write under the record lock: a follow-up finishing meanwhile
+    # must neither lose this message nor be overwritten by a stale copy.
+    with _RUN_WRITE_LOCK:
+        try:
+            run_data = _load_run_record(run_id)
+        except FileNotFoundError:
+            run_data = {"run_id": run_id}
+        problems = ensure_problems(run_data, run_id)
+        effective_model = _continuation_model(run_data, model)
+        if not any(_problem_item_text(p) == message for p in problems):
+            problems.append({"text": message, "source": "human", "ts": _now()})
+        run_data["problems"] = problems
+        run_data["problem_text_preview"] = _session_title(problems, run_data.get("problem_text") or message)
+        if run_data.get("run_id"):
+            _write_run(run_data)
 
     # One decision under the job lock: feedback for a running run, or for one
     # whose continuation another request is preparing, waits for the next
@@ -6656,8 +6686,11 @@ def _execute_continue(
 
     run_data["status"] = "running"
     run_data["updated_at"] = _now()
-    run_data["problems"] = problems
-    _write_run(run_data)
+    with _RUN_WRITE_LOCK:
+        # Feedback recorded since this follow-up read the record is for the
+        # next turn; keep it.
+        run_data["problems"] = _problems_with_recorded(problems, run_id)
+        _write_run(run_data)
 
     try:
         if engine == "improof":
@@ -6725,8 +6758,11 @@ def _execute_continue(
             run_data.get("subagent_model") if result_run["use_subagents"] else None
         )
         result_run["updated_at"] = _now()
-        result_run["problems"] = problems
-        _write_run(result_run)
+        with _RUN_WRITE_LOCK:
+            # Feedback sent while this follow-up ran is already in the
+            # record; keep it, after this turn's own problems.
+            result_run["problems"] = _problems_with_recorded(problems, run_id)
+            _write_run(result_run)
         status = "finished" if result_run.get("status") != "failed" else "failed"
         _update_job(job_id, status=status, error=result_run.get("error"))
         _append_chat(
@@ -6753,12 +6789,13 @@ def _execute_continue(
                 )
     except StopRequested:
         try:
-            stopped_run = _interrupted_continuation_record(
-                previous_run_data, _load_run_record(run_id), job_id=job_id
-            )
-            stopped_run["status"] = "stopped"
-            stopped_run["updated_at"] = _now()
-            _write_run(stopped_run)
+            with _RUN_WRITE_LOCK:  # no stale copy over a message recorded meanwhile
+                stopped_run = _interrupted_continuation_record(
+                    previous_run_data, _load_run_record(run_id), job_id=job_id
+                )
+                stopped_run["status"] = "stopped"
+                stopped_run["updated_at"] = _now()
+                _write_run(stopped_run)
         except FileNotFoundError:
             # The run was deleted, which stops its follow-up too.
             pass
@@ -6767,13 +6804,14 @@ def _execute_continue(
         _update_job(job_id, status="stopped")
     except Exception as exc:  # noqa: BLE001
         try:
-            failed_run = _interrupted_continuation_record(
-                previous_run_data, _load_run_record(run_id), job_id=job_id
-            )
-            failed_run["status"] = "failed"
-            failed_run["error"] = str(exc)
-            failed_run["updated_at"] = _now()
-            _write_run(failed_run)
+            with _RUN_WRITE_LOCK:  # no stale copy over a message recorded meanwhile
+                failed_run = _interrupted_continuation_record(
+                    previous_run_data, _load_run_record(run_id), job_id=job_id
+                )
+                failed_run["status"] = "failed"
+                failed_run["error"] = str(exc)
+                failed_run["updated_at"] = _now()
+                _write_run(failed_run)
         except FileNotFoundError:
             pass
         _update_job(job_id, status="failed", error=str(exc))
@@ -7967,10 +8005,11 @@ def stop_run(run_id: str) -> dict[str, Any]:
 def _record_stopped(run_id: str, job_id: str) -> None:
     """The run's record, job and chat say the user stopped it."""
     try:
-        run_data = _load_run_record(run_id)
-        run_data["status"] = "stopped"
-        run_data["updated_at"] = _now()
-        _write_run(run_data)
+        with _RUN_WRITE_LOCK:  # no stale copy over a follow-up's final write
+            run_data = _load_run_record(run_id)
+            run_data["status"] = "stopped"
+            run_data["updated_at"] = _now()
+            _write_run(run_data)
     except FileNotFoundError:
         pass
     _update_job(job_id, status="stopped")
