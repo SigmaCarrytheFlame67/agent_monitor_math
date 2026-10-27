@@ -86,6 +86,17 @@ _ATTACHED_FILES_RE = re.compile(re.escape(ATTACHED_FILES_LEAD) + r'(?:- ".*"(?:\
 # (jobs.send_human_message): no reference of the user's either, though its
 # "proof" would name a file called proof.tex.
 FILES_ONLY_MESSAGE = "Use these additional research findings to continue the proof."
+# What it writes for a first run started with files and no problem text
+# (jobs.start_job): its "problem", "research" and "proof" name no file either.
+FIRST_RUN_MESSAGE = (
+    "Use the attached research findings to investigate the problem and develop a rigorous proof."
+)
+# A line that is one of those stand-ins: queued messages reach a turn joined
+# by blank lines, so a batch may hold several.
+_STAND_IN_RE = re.compile(
+    r"^[^\S\n]*(?:" + "|".join(map(re.escape, (FILES_ONLY_MESSAGE, FIRST_RUN_MESSAGE))) + r")[^\S\n]*$",
+    re.MULTILINE,
+)
 _FILE_NUMBER_RE = re.compile(r"(?<![\w-])file\s*#?\s*(\d{1,3})(?![\w-])", re.IGNORECASE)
 _FILE_NUMBER_AT_RE = re.compile(r"file\s*#?\s*(\d{1,3})(?![\w-])", re.IGNORECASE)
 # What ties a page reference to the file named right after it.
@@ -118,6 +129,8 @@ _SCHEMA = "agent-monitor-source-text/1"
 _DELIVERED_SCHEMA = "agent-monitor-source-delivery/1"
 _ID_RE = re.compile(r"[0-9a-f]{32}")
 _PAGE_MARK = "\n\f\n"
+# A PDF's note when its extraction stopped early, then the pages it read.
+_STOPPED_NOTE = "its text extraction stopped after page"
 # A page reference: "p. 12", "page 3", "pp. 3–5", a list ("pages 3, 7 and 9",
 # "pp. 44-46, 50") and LaTeX's ties and ranges ("pp.~3--5", "p.\,12").
 _PAGE_RANGE = r"(?:\s*(?:-{1,3}|[\u2010-\u2015\u2212]|to)\s*\d{1,4})?"
@@ -171,6 +184,9 @@ class Source:
     unread: int = 0
     pages: list[str] | None = None
     pages_total: int | None = None
+    # A PDF whose extraction stopped early: how many pages it has beyond
+    # those read is not known (``pages_total`` is None).
+    stopped: bool = False
     error: str | None = None
     notes: list[str] = field(default_factory=list)
     new: bool = False
@@ -466,8 +482,16 @@ def _pdf_text(workspace: Path, source: Source, *, cancel: threading.Event | None
         return
     finally:
         os.close(directory)
-    source.pages_total = meta.get("pages_total") if isinstance(meta.get("pages_total"), int) else None
-    source.notes = [str(note) for note in meta.get("notes") or []][:4]
+    notes = [str(note) for note in meta.get("notes") or []]
+    stopped = meta.get("stopped")
+    if not isinstance(stopped, bool):
+        # Cached before "stopped" was recorded: only its note says so, and
+        # its pages_total is the number of pages read.
+        stopped = any(note.startswith(_STOPPED_NOTE) for note in notes)
+    source.stopped = stopped
+    total = meta.get("pages_total")
+    source.pages_total = total if isinstance(total, int) and not stopped else None
+    source.notes = notes[:4]
     if meta.get("error"):
         source.error = str(meta["error"])
         return
@@ -597,10 +621,12 @@ def _extract_pdf(
         notes.append("only its first pages were kept (the text is very long)")
     pages = text.split(_PAGE_MARK)[:-1]
     read_any = any(page.strip() for page in pages)
+    stopped = False
     if (timed_out or error is not None) and read_any:
-        # A child stopped early keeps the pages it finished.
-        notes.append(f"its text extraction stopped after page {len(pages)}")
-        error = None
+        # A child stopped early (a limit, a timeout, a page it could not
+        # walk past) keeps the pages it finished, of a number not known.
+        notes.append(f"{_STOPPED_NOTE} {len(pages)}")
+        error, stopped = None, True
     elif timed_out and not read_any:
         error = "reading the PDF took too long"
     if error is None and not read_any:
@@ -611,8 +637,9 @@ def _extract_pdf(
         "schema": _SCHEMA,
         "source_sha256": source.sha256,
         "parser": _parser_id(),
-        "pages_total": pages_total or (len(pages) if error is None else None),
+        "pages_total": pages_total or (len(pages) if error is None and not stopped else None),
         "pages_read": len(pages) if error is None else 0,
+        "stopped": stopped,
         "chars": len(text) if error is None else 0,
         "error": error,
         "notes": notes,
@@ -679,19 +706,23 @@ def _mentioned(source: Source, message: str) -> bool:
     lowered = message.lower()
     name = source.name.lower()
     for needle in {name, Path(name).stem}:
+        # A stem followed by an extension is another file's name:
+        # "paper.tex" does not name paper.pdf.
         if len(needle) >= 3 and re.search(
-            rf"(?<![\w-]){re.escape(needle)}(?![\w-])", lowered
+            rf"(?<![\w-]){re.escape(needle)}(?![\w-]|\.\w)", lowered
         ):
             return True
     return False
 
 
 def _own_words(message: str) -> str:
-    """``message`` without what the server wrote into it: the list of
-    attached files it appends, and the stand-in text of a message that
-    brought only files (``FILES_ONLY_MESSAGE``), which leaves nothing."""
-    words = _ATTACHED_FILES_RE.sub("\n\n", str(message or ""))
-    return "" if words.strip() == FILES_ONLY_MESSAGE else words
+    """``message`` without what the server wrote into it: the lists of
+    attached files it appends, and every line that is its stand-in for a
+    message that brought only files (``FILES_ONLY_MESSAGE``,
+    ``FIRST_RUN_MESSAGE``), also in a batch of queued messages.  Empty when
+    nothing else is left."""
+    words = _STAND_IN_RE.sub("", _ATTACHED_FILES_RE.sub("\n\n", str(message or "")))
+    return words if words.strip() else ""
 
 
 def _numbered(sources: list[Source], message: str) -> set[int]:
@@ -742,7 +773,7 @@ def _named_at(source: Source, text: str) -> bool:
     lowered = text.lower()
     name = source.name.lower()
     return any(
-        len(needle) >= 3 and re.match(rf"{re.escape(needle)}(?![\w-])", lowered)
+        len(needle) >= 3 and re.match(rf"{re.escape(needle)}(?![\w-]|\.\w)", lowered)
         for needle in {name, Path(name).stem}
     )
 
@@ -857,10 +888,33 @@ _MARKER_LINE_RE = re.compile(
 )
 
 
+# Characters that render blank or not at all, yet are neither whitespace nor
+# format characters: the Hangul fillers (letters), the braille blank, the
+# musical null notehead and the other default-ignorable code points (Khmer
+# inherent vowels, Mongolian variation selectors, reserved ones, the tag and
+# variation selector block).
+_BLANK_RANGES = (
+    (0x115F, 0x1160), (0x17B4, 0x17B5), (0x180B, 0x180F), (0x2065, 0x2065),
+    (0x2800, 0x2800), (0x3164, 0x3164), (0xFFA0, 0xFFA0), (0xFFF0, 0xFFF8),
+    (0x1D159, 0x1D159), (0xE0000, 0xE0FFF),
+)
+# Of those, the ones that render as a blank with a width, as a space does
+# (the others render as nothing): the Hangul fillers, the Khmer inherent
+# vowels, the braille blank and the musical null notehead.
+_SPACING_BLANK_RE = re.compile(r"[\u115f\u1160\u17b4\u17b5\u2800\u3164\uffa0\U0001d159]")
+# Renderers differ on three of them: browsers draw the Khmer inherent vowels
+# (U+17B4, U+17B5) as nothing, and terminals the Hangul jungseong filler
+# (U+1160) too.  A line holding one is also read each of those ways.
+_NARROW_BLANK_RE = re.compile(r"[\u1160\u17b4\u17b5]")
+_BROWSER_BLANK_RE = re.compile(r"[\u115f\u1160\u2800\u3164\uffa0\U0001d159]")
+_TERMINAL_BLANK_RE = re.compile(r"[\u115f\u2800\u3164\uffa0\U0001d159]")
+
+
 # A character of a tag-like name: a letter of any script or an underscore
 # (fullwidth too); like any word character other than a decimal digit, a
-# numeral such as a superscript two counts as well.
-_NAME_CHARACTER = r"(?:[^\W\d]|\uff3f)"
+# numeral such as a superscript two counts as well.  The Hangul fillers are
+# ignorable instead (_BLANK_RANGES).
+_NAME_CHARACTER = r"(?:[^\W\d\u115f\u1160\u3164\uffa0]|\uff3f)"
 
 
 # What a model may read as a line break: "\n", and every other boundary
@@ -882,16 +936,18 @@ def _ignorable_class() -> str:
     """A regex class of the characters a model reads past, from this
     Python's Unicode data, built once on first use: the format characters
     (Cf: zero-width space and joiners, bidi controls, a byte-order mark),
-    the variation selectors, the combining grapheme joiner, and the control
-    characters that are not whitespace.  None is whitespace or a name
-    character: one matched both ways would make a scan backtrack."""
+    the variation selectors, the combining grapheme joiner, the control
+    characters that are not whitespace, and the blank ones
+    (``_BLANK_RANGES``).  None is whitespace or a name character: one
+    matched both ways would make a scan backtrack."""
+    blank = frozenset(code for low, high in _BLANK_RANGES for code in range(low, high + 1))
     ranges: list[list[int]] = []
     for code in range(sys.maxunicode + 1):
         character = chr(code)
         category = unicodedata.category(character)
         if (
             0xFE00 <= code <= 0xFE0F
-            or 0xE0100 <= code <= 0xE01EF
+            or code in blank
             or code == 0x034F
             or category == "Cf"
             or (category == "Cc" and not character.isspace())
@@ -928,6 +984,24 @@ def _fence_patterns() -> tuple[re.Pattern[str], re.Pattern[str]]:
     return tag, re.compile(ignorable)
 
 
+_SPACES_RE = re.compile(r"\s+")
+_SPACE_RUN_RE = re.compile(r"\s\s")
+
+
+def _read_past(line: str, ignorable: re.Pattern[str], gap: str, spaced: re.Pattern[str] | None = None) -> str:
+    """The first 80 characters of ``line`` with each ``spaced`` character as
+    a space, each other ignorable one as ``gap``, and each run of whitespace
+    as one space, however long the runs: only as much of the line is read
+    as that takes."""
+    size = 256
+    while True:
+        part = line[:size] if spaced is None else spaced.sub(" ", line[:size])
+        probe = _SPACES_RE.sub(" ", ignorable.sub(gap, part)).lstrip()
+        if len(probe) >= 80 or size >= len(line):
+            return probe[:80]
+        size *= 8
+
+
 def _marker_line(line: str) -> bool:
     stripped = line.lstrip()
     if not stripped:
@@ -936,8 +1010,25 @@ def _marker_line(line: str) -> bool:
     # (A control character first is read past, as inside a marker.)
     if first.isascii() and first.isprintable() and first not in "=[-BbEe":
         return False  # the common case, decided without normalizing
-    probe = _fence_patterns()[1].sub("", stripped[:80])
-    return bool(_MARKER_LINE_RE.match(unicodedata.normalize("NFKC", probe).lstrip()))
+    ignorable = _fence_patterns()[1]
+    head = stripped[:80]
+    if ignorable.search(head) is None and _SPACE_RUN_RE.search(head) is None:
+        probes = {head}  # nothing to read past
+    else:
+        # Ignorable characters are left out, and also read as spaces (a
+        # braille blank between two words reads as one), however many; and
+        # as the line renders, which may mix the two: a blank one
+        # (_SPACING_BLANK_RE) as a space, a zero-width one left out.  Only
+        # the readings that can differ for this line are made.
+        readings: list[tuple[str, re.Pattern[str] | None]] = [("", None)]
+        if ignorable.search(stripped) is not None:
+            readings.append((" ", None))
+            if _SPACING_BLANK_RE.search(stripped) is not None:
+                readings.append(("", _SPACING_BLANK_RE))
+                if _NARROW_BLANK_RE.search(stripped) is not None:
+                    readings += [("", _BROWSER_BLANK_RE), ("", _TERMINAL_BLANK_RE)]
+        probes = {_read_past(stripped, ignorable, gap, spaced) for gap, spaced in readings}
+    return any(_MARKER_LINE_RE.match(unicodedata.normalize("NFKC", probe).lstrip()) for probe in probes)
 
 
 def _fence(text: str) -> str:
@@ -946,8 +1037,9 @@ def _fence(text: str) -> str:
     A tag-like ``<NAME`` (see :func:`_fence_patterns`) gets ``‹`` for its
     ``<``, as Analyze fences manuscript text, so a file's
     ``</SOURCE_MATERIAL>``, ``< /SOURCE_MATERIAL>``, a closing tag with a
-    zero-width space in it, or one in fullwidth brackets can neither close
-    nor open a delimiter of the prompt it is placed in.  A line that
+    zero-width space or a blank character (a braille blank, a Hangul
+    filler) in it, or one in fullwidth brackets can neither close nor open
+    a delimiter of the prompt it is placed in.  A line that
     imitates a file, page or excerpt marker of the SOURCE MATERIAL or of
     Plain's excerpts starts with ``‹``, so a file cannot end its own section
     early, start a forged one or move a [File n, p. k] citation; a line is
@@ -1016,7 +1108,8 @@ def _what(source: Source) -> str:
     if source.kind == "text":
         return f"text, {_chars(source):,} characters"
     count = _page_count(source)
-    return f"PDF, {count} page{'s' if count != 1 else ''}"
+    least = "at least " if source.stopped else ""
+    return f"PDF, {least}{count} page{'s' if count != 1 else ''}"
 
 
 def _coverage(selection: _Selection) -> str:
@@ -1068,13 +1161,17 @@ def _chat_item(source: Source, selection: _Selection | None, *, focused: bool = 
         return f"{name} (first {selection.kept:,} of {chars:,} characters; the rest did not fit{why})"
     count = _page_count(source)
     pages = f"{count} pp" if count != 1 else "1 page"
+    rest = "the rest did not fit"
+    if source.stopped:
+        # Its extraction stopped early: the pages after those read are lost.
+        pages, rest = f"at least {pages}", "the rest did not fit or could not be read"
     if selection.partial:
-        return f"{name} ({pages}: part of p. {selection.partial[0]}; the rest did not fit{why})"
+        return f"{name} ({pages}: part of p. {selection.partial[0]}; {rest}{why})"
     if not selection.chosen:
         return f"{name} ({pages}: none; it did not fit)"
     if not selection.complete():
-        return f"{name} ({pages}: {_pages_phrase(selection.chosen)}; the rest did not fit{why})"
-    if len(selection.units) < count:
+        return f"{name} ({pages}: {_pages_phrase(selection.chosen)}; {rest}{why})"
+    if source.stopped or len(selection.units) < count:
         return f"{name} ({pages}: {_pages_phrase(selection.chosen)}; the rest could not be read)"
     return f"{name} ({pages}, all)"
 
@@ -1195,8 +1292,8 @@ def render(
     and shown new-this-turn first, then those the user points to, then in
     upload order.  What a file is pointed to by, and which pages are named,
     is read from ``message`` (this turn's), then from ``earlier`` (the
-    session's earlier messages, most recent first), never from the list of
-    attached files the server appends to a message.  A file the user points
+    session's earlier messages, most recent first), never from what the
+    server wrote into a message (:func:`_own_words`).  A file the user points
     to (:func:`_focus`) is served first: whole if it fits, within
     ``FOCUS_PERCENT`` of the room or what the other files do not need, while
     each other file keeps ``min(FILE_RESERVE, need, room / files)``.  The
@@ -1466,7 +1563,8 @@ def plain_attachments(
                 f"{source.error or 'it could not be read'}."
             )
             continue
-        blocks.append(f"- {name} ({_what(source)})")
+        notes = "".join(f"; {note}" for note in source.notes)
+        blocks.append(f"- {name} ({_what(source)}{notes})")
         units = _units(source)
         selection = _Selection(
             source=source, rank=0, named=[], units=units,

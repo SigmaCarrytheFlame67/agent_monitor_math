@@ -92,22 +92,23 @@ function load(names, consts, prelude) {
   return code => vm.runInContext(code, sandbox)
 }
 
-// The session bar's two buttons, a clock, and the server's answer to a Stop.
-const SESSION = `
-let clock=0, runId='r1', stopAnswer={ok:true,body:{ok:true,status:'stopped'}};
-const Date={now:()=>clock};
+// The session bar's two buttons, and what a reader sees there.
+const BAR = `
 const button=text=>({textContent:text,disabled:false,names:new Set(),
   classList:{toggle(name,on){ on?this.owner.names.add(name):this.owner.names.delete(name); },contains(name){ return this.owner.names.has(name); }}});
 const els={'sess-stop':button('■ Stop'),'sess-cont':button('▶ Continue')};
 for(const el of Object.values(els))el.classList.owner=el;
+const bar=()=>{ const stop=els['sess-stop'], cont=els['sess-cont'];
+  return [stop.classList.contains('show')?(stop.disabled?'['+stop.textContent+']':stop.textContent):'',cont.classList.contains('show')?cont.textContent:''].filter(Boolean).join(' '); };`
+// The session bar, a clock, and the server's answer to a Stop.
+const SESSION = BAR + `
+let clock=0, runId='r1', stopAnswer={ok:true,body:{ok:true,status:'stopped'}};
+const Date={now:()=>clock};
 const $=id=>els[id];
 const calls=[];
 const fetch=async(url,init)=>{ calls.push(init?.method+' '+url); if(stopAnswer instanceof Error)throw stopAnswer;
   return {ok:stopAnswer.ok,status:stopAnswer.ok?200:500,json:async()=>stopAnswer.body}; };
-const setPill=(state,text)=>calls.push('pill '+text), startPolling=()=>calls.push('poll'), loadRuns=()=>calls.push('runs');
-// What a reader sees in the session bar.
-const bar=()=>{ const stop=els['sess-stop'], cont=els['sess-cont'];
-  return [stop.classList.contains('show')?(stop.disabled?'['+stop.textContent+']':stop.textContent):'',cont.classList.contains('show')?cont.textContent:''].filter(Boolean).join(' '); };`
+const setPill=(state,text)=>calls.push('pill '+text), startPolling=()=>calls.push('poll'), loadRuns=()=>calls.push('runs');`
 const STOP_STATE = ['STOP_SETTLE_MS', 'STOPPING_RUNS']
 
 test('after Stop, Continue takes the Stop button\'s spot only once the stop has settled', async () => {
@@ -186,7 +187,7 @@ const calls=[]; const $=()=>({textContent:''}); const setTimeout=()=>0;
 const fetch=async()=>({ok:true,json:async()=>JSON.parse(JSON.stringify(record))});
 const consoleRunSignature=run=>JSON.stringify(run);
 const setPill=()=>{}, updateChatStatus=()=>{}, updateProblemStrip=()=>{}, updatePromptStrip=()=>{}, renderConversation=()=>{}, renderAutoPipeline=()=>{};
-const applySandboxPreview=()=>{}, refreshProofPreview=async()=>{}, loadChat=()=>{}, loadRuns=()=>calls.push('runs');`)
+const applySandboxPreview=()=>{}, refreshProofPreview=async()=>{}, loadChat=()=>{}, loadRuns=()=>calls.push('runs'), updateSessionButtons=()=>{};`)
   const tick = async (record, clock) => { step(`clock=${clock}; record=${JSON.stringify(record)}`); return step('tick()') }
   step("STOPPING_RUNS.set('r1',{since:0,recorded:true})")
   const stopped = { run_id: 'r1', status: 'stopped', agents: [], totals: {} }
@@ -200,6 +201,32 @@ const applySandboxPreview=()=>{}, refreshProofPreview=async()=>{}, loadChat=()=>
   // A run stopped elsewhere is polled until its worker is done.
   assert.equal(await tick({ ...stopped, stopping: true }, 9000), true)
   assert.equal(await tick(stopped, 9100), false)
+})
+
+test('a Stop that settles while the proof refreshes still leaves ▶ Continue when polling ends', async () => {
+  // updateChatStatus draws the bar before the tick waits for the proof's
+  // refresh; the Stop can settle meanwhile, and the check after that wait ends
+  // the poll. Nothing drew the bar again, so it kept an inert "Stopping…" and
+  // no ▶ Continue (review, 2026-10-27; reproduced in Chromium).
+  const step = load(['tick', 'nextPollDelay', 'stopSettling', 'updateSessionButtons'], ['POLL_MIN_MS', ...STOP_STATE], BAR + `
+let clock=0, record=null, refreshMs=0, runId='r1', pollSig='', pollQuiet=0, pollDelay=2000, pollListedEnd=null, workspaceView='sandbox';
+const Date={now:()=>clock};
+const calls=[]; const $=id=>els[id]||{textContent:''}; const setTimeout=()=>0;
+const fetch=async()=>({ok:true,json:async()=>JSON.parse(JSON.stringify(record))});
+const consoleRunSignature=run=>JSON.stringify(run);
+const setPill=()=>{}, updateProblemStrip=()=>{}, updatePromptStrip=()=>{}, renderConversation=()=>{}, renderAutoPipeline=()=>{};
+// The bar as updateChatStatus draws it, and what it showed then.
+const updateChatStatus=run=>{ updateSessionButtons(run.analyze?.recheck?.status==='running'?'running':run.status,!!run.stopping); calls.push('drawn '+bar()); };
+// Fetching and drawing the proof takes refreshMs.
+const applySandboxPreview=()=>{}, refreshProofPreview=async()=>{ clock+=refreshMs; }, loadChat=()=>{}, loadRuns=()=>calls.push('runs');`)
+  // Stopped from this tab at 0 ms; at 2.8 s the worker is done and the record reads stopped.
+  step("STOPPING_RUNS.set('r1',{since:0,recorded:true})")
+  step("clock=2800; refreshMs=300; record={run_id:'r1',status:'stopped',agents:[],totals:{}}")
+  assert.equal(await step('tick()'), false)
+  // "Stopping…" at 2.8 s, settled by 3.1 s: the poll ends with ▶ Continue in the bar.
+  assert.deepEqual(plain(step('calls')), ['drawn [Stopping…]', 'runs'])
+  assert.equal(step('bar()'), '▶ Continue')
+  assert.equal(step('STOPPING_RUNS.size'), 0)
 })
 
 test('the run list keeps ■ inert in the spot ▶ takes until the stop has settled', async () => {
@@ -230,6 +257,54 @@ const action=async()=>{ await loadRuns();
   assert.equal(await step('action()'), 'stop (inert)')
   set({ ...job, status: 'stopped' }, 9100)
   assert.equal(await step('action()'), 'cont')
+})
+
+test('a second click on the run list\'s ■ before it turns inert sends no second Stop', async () => {
+  // The list draws ■ inert only once the server has answered the Stop. A
+  // second click before that sent a second Stop, which took the first one's
+  // place in STOPPING_RUNS and, answered "not_running" (the stopped worker had
+  // ended), removed it: ▶ came within a second and a third click continued the
+  // run (review, 2026-10-27; reproduced in Chromium). Checked with another run
+  // shown in the session, then with this one.
+  for (const shown of ['r2', 'r1']) {
+    const step = load(['escapeHtml', 'loadRuns', 'stopSettling', 'updateSessionButtons', 'stopRun'], STOP_STATE, BAR + `
+let clock=0, jobs=[], answers=[], runId=${JSON.stringify(shown)}, CURRENT_USER={id:7};
+const Date={now:()=>clock};
+const RUN_KIND_BY_ID=new Map();
+const box={innerHTML:'',querySelectorAll:()=>[]}; const $=id=>id==='runs'?box:els[id];
+// The server lists the run's job and answers each Stop in turn.
+const posts=[];
+const fetch=async(url,init)=>{ if(init?.method==='POST'){ posts.push(url); const answer=answers.shift(); return {ok:true,status:200,json:async()=>answer}; }
+  return {ok:true,json:async()=>url==='/api/jobs'?{jobs}:{runs:[]}}; };
+const setPill=()=>{}, startPolling=()=>{}, syncIdlePill=()=>{}, runningRunCount=()=>0;
+// The action button of run r1: what it is and whether it can be clicked.
+const action=async()=>{ await loadRuns();
+  const m=box.innerHTML.match(/<button class="run-act (stop|cont)" data-run="r1"[^>]*>/); return m?m[1]+(/ disabled>/.test(m[0])?' (inert)':''):'none'; };`)
+    const set = (job, clock) => step(`clock=${clock}; jobs=${JSON.stringify([job])}`)
+    const job = { run_id: 'r1', job_id: 'j1', engine: 'claude', status: 'running' }
+    set(job, 0)
+    assert.equal(await step('action()'), 'stop', shown)
+    // Two clicks on the live ■, 150 ms apart, before the first Stop's answer.
+    step("answers=[{ok:true,status:'stopped',run_id:'r1',job_id:'j1'},{ok:true,status:'not_running',run_id:'r1'}]")
+    const first = step("stopRun('r1')")
+    const second = step("clock=150; stopRun('r1')")
+    await Promise.all([first, second])
+    await new Promise(resolve => setImmediate(resolve))  // the run list's redraw after each Stop
+    // At 0.7 s the worker is done: ■ keeps the spot, inert, until three seconds have passed.
+    set({ ...job, status: 'stopped' }, 700)
+    assert.equal(await step('action()'), 'stop (inert)', shown)
+    if (shown === 'r1') {
+      step("updateSessionButtons('stopped',false)")
+      assert.equal(step('bar()'), '[Stopping…]')
+    }
+    assert.deepEqual(plain(step('posts')), ['/api/runs/r1/stop'], shown)
+    set({ ...job, status: 'stopped' }, 3100)
+    assert.equal(await step('action()'), 'cont', shown)
+    if (shown === 'r1') {
+      step("updateSessionButtons('stopped',false)")
+      assert.equal(step('bar()'), '▶ Continue')
+    }
+  }
 })
 
 test('the inert ■ in the run list swallows a second click instead of passing it to its run item', () => {

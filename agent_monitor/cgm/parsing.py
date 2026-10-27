@@ -560,14 +560,32 @@ def _parse_uses(value: str) -> tuple[str, ...]:
     return tuple(labels)
 
 
+# A follow-up's task lists the session problems with this tag on the last
+# line of each one new this turn (jobs._execute_continue); a copy of the list
+# or of one problem may keep or drop it, on any of its problems.
+_NEW_THIS_TURN = "← new this turn"
+
+
+def _untagged(line: str) -> str:
+    """``line`` without a trailing "← new this turn" tag, which follows the
+    line's text after whitespace as the task writes it."""
+    text = line.rstrip()
+    head = text.removesuffix(_NEW_THIS_TURN)
+    if head != text and head[-1:].isspace() and not head.isspace():
+        return head.rstrip()
+    return line
+
+
 def _squash(line: str) -> str:
-    return " ".join(line.split())
+    """``line`` as a copy of the problem is compared: without its tag
+    (``_untagged``), whitespace runs squashed."""
+    return " ".join(_untagged(line).split())
 
 
 def _problem_copies(problem: str | Sequence[str]) -> tuple[tuple[str, ...], ...]:
     """The forms of the problem a worker may copy into THEOREM's Statement
     (the whole text, the excerpt a prompt showed, one problem of a session),
-    as their non-blank lines with whitespace runs squashed."""
+    as their non-blank lines, each squashed (``_squash``)."""
     forms = (problem,) if isinstance(problem, str) else tuple(problem)
     copies: list[tuple[str, ...]] = []
     seen: set[tuple[str, ...]] = set()
@@ -592,8 +610,9 @@ def _copy_ends(
     ``first`` is the Statement line's own text after the colon; the line's
     pattern drops leading ``*``, ``_`` and backticks, so a first problem line
     made only of them (a code fence) may be on the Statement line.  Blank
-    lines and runs of whitespace may differ; anything else must match.  The
-    reply's lines are squashed once, whatever the number of forms.
+    lines, runs of whitespace and a line's "← new this turn" tag may differ;
+    anything else must match.  The reply's lines are squashed once, whatever
+    the number of forms.
     """
     if not copies:
         return []
@@ -636,15 +655,15 @@ def _copied_problem_marker(
     The problem's own lines are then not the reply's markers ("Proof." in a
     problem with a proof to complete, "=== END ===").  The reply's marker is
     the line right after the copy; a problem that ends with its own "Proof:"
-    line, which the reply used as its marker too, keeps that line.  Of copies
-    of several forms (one a prefix of another: a session's problems), the
-    longest so followed is used.  None in any other case: the reply is read
-    as before.
+    line, which the reply used as its marker too, keeps that line (read
+    without its tag, ``_untagged``).  Of copies of several forms (one a
+    prefix of another: a session's problems), the longest so followed is
+    used.  None in any other case: the reply is read as before.
     """
     for last, following, copy in _copy_ends(lines, start, first, copies):
         if following is not None and _is_proof_marker(lines[following]):
             return last + 1, following
-        if _is_proof_marker(copy[-1]) and last > start and _is_proof_marker(lines[last]):
+        if _is_proof_marker(copy[-1]) and last > start and _is_proof_marker(_untagged(lines[last])):
             return last + 1, last
     return None
 
@@ -733,7 +752,9 @@ def _parse_statement_block(
         if copies
         else None
     )
-    marker = _is_proof_marker(body[after_copy[1]]) if after_copy is not None else None
+    # The marker may be the copy's own last line ("Proof:"), whose tag is the
+    # task's, never proof text.
+    marker = _is_proof_marker(_untagged(body[after_copy[1]])) if after_copy is not None else None
     if after_copy is not None and marker is not None:
         proof_start = after_copy[1] + 1
         first_proof = marker.group("rest") or ""

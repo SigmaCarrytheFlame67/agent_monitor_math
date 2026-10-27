@@ -1034,7 +1034,8 @@ test('Paper map shading has a token per level in both themes, and its text stays
 test('progress: the runner\'s notes as stages, never model replies, call markers or the banner', () => {
   const lines = run(['readabilityProgressLines'], ['READABILITY_CALL_MARKER'], '', 'readabilityProgressLines')
   const raw = ['Ansatz Readability · kimi-k3 via sponsored_kimi · up to 6 parts', 'Readability · 1 Ingest · link', 'Readability · Ingest · reading order: 4 parts',
-    'Readability · guide', '{"title": "x"}', '=== READABLE ===', '```json', 'Readability · rewrite-2-low', 'Readability · recheck-3', 'assistant · {"verdict": "faithful"}',
+    'Readability · guide', '{"title": "x"}', '=== READABLE ===', '```json', 'Readability · rewrite-2-low', 'Readability · recheck-3',
+    'Readability · rewrite-2-low · declined first by claude-fable-5-1', 'assistant · {"verdict": "faithful"}',
     'Readability · 3 Rewrite · rewriting 4 of 4 parts', 'Readability · Rewrite · now working on Part 1, Part 2', 'Ansatz Readability completed · 4 parts rewritten'].join('\n')
   assert.deepEqual(lines(raw), ['1 Ingest · link', 'Ingest · reading order: 4 parts', '3 Rewrite · rewriting 4 of 4 parts', 'Rewrite · now working on Part 1, Part 2'])
   const detail = run(['readabilityProgressDetail'], ['READABILITY_STAGE_LINE', 'ANALYZE_SOURCE_WORDS'], '', 'readabilityProgressDetail')

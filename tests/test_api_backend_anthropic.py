@@ -1317,9 +1317,25 @@ class CallModelPricingTests(unittest.TestCase):
         self.assertEqual((parser.usage["input_tokens"], parser.usage["output_tokens"]), (2100, 80))
         self.assertEqual(parser.usage["reasoning_tokens"], 15)
 
-        # One model, a malformed split, or a run that is not Max (API): one event, as before.
+        # A run that is not Max (API) splits the call the same way, and its
+        # usage names no provider.
+        with self.subTest(api_max=False, by_model=shares):
+            events = call(False, shares)
+            usage = [event for event in events if event["type"] == "turn.completed"]
+            self.assertEqual(
+                [(event["stage"], event["model"], event.get("provider")) for event in usage],
+                [("verify-1", "claude-opus-4-8", None), ("verify-1", "claude-fable-5-1", None)],
+            )
+            self.assertEqual(events[3]["item"]["text"], "Math Harness · verify-1 · declined first by claude-fable-5-1")
+            _parser, nodes = _priced(events)
+            self.assertEqual(
+                [(node["model"], node["output"][:30], node["cost_usd"]) for node in nodes if node.get("input_tokens")],
+                priced,
+            )
+
+        # One model or a malformed split: one event, as before.
         for api_max, by_model in ((True, ()), (True, shares[:1]), (True, "junk"), (True, ((None, {}),) * 2),
-                                  (False, shares)):
+                                  (False, ())):
             with self.subTest(api_max=api_max, by_model=by_model):
                 usage = [event for event in call(api_max, by_model) if event["type"] == "turn.completed"]
                 self.assertEqual(len(usage), 1)
@@ -1328,6 +1344,8 @@ class CallModelPricingTests(unittest.TestCase):
                 # (API), whose two sides bill apart, names the provider too.
                 self.assertEqual(usage[0].get("model"), "claude-opus-4-8")
                 self.assertEqual(usage[0].get("provider"), "anthropic" if api_max else None)
+                if not api_max:
+                    self.assertEqual(set(usage[0]), {"type", "stage", "usage", "model"})
 
 
 if __name__ == "__main__":

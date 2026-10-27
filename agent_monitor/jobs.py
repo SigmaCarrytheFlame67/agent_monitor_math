@@ -40,8 +40,10 @@ _JOBS: dict[str, dict[str, Any]] = {}
 _DELETED_RUNS: set[str] = set()
 # The scalar fields (owner, route, model...) of each deleted run's last
 # record: the usage a worker still reports after the delete is booked under
-# them (see _write_run_locked).
+# them (see _write_run_locked).  Kept for the latest deletions only
+# (delete_run): a worker's last write comes within its wind-down.
 _DELETED_RUN_IDENTITY: dict[str, dict[str, Any]] = {}
+_DELETED_RUN_IDENTITY_MAX = 1000
 # The record of a run deleted while one of its sessions ran, as that session's
 # worker last wrote it (the removed file's stand-in, kept in memory only),
 # until the worker ends (_end_worker).  A follow-up's live records hold only
@@ -848,6 +850,17 @@ def _merge_continuation_run(
     return result
 
 
+# The fields a record write keeps from the record already written when the
+# new copy lacks them (and, for a deleted run, from what it was deleted with).
+_RECORD_IDENTITY_KEYS = (
+    "owner_id", "owner", "created_at", "problem_id",
+    "guest", "use_subagents", "subagent_model", "auth_route", "credential_source",
+    "model", "requested_model", "reasoning_effort", "speed_mode", "max_iterations", "formalize",
+    "route_plan", "run_kind", "analyze", "readability", "tool_free",
+    "engine_impl", "engine_impl_version", "artifact_schema", "graph_schema",
+)
+
+
 def _write_run_locked(run: dict[str, Any]) -> Path:
     cache = _cache_dir()
     path = cache / f"{run['run_id']}.json"
@@ -861,13 +874,7 @@ def _write_run_locked(run: dict[str, Any]) -> Path:
             old = json.loads(path.read_text(encoding="utf-8"))
         except (json.JSONDecodeError, OSError):
             old = {}
-    for k in (
-        "owner_id", "owner", "created_at", "problem_id",
-        "guest", "use_subagents", "subagent_model", "auth_route", "credential_source",
-        "model", "requested_model", "reasoning_effort", "speed_mode", "max_iterations", "formalize",
-        "route_plan", "run_kind", "analyze", "readability", "tool_free",
-        "engine_impl", "engine_impl_version", "artifact_schema", "graph_schema",
-    ):
+    for k in _RECORD_IDENTITY_KEYS:
         if run.get(k) in (None, "", "continue") and old.get(k) not in (None, "", "continue"):
             run[k] = old[k]
     if str(run.get("owner") or "").strip().lower().endswith("@public.local"):
@@ -1021,7 +1028,7 @@ def ensure_problems(run: dict[str, Any], run_id: str | None = None) -> list[dict
     return problems
 
 
-def _problems_with_recorded(problems: list[Any], run_id: str) -> list[Any]:
+def _problems_with_recorded(problems: list[Any], run_id: str, *, own: str | None = None) -> list[Any]:
     """``problems`` followed by the record's entries it lacks, in their order.
 
     A follow-up keeps the problem list it started with, while feedback sent
@@ -1037,6 +1044,15 @@ def _problems_with_recorded(problems: list[Any], run_id: str) -> list[Any]:
         record = {}
     recorded = record.get("problems") if isinstance(record, dict) else None
     merged = list(problems)
+    if isinstance(recorded, list) and any(_problem_item_text(item) for item in recorded):
+        # What the record lost since this follow-up read it (a Stop dropped
+        # queued feedback, _record_stopped) stays lost; only this turn's own
+        # message, not yet written, is kept.
+        kept = {_problem_item_text(item) for item in recorded}
+        merged = [
+            item for item in merged
+            if _problem_item_text(item) in kept or (own and _problem_item_text(item) == own)
+        ]
     seen = {_problem_item_text(item) for item in merged}
     for item in recorded if isinstance(recorded, list) else []:
         text = _problem_item_text(item)
@@ -1156,7 +1172,7 @@ def list_jobs(owner_id: int | None = None) -> list[dict[str, Any]]:
         jobs = [dict(j) for j in _JOBS.values() if j.get("run_id") not in _DELETED_RUNS]
         for j in jobs:
             worker = _WORKERS.get(str(j.get("job_id") or ""))
-            if j.get("status") != "running" and worker is not None and worker[1].is_alive():
+            if j.get("status") != "running" and worker is not None and _worker_not_done(worker[1]):
                 # Stopped while its worker still winds down: the run list
                 # offers no Continue yet (see run_is_stopping).
                 j["stopping"] = True
@@ -1974,10 +1990,7 @@ def start_job(
         if upload_error:
             raise ValueError(upload_error)
     if attachment_batch and not (problem_text or "").strip() and not problem_id:
-        problem_text = (
-            "Use the attached research findings to investigate the problem and "
-            "develop a rigorous proof."
-        )
+        problem_text = cgm_sources.FIRST_RUN_MESSAGE
     pid, text, path = resolve_problem(problem_id, problem_text)
     _check_cgm_problem_size(engine, text)
 
@@ -3199,17 +3212,55 @@ def _estimate_cost(
         return round(cost, 6) if cost > 0 else None
 
 
-def _exact_price_model(model: str | None) -> str | None:
-    """``model`` if the pricing table has an exact entry for it, else None.
+def _has_price(model: str) -> bool:
+    try:
+        from llm_cost_tracker.pricing import has_real_pricing
 
-    Calls that did not name the model that served them are priced at the
-    model their run selected only through this check.  A selection may be a
-    route alias (Claude Code's "opus", "sonnet" or "fable"; Max's "max")
-    that the lookup's family match resolves to an unrelated model's price
-    ("opus" to Claude 3 Opus, "max" to a Codex-max model), so only an exact
-    entry is trusted; None leaves ``_estimate_cost`` its gpt-4o fallback.
-    """
+        return has_real_pricing(model)
+    except Exception:  # noqa: BLE001
+        return False
+
+
+# The provider keys _resolve_llm_provider reads (see _requested_model_id).
+_RESOLVER_KEY_NAMES = (
+    "OPENAI_API_KEY", "KIMI_API_KEY", "ANTHROPIC_API_KEY", "GEMINI_API_KEY", "OPENROUTER_API_KEY",
+    "DEEPSEEK_API_KEY", "GROQ_API_KEY", "TOGETHERAI_API_KEY", "XAI_API_KEY",
+)
+
+
+def _requested_model_id(model: str | None) -> str | None:
+    """``model`` as an API call requests it: a provider prefix
+    ("openai:gpt-5.2") resolved as the API runners resolve it
+    (proof_graph._resolve_llm_provider, as math_harness_runner._requested_id).
+
+    The id never depends on the keys set (they only decide whether the call
+    can be made), so a stand-in for each lets it resolve whatever the run's
+    environment held.  A name no API provider takes ("opus", "max") is kept
+    as it is.  Never raises."""
     name = str(model or "").strip()
+    if not name:
+        return None
+    from agent_monitor.proof_graph import _resolve_llm_provider
+
+    try:
+        return _resolve_llm_provider(dict.fromkeys(_RESOLVER_KEY_NAMES, "-"), name)[3]
+    except (TypeError, ValueError):
+        return name
+
+
+def _exact_price_model(model: str | None) -> str | None:
+    """The id ``model`` requests (a provider prefix resolved,
+    ``_requested_model_id``) if the pricing table has an exact entry for it,
+    else None.
+
+    Calls that name no priced model are priced at the model their run
+    selected only through this check.  A selection may be a route alias
+    (Claude Code's "opus", "sonnet" or "fable"; Max's "max") that the
+    lookup's family match resolves to an unrelated model's price ("opus" to
+    Claude 3 Opus, "max" to a Codex-max model), so only an exact entry is
+    trusted; None leaves ``_estimate_cost`` its gpt-4o fallback.
+    """
+    name = _requested_model_id(model)
     if not name:
         return None
     try:
@@ -5077,16 +5128,18 @@ def _run_cli_engine(
     def _price_model(node_model: Any) -> str | None:
         """The model a trace node's tokens are priced at.
 
-        The node's own model, then the stream's.  The CGM runners name the
-        model that served each call on its usage event, which the parser
-        stamps on the node; other Codex-style streams name neither, and their
-        nodes are priced at the run's model when the pricing table has an
+        The node's own model, then the stream's, when the pricing table has
+        it.  The CGM runners name the model that served each call on its
+        usage event, which the parser stamps on the node; other Codex-style
+        streams name neither, and a reply may name a model the table lacks
+        (a dated OpenAI snapshot).  Such a node is priced at the run's model,
+        a provider prefix ("openai:gpt-5.2") resolved, when the table has an
         exact entry for it (``_exact_price_model``; either Max run has two
         models, so none).  Resolved on first need: the check loads the
         pricing table.
         """
         named = str(node_model or parser.usage.get("model") or "").strip()
-        if named:
+        if named and _has_price(named):
             return named
         if "model" not in run_price_model:
             max_run = cgm_max.route_mode(extra_env) is not None
@@ -6030,6 +6083,12 @@ def _end_worker(job_id: str) -> None:
             _DELETED_RUN_LAST.pop(worker[0], None)
 
 
+def _worker_not_done(thread: Any) -> bool:
+    """Whether a tracked worker thread is not done with its run: it runs, or
+    it was registered and has not started yet (_register_claimed_job)."""
+    return thread.ident is None or thread.is_alive()
+
+
 def _session_worker_alive(run_id: str) -> bool:
     """Whether a worker of one of ``run_id``'s sessions is not done with it yet.
 
@@ -6040,7 +6099,7 @@ def _session_worker_alive(run_id: str) -> bool:
     current = threading.get_ident()
     with _LOCK:
         for job_id, (_run_id, thread) in list(_WORKERS.items()):
-            if not thread.is_alive():
+            if not _worker_not_done(thread):
                 _WORKERS.pop(job_id, None)  # ended without saying so
         return any(
             worker_run == run_id and thread.ident != current
@@ -6086,11 +6145,32 @@ def _release_launch(run_id: str) -> None:
         _LAUNCHING_RUNS.discard(run_id)
 
 
-def _register_claimed_job(run_id: str, job: dict[str, Any]) -> None:
-    """Register a claimed run's continuation; its running job replaces the claim."""
+def _register_claimed_job(run_id: str, job: dict[str, Any], thread: Any = None) -> None:
+    """Register a claimed run's continuation; its running job replaces the claim.
+
+    Its worker (not started yet) is tracked in the same hold: a Stop and a
+    Continue before the thread starts must not find the run idle."""
     with _LOCK:
         _JOBS[job["job_id"]] = job
+        if isinstance(thread, _THREAD_CLASS):
+            _WORKERS[job["job_id"]] = (run_id, thread)
         _LAUNCHING_RUNS.discard(run_id)
+
+
+def _start_claimed_worker(run_id: str, job_id: str, thread: Any, announce: str) -> None:
+    """Say the claimed run continues and start the worker registered with it.
+
+    Should either fail (the chat line on a full disk, the thread's start),
+    the worker that never ran is ended and its job failed: the run is left
+    neither running nor stopping with no thread to end it."""
+    try:
+        _append_chat(run_id, "system", announce)
+        thread.start()
+    except BaseException:
+        with _LOCK:
+            _end_worker(job_id)
+            _update_job(job_id, status="failed", error="worker did not start")
+        raise
 
 
 def run_is_active(run_id: str) -> bool:
@@ -6467,7 +6547,8 @@ def _feedback_entries(raw: str) -> list[dict[str, Any]]:
     """Parse queued feedback lines into ``content``/``author_id``/``ts``
     entries, with ``problem_added`` (whether queueing the message added it to
     the session problems; ``None`` for feedback queued before that was
-    recorded) and ``attachment_ids`` (the files it brought)."""
+    recorded), ``attachment_ids`` (the files it brought) and ``booking`` (the
+    run start the console booked for it, see _queue_human_feedback)."""
     entries: list[dict[str, Any]] = []
     # One JSON object a line, each ended by "\n" (_feedback_line), with any
     # "\n" or "\r" inside it escaped.  Not splitlines(): a message's own
@@ -6482,8 +6563,9 @@ def _feedback_entries(raw: str) -> list[dict[str, Any]]:
             stamp = item.get("ts")
             added = item.get("problem_added")
             files = item.get("attachment_ids")
+            booking = item.get("booking")
         except (AttributeError, json.JSONDecodeError):
-            content, author, stamp, added, files = line.strip(), None, None, None, None
+            content, author, stamp, added, files, booking = line.strip(), None, None, None, None, None
         if content:
             entries.append({
                 "content": content,
@@ -6494,6 +6576,7 @@ def _feedback_entries(raw: str) -> list[dict[str, Any]]:
                 "attachment_ids": [
                     ident for ident in files if isinstance(ident, str)
                 ] if isinstance(files, list) else [],
+                "booking": booking if type(booking) in (int, float) else None,
             })
     return entries
 
@@ -6502,7 +6585,7 @@ def _feedback_line(entry: dict[str, Any]) -> str:
     """One queued message as its queue file stores it."""
     kept = {
         key: entry[key]
-        for key in ("content", "ts", "author_id", "problem_added")
+        for key in ("content", "ts", "author_id", "problem_added", "booking")
         if entry.get(key) is not None
     }
     if entry.get("attachment_ids"):
@@ -6517,13 +6600,16 @@ def _queue_human_feedback(
     author_id: int | None = None,
     problem_added: bool | None = None,
     attachment_ids: Sequence[str] = (),
+    booking: float | None = None,
 ) -> bool:
     """Durably append feedback that arrived while an engine was active.
 
     ``problem_added`` records whether the message was added to the session
     problems for it (a message the session already had was not), and
     ``attachment_ids`` the files it brought: a Stop that drops the message
-    takes back exactly that (_record_stopped).
+    takes back exactly that (_record_stopped).  So is ``booking``, the run
+    start the console booked for the follow-up this message will start (a
+    member's): kept unless the message joins one already booked.
 
     Returns whether ``author_id`` already had feedback waiting, so this message
     joins the follow-up that feedback booked rather than booking another.
@@ -6544,6 +6630,8 @@ def _queue_human_feedback(
             except OSError:
                 waiting = []
             joined = any(item["author_id"] == author_id for item in waiting)
+        if booking is not None and not joined:
+            entry["booking"] = booking
         with path.open("a", encoding="utf-8") as stream:
             stream.write(_feedback_line(entry))
     return joined
@@ -6741,11 +6829,14 @@ def send_human_message(
     max_iterations: int = 40,
     user: dict[str, Any] | None = None,
     attachments: object = None,
+    booking: float | None = None,
 ) -> dict[str, Any]:
     """Human-in-the-loop chat: queue feedback or continue a finished run.
 
     A queued answer reports ``joined_follow_up``: whether the message joined
     feedback its author already queued, so one follow-up carries both.
+    ``booking``: the run start the console booked for this message (a
+    member's); queued, the message keeps it (see _queue_human_feedback).
     """
     message = (message or "").strip()
     attachment_batch = research_attachments.validate(
@@ -6839,6 +6930,7 @@ def send_human_message(
                 author_id=(user or {}).get("id"),
                 problem_added=problem_added,
                 attachment_ids=[item["id"] for item in attached],
+                booking=booking,
             )
     if not claimed:
         _append_chat(
@@ -6914,25 +7006,6 @@ def _continue_with_message(
         ),
     )
     job_id = uuid.uuid4().hex[:10]
-    _register_claimed_job(run_id, {
-        "job_id": job_id,
-        "run_id": run_id,
-        "engine": engine,
-        "problem_id": run_data.get("problem_id"),
-        "status": "running",
-        "created_at": _now(),
-        "updated_at": _now(),
-        "error": None,
-        "model": effective_model,
-        "kind": "continue",
-        "owner_id": continue_owner_id,
-        "auth_route": continued_route,
-        "reasoning_effort": run_data.get("reasoning_effort", "default"),
-        "speed_mode": run_data.get("speed_mode", "standard"),
-        "problem_preview": _session_title(problems, first_problem),
-    })
-
-    _append_chat(run_id, "system", "Continuing proof with your feedback…")
     continued_subagents = bool(run_data.get("use_subagents", True)) and not tool_free
     continue_env["AGENT_MONITOR_USE_SUBAGENTS"] = "1" if continued_subagents else "0"
     continued_subagent_model = run_data.get("subagent_model") if continued_subagents else None
@@ -6958,8 +7031,24 @@ def _continue_with_message(
         daemon=True,
         name=f"continue-{run_id}-{job_id}",
     )
-    thread.start()
-    _track_worker(job_id, run_id, thread)
+    _register_claimed_job(run_id, {
+        "job_id": job_id,
+        "run_id": run_id,
+        "engine": engine,
+        "problem_id": run_data.get("problem_id"),
+        "status": "running",
+        "created_at": _now(),
+        "updated_at": _now(),
+        "error": None,
+        "model": effective_model,
+        "kind": "continue",
+        "owner_id": continue_owner_id,
+        "auth_route": continued_route,
+        "reasoning_effort": run_data.get("reasoning_effort", "default"),
+        "speed_mode": run_data.get("speed_mode", "standard"),
+        "problem_preview": _session_title(problems, first_problem),
+    }, thread)
+    _start_claimed_worker(run_id, job_id, thread, "Continuing proof with your feedback…")
     return {
         "ok": True,
         "status": "continuing",
@@ -7374,7 +7463,9 @@ def _execute_continue(
     with _RUN_WRITE_LOCK:
         # Feedback recorded since this follow-up read the record is for the
         # next turn; keep it.
-        run_data["problems"] = _problems_with_recorded(problems, run_id)
+        run_data["problems"] = _problems_with_recorded(
+            problems, run_id, own=message.strip() if recorded_here else None
+        )
         _write_run(run_data)
 
     try:
@@ -7476,7 +7567,9 @@ def _execute_continue(
         with _RUN_WRITE_LOCK:
             # Feedback sent while this follow-up ran is already in the
             # record; keep it, after this turn's own problems.
-            result_run["problems"] = _problems_with_recorded(problems, run_id)
+            result_run["problems"] = _problems_with_recorded(
+                problems, run_id, own=message.strip() if recorded_here else None
+            )
             _write_run(result_run)
         status = "finished" if result_run.get("status") != "failed" else "failed"
         _update_job(job_id, status=status, error=result_run.get("error"))
@@ -7999,6 +8092,8 @@ def _book_recheck_usage(run_id: str, output: str, *, model: str | None, stage: s
             continue
         raw = event.get("usage") if isinstance(event.get("usage"), dict) else {}
         usage = usage_ledger.cli_usage(raw, input_includes_cache=raw.get("input_excludes_cache") is not True)
+        named = event.get("model")
+        call_model = named.strip() if isinstance(named, str) and named.strip() else _exact_price_model(model)
         cost = None
         try:
             # Priced as usage_ledger.record_usage does: the input includes the
@@ -8006,7 +8101,7 @@ def _book_recheck_usage(run_id: str, output: str, *, model: str | None, stage: s
             cached = int(usage.get("cached_input_tokens") or 0)
             written = int(usage.get("cache_write_tokens") or 0)
             cost = _estimate_cost(
-                model,
+                call_model,
                 input_tokens=max(0, int(usage.get("input_tokens") or 0) - cached - written),
                 output_tokens=int(usage.get("output_tokens") or 0),
                 cache_read=cached,
@@ -8014,7 +8109,7 @@ def _book_recheck_usage(run_id: str, output: str, *, model: str | None, stage: s
             )
         except Exception:  # noqa: BLE001 - a price estimate is best-effort
             cost = None
-        usage_ledger.record_usage(model=model, usage=usage, cost_usd=cost or 0.0, stage=stage, run_id=run_id)
+        usage_ledger.record_usage(model=call_model or model, usage=usage, cost_usd=cost or 0.0, stage=stage, run_id=run_id)
         tally["calls"] += 1
         tally["input_tokens"] += int(usage.get("input_tokens") or 0)
         tally["output_tokens"] += int(usage.get("output_tokens") or 0)
@@ -8688,9 +8783,10 @@ def stop_run(run_id: str) -> dict[str, Any]:
             # written-proof round, it publishes, reports and exits while its
             # call processes are still being ended (up to a second), and its
             # worker's outcome ("finished") must be the last word.
-            _record_stopped(run_id, active["job_id"])
+            dropped_bookings = _record_stopped(run_id, active["job_id"])
             _stop_cgm_runner(proc)
-            return {"ok": True, "status": "stopped", "run_id": run_id, "job_id": active["job_id"]}
+            return {"ok": True, "status": "stopped", "run_id": run_id, "job_id": active["job_id"],
+                    "dropped_bookings": dropped_bookings}
         _terminate_registered_proc(proc, force=not graceful)
     if not active:
         # Nothing runs here: a re-check (or a question) left "running" by a
@@ -8716,8 +8812,9 @@ def stop_run(run_id: str) -> dict[str, Any]:
         # that registers after this Stop is killed at once (_register_proc).
         return {"ok": True, "status": "stopped", "run_id": run_id, "job_id": active["job_id"],
                 active["kind"]: True}
-    _record_stopped(run_id, active["job_id"])
-    return {"ok": True, "status": "stopped", "run_id": run_id, "job_id": active["job_id"]}
+    dropped_bookings = _record_stopped(run_id, active["job_id"])
+    return {"ok": True, "status": "stopped", "run_id": run_id, "job_id": active["job_id"],
+            "dropped_bookings": dropped_bookings}
 
 
 def _without_dropped(problems: Any, dropped: list[dict[str, Any]]) -> list[Any] | None:
@@ -8745,7 +8842,7 @@ def _without_dropped(problems: Any, dropped: list[dict[str, Any]]) -> list[Any] 
     return kept if removed else None
 
 
-def _record_stopped(run_id: str, job_id: str) -> None:
+def _record_stopped(run_id: str, job_id: str) -> list[dict[str, Any]]:
     """The run's record, job and chat say the user stopped it.
 
     Feedback queued for the end of the stopped session is dropped, and the
@@ -8791,6 +8888,13 @@ def _record_stopped(run_id: str, job_id: str) -> None:
         if files:
             text += f" The files attached to {it} stay with the run."
         _append_chat(run_id, "system", text)
+    # The run starts the dropped messages booked, each with its author (the
+    # console gives exactly those back, see _queue_human_feedback).
+    return [
+        {"author_id": entry["author_id"], "booking": entry["booking"]}
+        for entry in dropped
+        if entry.get("author_id") is not None and entry.get("booking") is not None
+    ]
 
 
 def continue_run(
@@ -8892,24 +8996,6 @@ def _continue_claimed_run(
         continue_env["AGENT_MONITOR_SUBAGENT_MODEL"] = str(continued_subagent_model)
     else:
         continue_env.pop("AGENT_MONITOR_SUBAGENT_MODEL", None)
-    _register_claimed_job(run_id, {
-        "job_id": job_id,
-        "run_id": run_id,
-        "engine": engine,
-        "problem_id": run_data.get("problem_id"),
-        "status": "running",
-        "created_at": _now(),
-        "updated_at": _now(),
-        "error": None,
-        "model": effective_model,
-        "kind": "continue",
-        "owner_id": continue_owner_id,
-        "auth_route": continued_route,
-        "reasoning_effort": run_data.get("reasoning_effort", "default"),
-        "speed_mode": run_data.get("speed_mode", "standard"),
-        "problem_preview": _session_title(problems, first_problem),
-    })
-    _append_chat(run_id, "system", "Continuing run…")
     thread = threading.Thread(
         target=_execute_continue,
         kwargs={
@@ -8929,8 +9015,24 @@ def _continue_claimed_run(
         daemon=True,
         name=f"continue-{run_id}-{job_id}",
     )
-    thread.start()
-    _track_worker(job_id, run_id, thread)
+    _register_claimed_job(run_id, {
+        "job_id": job_id,
+        "run_id": run_id,
+        "engine": engine,
+        "problem_id": run_data.get("problem_id"),
+        "status": "running",
+        "created_at": _now(),
+        "updated_at": _now(),
+        "error": None,
+        "model": effective_model,
+        "kind": "continue",
+        "owner_id": continue_owner_id,
+        "auth_route": continued_route,
+        "reasoning_effort": run_data.get("reasoning_effort", "default"),
+        "speed_mode": run_data.get("speed_mode", "standard"),
+        "problem_preview": _session_title(problems, first_problem),
+    }, thread)
+    _start_claimed_worker(run_id, job_id, thread, "Continuing run…")
     return {"ok": True, "status": "continuing", "run_id": run_id, "job_id": job_id}
 
 
@@ -9006,7 +9108,14 @@ def delete_run(run_id: str) -> dict[str, Any]:
             recorded = None
         if isinstance(recorded, dict):
             workspace_path = recorded.get("workspace")
-            identity = {key: value for key, value in recorded.items() if not isinstance(value, (dict, list))}
+            # Only what a winding-down worker's writes need (_write_run_locked,
+            # usage_ledger._book_run's title).
+            identity = {
+                key: recorded[key]
+                for key in (*_RECORD_IDENTITY_KEYS, "problem_text_preview")
+                if key in recorded and not isinstance(recorded[key], (dict, list))
+            }
+            identity["problem_text"] = str(recorded.get("problem_text") or "")[:2000]
 
     removed: dict[str, Any] = {"run_id": run_id, "deleted": []}
 
@@ -9022,11 +9131,19 @@ def delete_run(run_id: str) -> dict[str, Any]:
         # identity the first one took.
         _DELETED_RUN_IDENTITY[run_id] = identity or _DELETED_RUN_IDENTITY.get(run_id) or {}
         if isinstance(recorded, dict) and any(
-            worker_run == run_id and thread.is_alive() for worker_run, thread in _WORKERS.values()
+            worker_run == run_id and _worker_not_done(thread) for worker_run, thread in _WORKERS.values()
         ):
             # A session still running: its record lives on in memory until its
             # worker ends, for the usage it books (_record_at_session_end).
             _DELETED_RUN_LAST[run_id] = recorded
+        # Beyond the cap the oldest identities go; a session still winding
+        # down (_DELETED_RUN_LAST) keeps its own.
+        excess = len(_DELETED_RUN_IDENTITY) - _DELETED_RUN_IDENTITY_MAX
+        if excess > 0:
+            for old in [
+                key for key in _DELETED_RUN_IDENTITY if key != run_id and key not in _DELETED_RUN_LAST
+            ][:excess]:
+                del _DELETED_RUN_IDENTITY[old]
         _DELETED_RUNS.add(run_id)
         for jid in [k for k, j in _JOBS.items() if j.get("run_id") == run_id]:
             _JOBS.pop(jid, None)

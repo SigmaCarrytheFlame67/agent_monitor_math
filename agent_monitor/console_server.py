@@ -904,8 +904,12 @@ def _reserve_signup_slot(client: str | None = None) -> tuple[bool, int]:
     return True, 0
 
 
-def _reserve_member_run_slot(user_id: int) -> tuple[str | None, int]:
-    """Bound a member's concurrent and hourly run starts (continuations count)."""
+def _reserve_member_run_slot(user_id: int) -> tuple[str | None, int, float | None]:
+    """Bound a member's concurrent and hourly run starts (continuations count).
+
+    Returns the refusal and its Retry-After seconds, or (None, 0, booking):
+    the start's time in the member's hourly window, which gives back exactly
+    this start (_release_member_run_slot)."""
     concurrency = _bounded_env_int(
         "AGENT_MONITOR_MEMBER_CONCURRENCY", default=2, minimum=1, maximum=8
     )
@@ -921,7 +925,7 @@ def _reserve_member_run_slot(user_id: int) -> tuple[str | None, int]:
             for job in job_manager.list_jobs()
         )
         if active >= concurrency:
-            return "Wait for one of your current runs to finish before starting another", 30
+            return "Wait for one of your current runs to finish before starting another", 30, None
         window = _MEMBER_RUN_WINDOWS.setdefault(user_id, deque())
         while window and window[0] <= now - _MEMBER_RUN_WINDOW_SECONDS:
             window.popleft()
@@ -929,9 +933,10 @@ def _reserve_member_run_slot(user_id: int) -> tuple[str | None, int]:
             return (
                 "Your account has reached its hourly run limit; please try again later",
                 max(1, int(_MEMBER_RUN_WINDOW_SECONDS - (now - window[0]))),
+                None,
             )
         window.append(now)
-    return None, 0
+    return None, 0, now
 
 
 def _member_subscription_status(kind: str) -> dict[str, Any]:
@@ -981,12 +986,14 @@ def _remove_member_stored_login(kind: str, user_id: int) -> None:
         pass
 
 
-def _release_member_run_slot(user_id: int) -> None:
-    """Give back the newest run start reserved for a member that started nothing."""
+def _release_member_run_slot(user_id: int, booking: float | None) -> None:
+    """Give back a member's run start booked at ``booking``
+    (_reserve_member_run_slot) that started nothing.  Nothing once it has
+    left the hourly window: another start booked since must stay booked."""
     with _MEMBER_RUN_LOCK:
         window = _MEMBER_RUN_WINDOWS.get(user_id)
-        if window:
-            window.pop()
+        if window and booking is not None and booking in window:
+            window.remove(booking)
 
 
 def _reserve_member_message(user_id: int) -> tuple[str | None, int]:
@@ -1661,17 +1668,23 @@ def _https_link(value: object) -> str | None:
 
 # The Analyze runner's own progress notes start with this prefix ("Analyze ·
 # Check · Lemma 3.7 · error — …"); a bare call stage after it ("map",
-# "check-3", "check-3-low", "segment-1-retry") only marks a model call.
+# "check-3", "check-3-low", "segment-1-retry") only marks a model call, as
+# does one a refusal fallback's note names ("check-3 · declined first by
+# <model>", math_harness_runner._emit_call_usage).
+_DECLINED_FIRST = r"(?: · declined first by .+)?"
 _ANALYZE_NOTE_PREFIX = "Analyze · "
-_ANALYZE_CALL_RE = re.compile(r"(?:map|segment-\d+|check-\d+)(?:-retry)?(?:-low)?")
+_ANALYZE_CALL_RE = re.compile(r"(?:map|segment-\d+|check-\d+)(?:-retry)?(?:-low)?" + _DECLINED_FIRST)
 _ANALYZE_NOW_CHECKING = "Check · now checking "
 ANALYZE_PROGRESS_LINES = 600
 
 
 # The Readability runner's notes start with "Readability · "; a bare call
-# stage after it ("guide", "rewrite-3", "check-2-retry-low") marks a call.
+# stage after it ("guide", "rewrite-3", "check-2-retry-low") marks a call
+# (with or without a refusal fallback's "· declined first by <model>").
 _READABILITY_NOTE_PREFIX = "Readability · "
-_READABILITY_CALL_RE = re.compile(r"(?:guide|ask|(?:rewrite|check|repair|recheck)-\d+)(?:-retry)?(?:-low)?")
+_READABILITY_CALL_RE = re.compile(
+    r"(?:guide|ask|(?:rewrite|check|repair|recheck)-\d+)(?:-retry)?(?:-low)?" + _DECLINED_FIRST
+)
 _READABILITY_NOW_WORKING = " · now working on "
 
 
@@ -2466,19 +2479,24 @@ class Handler(RunSharingMixin, ProjectsMixin, ResearchMixin, BaseHTTPRequestHand
         )
         return True
 
+    # The run start this request booked for a member (_admit_member_run).
+    _member_booking: float | None = None
+
     def _admit_member_run(self, user: dict) -> bool:
+        self._member_booking = None
         if not account_policy.is_member(user):
             return True
-        error, retry_after = _reserve_member_run_slot(int(user["id"]))
+        error, retry_after, booking = _reserve_member_run_slot(int(user["id"]))
         if error:
             self._send(429, json.dumps({"error": error}), headers={"Retry-After": str(retry_after)})
             return False
+        self._member_booking = booking
         return True
 
     def _release_member_run(self, user: dict) -> None:
         """Return an admitted member start when the request started nothing."""
         if account_policy.is_member(user):
-            _release_member_run_slot(int(user["id"]))
+            _release_member_run_slot(int(user["id"]), self._member_booking)
 
     def _admit_member_message(self, user: dict) -> bool:
         if not account_policy.is_member(user):
@@ -4631,6 +4649,10 @@ class Handler(RunSharingMixin, ProjectsMixin, ResearchMixin, BaseHTTPRequestHand
             except Exception as exc:  # noqa: BLE001
                 self._send(500, json.dumps({"error": str(exc)}))
                 return
+            # A member's queued feedback the Stop dropped started nothing:
+            # the run start it booked is given back (that one, if still booked).
+            for dropped in result.pop("dropped_bookings", None) or []:
+                _release_member_run_slot(int(dropped["author_id"]), dropped["booking"])
             self._send(200, json.dumps(result, ensure_ascii=False))
             return
 
@@ -4719,6 +4741,9 @@ class Handler(RunSharingMixin, ProjectsMixin, ResearchMixin, BaseHTTPRequestHand
                     max_iterations=int(body.get("max_iterations") or 40),
                     user=user,
                     attachments=body.get("attachments"),
+                    # Queued, the message keeps its start: a Stop that drops
+                    # it gives back exactly that one.
+                    booking=self._member_booking,
                 )
             except account_policy.ProjectPolicyError as exc:
                 # The project's tool-free rule.

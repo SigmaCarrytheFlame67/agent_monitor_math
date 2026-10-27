@@ -955,7 +955,8 @@ _SESSION_HEADING_RE = re.compile(r"^## Problem \d+$")
 def _problem_forms(problem: str) -> tuple[str, ...]:
     """The problem as a worker may copy it into the THEOREM (for the parser):
     as the worker and repair prompts show it, and, in a follow-up, each
-    problem of the session notebook with or without its heading."""
+    problem of the session notebook with or without its heading, or as the
+    follow-up's task lists them ("N. text"), one or all."""
     forms = [
         problem,
         _clip_utf8(problem, _WORKER_PROBLEM_BYTES),
@@ -967,8 +968,16 @@ def _problem_forms(problem: str) -> tuple[str, ...]:
             sections.append([line])
         elif sections:
             sections[-1].append(line)
+    numbered: list[str] = []
     for section in sections:
         forms += ["\n".join(section), "\n".join(section[1:])]
+        # As a follow-up's task lists it (jobs._execute_continue): "N. text".
+        # The parser drops the tag of a problem new this turn, wherever it is.
+        item = f"{section[0].strip()[len('## Problem '):]}. " + "\n".join(section[1:]).strip()
+        forms.append(item)
+        numbered.append(item)
+    if numbered:
+        forms.append("\n".join(numbered))
     return tuple(forms)
 
 
@@ -1502,6 +1511,22 @@ def _served_model(route: Route, reported: object = None) -> str | None:
     return None if route.transport == "claude_code" else route.model
 
 
+def _requested_id(route: Route, env: Mapping[str, str]) -> str | None:
+    """The id an API call on ``route`` requested (``APIResult.model``): the
+    route's model with a provider prefix ("openai:gpt-5.2") resolved.
+
+    It runs in a failed call's handler, where an error of its own would hide
+    the call's failure: it never raises (None)."""
+    if route.transport != "api_chat":
+        return None
+    try:
+        from agent_monitor.proof_graph import _resolve_llm_provider
+
+        return _resolve_llm_provider(dict(env), route.model)[3]
+    except Exception:  # noqa: BLE001
+        return None
+
+
 def _priced_model(route: Route, result: Any, observed_model: object) -> object:
     """The model one successful call's usage names outside Max (API) (see
     ``_usage_source``).
@@ -1708,7 +1733,7 @@ def _provider_call(
                 # No reply names a model: the call was billed at the requested
                 # one (_served_model; never a Claude Code route's alias),
                 # unless a refusal fallback had more than one model bill it.
-                model=None,
+                model=_requested_id(route, call_env),
                 provider=route.provider,
                 by_model=getattr(exc, "usage_by_model", ()),
                 out=billed_events.append,
@@ -1822,14 +1847,16 @@ def _emit_call_usage(
 
     The run's parser books a usage event on the node just before it, so the
     caller sends the call's reply (or, for a failed call, a note) and this
-    usage as one unit.  In Max (API) a call that more than one model billed
-    (a refusal fallback; ``APIResult.usage_by_model``) is published as one
-    event per model: first the model that answered last (its share lands on
-    the reply's node, which then names it), then each model that declined
-    before it, after a note of its own, so each share is priced at its own
-    model's rates.
+    usage as one unit.  On every route, a call that more than one model
+    billed (a refusal fallback; ``APIResult.usage_by_model``) is published
+    as one event per model: first the model that answered last (its share
+    lands on the reply's node, which then names it), then each model that
+    declined before it, after a note of its own ("… · declined first by
+    <model>"), so each share is priced at its own model's rates.  Only in
+    Max (API) does an event name the provider that billed it.
     """
-    shares = _usage_shares(by_model) if ctx.api_max else []
+    shares = _usage_shares(by_model)
+    billed_by = provider if ctx.api_max else None
     if not shares:
         _emit_stage_usage(
             stage,
@@ -1840,7 +1867,7 @@ def _emit_call_usage(
         )
         return
     answered_model, answered = shares[-1]
-    _emit_stage_usage(stage, answered, out=out, model=answered_model, provider=provider)
+    _emit_stage_usage(stage, answered, out=out, model=answered_model, provider=billed_by)
     for share_model, share in shares[:-1]:
         out(
             {
@@ -1851,7 +1878,7 @@ def _emit_call_usage(
                 },
             }
         )
-        _emit_stage_usage(stage, share, out=out, model=share_model, provider=provider)
+        _emit_stage_usage(stage, share, out=out, model=share_model, provider=billed_by)
 
 
 def _invoke(

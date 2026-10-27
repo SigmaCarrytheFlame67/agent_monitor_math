@@ -75,7 +75,7 @@ let payload={run_id:'r1',status:'running',updated_at:'t1',agents:[],totals:{},en
 globalThis.fetch=async url=>{ calls.push(url); return {ok:true,json:async()=>JSON.parse(JSON.stringify(payload))}; };
 const $=()=>({textContent:''});
 function setPill(){} function updateChatStatus(){} function updateProblemStrip(){} function updatePromptStrip(){}
-function renderConversation(){} function renderAutoPipeline(){} function applySandboxPreview(){}
+function renderConversation(){} function renderAutoPipeline(){} function applySandboxPreview(){} function updateSessionButtons(){}
 async function refreshProofPreview(){ calls.push('files'); return true; }
 function loadChat(){ calls.push('chat'); }
 function loadRuns(){ calls.push('runs'); }
