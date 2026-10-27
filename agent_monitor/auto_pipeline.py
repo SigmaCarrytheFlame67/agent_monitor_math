@@ -12,6 +12,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import shutil
 import threading
 import time
 from pathlib import Path
@@ -64,6 +65,8 @@ def load_state(workspace: Path) -> dict[str, Any] | None:
 def _write_state(workspace: Path, state: dict[str, Any]) -> None:
     from agent_monitor import proof_graph
 
+    if _run_deleted(workspace):
+        return  # never recreate the workspace of a deleted run
     workspace.mkdir(parents=True, exist_ok=True)
     state["updated_at"] = _now()
     proof_graph._write_cached(workspace, STATE_FILENAME, state)
@@ -392,7 +395,8 @@ def _run_record(run_id: str) -> dict[str, Any] | None:
         from agent_monitor import cgm_max
         from agent_monitor.jobs import _load_run_record
 
-        # A Max run's Lean and graph work runs on its worker (Codex) route.
+        # A Max run's Lean and graph work runs on its worker (Codex) route, a
+        # Max (API) run's on its worker's API model (cgm_max.formal_view).
         return cgm_max.formal_view(_load_run_record(run_id))
     except (FileNotFoundError, OSError, json.JSONDecodeError):
         return None
@@ -512,6 +516,8 @@ def _wait_for_source(
     stable = after_writeup = noted = False
     record: dict[str, Any] | None = None
     while time.monotonic() < deadline:
+        if _run_deleted(workspace):
+            return "", None  # deleted while it waited: nothing to derive
         record = _run_record(run_id)
         sig = _source_signature(workspace, record)
         if sig != last_sig:
@@ -568,6 +574,22 @@ def _selected_harness(
     return str(engine or (run_record or {}).get("engine") or "unknown").strip().lower()
 
 
+def _run_deleted(workspace: Path) -> bool:
+    """Whether the run of ``workspace`` was deleted in this process
+    (jobs.delete_run marks the run before it removes the workspace)."""
+    from agent_monitor.jobs import _DELETED_RUNS
+
+    return workspace.name in _DELETED_RUNS
+
+
+def _run_gone(workspace: Path) -> bool:
+    """Whether the run of ``workspace`` was deleted, or its workspace is gone.
+    Its derived work then stops: a call in flight finishes, no further model
+    call starts (a Lean session checks before each one), and nothing is
+    written into a workspace that was removed."""
+    return _run_deleted(workspace) or not workspace.is_dir()
+
+
 def _informal_worker(
     workspace: Path,
     run_record: dict[str, Any] | None,
@@ -578,6 +600,8 @@ def _informal_worker(
 ) -> None:
     from agent_monitor import proof_graph
 
+    if _run_gone(workspace):
+        return
     selected = _selected_harness(run_record, engine)
     _set_stage(
         workspace,
@@ -586,6 +610,8 @@ def _informal_worker(
         detail=f"Shared DAG analysis · informal proof from {selected}",
         result={"proof_engine": selected, "derived_executor": "shared-dag-tool"},
     )
+    if _run_gone(workspace):
+        return  # deleted while the stage was being recorded: no model call
     try:
         result = proof_graph.generate(
             workspace=workspace,
@@ -623,6 +649,8 @@ def _informal_worker(
             result=stage_result,
         )
     except Exception as exc:
+        if _run_gone(workspace):
+            return
         fallback = dict((shared or {}).get("informal_graph") or {})
         if fallback.get("nodes"):
             source, _proof = proof_graph._proof_source(workspace, run_record)
@@ -713,6 +741,8 @@ def _lean_and_formal_worker(
 ) -> None:
     from agent_monitor import lean_verify, proof_bridge, proof_graph
 
+    if _run_gone(workspace):
+        return
     selected = _selected_harness(run_record, engine)
     _set_stage(
         workspace,
@@ -740,6 +770,8 @@ def _lean_and_formal_worker(
                 else lean_verify.AUTO_MAX_REPAIRS
             ),
             guidance=guidance,
+            # A deletion stops the session before its next model call.
+            should_stop=lambda: _run_gone(workspace),
             **(
                 {
                     "problem_override": analysis_lean["problem"],
@@ -753,6 +785,8 @@ def _lean_and_formal_worker(
             ),
         )
     except Exception as exc:
+        if _run_gone(workspace):
+            return
         _set_stage(
             workspace,
             "lean",
@@ -774,6 +808,8 @@ def _lean_and_formal_worker(
         )
         return
 
+    if _run_gone(workspace):
+        return
     lean_status = str(lean_result.get("status") or "error").strip().lower()
     lean_outcome = _lean_outcome(lean_status)
     has_lean_source = _has_lean_source(workspace)
@@ -832,6 +868,8 @@ def _lean_and_formal_worker(
         detail="Shared formal DAG analysis · from Proof.lean" + structural_note,
         result={"proof_engine": selected, "derived_executor": "shared-dag-tool"},
     )
+    if _run_gone(workspace):
+        return  # deleted while the stage was being recorded: no model call
     try:
         result = proof_graph.generate(
             workspace=workspace,
@@ -937,8 +975,18 @@ def _run_batch(
     def informal_then_signal() -> None:
         try:
             _informal_worker(*worker_args)
+        except Exception:
+            if not _run_gone(workspace):
+                raise
         finally:
             informal_ready.set()
+
+    def lean_and_formal() -> None:
+        try:
+            _lean_and_formal_worker(*worker_args)
+        except Exception:
+            if not _run_gone(workspace):
+                raise
 
     if not formalization_requested(run_record):
         _formalization_off(workspace)
@@ -960,7 +1008,7 @@ def _run_batch(
         # in the account-backed CLI. Keep the same call budget and execute this
         # run's derived model work serially instead.
         informal_then_signal()
-        _lean_and_formal_worker(*worker_args)
+        lean_and_formal()
     else:
         informal = threading.Thread(
             target=informal_then_signal,
@@ -968,8 +1016,7 @@ def _run_batch(
             name=f"informal-dag-{workspace.name}",
         )
         formal = threading.Thread(
-            target=_lean_and_formal_worker,
-            args=worker_args,
+            target=lean_and_formal,
             daemon=True,
             name=f"lean-formal-{workspace.name}",
         )
@@ -1362,13 +1409,19 @@ def _formal_refresh_loop(
                 continue
             with _FORMAL_REFRESH_LOCK:
                 version = _FORMAL_REFRESH_VERSION.get(key, 0)
-            _refresh_formal_once(
-                run_id=run_id,
-                workspace=workspace,
-                owner_id=owner_id,
-                model=model,
-                engine=engine,
-            )
+            try:
+                if not _run_gone(workspace):
+                    _refresh_formal_once(
+                        run_id=run_id,
+                        workspace=workspace,
+                        owner_id=owner_id,
+                        model=model,
+                        engine=engine,
+                    )
+            except Exception:
+                # Deleted during the refresh: nothing is left to refresh.
+                if not _run_gone(workspace):
+                    raise
             with _FORMAL_REFRESH_LOCK:
                 if _FORMAL_REFRESH_VERSION.get(key, 0) == version:
                     _FORMAL_REFRESH_ACTIVE.pop(key, None)
@@ -1473,15 +1526,47 @@ def cgm_run_wait_seconds(engine: str) -> float:
     return float(_cli_timeout_seconds(engine, env) + 300)
 
 
-def _is_max_run(run_id: str) -> bool:
-    """Whether ``run_id`` is a Max run (``_run_record`` returns its worker view)."""
-    try:
-        from agent_monitor import cgm_max
-        from agent_monitor.jobs import _load_run_record
+def max_api_run_wait_seconds() -> float:
+    """How long the pipeline waits for a Max (API) run: its outer watchdog
+    (its own wall clock, last call and written-proof round, from the run's
+    own limits; cgm_max.apply_models_api), and the record write."""
+    from agent_monitor import cgm_max
+    from agent_monitor.jobs import _apply_cgm_writeup_env, _cli_timeout_seconds
 
-        return cgm_max.is_max_record(_load_run_record(run_id))
+    env = _cgm_runner_env()
+    advisor, worker = cgm_max.api_models(env)
+    cgm_max.apply_models_api(env, {"advisor": {"model": advisor}, "worker": {"model": worker}})
+    _apply_cgm_writeup_env(env, engine=cgm_max.ENGINE)
+    return float(_cli_timeout_seconds(cgm_max.ENGINE, env) + 300)
+
+
+def _long_effort_run(record: dict[str, Any] | None) -> bool:
+    """Whether a run was made on an API key at extra-high or maximum effort:
+    a Plain or Meta-Harness run on an OpenAI model then has a three-hour
+    watchdog (jobs._cli_timeout_seconds).  Another model's run ends sooner,
+    and the waits end with it."""
+    record = record or {}
+    return str(record.get("auth_route") or "").strip().lower() == "api_key" and str(
+        record.get("reasoning_effort") or ""
+    ).strip().lower() in {"xhigh", "max"}
+
+
+def _max_run_wait_seconds(run_id: str) -> float | None:
+    """How long the pipeline waits for ``run_id`` when it is a Max or a Max
+    (API) run (``_run_record`` returns its worker view); ``None`` otherwise.
+    The two have one wall clock but different watchdogs."""
+    from agent_monitor import cgm_max
+    from agent_monitor.jobs import _load_run_record
+
+    try:
+        record = _load_run_record(run_id)
     except (FileNotFoundError, OSError, ValueError):
-        return False
+        return None
+    if cgm_max.is_max_api_record(record):
+        return max_api_run_wait_seconds()
+    if cgm_max.is_max_record(record):
+        return max_run_wait_seconds()
+    return None
 
 
 def analysis_wait_seconds(workspace: Path) -> float:
@@ -1512,19 +1597,27 @@ def _run(
     if is_analysis_run(_run_record(run_id)):
         # Its derived views come from the published graph, once it has ended.
         timeout = max(timeout, analysis_wait_seconds(workspace))
-    elif _is_max_run(run_id):
+    elif (max_wait := _max_run_wait_seconds(run_id)) is not None:
         # An Ansatz CGM Max run may take three hours and writes proof.md only
         # when it publishes; giving up at the default two hours left every
         # long Max run without derived views ("produced no proof draft").
-        timeout = max(timeout, max_run_wait_seconds())
+        timeout = max(timeout, max_wait)
     else:
-        from agent_monitor.jobs import _CGM_ENGINES
+        from agent_monitor.jobs import _CGM_ENGINES, _LONG_EFFORT_CLI_TIMEOUT
 
         if engine in _CGM_ENGINES:
             # A CGM run also publishes proof.md only at its end, which an
             # operator-raised wall clock (AGENT_MONITOR_CGM_MAX_SECONDS) can
             # put past the default wait.
             timeout = max(timeout, cgm_run_wait_seconds(engine))
+        elif engine == "deepagents" or (
+            engine in {"plain", "metaharness"} and _long_effort_run(_run_record(run_id))
+        ):
+            # Their watchdog may be three hours (DeepAgents always; Plain and
+            # Meta-Harness on an OpenAI model at extra-high or maximum
+            # effort), and the pass waits for the run's end to derive its
+            # final proof.  Both waits end as soon as the run does.
+            timeout = max(timeout, float(_LONG_EFFORT_CLI_TIMEOUT + 300))
     processed_sig = ""
     try:
         sig, record = _wait_for_source(run_id, workspace, timeout=timeout)
@@ -1567,9 +1660,12 @@ def _run(
         while (
             str((record or {}).get("status") or "") not in _TERMINAL
             and time.monotonic() < deadline
+            and not _run_deleted(workspace)
         ):
             time.sleep(0.75)
             record = _run_record(run_id)
+        if _run_deleted(workspace):
+            return  # deleted while the run went on: nothing left to derive
         final_sig = _source_signature(workspace, record)
         if final_sig and final_sig != sig:
             def rerun(state: dict[str, Any]) -> None:
@@ -1591,13 +1687,23 @@ def _run(
                 workspace, lambda state: state.update({"derived_signature": final_sig})
             )
         _finish(workspace)
+    except Exception:
+        # Deleted while its views were being derived: nothing is left to
+        # write, and the pass ends quietly instead of failing the thread.
+        if not _run_gone(workspace):
+            raise
     finally:
+        if _run_deleted(workspace) and workspace.is_dir():
+            # A model call still in flight at the deletion wrote files after it.
+            shutil.rmtree(workspace, ignore_errors=True)
         key = str(workspace.resolve())
         with _ACTIVE_LOCK:
             active = _ACTIVE.get(key)
             if active is threading.current_thread():
                 _ACTIVE.pop(key, None)
                 pending = _PENDING_START.pop(key, None)
+                if pending is not None and _run_gone(pending[1]):
+                    pending = None  # a refresh queued for a run since deleted
                 if pending is not None:
                     next_run_id, next_workspace, next_owner, next_model, next_engine = pending
                     current_sig = _source_signature(

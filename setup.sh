@@ -91,7 +91,10 @@ if [ -n "$IMPROOF_PY" ]; then
   DPY=./engines/deepagents/.venv/bin/python
   "$DPY" -m pip --version >/dev/null 2>&1 || "$DPY" -m ensurepip --upgrade
   "$DPY" -m pip install -q --upgrade pip
-  "$DPY" -m pip install -q deepagents langchain-openai
+  # The runner's audit pass calls api_backend.api_chat, whose Anthropic calls
+  # need the console's pinned SDK (pyproject.toml).
+  "$DPY" -m pip install -q deepagents langchain-openai \
+    "anthropic==1.13.0" "httpx2==2.13.1" "httpcore2==2.13.1"
   say "DeepAgents venv ready"
 else
   warn "Python 3.12+ not found — DeepAgents engine skipped."

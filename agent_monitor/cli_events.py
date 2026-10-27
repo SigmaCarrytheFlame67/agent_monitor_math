@@ -79,7 +79,9 @@ class CLIEventParser:
     # ── feeding ──────────────────────────────────────────────────────────
 
     def feed(self, chunk: str) -> None:
-        for line in chunk.splitlines():
+        # Newlines only: str.splitlines() also splits at U+2028, U+2029 and
+        # U+0085, which a JSON event may carry raw inside a string.
+        for line in chunk.split("\n"):
             self._feed_line(line)
 
     def _feed_line(self, line: str) -> None:
@@ -183,12 +185,18 @@ class CLIEventParser:
             self._log(
                 f"· usage in {input_tokens} / out {u.get('output_tokens', 0)}"
             )
+            # A Max (API) run names the model that answered each call, so the
+            # node is priced at that model's rates.  The run-level model
+            # stays unset: a CGM run's calls can use different models.
+            model = ev.get("model")
+            model = model.strip() if isinstance(model, str) else ""
             self._close_turn(
                 input_tokens=input_tokens,
                 output_tokens=int(u.get("output_tokens") or 0),
                 cache_read=cached,
                 cache_write=written,
                 reasoning=reasoning,
+                model=model or None,
             )
         elif t in {"turn.failed", "turn.cancelled"}:
             detail = ev.get("error") or ev.get("message") or t
@@ -530,6 +538,9 @@ class CLIEventParser:
                 last["cache_read_tokens"] += cache_read
                 last["cache_write_tokens"] += cache_write
                 last["reasoning_tokens"] += reasoning
+                # The usage's model, unless the node already names one.
+                if model and not last.get("model"):
+                    last["model"] = model
             return
         self.turns.append(
             {

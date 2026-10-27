@@ -78,6 +78,7 @@ from pathlib import Path
 from typing import Any, Callable, Iterator, Mapping, Sequence
 
 if __package__:
+    from . import api_backend
     from . import claude_backend as _claude_backend
     from . import codex_backend as _codex_backend
     from .api_backend import APIBackendError, api_chat
@@ -97,6 +98,7 @@ else:
     repository_root = Path(__file__).resolve().parents[2]
     if str(repository_root) not in sys.path:
         sys.path.insert(0, str(repository_root))
+    from agent_monitor.runners import api_backend
     from agent_monitor.runners import claude_backend as _claude_backend
     from agent_monitor.runners import codex_backend as _codex_backend
     from agent_monitor.runners.api_backend import APIBackendError, api_chat
@@ -112,7 +114,11 @@ else:
         subscription_enabled as codex_subscription_enabled,
     )
 
-from agent_monitor import kimi_k3
+from agent_monitor import (
+    cgm_max,
+    kimi_k3,
+    subprocess_env,
+)
 from agent_monitor.cgm import closure as cgm_closure
 from agent_monitor.cgm import curation as cgm_curation
 from agent_monitor.cgm import parsing as cgm_parsing
@@ -237,8 +243,8 @@ _BUDGET_ENV = {
 # publication when this is "1", on a call and time budget of its own, with
 # the fix turns it may spend on a rejected write-up: (default, minimum,
 # maximum).  Guest, public and sponsored runs use the lower profile, whose
-# defaults are also ceilings; Max gives the round an hour, as its
-# maximum-effort calls are long.
+# defaults are also ceilings; Max and Max (API) give the round an hour, as
+# their maximum-effort calls are long.
 WRITEUP_ENV = "AGENT_MONITOR_CGM_WRITEUP"
 _WRITEUP_PROFILE = {
     "max_calls": (6, 2, 12),
@@ -274,6 +280,13 @@ MAX_ROUTE_MODE_ENV = "AGENT_MONITOR_CGM_ROUTE_MODE"
 MAX_CODEX_CALL_HOME_ENV = "AGENT_MONITOR_CODEX_CALL_HOME"
 ADVISOR_FAMILIES = cgm_schema.ADVISOR_CALL_FAMILIES
 WORKER_FAMILIES = cgm_schema.WORKER_CALL_FAMILIES
+# Per-call API timeout ceiling (AGENT_MONITOR_CGM_API_TIMEOUT): Max (API)
+# calls, and OpenAI calls at extra-high or maximum effort, may take up to
+# 3600 s (1800 s by default); other API calls keep the 900 s ceiling.
+_API_TIMEOUT_MAX = 900
+_MAX_API_TIMEOUT_MAX = 3600
+# api_backend's own clamp of a requested output ceiling.
+_API_MAX_TOKENS_RANGE = (1024, 128_000)
 # One logical turn makes at most: the call, its low-effort retry, the format
 # retry and that retry's low-effort retry.
 _MAX_CALLS_PER_TURN = 4
@@ -347,6 +360,10 @@ class Route:
     provider: str
     model: str
     transport: str
+    # A route's own reasoning effort and output ceiling, sent with every call
+    # on it (set only on Max (API) routes; Kimi keeps its per-stage effort).
+    effort: str | None = None
+    max_tokens: int | None = None
 
 
 @dataclass(frozen=True)
@@ -474,10 +491,18 @@ class _RunEmitter:
     def deliver(
         self, obj: dict[str, Any], *, admit: Callable[[], bool] | None = None
     ) -> None:
+        self.deliver_all([obj], admit=admit)
+
+    def deliver_all(
+        self, objs: list[dict[str, Any]], *, admit: Callable[[], bool] | None = None
+    ) -> None:
+        """Deliver ``objs`` as one unit: no other event comes between them,
+        and ``admit`` is checked once, so all of them are delivered or none."""
         with self._lock:
             if self._closed or (admit is not None and not admit()):
                 return
-            (self._sink or emit)(obj)
+            for obj in objs:
+                (self._sink or emit)(obj)
 
     def close(self) -> None:
         """Let an event being delivered finish, then deliver nothing more."""
@@ -552,6 +577,8 @@ def _emit_stage_usage(
     *,
     out: Callable[[dict[str, Any]], None] | None = None,
     input_includes_cache: bool = True,
+    model: str | None = None,
+    provider: str | None = None,
 ) -> None:
     """Publish already-incurred usage immediately, even if a later stage fails.
 
@@ -559,14 +586,21 @@ def _emit_stage_usage(
     includes cached input). Claude reports cache reads and writes apart from
     ``input_tokens``; that usage is flagged ``input_excludes_cache`` and the
     server's parser folds the cache in (a parser that predates the flag reads
-    it as before, without pricing cached input twice).
+    it as before, without pricing cached input twice).  ``model`` and
+    ``provider`` (given only in Max (API), whose two sides bill at different
+    rates) name who billed the call.
     """
     projected = dict(usage)
     cache_read = int(usage.get("cache_read_tokens") or 0)
     projected.setdefault("cached_input_tokens", cache_read)
     if not input_includes_cache:
         projected["input_excludes_cache"] = True
-    (out or _out)({"type": "turn.completed", "stage": stage, "usage": projected})
+    event: dict[str, Any] = {"type": "turn.completed", "stage": stage, "usage": projected}
+    if model is not None:
+        event["model"] = model
+    if provider is not None:
+        event["provider"] = provider
+    (out or _out)(event)
 
 
 def _utf8_size(value: str) -> int:
@@ -721,24 +755,100 @@ def _claude_route(env: Mapping[str, str]) -> Route:
 
 
 def _max_mode(env: Mapping[str, str]) -> bool:
+    """Subscription Max (Claude Code advisor, Codex worker)."""
     return str(env.get(MAX_ROUTE_MODE_ENV) or "").strip().lower() == "max"
+
+
+def _max_api_mode(env: Mapping[str, str]) -> bool:
+    """Max (API): an Anthropic API advisor and an OpenAI API worker."""
+    return cgm_max.route_mode(env) == cgm_max.API_ROUTE_MODE
+
+
+def _is_api_max_pair(route: Route, worker_route: Route | None) -> bool:
+    """Whether the two routes are exactly Max (API)'s route table."""
+    table = cgm_schema.HYBRID_ROUTE_TABLES[cgm_max.API_MODEL_ID]
+    return (
+        worker_route is not None
+        and (route.provider, route.transport) == table["advisor"]
+        and (worker_route.provider, worker_route.transport) == table["worker"]
+    )
 
 
 def _select_routes(source: Mapping[str, str] | None = None) -> tuple[Route, Route | None]:
     """The run's route, and in Max mode the separate worker route.
 
     Max: Claude Code (strategist, verifier, curator) leads and Codex (workers,
-    repairs) works, each on its own linked account.  Every other run has one
-    route and no worker route.
+    repairs) works, each on its own linked account.  Max (API): the same split
+    on the Anthropic and OpenAI APIs (see ``_api_max_routes``).  Every other
+    run has one route and no worker route.
     """
     env = source if source is not None else os.environ
-    if not _max_mode(env):
+    mode = cgm_max.route_mode(env)
+    if mode is None:
+        if str(env.get(MAX_ROUTE_MODE_ENV) or "").strip():
+            # Never run a mode this runner does not know as a single route.
+            raise MathHarnessError("unknown CGM route mode")
         return _select_route(env), None
+    if mode == cgm_max.API_ROUTE_MODE:
+        return _api_max_routes(env)
     if not (codex_subscription_enabled(env) and claude_subscription_enabled(env)):
         raise MathHarnessError(
             "Max needs both the Claude Code and the Codex account routes"
         )
     return _claude_route(env), _codex_route(env)
+
+
+def _api_max_routes(env: Mapping[str, str]) -> tuple[Route, Route]:
+    """Max (API)'s two routes: the advisor model on the Anthropic API and the
+    worker model on the OpenAI API, both at maximum effort, each with an
+    explicit output ceiling.
+
+    Everything is checked before any (billed) call, and a run that does not
+    fit is refused, never run on another route: both models must be the
+    allowlisted ids ``cgm_max.apply_models_api`` chose, each must resolve to
+    its own provider with that provider's key present, and no linked
+    subscription may be selected.  Guest, public and sponsored runs never
+    get it.
+    """
+    if _is_guest_run(env):
+        raise MathHarnessError("Max (API) is not available to guest, public or sponsored runs")
+    if any(
+        name.upper().endswith("_SUBSCRIPTION") and str(value).strip() not in {"", "0"}
+        for name, value in env.items()
+    ):
+        raise MathHarnessError(
+            "Max (API) runs on API keys only, but an account subscription is selected"
+        )
+    minimum, maximum = _API_MAX_TOKENS_RANGE
+    max_tokens = _bounded_int(
+        env,
+        ("AGENT_MONITOR_API_MAX_TOKENS",),
+        default=cgm_max.API_MAX_OUTPUT_TOKENS,
+        minimum=minimum,
+        maximum=maximum,
+    )
+    from agent_monitor.proof_graph import _resolve_llm_provider
+
+    routes = []
+    for side, name, allowed, key in (
+        ("advisor", cgm_max.API_ADVISOR_MODEL_ENV, cgm_max.API_ADVISOR_MODELS, "an Anthropic"),
+        ("worker", cgm_max.API_WORKER_MODEL_ENV, cgm_max.API_WORKER_MODELS, "an OpenAI"),
+    ):
+        model = str(env.get(name) or "").strip()
+        if model not in allowed:
+            raise MathHarnessError(f"Max (API) {side} model must be one of {', '.join(allowed)}")
+        provider = cgm_max.API_PROVIDERS[side]
+        try:
+            resolved, _base, _key, chosen = _resolve_llm_provider(dict(env), model)
+        except ValueError:
+            # The only failure for an allowlisted id: its provider's key is missing.
+            raise MathHarnessError(f"Max (API) needs {key} API key") from None
+        if (resolved, chosen) != (provider, model):
+            raise MathHarnessError(f"Max (API) {side} model does not resolve to its API")
+        routes.append(
+            Route(provider, model, "api_chat", effort=cgm_max.EFFORT, max_tokens=max_tokens)
+        )
+    return routes[0], routes[1]
 
 
 def _select_route(source: Mapping[str, str] | None = None) -> Route:
@@ -853,6 +963,41 @@ class _Turn:
             return self.replies[-1][1] if self.replies else None
 
 
+class _StopRequest:
+    """A run's stop request, with ``threading.Event``'s interface.
+
+    The SIGTERM handler sets it on the main thread at whatever point that
+    thread was interrupted.  ``Event.set`` takes the event's own lock (a
+    plain, non-reentrant ``Lock``), which the interrupted code may hold, inside
+    ``Event.wait`` or a first handler when a second signal arrives, and then
+    never returns: the runner hangs until it is killed.  Here ``set`` is a
+    plain assignment and waits poll.
+    """
+
+    _POLL_SECONDS = 0.05
+
+    def __init__(self) -> None:
+        self._flag = False
+
+    def set(self) -> None:
+        self._flag = True
+
+    def clear(self) -> None:
+        self._flag = False
+
+    def is_set(self) -> bool:
+        return self._flag
+
+    def wait(self, timeout: float | None = None) -> bool:
+        deadline = None if timeout is None else time.monotonic() + max(0.0, timeout)
+        while not self._flag:
+            left = None if deadline is None else deadline - time.monotonic()
+            if left is not None and left <= 0:
+                return False
+            time.sleep(self._POLL_SECONDS if left is None else min(self._POLL_SECONDS, left))
+        return True
+
+
 @dataclass
 class _Ctx:
     route: Route
@@ -866,7 +1011,7 @@ class _Ctx:
     worker_stage_families: frozenset[str] = frozenset()
     api_timeout: int = 300
     concurrency: int = 1
-    cancel: threading.Event = field(default_factory=threading.Event)
+    cancel: Any = field(default_factory=_StopRequest)  # never a threading.Event (see _StopRequest)
     emitter: _RunEmitter = field(default_factory=_RunEmitter)
     turns: list[_Turn] = field(default_factory=list)
     stages: list[str] = field(default_factory=list)
@@ -910,6 +1055,11 @@ class _Ctx:
     def deadline_passed(self) -> bool:
         return time.monotonic() >= self.deadline
 
+    @property
+    def api_max(self) -> bool:
+        """Whether this is a Max (API) run (its two routes are API routes)."""
+        return _is_api_max_pair(self.route, self.worker_route)
+
     def route_for(self, stage: str) -> Route:
         """The route that answers ``stage`` (always ``route`` outside Max)."""
         if self.worker_route is not None and (
@@ -924,7 +1074,9 @@ class _Ctx:
 
         In Max mode each side sees only its own account: Codex calls never
         receive the Claude configuration directory and use their own home;
-        Claude calls never receive the Codex home.
+        Claude calls never receive the Codex home.  In Max (API) each side
+        sees only its own provider's keys and base URLs (an error can only
+        redact the key of the call that failed).
         """
         if self.worker_route is None:
             return self.env
@@ -938,6 +1090,15 @@ class _Ctx:
         else:
             for name in ("CODEX_HOME", "AGENT_MONITOR_CODEX_SUBSCRIPTION"):
                 env.pop(name, None)
+        if self.api_max:
+            foreign = {
+                name
+                for provider, names in subprocess_env._PROVIDER_GROUPS.items()
+                if provider != route.provider
+                for name in names
+            }
+            for name in [name for name in env if name.upper() in foreign]:
+                env.pop(name)
         env.pop(MAX_CODEX_CALL_HOME_ENV, None)
         return env
 
@@ -1061,11 +1222,21 @@ class _Ctx:
         for a turn once it has been abandoned.
         """
 
+        self.turn_out_all(turn, [obj])
+
+    def turn_out_all(self, turn: _Turn, objs: list[dict[str, Any]]) -> None:
+        """Emit several events of a live turn as one unit (see ``turn_out``).
+
+        A call's closing events (its reply, then its usage) go as one unit,
+        so a concurrent call's events never come between them: the run's
+        parser books each usage on the node of the reply it belongs to.
+        """
+
         def live() -> bool:
             with turn.gate:
                 return not turn.abandoned
 
-        self.emitter.deliver(obj, admit=live)
+        self.emitter.deliver_all(objs, admit=live)
 
 
 def _is_kimi_route(route: Route) -> bool:
@@ -1229,17 +1400,21 @@ def _api_call(
     """One ``api_chat`` call.  A sponsored Kimi strategist call the provider
     refused unprocessed is sent again after a deterministic pause (see
     ``_next_strategist_wait``); it stays one call record, since nothing was
-    processed or billed."""
+    processed or billed.  A route's own output ceiling (Max (API)) is sent
+    explicitly."""
     extra: dict[str, Any] = (
         {"retry_allowance": ctx.kimi_retries} if ctx.kimi_retries is not None else {}
     )
+    if route.max_tokens is not None:
+        extra["max_tokens"] = route.max_tokens
     while True:
         try:
             return api_chat(
                 system,
                 user,
                 model=route.model,
-                timeout=int(_deadline_timeout(ctx, ctx.api_timeout)),
+                # Rounded up: a call's own limit never ends before the deadline.
+                timeout=math.ceil(_deadline_timeout(ctx, ctx.api_timeout)),
                 effort=effort,
                 env=env,
                 **extra,
@@ -1280,6 +1455,14 @@ def _provider_call(
     route = ctx.route_for(stage)
     call_env = ctx.env_for(route)
     kimi = _is_kimi_route(route)
+    # A route's own effort (Max (API): "max" on both sides, every stage) wins.
+    # A Kimi model keeps its per-stage effort where Kimi's values apply (Kimi
+    # sends it; OpenRouter, Groq and Together check and drop it), but not
+    # through an Anthropic or OpenAI endpoint ("anthropic:kimi-…"), which
+    # would send it as that API's own effort.  Other routes send none.
+    effort = route.effort or (
+        effort if kimi and not _takes_own_effort(call_env, route.model) else None
+    )
     claude_timeout = (
         _claude_stage_timeout(stage, ctx.env)
         if route.transport == "claude_code"
@@ -1291,7 +1474,7 @@ def _provider_call(
         "model": route.model,
         "usage": {},
         "response_sha256": None,
-        "effort": effort if kimi else None,
+        "effort": effort,
     }
     ctx.begin_call(turn, record)
 
@@ -1303,6 +1486,8 @@ def _provider_call(
 
     out({"type": "item.completed", "item": {"type": "reasoning", "text": f"{ctx.label} · {stage}"}})
     observed_model = None
+    # The call's closing events: its reply and its usage, sent as one unit.
+    closing: list[dict[str, Any]] = []
     try:
         if route.transport == "codex_exec":
             result = codex_exec(
@@ -1347,17 +1532,26 @@ def _provider_call(
                 stage=stage,
                 system=system,
                 user=user,
-                effort=effort if kimi else None,
+                effort=effort,
                 env=call_env,
                 out=out,
             )
             provider = str(result.provider or "api")
             model = str(result.model or route.model)
             observed_model = getattr(result, "observed_model", None)
-            out(
+            if provider == "anthropic" and observed_model:
+                # Anthropic names the model that answered, which a refusal
+                # fallback changes: the call record names that model, not the
+                # requested one (and so, for a verify call, does the receipt).
+                model = str(observed_model)
+            # Sent with the call's usage, as one unit (below).
+            closing.append(
                 {
                     "type": "item.completed",
-                    "item": {"type": "agent_message", "text": str(result.text)[:6000]},
+                    "item": {
+                        "type": "agent_message",
+                        "text": cgm_parsing.without_lone_surrogates(str(result.text))[:6000],
+                    },
                 }
             )
     except _TurnAbandoned:
@@ -1370,12 +1564,28 @@ def _provider_call(
         # book what the provider reported before failing.
         spent = _clean_usage(getattr(exc, "usage", None))
         if spent and ctx.bill_failed_call(turn, record, spent):
-            _emit_stage_usage(
+            # A node of the call's own for its usage: under concurrency the
+            # last node may be another call's.  It carries the bare call
+            # marker, which progress views (Analyze, Readability) skip.
+            billed_events: list[dict[str, Any]] = [
+                {
+                    "type": "item.completed",
+                    "item": {"type": "reasoning", "text": f"{ctx.label} · {stage}"},
+                }
+            ]
+            _emit_call_usage(
+                ctx,
                 stage,
                 spent,
-                out=out,
-                input_includes_cache=route.transport != "claude_code",
+                route=route,
+                # No reply names a model: the call was billed at the requested
+                # one, unless a refusal fallback had more than one model bill it.
+                model=route.model,
+                provider=route.provider,
+                by_model=getattr(exc, "usage_by_model", ()),
+                out=billed_events.append,
             )
+            ctx.turn_out_all(turn, billed_events)
         failure = getattr(exc, "failure", None)
         billed = ctx.run_processed()
         message = str(exc)
@@ -1395,7 +1605,7 @@ def _provider_call(
 
     ctx.note_processed(turn)
     usage = _clean_usage(getattr(result, "usage", {}))
-    text = str(result.text or "").strip()
+    text = cgm_parsing.without_lone_surrogates(str(result.text or "")).strip()
     reply = Reply(
         text=text,
         usage=usage,
@@ -1413,13 +1623,91 @@ def _provider_call(
         response_sha256=_sha256(text.encode("utf-8")),
     ):
         raise _TurnAbandoned(stage)
-    _emit_stage_usage(
+    _emit_call_usage(
+        ctx,
         stage,
         usage,
-        out=out,
-        input_includes_cache=route.transport != "claude_code",
+        route=route,
+        # Anthropic's reply names the model that answered (a refusal fallback
+        # changes it); OpenAI's names a dated snapshot of the requested id,
+        # which may have no price of its own, so the requested id stays.
+        model=reply.model,
+        provider=reply.provider,
+        by_model=getattr(result, "usage_by_model", ()) if route.transport == "api_chat" else (),
+        out=closing.append,
     )
+    ctx.turn_out_all(turn, closing)
     return reply
+
+
+def _usage_source(ctx: _Ctx, model: str, provider: str) -> dict[str, str]:
+    """The model and provider a call's usage event names: in Max (API) only,
+    whose Anthropic and OpenAI calls are priced apart; other runs' events
+    are unchanged."""
+    return {"model": model, "provider": provider} if ctx.api_max else {}
+
+
+def _usage_shares(by_model: object) -> list[tuple[str, dict[str, int]]]:
+    """The ``(model, usage)`` shares of ``APIResult.usage_by_model``; empty
+    unless there are two or more, each naming its model."""
+    if not isinstance(by_model, (tuple, list)):
+        return []
+    shares: list[tuple[str, dict[str, int]]] = []
+    for share in by_model:
+        if not (isinstance(share, (tuple, list)) and len(share) == 2):
+            return []
+        model, usage = share
+        if not (isinstance(model, str) and model.strip()):
+            return []
+        shares.append((model.strip(), _clean_usage(usage)))
+    return shares if len(shares) > 1 else []
+
+
+def _emit_call_usage(
+    ctx: _Ctx,
+    stage: str,
+    usage: Mapping[str, int],
+    *,
+    route: Route,
+    model: str,
+    provider: str,
+    by_model: object,
+    out: Callable[[dict[str, Any]], None],
+) -> None:
+    """Publish one call's usage (see ``_emit_stage_usage``).
+
+    The run's parser books a usage event on the node just before it, so the
+    caller sends the call's reply (or, for a failed call, a note) and this
+    usage as one unit.  In Max (API) a call that more than one model billed
+    (a refusal fallback; ``APIResult.usage_by_model``) is published as one
+    event per model: first the model that answered last (its share lands on
+    the reply's node, which then names it), then each model that declined
+    before it, after a note of its own, so each share is priced at its own
+    model's rates.
+    """
+    shares = _usage_shares(by_model) if ctx.api_max else []
+    if not shares:
+        _emit_stage_usage(
+            stage,
+            usage,
+            out=out,
+            input_includes_cache=route.transport != "claude_code",
+            **_usage_source(ctx, model, provider),
+        )
+        return
+    answered_model, answered = shares[-1]
+    _emit_stage_usage(stage, answered, out=out, model=answered_model, provider=provider)
+    for share_model, share in shares[:-1]:
+        out(
+            {
+                "type": "item.completed",
+                "item": {
+                    "type": "reasoning",
+                    "text": f"{ctx.label} · {stage} · declined first by {share_model}",
+                },
+            }
+        )
+        _emit_stage_usage(stage, share, out=out, model=share_model, provider=provider)
 
 
 def _invoke(
@@ -1444,8 +1732,13 @@ def _invoke(
         raise PromptBoundError(f"{stage} model prompt exceeds its bound")
     if not ctx.turn_can_call(turn):
         raise _BudgetExhausted(f"no budget for {stage}")
-    kimi = _is_kimi_route(ctx.route)
+    # The route that answers this stage decides (in Max a worker stage is
+    # never answered by the advisor's route).
+    kimi = _is_kimi_route(ctx.route_for(stage))
     empty_detail = f"{stage} returned an empty response"
+    # A declined call's error stays the cause of the EmptyReplyError, so
+    # callers can say the model declined (and why).
+    refusal: BaseException | None = None
     try:
         reply = _provider_call(ctx, turn, stage=stage, system=system, user=user, effort=effort)
         if reply.text:
@@ -1454,6 +1747,7 @@ def _invoke(
         if not _is_empty_reply_error(exc):
             raise
         empty_detail = str(exc)
+        refusal = exc.__cause__ if _is_refusal(exc) else None
     # Kimi's reasoning tokens count against max_tokens and can starve the
     # visible answer; retry exactly once at low effort when budget allows.
     if kimi and effort != "low" and ctx.turn_can_call(turn):
@@ -1465,15 +1759,36 @@ def _invoke(
             if reply.text:
                 return reply
             empty_detail = f"{retry_stage} returned an empty response"
+            refusal = None
         except ProviderCallError as exc:
             if not _is_empty_reply_error(exc):
                 raise
             empty_detail = str(exc)
-    raise EmptyReplyError(empty_detail)
+            refusal = exc.__cause__ if _is_refusal(exc) else None
+    raise EmptyReplyError(empty_detail) from refusal
+
+
+def _is_refusal(exc: BaseException) -> bool:
+    """Whether a failed call was declined by the model (``APIBackendError.refusal``)."""
+    return getattr(exc.__cause__, "refusal", False) is True
 
 
 def _is_empty_reply_error(exc: BaseException) -> bool:
-    return "empty response" in str(exc)
+    """Whether a failed call returned nothing usable: no visible text, or a
+    refusal (its partial text is never used).  Stages degrade on either as
+    on any unusable reply."""
+    return "empty response" in str(exc) or _is_refusal(exc)
+
+
+def _takes_own_effort(env: Mapping[str, str], model: str) -> bool:
+    """Whether ``model`` resolves to the Anthropic or the OpenAI API, which
+    send a call's effort as their own (``api_backend.api_chat``)."""
+    from agent_monitor.proof_graph import _resolve_llm_provider
+
+    try:
+        return _resolve_llm_provider(dict(env), model)[0] in {"anthropic", "openai"}
+    except (TypeError, ValueError):
+        return False
 
 
 def _parse_reply(reply: Reply, *, limit: int, parse: Callable[[str], Any]) -> Any:
@@ -1481,7 +1796,14 @@ def _parse_reply(reply: Reply, *, limit: int, parse: Callable[[str], Any]) -> An
         raise ParseError(f"reply exceeds its {limit}-byte limit")
     if cgm_parsing.has_pseudo_tool_markup(reply.text):
         raise ParseError("reply contains prohibited pseudo-tool markup")
-    return parse(reply.text)
+    try:
+        return parse(reply.text)
+    except ParseError:
+        raise
+    except (TypeError, ValueError, ArithmeticError, RecursionError) as exc:
+        # A reply shaped in a way the parser did not foresee is unusable
+        # output (a format retry, then the stage's fallback), not a crash.
+        raise ParseError(f"reply could not be parsed ({type(exc).__name__})") from exc
 
 
 def _call_and_parse(
@@ -1955,6 +2277,11 @@ def _run_workers(
         if position and (room < 1 or ctx.deadline_passed()):
             ctx.degrade("workers-truncated-by-budget")
             break
+        if position and _stopped(ctx, f"worker-{position + 1}"):
+            # A worker of an earlier wave found the route's key rejected or
+            # out of credit: every later worker would be refused the same way.
+            ctx.degrade("worker-route-stopped")
+            break
         width = min(
             ctx.concurrency,
             len(plans) - position,
@@ -2099,6 +2426,9 @@ def _settle_worker(
         attempt.failure = error.failure
         attempt.refused = _refused(ctx, job.turn, error)
         ctx.degrade("worker-provider-failure")
+        # A key the provider rejects or that is out of credit fails every
+        # later call on this route (repairs, the write-up) the same way.
+        _stop_route(ctx, attempt.stage, error)
         _note(f"2 Explore · worker {stage_index} · provider call failed")
     elif isinstance(error, PromptBoundError):
         attempt.error = str(error)
@@ -2522,11 +2852,15 @@ def _run_cgm(
     problem: str,
     task: str,
 ) -> _PipelineResult:
-    models = (
-        ctx.route.model
-        if ctx.worker_route is None
-        else f"{ctx.route.model} + {ctx.worker_route.model}"
-    )
+    if ctx.worker_route is None:
+        models = ctx.route.model
+    elif ctx.api_max:
+        models = (
+            f"{cgm_max.API_LABEL}: {ctx.route.model} (Anthropic API) + "
+            f"{ctx.worker_route.model} (OpenAI API)"
+        )
+    else:
+        models = f"{ctx.route.model} + {ctx.worker_route.model}"
     _emit_stage(ctx, "scaffold", f"{models} · no tools")
     _emit_stage(ctx, "work", "strategist")
     strategy = _strategize(ctx, problem, task)
@@ -2827,9 +3161,13 @@ def _unverified_reason(result: _PipelineResult, ctx: _Ctx) -> str:
     if attempt.rejected_label and attempt.rejected_label in attempt.verdicts:
         record = attempt.verdicts[attempt.rejected_label]
         issues = [*record.report.critical_errors, *record.report.gaps]
-        detail = f" ({issues[0].location}: {issues[0].issue})" if issues else ""
+        detail = (
+            f" ({cgm_writeup._plain(issues[0].location, 120)}: {cgm_writeup._plain(issues[0].issue, 480)})"
+            if issues
+            else ""
+        )
         verdict = "could not be interpreted" if record.report.verdict == "error" else "was rejected"
-        return f"block {attempt.rejected_label} {verdict}{_clip_utf8(detail, 600)}."
+        return f"block {attempt.rejected_label} {verdict}{detail}."
     if attempt.oversized_label:
         return (
             f"block {attempt.oversized_label} was too large to send to the "
@@ -3307,7 +3645,9 @@ def _curate(
             "status": item.status,
             "score": item.score,
             "comment": _clip_utf8(item.comment, 3_900),
-            "evidence_considered": list(item.evidence),
+            # The 64 an annotation may carry (engine_graph); the curator's
+            # own citations come after the deterministic evidence.
+            "evidence_considered": list(item.evidence)[:64],
         }
         for item in annotations
     ]
@@ -3782,15 +4122,22 @@ def _valid_contract(receipt: Mapping[str, Any]) -> bool:
     workflow = receipt.get("workflow")
     transport = str(receipt.get("transport") or "")
     if transport == cgm_schema.HYBRID_TRANSPORT:
-        # A Max receipt: Claude Code answered the advisor families and Codex
-        # the worker families; see _route_record.
+        # A Max receipt: the advisor route answered the advisor families and
+        # the worker route the worker families (see _route_record), on the
+        # whole route table its requested model names: Max (Claude Code and
+        # Codex) or Max (API) (the Anthropic and OpenAI APIs).
+        requested = receipt.get("requested_model")
+        table = (
+            cgm_schema.HYBRID_ROUTE_TABLES.get(requested) if isinstance(requested, str) else None
+        )
         return (
-            isinstance(workflow, dict)
+            table is not None
+            and isinstance(workflow, dict)
             and workflow.get("tools_enabled") is False
             and receipt.get("schema_version") == cgm_schema.HYBRID_RECEIPT_SCHEMA_VERSION
-            and receipt.get("provider") == "claude_subscription"
+            and receipt.get("provider") == table["advisor"][0]
             and workflow.get("response_only_contract") == cgm_schema.HYBRID_CONTRACT
-            and _valid_route_table(workflow.get("routes"))
+            and _valid_route_table(workflow.get("routes"), table)
         )
     return (
         isinstance(workflow, dict)
@@ -3808,15 +4155,16 @@ def _valid_contract(receipt: Mapping[str, Any]) -> bool:
     )
 
 
-def _valid_route_table(routes: object) -> bool:
-    """Whether ``routes`` is the advisor/worker table a Max receipt records."""
-    sides = {
-        "advisor": ("claude_subscription", "claude_code", ADVISOR_FAMILIES),
-        "worker": ("codex_subscription", "codex_exec", WORKER_FAMILIES),
-    }
-    if not isinstance(routes, dict) or set(routes) != set(sides):
+def _valid_route_table(
+    routes: object, table: Mapping[str, tuple[str, str]]
+) -> bool:
+    """Whether ``routes`` is, whole, the advisor/worker table a Max receipt
+    records for ``table`` (one of ``cgm_schema.HYBRID_ROUTE_TABLES``)."""
+    families_of = {"advisor": ADVISOR_FAMILIES, "worker": WORKER_FAMILIES}
+    if not isinstance(routes, dict) or set(routes) != set(table):
         return False
-    for side, (provider, transport, families) in sides.items():
+    for side, (provider, transport) in table.items():
+        families = families_of[side]
         route = routes[side]
         if not isinstance(route, dict) or set(route) != {
             "families", "provider", "model", "transport", "isolation_version", "effort",
@@ -4186,10 +4534,14 @@ def _receipt_payload(
         if len(providers) > 1:
             raise MathHarnessError("provider changed during the bounded workflow")
         final_provider = next(iter(providers)) if providers else ctx.route.provider
-        final_model = answered[-1]["model"] if answered else ctx.route.model
+        # The verifier's model (see below), else the last answer's.
+        verify_answers = [record for record in answered if cgm_schema.call_family(record["stage"]) == "verify"]
+        final_model = (verify_answers or answered or [{"model": ctx.route.model}])[-1]["model"]
     else:
         # Max: every call must come from its side's route.  The receipt's
-        # provider and model are the advisor's, whose verifier gates facts.
+        # provider and model are the advisor's, whose verifier gates facts:
+        # the model of its last verify answer (a refusal fallback can answer
+        # any one call on another model), else of its last answer.
         for record in calls:
             if record["provider"] != ctx.route_for(record["stage"]).provider:
                 raise MathHarnessError("provider changed during the bounded workflow")
@@ -4198,8 +4550,11 @@ def _receipt_payload(
             for record in answered
             if cgm_schema.call_family(record["stage"]) in ADVISOR_FAMILIES
         ]
+        verify_answers = [
+            record for record in advisor_answers if cgm_schema.call_family(record["stage"]) == "verify"
+        ]
         final_provider = ctx.route.provider
-        final_model = advisor_answers[-1]["model"] if advisor_answers else ctx.route.model
+        final_model = (verify_answers or advisor_answers or [{"model": ctx.route.model}])[-1]["model"]
     accepted = target_id is not None
     receipt: dict[str, Any] = {
         "schema_version": cgm_schema.RECEIPT_SCHEMA_VERSION,
@@ -4220,7 +4575,12 @@ def _receipt_payload(
         "proof_rendering": proof_rendering,
         "provider": final_provider,
         "model": final_model,
-        "requested_model": ctx.route.model if ctx.worker_route is None else "max",
+        # Max names its route table (cgm_schema.HYBRID_ROUTE_TABLES) by its mode.
+        "requested_model": (
+            ctx.route.model
+            if ctx.worker_route is None
+            else cgm_max.API_MODEL_ID if ctx.api_max else cgm_max.MODEL_ID
+        ),
         "transport": ctx.route.transport if ctx.worker_route is None else cgm_schema.HYBRID_TRANSPORT,
         "target_fact_id": target_id,
         "target_sha256": _sha256(target_payload) if target_payload is not None else None,
@@ -4285,7 +4645,10 @@ def _route_record(
     route: Route, families: frozenset[str], env: Mapping[str, str]
 ) -> dict[str, Any]:
     """One side of a Max receipt: who answered which call families, at which effort."""
-    if route.transport == "claude_code":
+    if route.effort is not None:
+        # Max (API): each side's own effort, sent with each of its calls.
+        effort = route.effort
+    elif route.transport == "claude_code":
         effort = str(env.get("AGENT_MONITOR_CLAUDE_EFFORT") or "default").strip().lower()
     else:
         effort = str(env.get("AGENT_MONITOR_RUN_REASONING_EFFORT") or "default").strip().lower()
@@ -4465,7 +4828,8 @@ def _writeup_limits(env: Mapping[str, str]) -> tuple[Budgets, int]:
     """The write-up round's own call and time budget, and its fix turns."""
     guest = _is_guest_run(env)
     profile = dict(_GUEST_WRITEUP_PROFILE if guest else _WRITEUP_PROFILE)
-    if _max_mode(env):
+    if _max_mode(env) or _max_api_mode(env):
+        # Either Max's maximum-effort calls are long.
         profile["max_seconds"] = _MAX_MODE_WRITEUP_SECONDS
     values = {
         name: _bounded_int(
@@ -4512,9 +4876,11 @@ def _writeup_ctx(ctx: _Ctx) -> tuple[_Ctx, int]:
     """A call context of its own for the write-up round, and its fix turns.
 
     Its calls never reach the CGM receipt, which is already published.  It
-    shares the run's routes, environment, events, stop request and stopped
-    accounts; in Max the writer is the Codex worker and the checker the
-    Claude Code advisor, as for the proof itself.
+    shares the run's routes (with their own effort and output ceiling), API
+    timeout, environment, events, stop request and stopped accounts; in Max
+    the writer is the Codex worker and the checker the Claude Code advisor,
+    and in Max (API) the OpenAI worker writes and the Anthropic advisor
+    checks, as for the proof itself.
     """
     budgets, fixes = _writeup_limits(ctx.env)
     wctx = _Ctx(
@@ -4875,17 +5241,18 @@ def writeup_paths(result: Mapping[str, Any]) -> list[str]:
 
 
 # SIGTERM stops every active run in this process.  The handler only sets
-# events (no locks), so it is safe at any point of the coordinator thread.
-_ACTIVE_RUN_CANCELS: list[threading.Event] = []
+# flags (no locks; see _StopRequest), so it is safe at any point of the
+# coordinator thread.
+_ACTIVE_RUN_CANCELS: list[Any] = []
 
 
 def _stop_active_runs(_signum: int | None = None, _frame: object = None) -> None:
-    for event in tuple(_ACTIVE_RUN_CANCELS):
-        event.set()
+    for request in tuple(_ACTIVE_RUN_CANCELS):
+        request.set()
 
 
 @contextmanager
-def _stop_on_sigterm(cancel: threading.Event) -> Iterator[None]:
+def _stop_on_sigterm(cancel: Any) -> Iterator[None]:
     """Route SIGTERM to ``cancel`` for the duration of one run.
 
     Installed only from the main thread and only over the default action (or
@@ -4936,7 +5303,12 @@ def run_pipeline(
     ``AGENT_MONITOR_PROBLEM_ID`` or a hash of the problem; either is reduced
     to ``[A-Za-z0-9._-]`` (at most 80 characters) before use.
     ``worker_route`` (Max mode) answers the worker and repair calls while
-    ``route`` answers the strategist, verifier and curator calls.
+    ``route`` answers the strategist, verifier and curator calls: a Claude
+    Code advisor with a Codex worker (Max), or exactly an Anthropic
+    ``api_chat`` advisor with an OpenAI ``api_chat`` worker (Max (API), whose
+    calls may each take up to 3600 s of ``AGENT_MONITOR_CGM_API_TIMEOUT``,
+    default 1800 s, as may an OpenAI route's at extra-high or maximum
+    effort; other API calls up to 900 s).
 
     Writes under ``<workspace>/math_harness/project/``: ``PROBLEM.md``,
     ``global_memory/*.jsonl``, ``fact_graph/facts/<id>.md`` for each verified
@@ -4978,7 +5350,7 @@ def run_pipeline(
     it, and its ``billed`` attribute whether any call of the run may have
     been processed (and billed).
     """
-    cancel = threading.Event()
+    cancel = _StopRequest()
     emitter = _RunEmitter(emit)
     token = _RUN_EMITTER.set(emitter)
     try:
@@ -5016,7 +5388,7 @@ def _run_pipeline(
     budgets: Budgets | None,
     task: str | None,
     problem_id: str | None,
-    cancel: threading.Event,
+    cancel: Any,
     emitter: _RunEmitter,
     worker_route: Route | None = None,
 ) -> dict[str, Any]:
@@ -5039,19 +5411,38 @@ def _run_pipeline(
     sponsored_kimi = (
         worker_route is None and _is_kimi_route(route) and kimi_k3.is_sponsored(env)
     )
+    # Max (API) is exactly its own pair; any other two-route run is Max's
+    # (never a mix of a subscription and an API route).
+    api_max = _is_api_max_pair(route, worker_route)
+    if worker_route is not None and not api_max and (
+        route.transport != "claude_code" or worker_route.transport != "codex_exec"
+    ):
+        raise MathHarnessError(
+            "Max pairs a Claude Code advisor with a Codex worker, and Max (API) "
+            "an Anthropic API advisor with an OpenAI API worker"
+        )
+    # An OpenAI route at extra-high or maximum effort (the run profile) gets
+    # 64,000 output tokens per call (api_backend), and the time to write them.
+    long_effort = (
+        not api_max
+        and route.transport == "api_chat"
+        and api_backend.openai_high_effort(env, route.model)
+    )
     api_timeout = _bounded_int(
         env,
         ("AGENT_MONITOR_CGM_API_TIMEOUT",),
         # A sponsored call waits for the broker's own answer (its gateway
         # deadline plus 15 s) instead of abandoning a slow healthy reply.
-        default=kimi_k3.SPONSORED_TIMEOUT_SECONDS if sponsored_kimi else 300,
+        default=(
+            cgm_max.API_CALL_TIMEOUT
+            if api_max
+            else api_backend.HIGH_EFFORT_TIMEOUT
+            if long_effort
+            else kimi_k3.SPONSORED_TIMEOUT_SECONDS if sponsored_kimi else 300
+        ),
         minimum=60,
-        maximum=900,
+        maximum=_MAX_API_TIMEOUT_MAX if api_max or long_effort else _API_TIMEOUT_MAX,
     )
-    if worker_route is not None and (
-        route.transport != "claude_code" or worker_route.transport != "codex_exec"
-    ):
-        raise MathHarnessError("Max pairs a Claude Code advisor with a Codex worker")
     if route.transport == "claude_code":
         # Configuration errors surface before any potentially billed call.
         for stage in ("strategist", "worker-1", "verify-1", "repair-1", "curator"):
@@ -5084,6 +5475,12 @@ def _run_pipeline(
                 + (
                     f"{route.model} · no tools"
                     if worker_route is None
+                    else (
+                        f"{cgm_max.API_LABEL}: {route.model} plans, verifies and curates "
+                        f"through the Anthropic API; {worker_route.model} writes and "
+                        "repairs through the OpenAI API · no tools"
+                    )
+                    if api_max
                     else (
                         f"Max: Claude Code {route.model} plans, verifies and curates; "
                         f"Codex {worker_route.model} writes and repairs · no tools"

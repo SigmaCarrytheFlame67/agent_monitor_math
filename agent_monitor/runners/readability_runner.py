@@ -54,7 +54,6 @@ import os
 import re
 import signal
 import sys
-import threading
 import time
 from dataclasses import dataclass, field
 from functools import partial
@@ -842,7 +841,7 @@ def run_ask(
     receipt = _json(folder / "receipt.json")
     if not receipt or receipt.get("schema") != RECEIPT_SCHEMA:
         raise ConfigError("This run has no readable version to ask about yet")
-    run = ReadabilityRun(root, req, env=route_env, sink=sink, cancel=threading.Event(),
+    run = ReadabilityRun(root, req, env=route_env, sink=sink, cancel=harness._StopRequest(),
                          caps_override={"max_calls": ASK_MAX_CALLS, "max_seconds": ASK_SECONDS})
     guide = _json(folder / "guide.json") or {}
     segments = _json(folder / "segments.json") or {}

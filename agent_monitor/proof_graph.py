@@ -9,6 +9,7 @@ premise to consequence. The result is cached in the run workspace as
 from __future__ import annotations
 
 import hashlib
+import http.client
 import json
 import logging
 import math
@@ -19,6 +20,7 @@ import tempfile
 import time
 from pathlib import Path
 from typing import Any, Mapping
+from urllib.parse import quote
 
 from agent_monitor import usage_ledger
 
@@ -211,6 +213,40 @@ def _proof_source(workspace: Path, run_record: dict[str, Any] | None) -> tuple[s
         if len(out) > 200:
             return "final agent output", out[:MAX_SOURCE_BYTES]
     return "", ""
+
+
+# How a provider is named in an error message.
+_PROVIDER_LABELS = {
+    "anthropic": "Anthropic",
+    "deepseek": "DeepSeek",
+    "google": "Google",
+    "groq": "Groq",
+    "kimi": "Kimi",
+    "openai": "OpenAI",
+    "openrouter": "OpenRouter",
+    "together": "Together",
+    "xai": "xAI",
+}
+
+
+def provider_label(provider: str) -> str:
+    """A provider's name as people write it ("OpenAI", not "Openai")."""
+    return _PROVIDER_LABELS.get(provider, provider.title())
+
+
+def key_defect(key: str) -> bool:
+    """Whether an API key holds a character no API key has: a space, a line
+    break or another control character, or one outside ASCII (a paste can
+    carry a non-breaking or zero-width space).  An HTTP library refuses such
+    a key and quotes it in its error."""
+    return any(not 33 <= ord(char) <= 126 for char in key)
+
+
+def key_defect_message(provider: str) -> str:
+    return (
+        f"The {provider_label(provider)} API key contains a space, a line break or "
+        "another character API keys never have; paste it again in Settings"
+    )
 
 
 def _resolve_llm_provider(
@@ -469,6 +505,9 @@ def _call_llm(
     if env.get("AGENT_MONITOR_GUEST_DERIVED") == "1":
         model = "kimi-k3"
     provider, base, key, chosen = _resolve_llm_provider(env, model)
+    if key and key_defect(key):
+        # Never sent: the request would fail with the key quoted.
+        raise ValueError(key_defect_message(provider))
     max_output = max(1024, min(int(env.get("AGENT_MONITOR_LLM_MAX_OUTPUT") or 32768), 128000))
     headers: dict[str, str]
     payload: dict[str, Any]
@@ -508,7 +547,9 @@ def _call_llm(
         }
     elif provider == "google":
         api_base = base if base.endswith("/v1beta") else f"{base}/v1beta"
-        url = f"{api_base}/models/{chosen}:generateContent?key={key}"
+        # The id is quoted: a stray space would make an invalid URL, whose
+        # error quotes it with the key.
+        url = f"{api_base}/models/{quote(chosen)}:generateContent?key={key}"
         headers = {}
         payload = {
             "contents": [{"role": "user", "parts": [{"text": prompt}]}],
@@ -546,13 +587,23 @@ def _call_llm(
                 **headers,
                 kimi_k3.TIMEOUT_HEADER: kimi_k3.timeout_header_value(limit),
             }
-        code, body = _http_json(
-            url,
-            method="POST",
-            headers=call_headers,
-            payload=payload,
-            timeout=limit,
-        )
+        try:
+            code, body = _http_json(
+                url,
+                method="POST",
+                headers=call_headers,
+                payload=payload,
+                timeout=limit,
+            )
+        except (ValueError, http.client.InvalidURL) as exc:
+            # A request the HTTP library refused (an invalid URL or header
+            # value) quotes it, key included; nothing was sent.
+            from agent_monitor.runners.api_backend import _safe_error
+
+            raise ValueError(
+                f"{provider_label(provider)} model request was refused for {chosen}: "
+                f"{_safe_error(exc, key)}"
+            ) from None
         if 200 <= code < 300 and isinstance(body, dict):
             # Every 2xx reply was billed, including an empty completion that
             # a retry below replaces: book each one, not only the last.
@@ -594,14 +645,14 @@ def _call_llm(
             # SSRF guard: a private, loopback or plain-HTTP endpoint could be
             # an internal service; report only the status, never its body.
             raise ValueError(
-                f"{provider.title()} model call failed for {chosen} (HTTP {code}); "
+                f"{provider_label(provider)} model call failed for {chosen} (HTTP {code}); "
                 "the response of this non-public endpoint is not shown"
             )
         detail = str(_api_error(body) or "unknown error")
         if key:
             detail = detail.replace(key, "[redacted]")
         raise ValueError(
-            f"{provider.title()} model call failed for {chosen} (HTTP {code}): "
+            f"{provider_label(provider)} model call failed for {chosen} (HTTP {code}): "
             f"{detail[-1600:]}"
         )
     try:
@@ -629,7 +680,7 @@ def _call_llm(
             content = str(body["choices"][0]["message"]["content"])
     except (KeyError, IndexError, TypeError) as exc:
         raise ValueError(
-            f"{provider.title()} returned an unexpected response shape for {chosen}"
+            f"{provider_label(provider)} returned an unexpected response shape for {chosen}"
         ) from exc
     if not content.strip():
         detail = ""
@@ -646,7 +697,7 @@ def _call_llm(
                 payload.get("reasoning_effort"),
             )
         raise ValueError(
-            f"{provider.title()} returned an empty response for {chosen}"
+            f"{provider_label(provider)} returned an empty response for {chosen}"
             + (f" ({detail})" if detail else "")
         )
     return ObservedModel(chosen, body.get("model")), content, provider

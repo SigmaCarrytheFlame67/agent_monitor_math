@@ -736,12 +736,15 @@ def get_settings(user: dict[str, Any] | None = None) -> dict[str, Any]:
         except (KeyError, OSError, ValueError):
             claude_models = []
 
-    # Ansatz CGM Max needs both linked accounts; the console offers it then.
+    # Ansatz CGM Max needs both linked accounts, and Max (API) both API keys;
+    # the console offers each then.
     cgm_max_plan: dict[str, Any] = {"available": False, "reason": ""}
+    cgm_max_api_plan: dict[str, Any] = {"available": False, "reason": ""}
     if user is not None and not user.get("guest"):
         from agent_monitor import cgm_max
 
         cgm_max_plan = cgm_max.plan_for(user)
+        cgm_max_api_plan = cgm_max.plan_for_api(user)
 
     api_models: list[str] = []
     visible_providers = [p for p in providers if p["api_key_set"]]
@@ -842,6 +845,7 @@ def get_settings(user: dict[str, Any] | None = None) -> dict[str, Any]:
         "claude_connected": claude_connected,
         "claude_reauth_required": claude_reauth_required,
         "cgm_max": cgm_max_plan,
+        "cgm_max_api": cgm_max_api_plan,
         "subscription_policy": account_policy.subscription_policy(user),
         "subscription_notes": account_policy.subscription_notes() if restricted else {},
         "subscription_stored": stored_logins,

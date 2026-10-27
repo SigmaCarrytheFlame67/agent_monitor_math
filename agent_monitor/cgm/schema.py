@@ -36,13 +36,29 @@ PIPELINE_SOURCE = "agent-monitor-math-harness-cgm@2"
 # concurrency in ``workflow.budgets`` and ``workflow.call_order``.  Schema 2
 # (the sequential phase-1 writer) stays valid for already-written runs.
 RECEIPT_SCHEMA_VERSION = 3
-# Max runs (Claude Code advisor + Codex worker) write schema 4: schema 3 plus
+# Max runs (an advisor route + a worker route) write schema 4: schema 3 plus
 # ``workflow.routes``, which binds every call family to one of the two routes.
 HYBRID_RECEIPT_SCHEMA_VERSION = 4
 CGM_RECEIPT_SCHEMA_VERSIONS = (2, 3, 4)
 HYBRID_TRANSPORT = "hybrid"
 HYBRID_CONTRACT = {"transport": HYBRID_TRANSPORT, "isolation_version": 1}
 HYBRID_EFFORTS = frozenset({"default", "low", "medium", "high", "xhigh", "max"})
+# The route tables a schema-4 receipt may bind, by its requested model, as
+# (provider, transport) per side.  Each is valid only whole, never mixed with
+# the other: Max ("max", cgm_max.MODEL_ID) runs Claude Code and Codex on linked
+# subscriptions; Max (API) ("max-api", cgm_max.API_MODEL_ID) an Anthropic API
+# advisor and an OpenAI API worker.  The runner and engine_graph both check
+# receipts against this table.
+HYBRID_ROUTE_TABLES: dict[str, dict[str, tuple[str, str]]] = {
+    "max": {
+        "advisor": ("claude_subscription", "claude_code"),
+        "worker": ("codex_subscription", "codex_exec"),
+    },
+    "max-api": {
+        "advisor": ("anthropic", "api_chat"),
+        "worker": ("openai", "api_chat"),
+    },
+}
 SEMANTICS = "model-verifier"
 VERIFIER_LABEL = "independent-response-only-model-verifier"
 PROOF_RENDERING_VERIFIED = "verified-closure@1"
@@ -195,8 +211,9 @@ CALL_STAGE_RE = re.compile(
     r"(?:-(?P<index>[1-9][0-9]{0,2}))?(?P<retry>-retry)?(?P<low>-low)?$"
 )
 CALL_FAMILIES = ("strategist", "worker", "verify", "repair", "curator")
-# Max mode: the advisor route (Claude Code) answers these families and the
-# worker route (Codex) the others.
+# Max mode: the advisor route (Claude Code, or the Anthropic API in Max (API))
+# answers these families and the worker route (Codex, or the OpenAI API) the
+# others.
 ADVISOR_CALL_FAMILIES = frozenset({"strategist", "verify", "curator"})
 WORKER_CALL_FAMILIES = frozenset({"worker", "repair"})
 _SPACE_RE = re.compile(r"\s+")

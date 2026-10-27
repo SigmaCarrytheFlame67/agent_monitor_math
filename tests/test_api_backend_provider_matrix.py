@@ -52,7 +52,8 @@ _CASES = (
         "provider": "anthropic",
         "model": "claude-sonnet-5",
         "chosen": "claude-sonnet-5",
-        "url": "https://owner.anthropic.invalid/v1/messages",
+        # The SDK's base URL: it adds /v1/messages itself.
+        "url": "https://owner.anthropic.invalid",
         "key": "owner-anthropic-key",
     },
     {
@@ -131,6 +132,32 @@ def _response(provider: str) -> dict[str, Any]:
     }
 
 
+def _anthropic_reply() -> object:
+    """What the Anthropic SDK call (``api_backend._anthropic_message``) returns."""
+    from anthropic.types.beta import BetaMessage
+
+    return BetaMessage.model_validate(
+        {
+            "id": "msg_matrix",
+            "type": "message",
+            "role": "assistant",
+            "model": "claude-sonnet-5",
+            "stop_reason": "end_turn",
+            **_response("anthropic"),
+        }
+    )
+
+
+def _anthropic_status_error(code: int, body: object) -> Exception:
+    """The error the Anthropic SDK raises for an HTTP error reply."""
+    import anthropic
+    import httpx2
+
+    request = httpx2.Request("POST", "https://owner.anthropic.invalid/v1/messages")
+    response = httpx2.Response(code, json=body, request=request)
+    return anthropic.APIStatusError(f"Error code: {code}", response=response, body=body)
+
+
 class ApiBackendProviderMatrixTests(unittest.TestCase):
     def assert_response_only(self, value: object) -> None:
         forbidden = {
@@ -164,9 +191,14 @@ class ApiBackendProviderMatrixTests(unittest.TestCase):
                     captured.update(url=url, **kwargs)
                     return 200, _response(provider)
 
+                def fake_anthropic(options, request):
+                    captured.update(options=dict(options), payload=dict(request))
+                    return _anthropic_reply()
+
                 with (
                     patch.dict(api_backend.os.environ, _OWNER_ENV, clear=True),
                     patch("agent_monitor.settings._http_json", side_effect=fake_http),
+                    patch.object(api_backend, "_anthropic_message", side_effect=fake_anthropic),
                 ):
                     result = api_backend.api_chat(
                         "System proof contract",
@@ -174,17 +206,23 @@ class ApiBackendProviderMatrixTests(unittest.TestCase):
                         model=str(case["model"]),
                     )
 
-                self.assertEqual(captured["url"], case["url"])
-                headers = captured["headers"]
                 if provider == "anthropic":
-                    self.assertEqual(headers["x-api-key"], case["key"])
-                    self.assertEqual(headers["anthropic-version"], "2023-06-01")
-                elif provider == "google":
-                    self.assertEqual(headers, {})
-                else:
+                    # The official SDK sends the key as X-Api-Key (see
+                    # test_api_backend_anthropic for the wire format).
                     self.assertEqual(
-                        headers, {"Authorization": f"Bearer {case['key']}"}
+                        captured["options"],
+                        # A custom base URL (a gateway) gets plain requests.
+                        {"api_key": case["key"], "base_url": case["url"], "timeout": 240, "stream": False},
                     )
+                else:
+                    self.assertEqual(captured["url"], case["url"])
+                    headers = captured["headers"]
+                    if provider == "google":
+                        self.assertEqual(headers, {})
+                    else:
+                        self.assertEqual(
+                            headers, {"Authorization": f"Bearer {case['key']}"}
+                        )
 
                 payload = captured["payload"]
                 self.assert_response_only(payload)
@@ -695,9 +733,14 @@ class ApiBackendFailureKindTests(unittest.TestCase):
     (``APIBackendError.kind``); one that may pass on a retry does not."""
 
     def _kind(self, model: str, code: int, body: object, **env: str) -> str | None:
+        def anthropic_reply(*_args: object) -> None:
+            # The Anthropic SDK raises an HTTP error reply as an exception.
+            raise _anthropic_status_error(code, body)
+
         with (
             patch.dict(api_backend.os.environ, {**_OWNER_ENV, **env}, clear=True),
             patch("agent_monitor.settings._http_json", return_value=(code, body)),
+            patch.object(api_backend, "_anthropic_message", side_effect=anthropic_reply),
             patch("agent_monitor.kimi_k3.time.sleep"),
             self.assertRaises(api_backend.APIBackendError) as raised,
         ):

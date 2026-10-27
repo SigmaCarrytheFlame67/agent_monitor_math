@@ -2671,7 +2671,8 @@ $('monitor-frame').onload=()=>{ syncThemeToMonitor(document.documentElement.data
 /* ── settings + colorful model picker ── */
 function currentModel(){ const s=$('model-select').value; return s==='__custom__'?$('model-custom').value.trim():(s||''); }
 function runTuningCapabilities(){
-  if(isCgmMax())return {reasoning:[{id:'max',label:'Ultra'}],speed:[{id:'standard',label:'Standard'}],default_reasoning_effort:'max',default_speed_mode:'standard',max_mode:true};
+  // Both Max and Max (API) run every call at maximum effort: nothing to adjust.
+  if(isCgmMax()||SETTINGS?.cgm_max_api?.available&&isCgmMaxApi())return {reasoning:[{id:'max',label:'Ultra'}],speed:[{id:'standard',label:'Standard'}],default_reasoning_effort:'max',default_speed_mode:'standard',max_mode:true};
   const runtime=selectedAccountRuntime(), model=currentModel();
   const configured=SETTINGS?.run_tuning_by_runtime?.[runtime]?.[model];
   // Ansatz Analyze and Ansatz Readability take the CGM harness's tuning (the server aliases them).
@@ -2734,10 +2735,14 @@ function renderRunTuning(){
   $('run-thinking-ticks').innerHTML=reasoning.map(()=>'<i></i>').join('');
   $('run-thinking-min-label').textContent=reasoning[0]?.label||'Default';
   $('run-thinking-max-label').textContent=reasoning.length>1?reasoning.at(-1).label:'';
-  // Lean and DAG work of a Codex-subscription run is capped at High (cgm_max.formal_view).
-  const derivedAtHigh=runAuthRoute()==='codex_subscription'&&['xhigh','max'].includes(reasoningItem.id);
+  // Lean and DAG work of a Codex-subscription or API-key run is capped at High (cgm_max.formal_view).
+  const derivedRoute=runAuthRoute();
+  const derivedAtHigh=['codex_subscription','api_key'].includes(derivedRoute)&&['xhigh','max'].includes(reasoningItem.id);
+  // Max (API) derives its Lean and DAG views on the worker's API model at High (cgm_max.formal_view).
   $('run-profile-note').textContent=caps.max_mode
-    ?'Max runs Claude Code and Codex at maximum effort. Formal Lean and Lean DAG run on Codex at High.'
+    ?(isCgmMax()
+      ?'Max runs Claude Code and Codex at maximum effort. Formal Lean and Lean DAG run on Codex at High.'
+      :`Max (API) runs ${cgmMaxApiNames().join(' and ')} at maximum effort, billed to API keys. Formal Lean and Lean DAG run on ${cgmMaxApiNames()[1]} at High.`)
     :caps.unsupported_engine
     ?'This engine uses its default thinking and speed settings.'
     :reasoning.length<=1&&speeds.length<=1
@@ -2745,7 +2750,7 @@ function renderRunTuning(){
     :speeds.length<=1
       ?'Thinking applies to new runs. Speed is fixed for this model.'
     :derivedAtHigh
-      ?'Saved for this model. Applies to new runs; existing runs and continuations keep the profile they started with. Formal Lean and Lean DAG run at High, the most their Codex calls allow.'
+      ?`Saved for this model. Applies to new runs; existing runs and continuations keep the profile they started with. Formal Lean and Lean DAG run at High, the most their ${derivedRoute==='codex_subscription'?'Codex ':''}calls allow.`
       :'Saved for this model. Applies to new runs; existing runs, Formal Lean, Lean DAG, and continuations keep the profile they started with.';
   animateRunTuningFeedback();
 }
@@ -2767,6 +2772,7 @@ function modelVisual(id){
   if(s.includes('grok'))return {tone:'282 76% 61%',mark:'GX',glyph:'🟪',provider:'xAI'};
   // Codex itself runs for the operator, and for an account given full access (on its own linked Codex).
   if(s.includes('gpt')||s.includes('codex'))return {tone:'218 88% 59%',mark:'CX',glyph:'🔵',provider:viewerIsAdmin()||viewerHasFullAccess()?'OpenAI · Codex-ready':'OpenAI'};
+  if(s===CGM_MAX_API_MODEL)return {tone:'236 82% 66%',mark:'MX',glyph:'✦',provider:'Anthropic + OpenAI API keys'};
   return {tone:'265 76% 62%',mark:'AI',glyph:'🎨',provider:'Custom provider'};
 }
 function positionControlPanel(panel,trigger){
@@ -2875,20 +2881,49 @@ function engineRuntimeIssue(selected){
 }
 /* Ansatz CGM Max: Claude Code leads (strategist, verifier, curator) and Codex
    works (workers, repairs), each on its most capable model at maximum effort,
-   on the account's two linked subscriptions (agent_monitor/cgm_max.py). */
-const CGM_MAX_MODEL='max';
-function cgmMaxAvailable(){
+   on the account's two linked subscriptions (agent_monitor/cgm_max.py).
+   Max (API) is the same split on API keys: a Claude model through the
+   Anthropic API leads and an OpenAI model through the OpenAI API works.
+   Each has its own plan in the settings (cgm_max, cgm_max_api), and neither
+   falls back to the other. */
+const CGM_MAX_MODEL='max', CGM_MAX_API_MODEL='max-api', CGM_MAX_API_LABEL='Max (API)';
+function cgmMaxAvailable(model=CGM_MAX_MODEL){
   const harness=ENGINES.find(x=>x.id==='math_harness');
+  // Max (API) runs on the harness's API route, whatever the account runtime.
+  if(model===CGM_MAX_API_MODEL)return !!SETTINGS?.cgm_max_api?.available&&!!harness?.available&&!harness?.requires_login&&(harness?.auth_modes||[]).includes('api_key');
   return !!SETTINGS?.cgm_max?.available&&!!harness?.available&&!harness?.requires_login;
 }
 function isCgmMax(model=currentModel()){ return model===CGM_MAX_MODEL&&dagIsCgmEngine(engine)&&cgmMaxAvailable(); }
+function isCgmMaxApi(model=currentModel()){ return model===CGM_MAX_API_MODEL&&dagIsCgmEngine(engine)&&cgmMaxAvailable(model); }
 function cgmMaxSummary(){
   const plan=SETTINGS?.cgm_max||{};
   return `Claude Code ${plan.advisor?.model||'fable'} plans, verifies and curates; Codex ${plan.worker?.model||'gpt-6-astra'} writes and repairs, both at maximum effort.`;
 }
-// The route a new run asks for: Max uses both subscriptions, whatever the
-// account runtime; every other choice follows the runtime.
-function runAuthRoute(){ return isCgmMax()?'dual_subscription':engineModelMode(); }
+// The advisor and worker of a Max (API) plan (the settings' cgm_max_api, or a
+// run's route_plan) by name: "claude-fable-5-1" reads "Claude Fable 5.1" and
+// "gpt-6-astra" "GPT-6 Astra"; any other id is shown as it is.
+function cgmMaxApiNames(plan=SETTINGS?.cgm_max_api){
+  const word=text=>text.charAt(0).toUpperCase()+text.slice(1);
+  const name=id=>{
+    const claude=/^claude-([a-z]+)-(\d+)-(\d+)$/.exec(id), gpt=/^gpt-(\d+(?:\.\d+)?)-([a-z]+)$/.exec(id);
+    return claude?`Claude ${word(claude[1])} ${claude[2]}.${claude[3]}`:gpt?`GPT-${gpt[1]} ${word(gpt[2])}`:id;
+  };
+  return [name(String(plan?.advisor?.model||'claude-fable-5-1')),name(String(plan?.worker?.model||'gpt-6-astra'))];
+}
+function cgmMaxApiSummary(plan=SETTINGS?.cgm_max_api){
+  const [advisor,worker]=cgmMaxApiNames(plan);
+  return `${advisor} plans and checks · ${worker} writes · max effort · billed to API keys`;
+}
+// Whether a run record is a Max (API) run, by cgm_max.is_max_api_record's
+// test: a Max run never is one.
+function isCgmMaxApiRun(run){
+  if(run?.auth_route==='dual_subscription'||run?.live?.auth_mode==='dual_subscription')return false;
+  return run?.route_plan?.mode==='api'||[run?.model,run?.requested_model].includes(CGM_MAX_API_MODEL);
+}
+// The route a new run asks for: Max uses both subscriptions and Max (API)
+// both API keys, whatever the account runtime; every other choice follows
+// the runtime.
+function runAuthRoute(){ return isCgmMax()?'dual_subscription':isCgmMaxApi()?'api_key':engineModelMode(); }
 function engineModelMode(selected=ENGINES.find(x=>x.id===engine)){
   if(!selected)return SETTINGS?.auth_mode||'unavailable';
   const auth=selected.auth_modes||[];
@@ -2931,9 +2966,11 @@ function renderModels(){
   const otherApiModels=selected?.id==='kimi'&&mode==='api_key'&&!harness?(SETTINGS?.api_models||[]).filter(model=>!String(model).toLowerCase().includes('kimi')):[];
   const previous=sel.value, previousCustom=$('model-custom').value;
   let desired=models.includes(previous)?previous:(previous==='__custom__'&&allowCustom?'__custom__':'');
-  // Max is a deliberate choice: it is never the automatic selection.
-  if(!desired)desired=models.includes(SETTINGS?.default_model)?SETTINGS.default_model:(models.find(model=>model!==CGM_MAX_MODEL)||models[0]||(allowCustom?'__custom__':''));
-  const options=models.map(model=>{const v=modelVisual(model);return `<option value="${LIB_ESC(model)}">${v.glyph} ${LIB_ESC(model)}</option>`;});
+  // Max is a deliberate choice: it is never the automatic selection, and
+  // Max (API), which bills two API keys, is not even as the saved default.
+  const automatic=models.filter(model=>model!==CGM_MAX_API_MODEL);
+  if(!desired)desired=automatic.includes(SETTINGS?.default_model)?SETTINGS.default_model:(automatic.find(model=>model!==CGM_MAX_MODEL)||automatic[0]||(allowCustom?'__custom__':''));
+  const options=models.map(model=>{const v=modelVisual(model);return `<option value="${LIB_ESC(model)}">${v.glyph} ${LIB_ESC(model===CGM_MAX_API_MODEL?CGM_MAX_API_LABEL:model)}</option>`;});
   if(allowCustom)options.push('<option value="__custom__">🎨 custom model…</option>');
   if(!options.length)options.push(`<option value="">${mode==='unavailable'?'Selected account runtime is unavailable for this engine':'Configure an API provider in Settings'}</option>`);
   sel.innerHTML=options.join('');
@@ -2941,26 +2978,30 @@ function renderModels(){
   $('model-custom').value=previousCustom;
   sel.disabled=!models.length&&!allowCustom;
   if(cgm){ const real=cgmEngineFor(currentModel()); if(real!==engine){ engine=real; renderEngines(); return; } }
-  const value=currentModel()||models[0]||'';
+  const value=currentModel()||automatic[0]||'';
   const visual=modelVisual(value);
   $('model-trigger').style.setProperty('--tone',visual.tone);
   $('model-current-mark').textContent=value?visual.mark:'!';
-  $('model-current-name').textContent=value||(mode==='unavailable'?'Account connection required':'Configure API provider');
+  $('model-current-name').textContent=value===CGM_MAX_API_MODEL?CGM_MAX_API_LABEL:value||(mode==='unavailable'?'Account connection required':'Configure API provider');
   const includedKimi=mode==='api_key'&&String(value).toLowerCase().includes('kimi')&&(SETTINGS?.sponsored_kimi_available||GUEST_POLICY?.hosted_guest_available)&&!SETTINGS?.kimi_user_key_set;
-  const routeLabel=isCgmMax(value)?'Claude Code + Codex · max effort':mode==='codex_subscription'?'Codex subscription':mode==='claude_subscription'?'Claude Code subscription':includedKimi?'Kimi K3 · included':visual.provider+' · API key';
+  // Like Max, Max (API) keeps its own route whatever the account runtime (runAuthRoute).
+  const routeLabel=isCgmMax(value)?'Claude Code + Codex · max effort':cgm&&value===CGM_MAX_API_MODEL&&cgmMaxAvailable(value)?'Anthropic + OpenAI API keys · max effort':mode==='codex_subscription'?'Codex subscription':mode==='claude_subscription'?'Claude Code subscription':includedKimi?'Kimi K3 · included':visual.provider+' · API key';
   $('model-current-meta').textContent=value?routeLabel:(mode==='unavailable'?'Connect and enable a compatible account in Settings':'Choose a supported Kimi harness or configure an API key');
   const custom=restricted
     ?`<div class="model-custom-row"><span>${LIB_ESC(selected.model_note||'This Codex adapter has a restricted model list.')}</span></div>`
     :allowCustom
       ?`<div class="model-custom-row"><input id="model-custom-entry" value="${sel.value==='__custom__'?LIB_ESC($('model-custom').value):''}" placeholder="provider:model · or OpenRouter vendor/model"/><button type="button" id="model-custom-use">Use</button></div>`
-      :`<div class="model-custom-row"><span>${mode==='unavailable'?'This engine needs a compatible account connection.':otherApiModels.length?`On this account Ansatz CGM runs on Kimi K3 only. To use ${LIB_ESC(otherApiModels[0])} or another model from your API keys, switch the harness (for example to Plain).`:selected?.id==='readability'&&mode==='api_key'?'On API routes Readability runs on Kimi K3: sponsored, or your own Kimi key.':models.length?'Your selection applies to new runs.':'Configure an API provider in Settings to see its models.'}</span></div>`;
+      :`<div class="model-custom-row"><span>${mode==='unavailable'&&cgm&&models.includes(CGM_MAX_API_MODEL)?`Only ${CGM_MAX_API_LABEL} runs while the selected runtime is unavailable: it uses the Anthropic and OpenAI API keys.`:mode==='unavailable'?'This engine needs a compatible account connection.':otherApiModels.length?`On this account Ansatz CGM runs on Kimi K3 only. To use ${LIB_ESC(otherApiModels[0])} or another model from your API keys, switch the harness (for example to Plain).`:selected?.id==='readability'&&mode==='api_key'?'On API routes Readability runs on Kimi K3: sponsored, or your own Kimi key.':models.length?'Your selection applies to new runs.':'Configure an API provider in Settings to see its models.'}</span></div>`;
   renderChoiceMenu('model-menu','Choose model',models.map(model=>{
     const v=modelVisual(model);
-    const max=model===CGM_MAX_MODEL&&cgm;
+    const max=model===CGM_MAX_MODEL&&cgm, maxApi=model===CGM_MAX_API_MODEL&&cgm;
     const desc=max
       ?'Claude Code leads · Codex works · max effort'
+      :maxApi
+      ?'Claude leads · GPT works · billed to API keys'
       :mode==='codex_subscription'?'Codex subscription':mode==='claude_subscription'?'Claude Code subscription':String(model).toLowerCase().includes('kimi')&&(SETTINGS?.sponsored_kimi_available||GUEST_POLICY?.hosted_guest_available)&&!SETTINGS?.kimi_user_key_set?'Kimi K3 · included':v.provider+' · API key';
-    return `<button type="button" class="choice-option model-option ${sel.value===model?'active':''}" data-model="${LIB_ESC(model)}" style="--tone:${v.tone}"${max?` title="${LIB_ESC(cgmMaxSummary())}"`:''}><span class="choice-badge">${v.mark}</span><span class="opt-main"><span class="opt-name"><b>${LIB_ESC(model)}</b></span><span class="opt-desc">${desc}</span></span></button>`;
+    const title=max?cgmMaxSummary():maxApi?cgmMaxApiSummary():'';
+    return `<button type="button" class="choice-option model-option ${sel.value===model?'active':''}" data-model="${LIB_ESC(model)}" style="--tone:${v.tone}"${title?` title="${LIB_ESC(title)}"`:''}><span class="choice-badge">${v.mark}</span><span class="opt-main"><span class="opt-name"><b>${LIB_ESC(maxApi?CGM_MAX_API_LABEL:model)}</b></span><span class="opt-desc">${desc}</span></span></button>`;
   }).join(''),custom);
   $('model-menu').querySelectorAll('[data-model]').forEach(button=>button.onclick=()=>{
     sel.value=button.dataset.model; $('model-custom').value=''; renderModels(); closeChoiceMenus();
@@ -2978,15 +3019,20 @@ function renderModels(){
 }
 // The launcher states the saved runtime (the route the server will enforce),
 // and names connected subscriptions that are not in use.
+// When the runtime blocks Ansatz CGM but Max (API) can run, say how to choose it.
+function withMaxApiHint(issue){
+  return issue&&dagIsCgmEngine(engine)&&cgmMaxAvailable(CGM_MAX_API_MODEL)?`${issue} ${CGM_MAX_API_LABEL} can still run on your API keys: choose it in the model menu.`:issue;
+}
 function runRuntimeSummary(){
   if(!SETTINGS||CURRENT_USER?.guest)return null;
   if(isCgmMax())return {warn:false,lead:'Runs on',strong:'Max',spare:' '+cgmMaxSummary()};
+  if(SETTINGS.cgm_max_api?.available&&isCgmMaxApi())return {warn:false,lead:'Runs on',strong:CGM_MAX_API_LABEL,spare:' '+cgmMaxApiSummary()+'.'};
   const runtime=selectedAccountRuntime(), selected=ENGINES.find(x=>x.id===engine);
   const issue=selected?engineRuntimeIssue(selected):'';
   const account=runtime==='claude'?'your Claude Code subscription':runtime==='codex'?'your Codex (ChatGPT) subscription':'';
   const spare=[['codex','Codex'],['claude','Claude Code']].filter(([id])=>id!==runtime&&SETTINGS[id+'_connected']).map(([,label])=>label);
   const spareText=spare.length?` ${spare.join(' and ')} ${spare.length===1?'is':'are'} connected but not in use.`:'';
-  if(issue)return {warn:true,text:issue,spare:spareText};
+  if(issue)return {warn:true,text:withMaxApiHint(issue),spare:spareText};
   if(runtime==='api'){
     const model=currentModel(), included=String(model).toLowerCase().includes('kimi')&&(SETTINGS.sponsored_kimi_available||GUEST_POLICY?.hosted_guest_available)&&!SETTINGS.kimi_user_key_set;
     if(!model||!(SETTINGS.sponsored_kimi_available||(SETTINGS.configured_providers||[]).length))return {warn:true,text:'Kimi + API providers is selected, but no API provider is configured. Add a key in Settings.',spare:spareText};
@@ -3072,7 +3118,8 @@ function runtimeCardState(runtime,selected=selectedAccountRuntime()){
   const spec=runtimeUiSpec(runtime), inUse=runtime===selected;
   if(spec.adminOnly)return {label:'Site administrator only',detail:'Use your own API key instead'};
   if(inUse&&spec.ready)return {label:'In use',detail:runtime==='api'?spec.state:'New runs use this account'};
-  if(inUse)return {label:'In use · not connected',detail:'New runs are blocked until you connect it below or select another runtime'};
+  // Max (API) runs on its two API keys whatever the runtime (runAuthRoute).
+  if(inUse)return {label:'In use · not connected',detail:`New runs${SETTINGS?.cgm_max_api?.available?' other than Max (API)':''} are blocked until you connect it below or select another runtime`};
   if(spec.ready)return {label:'Connected — not in use (select to use)',detail:runtime==='api'?spec.state:''};
   return {label:'Not connected',detail:spec.state};
 }
@@ -3112,7 +3159,8 @@ function syncApiProviderGroup(){
   group.classList.toggle('dormant',dormant);
   if(dormant)group.open=false;
   else group.open=true;
-  if(meta)meta.textContent=dormant?`Dormant for new runs · ${configured} own key${configured===1?'':'s'}`:(SETTINGS.sponsored_kimi_available?`Kimi K3 included · ${configured} own key${configured===1?'':'s'}`:`Active for new runs · ${configured} configured`);
+  // Max (API) bills the Anthropic and OpenAI keys whatever the runtime.
+  if(meta)meta.textContent=dormant?`Dormant for new runs${SETTINGS.cgm_max_api?.available?' except Max (API)':''} · ${configured} own key${configured===1?'':'s'}`:(SETTINGS.sponsored_kimi_available?`Kimi K3 included · ${configured} own key${configured===1?'':'s'}`:`Active for new runs · ${configured} configured`);
 }
 function renderSettingsModal(){
   if(!SETTINGS){$('settings-body').textContent='Failed to load.';return;}
@@ -5487,10 +5535,12 @@ function cgmEngineUsable(id){ const e=ENGINES.find(x=>x.id===id); return !!e&&!!
 function cgmModels(){
   const models=['kimi','math_harness'].filter(cgmEngineUsable).flatMap(id=>modelsForEngine(ENGINES.find(x=>x.id===id)));
   const list=models.length?[...new Set(models)]:modelsForEngine();
-  return cgmMaxAvailable()?[CGM_MAX_MODEL,...list.filter(model=>model!==CGM_MAX_MODEL)]:list;
+  // Each Max this account may run leads the list: Max, then Max (API).
+  const max=[CGM_MAX_MODEL,CGM_MAX_API_MODEL].filter(model=>cgmMaxAvailable(model));
+  return [...max,...list.filter(model=>!max.includes(model))];
 }
 function cgmEngineFor(model){
-  if(model===CGM_MAX_MODEL&&cgmMaxAvailable())return 'math_harness';
+  if((model===CGM_MAX_MODEL||model===CGM_MAX_API_MODEL)&&cgmMaxAvailable(model))return 'math_harness';
   if(String(model||'').toLowerCase().includes('kimi')&&cgmEngineUsable('kimi'))return 'kimi';
   if(cgmEngineUsable('math_harness'))return 'math_harness';
   return cgmEngineUsable('kimi')?'kimi':engine;
@@ -5504,14 +5554,17 @@ function engineMenuEntries(list){
 function engineView(e){
   const cgm=dagIsCgmEngine(e?.id);
   const own=cgm?['kimi','math_harness'].filter(cgmEngineUsable).map(id=>ENGINES.find(x=>x.id===id)):[];
-  const issue=own.length?'':(e.available?engineRuntimeIssue(e):'');
+  // Max (API) runs on its two API keys whatever the account runtime, so an
+  // unusable runtime still leaves Ansatz CGM open for it (runAuthRoute).
+  const apiOnly=cgm&&!own.length&&cgmMaxAvailable(CGM_MAX_API_MODEL);
+  const issue=own.length||apiOnly?'':(e.available?engineRuntimeIssue(e):'');
   const modes=new Set((own.length?own:[e]).flatMap(x=>x.auth_modes||[]));
   const auth=Object.keys(ENGINE_AUTH_LABELS).filter(x=>modes.has(x)).map(x=>ENGINE_AUTH_LABELS[x]).join(' / ')||'runtime';
   if(!cgm)return {label:e.label,vendor:e.vendor||'',mark:ENGINE_MARK[e.id]||e.label.slice(0,2).toUpperCase(),tone:ENGINE_TONE[e.id]||'220 88% 60%',auth,issue,available:!!e.available,usable:!!e.available&&!issue,copy:''};
   // Describe what this account can run: one engine's own copy, or both.
   const ownKey=own.some(x=>x.own_key_only);
   const copy=own.length===1?CGM_ENGINE_COPY[ownKey?'own_key':own[0].id]:own.length?(ownKey?CGM_FAMILY.ownKeyCopy:CGM_FAMILY.copy):'';
-  return {label:CGM_FAMILY.label,vendor:CGM_FAMILY.vendor,mark:CGM_FAMILY.mark,tone:CGM_FAMILY.tone,auth,issue,available:own.length>0||!!e.available,usable:own.length>0,copy};
+  return {label:CGM_FAMILY.label,vendor:CGM_FAMILY.vendor,mark:CGM_FAMILY.mark,tone:CGM_FAMILY.tone,auth,issue,available:own.length>0||!!e.available,usable:own.length>0||apiOnly,copy:apiOnly?`Only ${CGM_MAX_API_LABEL} can run until the selected runtime is connected: it uses the Anthropic and OpenAI API keys`:copy};
 }
 function renderEngines(){
   // The proof toolbar's Make readable follows the Readability policy and settings this draws from.
@@ -5694,8 +5747,9 @@ async function startRun(){
   const selected=ENGINES.find(x=>x.id===engine);
   if(selected?.requires_login){showEngineSignIn(selected.label);return;}
   if(selected&&!selected.available){eb.style.display='block';eb.textContent=selected.label+' needs setup — '+(selected.health_detail||selected.hint||'runtime unavailable');return;}
-  const runtimeIssue=engineRuntimeIssue(selected);
-  if(runtimeIssue){eb.style.display='block';eb.textContent=runtimeIssue;return;}
+  // Max (API) runs on its two API keys, never on the account runtime.
+  const runtimeIssue=isCgmMaxApi()?'':engineRuntimeIssue(selected);
+  if(runtimeIssue){eb.style.display='block';eb.textContent=withMaxApiHint(runtimeIssue);return;}
   if(!currentModel()){eb.style.display='block';eb.textContent=selectedAccountRuntime()==='api'?'Configure and verify an API provider in Settings, then choose a model.':runtimeDisplayName()+' has no available model for this harness.';return;}
   // A refused start (limits, validation) starts nothing, so the pill goes back
   // to what it showed (for example a guest's first run that is still running).
@@ -6098,14 +6152,16 @@ function updateLiveChips(run){
     box.classList.toggle('on',chips.length>0);
     return;
   }
+  const maxApi=isCgmMaxApiRun(run);
   if(model){
     const asked=live.model_requested, plan=live.auth_mode==='dual_subscription'?run?.route_plan:null;
-    const tip=plan?`Max: Claude Code ${plan.advisor?.model||''} plans, verifies and curates; Codex ${plan.worker?.model||''} writes and repairs`:asked?'Requested model — this engine does not report the model it used, so its own config may override this':'Model answering this run';
-    chips.push(`<span class="lv model" title="${escapeHtml(tip)}">◆ ${escapeHtml(model)}${asked?' <span style="opacity:.6">(requested)</span>':''}</span>`);
+    const tip=plan?`Max: Claude Code ${plan.advisor?.model||''} plans, verifies and curates; Codex ${plan.worker?.model||''} writes and repairs`:maxApi?`${CGM_MAX_API_LABEL}: ${cgmMaxApiSummary(run?.route_plan)}`:asked?'Requested model — this engine does not report the model it used, so its own config may override this':'Model answering this run';
+    chips.push(`<span class="lv model" title="${escapeHtml(tip)}">◆ ${escapeHtml(maxApi?CGM_MAX_API_LABEL:model)}${asked?' <span style="opacity:.6">(requested)</span>':''}</span>`);
   }
   if(live.auth_mode==='chatgpt_subscription')chips.push(`<span class="lv sub" title="Uses your private ChatGPT/Codex subscription, not API billing">◉ subscription</span>`);
   if(live.auth_mode==='claude_subscription')chips.push(`<span class="lv sub" title="Uses your private Claude Code subscription, not Anthropic API billing">◉ Claude subscription</span>`);
   if(live.auth_mode==='dual_subscription')chips.push(`<span class="lv sub" title="Max: uses your private Claude Code and Codex subscriptions, not API billing">◉ Claude Code + Codex</span>`);
+  if(maxApi)chips.push(`<span class="lv sub" title="Max (API): billed to the Anthropic and OpenAI API keys, not a subscription">◉ Anthropic + OpenAI API</span>`);
   if(live.subagents&&live.subagent_model)chips.push(`<span class="lv sub" title="Model used by spawned sub-agents">⑃ ${escapeHtml(live.subagent_model)}</span>`);
   else if(live.subagents)chips.push(`<span class="lv sub" title="Sub-agents enabled, inheriting the main model">⑃ subagents</span>`);
   const active=(live.tools_active||[]).slice(0,3);
@@ -7330,6 +7386,8 @@ function renderConversation(run,force){
     t.output_tokens?('out '+fmtTok(t.output_tokens)):null,
     t.cost_usd?('$'+Number(t.cost_usd).toFixed(3)):null,
     (run.engine||'')+' · '+(run.status||''),
+    // A Max (API) run names its two models here; each turn names the one that answered it.
+    isCgmMaxApiRun(run)?`${CGM_MAX_API_LABEL} · ${cgmMaxApiNames(run.route_plan).join(' + ')} · API keys`:null,
     lean.has_result?('Lean '+(lean.status||'none')):null,
   ].filter(Boolean).map(c=>`<span class="convo-chip">${escapeHtml(c)}</span>`).join('');
   let html=`<div class="convo-head">

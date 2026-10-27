@@ -32,6 +32,7 @@ spent on an infrastructure error. There is no local/unsandboxed fallback.
 """
 from __future__ import annotations
 
+import contextvars
 import hashlib
 import json
 import os
@@ -46,7 +47,7 @@ import tempfile
 import threading
 import time
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 from agent_monitor import account_policy, lean_broker, usage_ledger
 from agent_monitor.proof_graph import (  # reuse LLM plumbing and safe reads
@@ -2850,12 +2851,44 @@ def _llm_environment(
 from agent_monitor.proof_graph import ObservedModel as _ObservedModel
 
 
+# The stop check of the Lean work in progress on this thread (generate's
+# should_stop, or stop_when's): asked before each model call, Lean probe,
+# compile, restore and persist.
+_SHOULD_STOP: contextvars.ContextVar[Callable[[], bool] | None] = contextvars.ContextVar(
+    "lean_verify_should_stop", default=None
+)
+
+
+class SessionStopped(Exception):
+    """The run a Lean session works for is gone (deleted): the session makes
+    no further model call or compile and persists nothing."""
+
+
+def _stop_if_asked() -> None:
+    should_stop = _SHOULD_STOP.get()
+    if should_stop is not None and should_stop():
+        raise SessionStopped("the run was deleted; the Lean session stopped")
+
+
+def stop_when(should_stop: Callable[[], bool]) -> contextvars.Token:
+    """Stop this thread's Lean work (raising :class:`SessionStopped` at its
+    next model call, probe, compile or write) once ``should_stop`` answers
+    True, until the returned token is passed to :func:`stop_reset`.  Threads
+    started meanwhile (the Lean harness) are not affected."""
+    return _SHOULD_STOP.set(should_stop)
+
+
+def stop_reset(token: contextvars.Token) -> None:
+    _SHOULD_STOP.reset(token)
+
+
 def _chat(
     env: dict[str, str],
     model: str | None,
     prompt: str,
     timeout: float | None = None,
 ) -> tuple[str, str]:
+    _stop_if_asked()
     legacy_timeout = 240 if timeout is None else timeout
     if env.get("AGENT_MONITOR_CLAUDE_SUBSCRIPTION") == "1":
         from agent_monitor.runners.claude_backend import ClaudeBackendError, claude_exec
@@ -4242,6 +4275,8 @@ def _audit_faithfulness(
     try:
         used, content = _chat(env, model, prompt)
         data = _extract_json_object(str(content))
+    except SessionStopped:
+        raise  # the run was deleted: never an audit result
     except Exception as exc:  # noqa: BLE001 - a provider outage (timeout, HTTP
         # error, subprocess failure) means "no audit"; it must never discard a
         # checked Lean result on the generate, revise or harness paths.
@@ -4467,6 +4502,7 @@ def _persist(
     authoritative_check: dict[str, Any] | None = None,
     extra: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
+    _stop_if_asked()  # nothing is written for a deleted run
     prev = load_cached(workspace) or {}
     lean_src = lean_src.rstrip() + "\n"
     kernel_receipt = _trusted_kernel_receipt(authoritative_check)
@@ -5710,6 +5746,7 @@ class _FormalSession:
                 self.main_decl = declared
 
     def _compile(self, action: str) -> str:
+        _stop_if_asked()
         self.uses_mathlib = _detect_mathlib(self.lean)
         try:
             check = _write_and_run(
@@ -5805,6 +5842,8 @@ class _FormalSession:
         """
         try:
             step()
+        except SessionStopped:
+            raise
         except Exception as exc:  # noqa: BLE001 - partial progress must persist
             reason = str(exc).strip() or exc.__class__.__name__
             self._record_event(action, f"{action} round failed: {reason}", status="error")
@@ -5946,6 +5985,8 @@ class _FormalSession:
                 proof=self.proof,
                 lean=self.lean,
             )
+        except SessionStopped:
+            raise
         except Exception as exc:  # noqa: BLE001 - an audit outage must not lose the skeleton
             reason = str(exc).strip() or exc.__class__.__name__
             self._record_event(
@@ -5963,6 +6004,7 @@ class _FormalSession:
         key = hashlib.sha256(lean.encode("utf-8")).hexdigest()
         cached = self._fingerprints.get(key)
         if cached is None:
+            _stop_if_asked()  # a Lean probe, like a compile
             try:
                 cached = _statement_fingerprint(
                     lean,
@@ -6096,6 +6138,7 @@ class _FormalSession:
             lock_rule = ""
         goals = ""
         if kind == "sorry":
+            _stop_if_asked()  # a Lean probe, like a compile
             goals = _sorry_goals(self.lean, uses_mathlib=_detect_mathlib(self.lean))
         errors = (
             _error_digest(self.check, self.lean)
@@ -6186,6 +6229,7 @@ class _FormalSession:
 
     def _restore_current(self) -> None:
         """Reinstall ``self.lean`` bytes (already checked) without recompiling."""
+        _stop_if_asked()  # never write into a deleted run's workspace
         workspace = Path(self.workspace).resolve()
         with _formal_io_lock(workspace):
             ldir = lean_dir(workspace)
@@ -6348,6 +6392,7 @@ def generate(
     prove: bool = True,
     targets: list[str] | None = None,
     source_label: str | None = None,
+    should_stop: Callable[[], bool] | None = None,
 ) -> dict[str, Any]:
     """Translate the run's proof into Lean statement-first and verify it.
 
@@ -6363,7 +6408,40 @@ def generate(
     audit and the lock: no proof round and no repair round run, and the result
     says "Statements compiled · proofs not attempted" (``scope:
     "statements"``), never an incomplete proof.
+
+    ``should_stop`` is asked before each model call, Lean probe, compile and
+    write; once it answers True (the run was deleted) the session raises
+    :class:`SessionStopped` and persists nothing.  Without one, a caller's
+    :func:`stop_when` applies.
     """
+    token = _SHOULD_STOP.set(should_stop) if should_stop is not None else None
+    try:
+        return _generate(
+            workspace=workspace, run_record=run_record, user=user, model=model,
+            max_repairs=max_repairs, audit=audit, guidance=guidance,
+            problem_override=problem_override, proof_override=proof_override,
+            prove=prove, targets=targets, source_label=source_label,
+        )
+    finally:
+        if token is not None:
+            _SHOULD_STOP.reset(token)
+
+
+def _generate(
+    *,
+    workspace: Path,
+    run_record: dict[str, Any] | None,
+    user: dict[str, Any] | None,
+    model: str | None,
+    max_repairs: int,
+    audit: bool,
+    guidance: str | None,
+    problem_override: str | None,
+    proof_override: str | None,
+    prove: bool,
+    targets: list[str] | None,
+    source_label: str | None,
+) -> dict[str, Any]:
     guest = bool((user or {}).get("guest") or (run_record or {}).get("guest"))
     if guest:
         model = "kimi-k3"
@@ -6430,6 +6508,8 @@ def generate(
     else:
         try:
             audit_result = session.final_audit()
+        except SessionStopped:
+            raise
         except Exception as exc:  # noqa: BLE001 - keep the checked result
             audit_result = {"ok": False, "error": str(exc)[:300]}
         status = _apply_fidelity(status, session._statement_flags(), audit_result)

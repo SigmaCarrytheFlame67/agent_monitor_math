@@ -299,7 +299,11 @@
     empty($('rv-step-detail'), 'No activity details', 'The proof and graph views may still contain saved artifacts.', '⌁');
   }
   $('rv-step-count').textContent = `${agents.length} ${agents.length === 1 ? 'step' : 'steps'}`;
-  const models = new Set(agents.map(agent => agent.model).filter(Boolean));
+  // A dated snapshot ("gpt-6-astra-2026-10-01", "claude-sonnet-4-5-20250929") is
+  // the model it snapshots: the run names a call by the model it asked for
+  // and its published proof by the one the provider reported.
+  const modelFamily = model => String(model).replace(/-(?:\d{4}-\d{2}-\d{2}|\d{8})$/, '');
+  const models = new Set(agents.map(agent => agent.model).filter(Boolean).map(modelFamily));
   for (const [value, label] of [[String(agents.length), 'Recorded research steps'], [models.size ? String(models.size) : '—', 'Models included in snapshot'], [statusLabel(data.status) || 'Saved', 'Run status']]) {
     const card = node('div', 'rv-monitor-stat'); card.append(node('strong', '', value), node('span', '', label)); $('rv-monitor-stats').append(card);
   }

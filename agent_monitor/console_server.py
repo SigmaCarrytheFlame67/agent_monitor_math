@@ -1453,7 +1453,9 @@ def _derived_record_for(run_id: str) -> dict | None:
     """The run record as Lean and graph work sees it.
 
     A Max run (Claude Code + Codex) does derived work on its worker route, the
-    linked Codex account; every other record is returned unchanged.
+    linked Codex account, and a Max (API) run on its worker's API model and
+    key, both at high effort; a Codex-subscription or API-key run made at
+    extra-high or maximum effort derives at high too.  See cgm_max.formal_view.
     """
     from agent_monitor import cgm_max
 
@@ -4357,6 +4359,9 @@ class Handler(RunSharingMixin, ProjectsMixin, ResearchMixin, BaseHTTPRequestHand
                 # would bill that sign-in and could fall back to Codex.
                 # Compile and Check call no model; _lean_verify_action skips
                 # the Formal refresh after them on such a run.
+                # A Max (API) run's Lean and graph work is ordinary own-key API
+                # work on its worker model (cgm_max.formal_view), which any
+                # member may do: only a follow-up re-runs Max (API) itself.
                 refusal = account_policy.member_continuation_error(
                     user, job_manager._route_from_record(run_record)
                 )
@@ -4886,8 +4891,11 @@ class Handler(RunSharingMixin, ProjectsMixin, ResearchMixin, BaseHTTPRequestHand
         ``analysis_lean`` (an Analyze run's Verify) formalizes the statements
         of the selected nodes only.
         """
-        from agent_monitor import lean_verify
+        from agent_monitor import auto_pipeline, lean_verify
 
+        # A run deleted meanwhile stops this action's Lean work at its next
+        # model call, probe, compile or write (nothing recreates its files).
+        stop_token = lean_verify.stop_when(lambda: auto_pipeline._run_gone(ws))
         try:
             if action in {"compile", "check"}:
                 # An analysis's Lean states results; checking it again never
@@ -4960,13 +4968,17 @@ class Handler(RunSharingMixin, ProjectsMixin, ResearchMixin, BaseHTTPRequestHand
                     ),
                     **overrides,
                 )
+        except lean_verify.SessionStopped:
+            self._send(410, json.dumps({"error": "This run was deleted; its Lean work stopped."}, ensure_ascii=False))
+            return
         except ValueError as exc:
             self._send(400, json.dumps({"error": str(exc)}, ensure_ascii=False))
             return
         except Exception as exc:  # noqa: BLE001
             self._send(500, json.dumps({"error": f"Lean verification failed: {exc}"}, ensure_ascii=False))
             return
-        from agent_monitor import auto_pipeline
+        finally:
+            lean_verify.stop_reset(stop_token)
 
         # Verify is how an informal-only run is formalized later; its formal
         # stages then leave "off" exactly as after a manual check.

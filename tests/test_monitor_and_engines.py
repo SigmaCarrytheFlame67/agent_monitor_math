@@ -814,10 +814,20 @@ class ProviderRoutingRegressionTests(unittest.TestCase):
         self.assertNotIn("PLAIN_MODEL", subscription_env)
 
     def test_anthropic_api_backend_uses_messages_and_reports_usage(self) -> None:
-        response = {
-            "content": [{"type": "text", "text": "verified counterexample"}],
-            "usage": {"input_tokens": 17, "output_tokens": 5},
-        }
+        # The Messages API, through the official SDK (api_backend._anthropic_message).
+        from anthropic.types.beta import BetaMessage
+
+        reply = BetaMessage.model_validate(
+            {
+                "id": "msg_1",
+                "type": "message",
+                "role": "assistant",
+                "model": "claude-haiku-4-5",
+                "content": [{"type": "text", "text": "verified counterexample"}],
+                "stop_reason": "end_turn",
+                "usage": {"input_tokens": 17, "output_tokens": 5},
+            }
+        )
         with (
             patch.dict(
                 os.environ,
@@ -827,18 +837,21 @@ class ProviderRoutingRegressionTests(unittest.TestCase):
                 },
                 clear=True,
             ),
-            patch("agent_monitor.settings._http_json", return_value=(200, response)) as request,
+            patch.object(api_backend, "_anthropic_message", return_value=reply) as request,
         ):
             result = api_backend.api_chat(
                 "system contract", "prove or refute", model="claude-haiku-4-5"
             )
         self.assertEqual(result.text, "verified counterexample")
         self.assertEqual(result.provider, "anthropic")
-        self.assertEqual(result.usage, {"input_tokens": 17, "output_tokens": 5})
-        args, kwargs = request.call_args
-        self.assertEqual(args[0], "https://api.anthropic.test/v1/messages")
-        self.assertEqual(kwargs["payload"]["system"], "system contract")
-        self.assertEqual(kwargs["payload"]["messages"][0]["content"], "prove or refute")
+        self.assertEqual(
+            (result.usage["input_tokens"], result.usage["output_tokens"]), (17, 5)
+        )
+        options, payload = request.call_args.args
+        self.assertEqual(options["base_url"], "https://api.anthropic.test")
+        self.assertEqual(options["api_key"], "test-anthropic-secret")
+        self.assertEqual(payload["system"], "system contract")
+        self.assertEqual(payload["messages"][0]["content"], "prove or refute")
 
     def test_kimi_api_backend_uses_chat_completions_and_reports_reasoning_usage(self) -> None:
         response = {

@@ -34,6 +34,9 @@ _CONTROL_PLANE_ENV_NAMES = frozenset(
 PROVIDER_ROUTE_ENV_NAMES = frozenset(
     {
         "AGENT_MONITOR_BASE_URL",
+        # Max (API)'s two models (cgm_max.apply_models_api); only a run sets them.
+        "AGENT_MONITOR_CGM_ADVISOR_MODEL",
+        "AGENT_MONITOR_CGM_WORKER_MODEL",
         "AGENT_MONITOR_CLAUDE_MODEL",
         "AGENT_MONITOR_CLAUDE_SUBSCRIPTION",
         "AGENT_MONITOR_CODEX_MODEL",
@@ -48,6 +51,9 @@ PROVIDER_ROUTE_ENV_NAMES = frozenset(
         "ANTHROPIC_API_KEY",
         "ANTHROPIC_AUTH_TOKEN",
         "ANTHROPIC_BASE_URL",
+        # The Anthropic SDK adds these headers to every request (they could
+        # replace the run's key); Claude Code reads them too.
+        "ANTHROPIC_CUSTOM_HEADERS",
         "CLAUDE_CONFIG_DIR",
         "CLAUDE_CODE_OAUTH_TOKEN",
         "CODEX_API_KEY",

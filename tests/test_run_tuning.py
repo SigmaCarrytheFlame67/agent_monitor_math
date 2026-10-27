@@ -659,12 +659,14 @@ console.log(JSON.stringify(out));
             "keep the profile they started with. Formal Lean and Lean DAG run at High, "
             "the most their Codex calls allow."
         )
+        capped_api = capped.replace("their Codex calls", "their calls")
+        expected = {"codex_subscription": capped, "api_key": capped_api}
         for (route, effort), (summary, note) in zip(cases, json.loads(result.stdout), strict=True):
             derived = cgm_max.formal_view({"auth_route": route, "reasoning_effort": effort})
             self.assertIn(" · Fast", summary)
-            self.assertEqual(note, kept if derived["reasoning_effort"] == effort else capped, (route, effort))
+            self.assertEqual(note, kept if derived["reasoning_effort"] == effort else expected[route], (route, effort))
         self.assertEqual(
-            [note for _summary, note in json.loads(result.stdout)], [kept, capped, capped, kept]
+            [note for _summary, note in json.loads(result.stdout)], [kept, capped, capped, capped_api]
         )
 
 

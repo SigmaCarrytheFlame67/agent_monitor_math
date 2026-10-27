@@ -206,7 +206,8 @@ Admin view → **Accounts** (`GET /api/admin/accounts`, administrators only;
   checked.
   - **What it lifts:** an account with full access is no longer restricted
     (`account_policy.is_restricted`). It may link its own Claude Code and
-    Codex in Settings, run Max on them, and run every engine except Hermes.
+    Codex in Settings, run Max on them, run Max (API) on the Anthropic and
+    OpenAI keys saved on it, and run every engine except Hermes.
     That includes the coding-agent harnesses, which run commands on this
     host with no OS sandbox: such a run, or a prompt injection in what it
     reads, can read the server's files and other accounts' data. Give it
@@ -274,6 +275,12 @@ ends, they are derived again only when something is missing:
   before.
 - **Run's own pass still running when the follow-up ends:** an unchanged proof
   is never derived again (unchanged behaviour).
+- **Run deleted while its views are derived:** the pass stops. A model call
+  already in flight finishes; a Lean session then stops before its next call,
+  Lean probe or compile, no later stage runs, nothing more is written, and
+  anything written after the deletion is removed when the pass ends. A Lean
+  action started from the console (Verify, Revise, Audit) stops the same way
+  and answers 410.
 
 ## Ansatz CGM runs
 
@@ -297,7 +304,10 @@ ceilings, so an environment value can only lower them.
 | `AGENT_MONITOR_CGM_CONCURRENCY` (provider calls in flight) | 3 on API routes, 1 on Codex/Claude subscription routes unless set (6) | 2 |
 
 - `AGENT_MONITOR_CGM_API_TIMEOUT` (default 300 s, or 630 s on a sponsored
-  Kimi run; 60–900) is each API call's total timeout;
+  Kimi run; 60–900; on an OpenAI model at extra-high or maximum effort the
+  default is 1800 s and the ceiling 3600; a Max (API) run sets its own
+  1800 s, below) is each API call's total timeout, and every call still ends
+  by the run's deadline;
   `AGENT_MONITOR_CGM_REASONING_EFFORT` (`low`, `high` or
   `max`) overrides the Kimi effort of every stage but the curator. Guest and
   sponsored CGM calls always have an 8192-token output ceiling.
@@ -356,9 +366,133 @@ ceilings, so an environment value can only lower them.
   stopped so leaves the candidate unattested, with the reason in `proof.md`. A
   follow-up continues as Max, or stops if either account was disconnected.
   Lean and graph work after a Max run uses the Codex account with the worker
-  model at high effort. Derived Codex calls have a fixed per-call limit, so
-  the same cap applies after any Codex-subscription run made at extra-high or
-  maximum effort; the console's run-profile note says so.
+  model at high effort. Derived calls have a fixed per-call limit, so the
+  same cap applies after any Codex-subscription or API-key run made at
+  extra-high or maximum effort (an API-key run's DAG call gets 180 s, its
+  Lean calls 240 s); the console's run-profile note says so.
+- **Max (API)** (model `max-api`, on the ordinary `api_key` route) is the same
+  split on API keys: a Claude model through the Anthropic API answers the
+  strategist, verifier and curator calls, and an OpenAI model through the
+  OpenAI API answers the worker and repair calls, both at effort `max`
+  (`output_config.effort` on the Claude side, `reasoning.effort` on the OpenAI
+  side), with the run mode fixed. Neither Max falls back to the other: Max is
+  never billed to an API key, and Max (API) never uses a linked account.
+  - **Who may run it:** the administrator, on the server's Anthropic and
+    OpenAI keys unless it saved its own (as its other API runs do), and
+    accounts given full access, on the Anthropic and OpenAI keys saved on that
+    account, never the server's, even in public mode. It needs both keys.
+    Guests, other members and projects that stay tool-free (a
+    non-administrator wrote in them) are refused, and so is a follow-up by an
+    account whose full access has ended. The console offers "Max (API)" next
+    to Max in the Ansatz CGM model picker when `GET /api/settings` reports
+    `cgm_max_api.available` (otherwise the plan's `reason` says what is
+    missing, and a start is refused with it), whatever the account's runtime
+    for new runs and never as the automatic choice; the picker, the launcher
+    and the run's chips say it is billed to API keys.
+  - **Models:** `claude-fable-5-1` (advisor) and `gpt-6-astra` (worker) by
+    default. `AGENT_MONITOR_CGM_MAX_API_ADVISOR_MODEL` and
+    `AGENT_MONITOR_CGM_MAX_API_WORKER_MODEL` in the console environment pin
+    another model of each allowlist (advisor `claude-fable-5-1`,
+    `claude-opus-5-5`, `claude-sonnet-5-5`; worker `gpt-6-astra`,
+    `gpt-6.1-sol`, `gpt-6-sol`, `gpt-5.6-sol`); any other value is ignored. A
+    run and its follow-ups keep the models in its `route_plan`, and a
+    follow-up stops if either key is gone. On the Claude side, a request that
+    Anthropic's safety classifiers refuse is answered in the same call by the
+    fallback model Anthropic recommends for that refusal (server-side
+    `fallbacks: "default"`, on `api.anthropic.com` only), at that model's
+    rates. A refusal that remains is unusable output, like an empty reply:
+    its partial text is never used, a strategist so refused leaves the run
+    on one direct plan, and a verifier so refused gives that candidate an
+    "error" verdict while the others are still checked.
+  - **Limits:** each call may take 1800 s and write up to 64,000 output
+    tokens, reasoning included, and the run 10,800 s, as for Max
+    (`agent_monitor/cgm_max.py`). Unlike Max, up to 3 calls are in flight
+    (`AGENT_MONITOR_CGM_CONCURRENCY`, 1-6). The usual call budgets above
+    apply (`AGENT_MONITOR_CGM_MAX_CALLS`, 16 recorded calls by default), plus
+    the written-proof round's own calls. The derived views wait for the
+    run's own outer watchdog plus 300 s.
+  - **Data retention:** `claude-fable-5-1` needs 30-day data retention: a key
+    whose Anthropic organisation uses zero data retention gets HTTP 400 on
+    every advisor call, and the run stops at its first call with Anthropic's
+    message. `AGENT_MONITOR_CGM_MAX_API_ADVISOR_MODEL` can pin another
+    advisor (for every account).
+  - **Cost: there is no spending cap.** At list prices ($10 per million input
+    and $50 per million output tokens on both default models), 16 calls of
+    about 40,000 input and 20,000 output tokens each cost about $22 ($6.40 of
+    input and $16 of output); longer outputs cost more, up to $3.20 of output
+    for a call that uses its whole 64,000-token ceiling: at the default
+    budgets the worst case is about $70 of output per run (22 calls including
+    the written-proof round, each at 64,000 tokens), plus up to about $20 for
+    the automatic Lean and graph pass on the worker's key (about a dozen
+    calls of up to 32,768 output tokens), more with higher budgets, and as
+    much again for each follow-up that changes the proof. The spend limits
+    set with Anthropic and OpenAI on the accounts that own the keys are the
+    cap.
+  - **Records and billing:** the run records model `max-api` on route
+    `api_key`, with `route_plan` `{"mode": "api", "advisor": {…,
+    "provider": "anthropic", …}, "worker": {…, "provider": "openai", …}}`.
+    Its receipt is schema 4 (transport `hybrid`) with the Anthropic and
+    OpenAI `api_chat` route table; a revision older than this one shows such
+    runs as unattested and refuses their follow-ups until this one is back.
+    Its billing class is `api`, and each call is priced at the rates of the
+    model that billed it: the Claude model that answered, or each model's
+    own share of a call a refusal fallback passed on (the reply's node names
+    the model that answered and carries its share; each model that declined
+    first gets a node of its own, "declined first by <model>"); and the
+    requested OpenAI model,
+    since OpenAI replies name a dated snapshot that may have no price of its
+    own. Calls cut at their time limit, abandoned at the run's deadline or
+    in flight at a Stop are not in the Monitor's cost, though the provider
+    may bill them. Lean and graph work after a Max (API) run uses the worker
+    model on its API key at high effort.
+- **Claude API calls** that runs make through `api_backend.api_chat` (Max
+  (API), Plain, Meta-Harness, single-route Ansatz CGM, Analyze, and the
+  agent harnesses' own audit calls) go through the official SDK
+  (`anthropic`, pinned in `pyproject.toml`). The DeepAgents and OpenClaw
+  agent loops and the console's own Lean and DAG model calls use their own
+  clients, without the rules below. DeepAgents' audit calls run in its own
+  venv: `setup.sh` installs the same pinned SDK there, and a venv made
+  before this SDK must be refreshed (re-run `setup.sh`), or its Claude
+  audit calls fail with a message that says so.
+  - **Endpoints.** Calls to `api.anthropic.com` stream the reply; with a
+    custom `ANTHROPIC_BASE_URL` (a gateway) each attempt is one plain
+    request, as before.
+  - **Refusal fallbacks.** On `api.anthropic.com`, `claude-fable-5-1`,
+    `claude-opus-5-5`, `claude-opus-5` and `claude-sonnet-5-5` calls opt
+    into Anthropic's server-side fallbacks in every run: a request their
+    safety classifiers refuse is answered in the same call by the model
+    Anthropic recommends for the refusal's category (some categories have
+    none, and the refusal stands). The declined attempt is billed when it
+    declined mid-reply or in a billed category; the Monitor books every
+    attempt Anthropic reports in `usage.iterations`, so its cost can exceed
+    the bill. Only Max (API) prices each model's share at its own rates;
+    other runs book the call as one. A refusal that remains is never used as an answer: it fails a
+    Plain or agent run, and a CGM or Analyze stage treats it like an empty
+    reply (Analyze says the model declined, and why).
+  - **Time limit.** An attempt must connect within 10 s and receive its
+    response headers within what is left of the call; from then on the
+    reply is ended at the call's timeout however it is still arriving, and
+    a reply whose final event arrived is kept even if the connection then
+    failed.
+  - **Retries.** Only a request Anthropic refused before processing it
+    (HTTP 429 rate limited or 529 overloaded) is sent again, at most twice,
+    after the wait the refusal names (otherwise 2 s, then 4 s) and only
+    while at least 5 s would remain; anything else (a timeout, a 5xx, a
+    dropped stream) may have been processed and billed, so it fails the call.
+  - Redirects are never followed, and runs never inherit
+    `ANTHROPIC_CUSTOM_HEADERS` (the SDK would add those headers to every
+    request).
+- **OpenAI output limit:** a call through `api_chat` gets
+  `AGENT_MONITOR_API_MAX_TOKENS` output tokens (default 16,384). At
+  extra-high or maximum effort an OpenAI call gets 64,000 by default
+  instead, and 1800 s when its caller sets no timeout (CGM, Analyze and
+  Readability calls: unless `AGENT_MONITOR_CGM_API_TIMEOUT`, or for Analyze
+  and Readability their own `*_API_TIMEOUT`, is set; up to 3600 s):
+  reasoning counts against the limit, and at 16,384 it could use all of it
+  and return no answer. A Plain or Meta-Harness run at those efforts gets a
+  3-hour watchdog instead of 1 hour (`AGENT_MONITOR_CLI_TIMEOUT` and the
+  engine's own timeout still win). An empty reply cut at its limit says so
+  in the run's error; a reply cut after some text is used as it is.
 - Sponsored calls go through the Kimi broker's credential gateway, which runs
   at most `PUBLIC_KIMI_GATEWAY_CONCURRENCY` (default 8) upstream calls at once.
   Each guest run keeps up to 2 in flight, so a few concurrent runs can fill
@@ -572,8 +706,8 @@ the CGM runners; it reads `analysis/request.json` (written by `jobs.py` with
 `agent_monitor.analyze.request`) and makes tool-free model calls through the
 same response-only turn machinery and routes as `math_harness` (sponsored
 Kimi through the loopback broker with the `math_harness` credential scope, an
-own key, or, for administrators only, a Codex or Claude account; Max is
-refused).
+own key, or, for administrators only, a Codex or Claude account; Max and
+Max (API) are refused).
 
 The console offers it as the third mode next to "Informal only" and
 "Informal + formalization": `POST /api/runs` with `run_kind: "analyze"`
@@ -820,7 +954,7 @@ when the server offers it.
 | `ANALYZE_CMD` | unset (an override removes Analyze from guests and members) |
 | `AGENT_MONITOR_ANALYZE_<PROFILE>_MAX_NODES`, `_MAX_CALLS`, `_MAX_SECONDS` (`GUEST`, `MEMBER_SPONSORED`, `MEMBER_OWN_KEY`, `ADMIN`) | 12/16/2400, 30/36/3600, 120/140/3600, 256/300/14400 (ceilings 256/300/14400) |
 | `AGENT_MONITOR_ANALYZE_CONCURRENCY` | 3 (sponsored and guest at most 2, subscriptions 1) |
-| `AGENT_MONITOR_ANALYZE_API_TIMEOUT` | 300 s (630 s on sponsored Kimi) |
+| `AGENT_MONITOR_ANALYZE_API_TIMEOUT` | 300 s (630 s on sponsored Kimi; 1800 s, up to 3600, on an OpenAI model at Extra high or Ultra) |
 | `AGENT_MONITOR_ANALYZE_GITHUB_TOKEN` | unset |
 
 ## Readability runs
@@ -855,10 +989,11 @@ the listing, with a per-viewer `readability` policy).
   | admin | also its own Kimi key, or a Codex or Claude Code account (response-only, tool-free, one call in flight) | 120 / 300 / 14,400 s |
 
   On an API key Readability runs Kimi K3 only (another provider's model is
-  refused, by `start_job` and by the runner); Max is refused. A sponsored run
-  is also held to 150 calls and 5,400 s. Guests start one readability run
-  per hour (three per client network) on top of the guest run limits;
-  members count against the member run limits (2 at once, 12 per hour).
+  refused, by `start_job` and by the runner); Max and Max (API) are refused.
+  A sponsored run is also held to 150 calls and 5,400 s. Guests start one
+  readability run per hour (three per client network) on top of the guest
+  run limits; members count against the member run limits (2 at once, 12 per
+  hour).
   Policy note for the owner: a member's sponsored run may spend up to four
   of its 30 calls on repairs (two parts rewritten again and re-checked);
   guests' runs are never repaired.
@@ -988,7 +1123,7 @@ the listing, with a per-viewer `readability` policy).
 | `READABILITY_CMD` | unset (an override removes Readability from guests and members) |
 | `AGENT_MONITOR_READABILITY_<PROFILE>_MAX_PARTS`, `_MAX_CALLS`, `_MAX_SECONDS` (`GUEST`, `MEMBER_SPONSORED`, `MEMBER_OWN_KEY`, `ADMIN`) | 6/16/2400, 12/30/3600, 40/90/3600, 120/300/14400 (ceilings 120/300/14400) |
 | `AGENT_MONITOR_READABILITY_CONCURRENCY` | 3 (sponsored and guest at most 2, subscriptions 1) |
-| `AGENT_MONITOR_READABILITY_API_TIMEOUT` | 300 s (630 s on sponsored Kimi) |
+| `AGENT_MONITOR_READABILITY_API_TIMEOUT` | 300 s (630 s on sponsored Kimi; 1800 s, up to 3600, on an OpenAI model at Extra high or Ultra) |
 | `AGENT_MONITOR_READABILITY_WATCHDOG_SECONDS` | set per run: its deadline + one call + 300 s |
 | `AGENT_MONITOR_READABILITY_SPONSORED_ASKS_PER_DAY` | 200 sponsored questions per UTC day, about readable versions and analyses together (0 turns them off) |
 | `AGENT_MONITOR_READABILITY_GUEST_SPONSORED_ASKS_PER_DAY` | half of the above |

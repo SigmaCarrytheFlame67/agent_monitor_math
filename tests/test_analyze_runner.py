@@ -269,7 +269,7 @@ def test_provider_failure_on_every_check_fails_the_run_but_keeps_the_structure(t
     server = provider(script)
     # An own key's provider says why (the key is redacted where the error is raised).
     with pytest.raises(runner.AnalyzeError, match=re.escape(
-            "No result could be checked: Deepseek model call failed for deepseek-test (HTTP 500): upstream exploded")):
+            "No result could be checked: DeepSeek model call failed for deepseek-test (HTTP 500): upstream exploded")):
         run(tmp_path, write_request(tmp_path), own_key_env(server))
     graph = ag.load(tmp_path)
     assert graph is not None and all(node["meta"]["verdict"] == "not_checked" for node in graph["nodes"])
@@ -288,7 +288,7 @@ def test_an_own_key_refusal_stops_the_checks_and_says_why(tmp_path, provider, st
         return paper_map() if kind == "map" else (status, {"error": dict(error)})
 
     server = provider(script)
-    reason = f"Deepseek model call failed for deepseek-test (HTTP {status}): {error['message']}"
+    reason = f"DeepSeek model call failed for deepseek-test (HTTP {status}): {error['message']}"
     with pytest.raises(runner.AnalyzeError, match=re.escape(f"No result could be checked: {reason}")):
         run(tmp_path, write_request(tmp_path), own_key_env(server, AGENT_MONITOR_ANALYZE_CONCURRENCY="1"))
     # Every later check would be refused the same way.
@@ -306,7 +306,7 @@ def test_a_rate_limited_check_does_not_stop_the_others(tmp_path, provider):
     server = provider(script)
     run(tmp_path, write_request(tmp_path), own_key_env(server, AGENT_MONITOR_ANALYZE_CONCURRENCY="1"))
     assert node_meta(tmp_path, "thm:main")["reason"] == (
-        "Not checked: Deepseek model call failed for deepseek-test (HTTP 429): Rate limit reached for requests")
+        "Not checked: DeepSeek model call failed for deepseek-test (HTTP 429): Rate limit reached for requests")
     assert node_meta(tmp_path, "lem:rep")["verdict"] == node_meta(tmp_path, "lem:sum")["verdict"] == "checked"
 
 
@@ -886,6 +886,47 @@ def test_a_failed_call_is_described_in_words_that_fit_every_stage(tmp_path, prov
     assert analysis._note_failure(timeout) == "The model did not answer in time (codex exec timed out after 600s)"
     assert analysis._note_failure(failed(ConnectionResetError())) == "The model provider did not answer"
     assert not analysis.permanent_failure
+
+
+
+def test_a_declined_check_says_the_model_declined(tmp_path, provider):
+    # An Anthropic refusal is unusable output, like an empty answer, but the
+    # reason (and its category) is kept for the node, Ask and the paper map.
+    from types import SimpleNamespace
+
+    from agent_monitor.runners.api_backend import APIBackendError
+
+    analysis = runner.AnalysisRun(tmp_path, write_request(tmp_path), env=own_key_env(provider(default_script())),
+                                  sink=lambda _event: None)
+
+    def empty(cause):
+        try:
+            raise harness.EmptyReplyError("check-1 provider call failed: ...") from cause
+        except harness.EmptyReplyError as error:
+            return error
+
+    def settle(error):
+        return analysis._settle(SimpleNamespace(turn_job=SimpleNamespace(error=error, abandoned=False)))[2]
+
+    declined = APIBackendError("Anthropic declined the request for claude-opus-4-8 (cyber)", refusal=True)
+    assert settle(empty(declined)) == "Anthropic declined the request for claude-opus-4-8 (cyber)"
+    assert analysis._note_failure(empty(declined)) == "Anthropic declined the request for claude-opus-4-8 (cyber)"
+    assert not analysis.permanent_failure
+    # A plain empty answer reads as before.
+    assert settle(empty(None)).startswith("the model returned an empty answer")
+
+
+
+def test_an_openai_check_at_maximum_effort_gets_30_minutes(tmp_path, provider):
+    # Such calls get 64,000 output tokens (api_backend) and the time to write them.
+    server = provider(default_script())
+    for effort, expected in (("max", 1800), ("xhigh", 1800), ("high", 300)):
+        env = base_env(OPENAI_API_KEY="test-key", OPENAI_BASE_URL=f"http://127.0.0.1:{server.server_address[1]}/v1",
+                       AGENT_MONITOR_SELECTED_MODEL="gpt-6-astra", AGENT_MONITOR_RUN_REASONING_EFFORT=effort)
+        workspace = tmp_path / effort
+        analysis = runner.AnalysisRun(workspace, write_request(workspace, model="gpt-6-astra"), env=env,
+                                      sink=lambda _event: None)
+        assert analysis.ctx.api_timeout == expected, effort
 
 
 SHORT_TEX =r"""\documentclass{article}

@@ -44,30 +44,36 @@ MAX_BLOCK_STATEMENT_BYTES = 8_000
 MAX_BLOCK_PROOF_BYTES = 60_000
 
 _DECOR = r"[\s#>*_`]*"
+# Possessive quantifiers throughout: a model line with a long whitespace run
+# made the former ``\s*[*_`]*\s*`` sequences backtrack cubically, holding the
+# GIL (and so Stop) for minutes.  Captured groups are stripped by the callers.
 _HEADER_RE = re.compile(
-    rf"^{_DECOR}={{3,}}\s*(?P<kind>LEMMA|THEOREM|STATUS|FINDING)\b\s*"
-    rf"(?P<arg>[^=]*?)\s*={{3,}}{_DECOR}$",
+    rf"^{_DECOR}={{3,}}\s*+(?P<kind>LEMMA|THEOREM|STATUS|FINDING)\b"
+    rf"(?P<arg>[^=]*+)={{3,}}{_DECOR}$",
     re.IGNORECASE,
 )
 _END_RE = re.compile(rf"^{_DECOR}={{3,}}\s*END\b[^=]*={{3,}}{_DECOR}$", re.IGNORECASE)
 _KEY_RE = re.compile(
-    r"^[\s>*_`-]*(?P<key>subgoal|uses|depends on|dependencies|cites)\s*[*_`]*\s*:"
-    r"\s*[*_`]*\s*(?P<value>.*?)\s*$",
+    r"^[\s>*_`-]*+(?P<key>subgoals?|uses|depends on|dependencies|cites)[\s*_`]*+:"
+    r"[\s*_`]*+(?P<value>.*)$",
     re.IGNORECASE,
 )
+# "Statement:", "**Proof.**", and a short qualifier: "Proof (sketch):".
+_QUALIFIER = r"(?:\s*+\([^()\n]{0,400}\))?"
 _STATEMENT_RE = re.compile(
-    r"^[\s#>*_`]*statement\s*[*_`]*\s*(?:[:.]\s*[*_`]*\s*(?P<rest>.*?))?\s*$",
+    rf"^[\s#>*_`]*+statement{_QUALIFIER}[\s*_`]*+(?:[:.][\s*_`]*+(?P<rest>.*))?$",
     re.IGNORECASE,
 )
 _PROOF_RE = re.compile(
-    r"^[\s#>*_`]*proof\s*[*_`]*\s*(?:[:.]\s*[*_`]*\s*(?P<rest>.*?))?\s*$",
+    rf"^[\s#>*_`]*+proof{_QUALIFIER}[\s*_`]*+(?:[:.][\s*_`]*+(?P<rest>.*))?$",
     re.IGNORECASE,
 )
-_CLAIM_RE = re.compile(
-    r"^[\s#>*_`]*claim\s*[*_`]*\s*:\s*[*_`]*\s*(?P<rest>.*?)\s*$", re.IGNORECASE
-)
+# "Proof (structure of the computation," with the parenthesis closing on a
+# later line (seen in a field-test reply): the proof starts there.
+_PROOF_OPEN_RE = re.compile(r"^[\s#>*_`]*+proof\s*+(?P<rest>\([^()\n]*)$", re.IGNORECASE)
+_CLAIM_RE = re.compile(r"^[\s#>*_`]*+claim[\s*_`]*+:[\s*_`]*+(?P<rest>.*)$", re.IGNORECASE)
 _EVIDENCE_RE = re.compile(
-    r"^[\s#>*_`]*evidence\s*[*_`]*\s*(?:[:.]\s*[*_`]*\s*(?P<rest>.*?))?\s*$",
+    r"^[\s#>*_`]*+evidence[\s*_`]*+(?:[:.][\s*_`]*+(?P<rest>.*))?$",
     re.IGNORECASE,
 )
 _FENCE_RE = re.compile(r"^\s*```[A-Za-z0-9_-]*\s*$")
@@ -179,13 +185,43 @@ def _balanced_objects(text: str) -> list[str]:
     return spans
 
 
-def _load_object(span: str) -> Any:
+_LONE_SURROGATE_RE = re.compile("[\ud800-\udfff]")
+
+
+def without_lone_surrogates(text: str) -> str:
+    """``text`` with any unpaired UTF-16 surrogate (a JSON ``\\ud83d`` escape
+    on its own, say) replaced by U+FFFD, so it encodes as UTF-8."""
+    return _LONE_SURROGATE_RE.sub("\ufffd", text)
+
+
+def _clean_json(value: Any) -> Any:
+    if isinstance(value, str):
+        return without_lone_surrogates(value)
+    if isinstance(value, list):
+        return [_clean_json(item) for item in value]
+    if isinstance(value, dict):
+        return {_clean_json(key): _clean_json(item) for key, item in value.items()}
+    return value
+
+
+def _unique_keys(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
+    keys = [key for key, _value in pairs]
+    if len(set(keys)) != len(keys):
+        raise ValueError("a JSON object repeats a key")
+    return dict(pairs)
+
+
+def _load_object(span: str, *, unique_keys: bool = False) -> Any:
+    """``span`` as JSON, or None.  With ``unique_keys`` (a verdict object) a
+    repeated key makes it invalid: JSON keeps the last one, so a report with
+    two "critical_errors" lists could hide the errors it lists."""
+    hook = _unique_keys if unique_keys else None
     # The repaired form first: JSON silently accepts ``\frac`` as a form feed,
     # so an unrepaired parse can succeed with corrupted text.
     for candidate in (repair_json_escapes(span), span):
         try:
-            return json.loads(candidate)
-        except (json.JSONDecodeError, RecursionError):
+            return _clean_json(json.loads(candidate, object_pairs_hook=hook))
+        except (ValueError, RecursionError):  # JSONDecodeError, too-long ints, repeated keys
             continue
     return None
 
@@ -232,7 +268,7 @@ def find_verdict_object(text: str) -> dict[str, Any]:
         raise ParseError("empty reply")
     bearing: list[Any] = []
     for span in _balanced_objects(stripped):
-        value = _load_object(span)
+        value = _load_object(span, unique_keys=True)
         # Textual match catches invalid JSON; the parsed check catches keys
         # spelled with escapes (``"\u0076erdict"``).
         if _VERDICT_KEY_RE.search(span) or _contains_key(value, "verdict"):
@@ -406,7 +442,8 @@ def parse_strategist(
     if not plans:
         raise ParseError("strategist returned no usable plan")
     conclusions: list[Conclusion] = []
-    for item in raw.get("immediate_conclusions") or []:
+    raw_conclusions = raw.get("immediate_conclusions")
+    for item in raw_conclusions if isinstance(raw_conclusions, list) else []:
         if len(conclusions) >= 6 or not isinstance(item, Mapping):
             continue
         statement = _text(item.get("statement"), limit=2000)
@@ -561,9 +598,10 @@ def _parse_statement_block(
         key = _KEY_RE.match(line)
         if key:
             name = key.group("key").lower()
-            if name == "subgoal":
-                token = key.group("value").strip().strip("*_`[]().").upper()
-                token = token.split()[0] if token.split() else ""
+            if name.startswith("subgoal"):
+                # "Subgoal: S2" or "Subgoals: S1, S2": a block serves the first.
+                tokens = re.split(r"[\s,;]+", key.group("value").strip().strip("*_`[]().").upper())
+                token = tokens[0] if tokens else ""
                 subgoal = token if _SUBGOAL_RE.fullmatch(token) else None
             else:
                 uses = _parse_uses(key.group("value"))
@@ -579,7 +617,7 @@ def _parse_statement_block(
     proof_start: int | None = None
     first_proof = ""
     for position in range(statement_start, len(body)):
-        match = _PROOF_RE.match(body[position])
+        match = _PROOF_RE.match(body[position]) or _PROOF_OPEN_RE.match(body[position])
         if match:
             proof_start = position + 1
             first_proof = match.group("rest") or ""

@@ -9,6 +9,7 @@ import os
 import re
 import signal
 import shutil
+import sqlite3
 import stat
 import sys
 import threading
@@ -322,7 +323,7 @@ def _analyze_model(user: dict[str, Any] | None, model: str | None) -> str:
         from agent_monitor.settings import resolved_user_env
 
         saved = str(resolved_user_env(user).get("AGENT_MONITOR_MODEL") or "").strip()
-        if saved and not cgm_max.is_max_model(saved):
+        if saved and not (cgm_max.is_max_model(saved) or cgm_max.is_max_api_model(saved)):
             return saved
     return GUEST_DEFAULT_MODEL
 
@@ -367,7 +368,7 @@ def _saved_default_model(
 
     env = resolved_user_env(user)
     saved = str(env.get("AGENT_MONITOR_MODEL") or "").strip()
-    if not saved or cgm_max.is_max_model(saved):
+    if not saved or cgm_max.is_max_model(saved) or cgm_max.is_max_api_model(saved):
         return None
     route = str(auth_route or "").strip().lower() or {
         "api": "api_key",
@@ -478,7 +479,7 @@ def _cgm_operator_timeout_seconds(engine: str, env: dict[str, str]) -> int | Non
     top (_cli_timeout_seconds).  ``None`` without one, and for Max, which
     operator timeouts never cut short."""
     normalized = str(engine or "").strip().upper().replace("-", "_")
-    if normalized not in {"MATH_HARNESS", "KIMI"} or env.get(cgm_max.ROUTE_MODE_ENV) == "max":
+    if normalized not in {"MATH_HARNESS", "KIMI"} or cgm_max.route_mode(env) is not None:
         return None
     override = env.get(f"AGENT_MONITOR_{normalized}_TIMEOUT") or env.get("AGENT_MONITOR_CLI_TIMEOUT")
     try:
@@ -1626,6 +1627,22 @@ def start_job(
         speed_mode = cgm_max.SPEED
         use_subagents = False
         subagent_model = None
+    api_max_plan: dict[str, Any] | None = None
+    if cgm_max.is_max_api_model(model):
+        # Max (API): the same split on the run owner's Anthropic and OpenAI
+        # keys, never a linked account (and never a fallback from Max).
+        if engine not in _CGM_ENGINES:
+            raise ValueError("Max (API) is available only for Ansatz CGM")
+        api_max_plan = cgm_max.plan_for_api(user)
+        if not api_max_plan["available"]:
+            raise ValueError(api_max_plan["reason"])
+        engine = cgm_max.ENGINE
+        model = cgm_max.API_MODEL_ID
+        auth_route = cgm_max.API_ROUTE
+        reasoning_effort = cgm_max.EFFORT
+        speed_mode = cgm_max.SPEED
+        use_subagents = False
+        subagent_model = None
     # Guests run only the two tool-free engines, never a coding-agent CLI, and
     # never with subagents or a command override that escapes that contract.
     if is_guest:
@@ -1670,7 +1687,14 @@ def start_job(
         # before the provider keys are projected for it.
         model = _saved_default_model(user, engine=engine, auth_route=auth_route) or model
 
-    extra_env = _user_extra_env(user, model, subagent_model)
+    extra_env = _user_extra_env(
+        user,
+        *(
+            (api_max_plan["advisor"]["model"], api_max_plan["worker"]["model"])
+            if api_max_plan is not None
+            else (model, subagent_model)
+        ),
+    )
     if is_guest:
         # Two ceilings, one per transport: the Plain/Kimi harnesses read the
         # PLAIN variable, and api_backend clamps every API call with the other.
@@ -1779,6 +1803,18 @@ def start_job(
         if not {"claude_subscription", "codex_subscription"} <= auth_modes:
             raise ValueError(f"{engine_info.get('label') or engine} cannot run Max")
         route = cgm_max.ROUTE
+    elif api_max_plan is not None:
+        # Nor does Max (API): it always uses the two API keys, which must both
+        # have reached the run (one key is never enough).
+        if cgm_max.API_ROUTE not in auth_modes:
+            raise ValueError(f"{engine_info.get('label') or engine} cannot run Max (API)")
+        if not all(
+            str(extra_env.get(name) or "").strip() for name in cgm_max.API_KEY_ENVS.values()
+        ):
+            raise ValueError(
+                "Max (API) needs both an Anthropic and an OpenAI API key; add them in Settings"
+            )
+        route = cgm_max.API_ROUTE
     else:
         route, _route_was_explicit = _selected_auth_route(
             requested=auth_route,
@@ -1864,6 +1900,9 @@ def start_job(
     )
     if max_plan is not None:
         cgm_max.apply_models(extra_env, max_plan)
+    if api_max_plan is not None:
+        # After _configure_auth_route, which clears every route-mode marker.
+        cgm_max.apply_models_api(extra_env, api_max_plan)
     _raise_long_effort_timeouts(
         extra_env, engine=engine, route=route, effort=tuning.get("reasoning_effort")
     )
@@ -1979,7 +2018,8 @@ def start_job(
             text=text,
             pid=pid,
             path=path,
-            max_plan=max_plan,
+            # Either Max: the plan names both sides (an API plan has mode "api").
+            max_plan=max_plan if max_plan is not None else api_max_plan,
             max_iterations=max_iterations,
             use_subagents=use_subagents,
             subagent_model=subagent_model,
@@ -2177,6 +2217,7 @@ def _start_job_launch(
             **(
                 {
                     "route_plan": {
+                        **({"mode": max_plan["mode"]} if max_plan.get("mode") else {}),
                         "advisor": dict(max_plan["advisor"]),
                         "worker": dict(max_plan["worker"]),
                     }
@@ -2310,6 +2351,18 @@ def _user_extra_env(
     return dict(project_provider_env(env, requested_models))
 
 
+def _run_provider_models(
+    run_data: dict[str, Any], model: str | None, subagent_model: str | None
+) -> tuple[str | None, str | None]:
+    """The models whose provider keys a follow-up's env keeps: both sides of a
+    Max (API) run (its mode id names no provider), else the run's model and
+    its subagent model."""
+    if cgm_max.is_max_api_record(run_data) or cgm_max.is_max_api_model(model):
+        plan = cgm_max.record_plan_api(run_data)
+        return plan["advisor"]["model"], plan["worker"]["model"]
+    return model, subagent_model
+
+
 def _account_awaits_reconnect(route: str, user_id: int | None) -> bool:
     """True when the route's linked login was rejected and needs a new sign-in."""
     if user_id is None:
@@ -2397,6 +2450,14 @@ def _continuation_auth_environment(
             )
         ):
             raise ValueError("The API connection originally used by this run is unavailable")
+        if cgm_max.is_max_api_record(run_data) and not all(
+            str(env.get(name) or "").strip() for name in cgm_max.API_KEY_ENVS.values()
+        ):
+            # Both sides keep their provider: one key is never enough.
+            raise ValueError(
+                "This Max (API) run needs both an Anthropic and an OpenAI API key; "
+                "add them in Settings"
+            )
     owner_id = (user or {}).get("id") or run_data.get("owner_id")
     try:
         configured = _configure_auth_route(env, route=route, user_id=owner_id)
@@ -2434,6 +2495,8 @@ def _continuation_auth_environment(
         )
     if route == cgm_max.ROUTE:
         cgm_max.apply_models(configured, cgm_max.record_plan(run_data))
+    elif route == cgm_max.API_ROUTE and cgm_max.is_max_api_record(run_data):
+        cgm_max.apply_models_api(configured, cgm_max.record_plan_api(run_data))
     from agent_monitor.run_tuning import from_record as apply_recorded_tuning
 
     tuning = apply_recorded_tuning(configured, run_data) or {}
@@ -2825,10 +2888,14 @@ def _execute_job_body(
         published_before_stop = _published_before_stop(result_run)
         if _stop_event(run_id).is_set() and not published_before_stop:
             result_run["status"] = "stopped"
-        max_run = (extra_env or {}).get(cgm_max.ROUTE_MODE_ENV) == "max"
-        if max_run:
+        max_kind = cgm_max.route_mode(extra_env)
+        max_run = max_kind is not None
+        if max_kind == "max":
             result_run.setdefault("live", {})["auth_mode"] = cgm_max.ROUTE
             final_route = cgm_max.ROUTE
+        elif max_kind == cgm_max.API_ROUTE_MODE:
+            result_run.setdefault("live", {})["auth_mode"] = cgm_max.API_ROUTE
+            final_route = cgm_max.API_ROUTE
         elif (extra_env or {}).get("AGENT_MONITOR_CLAUDE_SUBSCRIPTION") == "1":
             result_run.setdefault("live", {})["auth_mode"] = "claude_subscription"
             final_route = "claude_subscription"
@@ -2839,7 +2906,9 @@ def _execute_job_body(
             final_route = "api_key"
         effective_result_model = str(
             cgm_max.MODEL_ID
-            if max_run
+            if max_kind == "max"
+            else cgm_max.API_MODEL_ID
+            if max_kind == cgm_max.API_ROUTE_MODE
             else (result_run.get("live") or {}).get("model") or model or ""
         ).strip()
         if effective_result_model:
@@ -4454,6 +4523,25 @@ def _apply_analyze_runner_env(env: dict[str, str], extra_env: dict[str, str]) ->
         env.pop("AGENT_MONITOR_SPONSORED_KIMI_URL", None)
 
 
+# The outer watchdog of a Plain or Meta-Harness run whose OpenAI calls run at
+# extra-high or maximum effort (see _cli_timeout_seconds).
+_LONG_EFFORT_CLI_TIMEOUT = 10_800
+
+
+def _openai_long_effort(env: dict[str, str], model: object) -> bool:
+    """Whether a run's ``api_chat`` calls of ``model`` are OpenAI calls at
+    extra-high or maximum effort (api_backend then allows each one
+    HIGH_EFFORT_TIMEOUT).  Never on a linked account's route."""
+    if not str(model or "").strip() or any(
+        env.get(name) == "1"
+        for name in ("AGENT_MONITOR_CODEX_SUBSCRIPTION", "AGENT_MONITOR_CLAUDE_SUBSCRIPTION")
+    ):
+        return False
+    from agent_monitor.runners import api_backend
+
+    return api_backend.openai_high_effort(env, str(model))
+
+
 def _cli_timeout_seconds(engine: str, env: dict[str, str]) -> int:
     """Resolve a bounded CLI timeout, including multi-stage harness budgets."""
     normalized = str(engine or "").strip().upper().replace("-", "_")
@@ -4524,6 +4612,13 @@ def _cli_timeout_seconds(engine: str, env: dict[str, str]) -> int:
             inner = 0.0
         if math.isfinite(inner) and inner > 0:
             default = max(default, math.ceil(inner) + 300)
+    elif normalized in {"PLAIN", "METAHARNESS"} and _openai_long_effort(
+        env, env.get(f"{normalized}_MODEL")
+    ):
+        # Their calls go through api_chat, which gives an OpenAI call at
+        # extra-high or maximum effort 64,000 output tokens and 30 minutes;
+        # a run of several such calls gets the three hours DeepAgents has.
+        default = _LONG_EFFORT_CLI_TIMEOUT
     else:
         default = 3_600
     engine_override = (
@@ -4539,10 +4634,11 @@ def _cli_timeout_seconds(engine: str, env: dict[str, str]) -> int:
     except (TypeError, ValueError):
         requested = default
     bounded = max(60, min(requested, 86_400))
-    if normalized == "MATH_HARNESS" and env.get(cgm_max.ROUTE_MODE_ENV) == "max":
-        # Max fixes its own call and run limits (cgm_max.apply_models), and a
-        # runner the watchdog stops publishes nothing: operator timeouts may
-        # raise a Max run's watchdog but never cut the run short.
+    if normalized == "MATH_HARNESS" and cgm_max.route_mode(env) is not None:
+        # Either Max fixes its own call and run limits (cgm_max.apply_models,
+        # apply_models_api), and a runner the watchdog stops publishes
+        # nothing: operator timeouts may raise a Max run's watchdog but never
+        # cut the run short.
         bounded = max(bounded, default, cgm_max.RUN_SECONDS + 300 + writeup)
     if env.get("AGENT_MONITOR_SPONSORED_KIMI") == "1":
         bounded = min(bounded, _SPONSORED_KIMI_CLI_TIMEOUT_MAX)
@@ -4556,8 +4652,8 @@ def _apply_selected_model_env(
     requested = str(model or "").strip()
     if not requested:
         return
-    if env.get(cgm_max.ROUTE_MODE_ENV) == "max":
-        # cgm_max.apply_models already chose the Claude and Codex models.
+    if cgm_max.route_mode(env) is not None:
+        # cgm_max.apply_models (or apply_models_api) already chose both models.
         return
     if env.get("AGENT_MONITOR_CLAUDE_SUBSCRIPTION") == "1":
         env["AGENT_MONITOR_SELECTED_MODEL"] = requested
@@ -4740,7 +4836,9 @@ def _apply_math_harness_iteration_env(
         env["AGENT_MONITOR_PROBLEM_ID"] = str(problem_id)[:240]
 
 
-# Set by _run_cli_engine on a CGM run the user stopped after it published.
+# Set by _run_cli_engine on a CGM run that published a new generation, so a
+# Stop that reached it afterwards, or raced its normal end, never makes it
+# "stopped" (the callers read it only when a Stop was seen).
 _PUBLISHED_BEFORE_STOP = "published_before_stop"
 # How long a CLI runner that Stop or the watchdog signalled may take to exit
 # before _run_cli_engine kills its group.
@@ -4748,9 +4846,9 @@ _RUNNER_SETTLE_SECONDS = 30
 
 
 def _published_before_stop(result: dict[str, Any]) -> bool:
-    """Whether a run the user stopped had already published its proof (an
-    Ansatz CGM run in its written-proof round), so it is not "stopped";
-    takes the flag off ``result``."""
+    """Whether the run had published its proof (an Ansatz CGM run), so a Stop
+    that reached it in its written-proof round, or just after it ended, does
+    not make it "stopped"; takes the flag off ``result``."""
     return bool(result.pop(_PUBLISHED_BEFORE_STOP, False))
 
 
@@ -4962,11 +5060,15 @@ def _run_cli_engine(
                     cache_write=int(u.get("cache_write_tokens") or 0),
                 )
         live = parser.live_state()
-        if (extra_env or {}).get(cgm_max.ROUTE_MODE_ENV) == "max":
+        if cgm_max.route_mode(extra_env) == "max":
             # Both models answer in one Max run; the run shows the mode, and
             # route_plan on the record names both models.
             live["auth_mode"] = cgm_max.ROUTE
             live["model"] = cgm_max.MODEL_ID
+            live["model_requested"] = False
+        elif cgm_max.route_mode(extra_env) == cgm_max.API_ROUTE_MODE:
+            live["auth_mode"] = cgm_max.API_ROUTE
+            live["model"] = cgm_max.API_MODEL_ID
             live["model_requested"] = False
         elif (extra_env or {}).get("AGENT_MONITOR_CLAUDE_SUBSCRIPTION") == "1":
             live["auth_mode"] = "claude_subscription"
@@ -5311,11 +5413,8 @@ def _run_cli_engine(
     # generation (the receipt is written last) cuts short only its
     # written-proof round: the run is complete, and is recorded so.
     stop_requested = stopped or stop_ev.is_set()
-    ended_after_publication = (
-        cgm_run
-        and (stop_requested or timed_out)
-        and _cgm_receipt_signature(workspace) not in (None, receipt_before)
-    )
+    published = cgm_run and _cgm_receipt_signature(workspace) not in (None, receipt_before)
+    ended_after_publication = published and (stop_requested or timed_out)
     if ended_after_publication:
         parser.lines.append(
             "[agent-monitor] the proof was already published; only the "
@@ -5404,8 +5503,10 @@ def _run_cli_engine(
         status="finished" if ok else "failed",
         error=failure_reason,
     )
-    if ended_after_publication and stop_requested:
-        # For the worker (see _published_before_stop), not the record.
+    if published:
+        # For the worker (see _published_before_stop), not the record: a Stop
+        # that reaches the worker after this point (it raced the run's normal
+        # end) must not turn this published run into a stopped one either.
         run[_PUBLISHED_BEFORE_STOP] = True
     return run
 
@@ -5997,6 +6098,9 @@ def _continuation_model(run_data: dict[str, Any], requested: str | None) -> str 
     if cgm_max.is_max_record(run_data):
         # A Max run continues as Max; its two models come from the route plan.
         return cgm_max.MODEL_ID
+    if cgm_max.is_max_api_record(run_data):
+        # Likewise Max (API), on its recorded API models.
+        return cgm_max.API_MODEL_ID
     if explicit:
         # Explicit input is checked against the recorded route by the caller
         # (``_member_continuation_model``); never reinterpret a selection as
@@ -6054,6 +6158,9 @@ def _recorded_route_runs(
     route = _route_from_record(run_data)
     if cgm_max.is_max_model(model):
         return route == cgm_max.ROUTE
+    if cgm_max.is_max_api_model(model):
+        # Only a Max (API) run continues as Max (API), on its API route.
+        return route == cgm_max.API_ROUTE and cgm_max.is_max_api_record(run_data)
     if engine == "kimi":
         return model == GUEST_DEFAULT_MODEL
     if route not in {"claude_subscription", "codex_subscription"}:
@@ -6083,7 +6190,9 @@ def _member_continuation_model(
     launcher's current model, which may belong to another route or to the
     other Ansatz CGM engine (Kimi K3, or a model from the member's own keys).
     """
-    route_error = account_policy.member_continuation_error(user, _route_from_record(run_data))
+    route_error = account_policy.member_continuation_error(
+        user, _route_from_record(run_data), record=run_data
+    )
     error = account_policy.member_engine_error(user, engine) or route_error
     if error:
         raise ValueError(error)
@@ -6405,7 +6514,10 @@ def send_human_message(
             engine=recorded_engine,
             model=preflight_model,
             user=user,
-            env=_user_extra_env(user, preflight_model, recorded.get("subagent_model")),
+            env=_user_extra_env(
+                user,
+                *_run_provider_models(recorded, preflight_model, recorded.get("subagent_model")),
+            ),
         )
 
     attached = research_attachments.save(ws, attachment_batch)
@@ -6512,7 +6624,10 @@ def _continue_with_message(
         engine=engine,
         model=effective_model,
         user=user,
-        env=_user_extra_env(user, effective_model, run_data.get("subagent_model")),
+        env=_user_extra_env(
+            user,
+            *_run_provider_models(run_data, effective_model, run_data.get("subagent_model")),
+        ),
     )
     job_id = uuid.uuid4().hex[:10]
     _register_claimed_job(run_id, {
@@ -8096,7 +8211,10 @@ def _continue_claimed_run(
         engine=engine,
         model=effective_model,
         user=user,
-        env=_user_extra_env(user, effective_model, run_data.get("subagent_model")),
+        env=_user_extra_env(
+            user,
+            *_run_provider_models(run_data, effective_model, run_data.get("subagent_model")),
+        ),
     )
     continued_subagents = bool(run_data.get("use_subagents", True)) and not tool_free
     continue_env["AGENT_MONITOR_USE_SUBAGENTS"] = "1" if continued_subagents else "0"
@@ -8251,7 +8369,19 @@ def delete_run(run_id: str) -> dict[str, Any]:
 
     ws = RUNS_DIR / "workspaces" / run_id
     if ws.is_dir():
-        shutil.rmtree(ws)
+        # The run's derived-views pass may be removing what it wrote after
+        # the deletion at the same time (auto_pipeline): a path already gone
+        # is fine, any other error still fails the deletion.  (Python 3.11
+        # reports every vanished entry to the handler; 3.12+ names it onexc.)
+        def _gone_already(_function, _path, error) -> None:
+            error = error[1] if isinstance(error, tuple) else error
+            if not isinstance(error, FileNotFoundError):
+                raise error
+
+        if sys.version_info >= (3, 12):
+            shutil.rmtree(ws, onexc=_gone_already)
+        else:
+            shutil.rmtree(ws, onerror=_gone_already)
         removed["deleted"].append(str(ws))
 
     hermes_removed = _cleanup_hermes_memory(run_id, workspace_path)
