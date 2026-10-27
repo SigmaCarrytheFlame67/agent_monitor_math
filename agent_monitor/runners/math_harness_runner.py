@@ -50,11 +50,14 @@ abandoned call can never change an artifact, and a stop request never
 interrupts a publication that has started.  A stop request during the
 write-up round ends only that round: the run stays published (exit 0).
 
-Usage: ``math_harness_runner.py`` from a run workspace containing the canonical
-``problem.txt``.  A direct operator may provide one argument as additional task
-context.  The process emits Codex-shaped JSONL events and exits successfully
-only after a substantive root ``proof.md`` has been written.  Library callers
-use :func:`run_pipeline`.
+Usage: ``math_harness_runner.py --prompt-file PATH`` (the console's command;
+the file holds the task context and is deleted once read) from a run
+workspace containing the canonical ``problem.txt``, which stays the problem;
+``AGENT_MONITOR_CGM_SOURCES`` may name the SOURCE MATERIAL file there (see
+:func:`read_source_material`).  A direct operator may instead provide one
+argument as additional task context, or none.  The process emits
+Codex-shaped JSONL events and exits successfully only after a substantive
+root ``proof.md`` has been written.  Library callers use :func:`run_pipeline`.
 """
 from __future__ import annotations
 
@@ -93,6 +96,7 @@ if __package__:
         codex_exec,
         subscription_enabled as codex_subscription_enabled,
     )
+    from .task_prompt import read_task_prompt
 else:
     # The registry launches this file by absolute path from the run workspace.
     repository_root = Path(__file__).resolve().parents[2]
@@ -113,6 +117,7 @@ else:
         codex_exec,
         subscription_enabled as codex_subscription_enabled,
     )
+    from agent_monitor.runners.task_prompt import read_task_prompt
 
 from agent_monitor import (
     cgm_max,
@@ -126,6 +131,7 @@ from agent_monitor.cgm import prompts as cgm_prompts
 from agent_monitor.cgm import schema as cgm_schema
 from agent_monitor.cgm import writeup as cgm_writeup
 from agent_monitor.cgm.parsing import Candidate, ParseError, VerifierReport
+from agent_monitor.cgm_sources import SOURCES_ENV
 
 
 ADAPTER_SOURCE = cgm_schema.PIPELINE_SOURCE
@@ -139,6 +145,8 @@ MAX_PROBLEM_BYTES = 44_000
 MAX_TASK_BYTES = 160_000
 MAX_MODEL_PROMPT_BYTES = 120_000
 MAX_SYSTEM_PROMPT_BYTES = 12_000
+# The SOURCE MATERIAL file the console prepares (agent_monitor.cgm_sources).
+MAX_SOURCE_BYTES = 256_000
 # Per-reply byte caps.  Kimi proofs routinely exceed the old 20,000 B cap;
 # engine_graph accepts a proof.md of up to 200,000 B.
 MAX_STRATEGIST_BYTES = 48_000
@@ -586,9 +594,13 @@ def _emit_stage_usage(
     includes cached input). Claude reports cache reads and writes apart from
     ``input_tokens``; that usage is flagged ``input_excludes_cache`` and the
     server's parser folds the cache in (a parser that predates the flag reads
-    it as before, without pricing cached input twice).  ``model`` and
-    ``provider`` (given only in Max (API), whose two sides bill at different
-    rates) name who billed the call.
+    it as before, without pricing cached input twice).
+
+    ``model`` names the model the call's usage is priced at
+    (``_usage_source``): Codex-style events otherwise name no model, and the
+    stage's cost fell back to gpt-4o rates.  ``provider`` (given only in Max
+    (API), whose two sides bill at different rates) names who billed the
+    call.
     """
     projected = dict(usage)
     cache_read = int(usage.get("cache_read_tokens") or 0)
@@ -596,8 +608,8 @@ def _emit_stage_usage(
     if not input_includes_cache:
         projected["input_excludes_cache"] = True
     event: dict[str, Any] = {"type": "turn.completed", "stage": stage, "usage": projected}
-    if model is not None:
-        event["model"] = model
+    if isinstance(model, str) and model.strip():
+        event["model"] = model.strip()
     if provider is not None:
         event["provider"] = provider
     (out or _out)(event)
@@ -1035,6 +1047,8 @@ class _Ctx:
     # Prefix of the per-call progress notes (other response-only runners that
     # reuse this turn machinery, such as Analyze, name themselves here).
     label: str = "Math Harness"
+    # The run's SOURCE MATERIAL (strategist and worker prompts only).
+    sources: str = ""
 
     @property
     def calls(self) -> list[dict[str, Any]]:
@@ -1434,6 +1448,39 @@ def _api_call(
                 raise _TurnAbandoned(stage) from None
 
 
+def _served_model(route: Route, reported: object = None) -> str | None:
+    """The model that served one call on ``route``; its usage is priced so.
+
+    ``reported`` is the model the call's usage is priced at (see
+    ``_usage_source``: an API call's requested id, the model a CLI reports).
+    Without one, an API or Codex call was served by the route's model, which
+    its request named.  A Claude Code route's model may be an alias
+    ("sonnet", "fable") that the server's pricing would match to another
+    model's price, so it never stands in: such usage names no model.
+    """
+    if isinstance(reported, str) and reported.strip():
+        return reported.strip()
+    return None if route.transport == "claude_code" else route.model
+
+
+def _priced_model(route: Route, result: Any, observed_model: object) -> object:
+    """The model one successful call's usage names outside Max (API) (see
+    ``_usage_source``).
+
+    An API call names the id it requested (``APIResult.model``), whatever
+    its reply names: a dated snapshot of that id (OpenAI) that the price
+    table may lack, or (Anthropic) the model the call record names.  The
+    derived DAG and Lean calls of the same run are priced at the requested id
+    too.  A Claude Code call names the model its reply reports, never the
+    route's alias; a Codex call, the model it was run with.
+    """
+    if route.transport == "claude_code":
+        return observed_model or getattr(result, "model", None)
+    if route.transport == "codex_exec":
+        return observed_model or route.model
+    return getattr(result, "model", None) or route.model
+
+
 def _provider_call(
     ctx: _Ctx,
     turn: _Turn,
@@ -1544,7 +1591,10 @@ def _provider_call(
                 # fallback changes: the call record names that model, not the
                 # requested one (and so, for a verify call, does the receipt).
                 model = str(observed_model)
-            # Sent with the call's usage, as one unit (below).
+            # Sent with the call's usage, as one unit (below).  The reply's
+            # node takes the model that usage names (_usage_source), never
+            # the reply's own: an OpenAI reply names a dated snapshot of the
+            # requested id, which the price table may lack.
             closing.append(
                 {
                     "type": "item.completed",
@@ -1579,8 +1629,9 @@ def _provider_call(
                 spent,
                 route=route,
                 # No reply names a model: the call was billed at the requested
-                # one, unless a refusal fallback had more than one model bill it.
-                model=route.model,
+                # one (_served_model; never a Claude Code route's alias),
+                # unless a refusal fallback had more than one model bill it.
+                model=None,
                 provider=route.provider,
                 by_model=getattr(exc, "usage_by_model", ()),
                 out=billed_events.append,
@@ -1628,10 +1679,11 @@ def _provider_call(
         stage,
         usage,
         route=route,
-        # Anthropic's reply names the model that answered (a refusal fallback
-        # changes it); OpenAI's names a dated snapshot of the requested id,
-        # which may have no price of its own, so the requested id stays.
-        model=reply.model,
+        # Max (API): Anthropic's reply names the model that answered (a
+        # refusal fallback changes it); OpenAI's names a dated snapshot of the
+        # requested id, which may have no price of its own, so the requested
+        # id stays.  Other runs: the model _priced_model names.
+        model=reply.model if ctx.api_max else _priced_model(route, result, observed_model),
         provider=reply.provider,
         by_model=getattr(result, "usage_by_model", ()) if route.transport == "api_chat" else (),
         out=closing.append,
@@ -1640,11 +1692,16 @@ def _provider_call(
     return reply
 
 
-def _usage_source(ctx: _Ctx, model: str, provider: str) -> dict[str, str]:
-    """The model and provider a call's usage event names: in Max (API) only,
-    whose Anthropic and OpenAI calls are priced apart; other runs' events
-    are unchanged."""
-    return {"model": model, "provider": provider} if ctx.api_max else {}
+def _usage_source(ctx: _Ctx, route: Route, model: object, provider: str) -> dict[str, str]:
+    """What a call's usage event names: the model the server prices the
+    usage at (``_served_model`` of ``model``, ``None`` when no reply names
+    one), and in Max (API), whose Anthropic and OpenAI calls are priced
+    apart, the provider that billed it."""
+    served = _served_model(route, model)
+    source = {"model": served} if served else {}
+    if ctx.api_max:
+        source["provider"] = provider
+    return source
 
 
 def _usage_shares(by_model: object) -> list[tuple[str, dict[str, int]]]:
@@ -1669,12 +1726,13 @@ def _emit_call_usage(
     usage: Mapping[str, int],
     *,
     route: Route,
-    model: str,
+    model: object,
     provider: str,
     by_model: object,
     out: Callable[[dict[str, Any]], None],
 ) -> None:
-    """Publish one call's usage (see ``_emit_stage_usage``).
+    """Publish one call's usage (see ``_emit_stage_usage``), priced at
+    ``model`` (see ``_usage_source``).
 
     The run's parser books a usage event on the node just before it, so the
     caller sends the call's reply (or, for a failed call, a note) and this
@@ -1692,7 +1750,7 @@ def _emit_call_usage(
             usage,
             out=out,
             input_includes_cache=route.transport != "claude_code",
-            **_usage_source(ctx, model, provider),
+            **_usage_source(ctx, route, model, provider),
         )
         return
     answered_model, answered = shares[-1]
@@ -1806,6 +1864,41 @@ def _parse_reply(reply: Reply, *, limit: int, parse: Callable[[str], Any]) -> An
         raise ParseError(f"reply could not be parsed ({type(exc).__name__})") from exc
 
 
+# A format retry's copy of the malformed reply: at most this much of it, and
+# not at all when less than the minimum fits.  A prompt that carries SOURCE
+# MATERIAL is sized to fill its bound, so a retry that would get less than
+# the minimum is rebuilt with the sources clipped to leave the room below.
+_PREVIOUS_REPLY_BYTES = 40_000
+_MIN_PREVIOUS_REPLY_BYTES = 4_096
+_PREVIOUS_REPLY_ROOM = 16_000
+_PREVIOUS_REPLY_WRAPPER = "\n\n<PREVIOUS_REPLY>\n" + "\n</PREVIOUS_REPLY>"
+
+
+def _with_previous_reply(
+    retry_user: str,
+    reply: str,
+    *,
+    reminder: str,
+    rebuild: Callable[[int], str],
+) -> str:
+    """``retry_user`` with as much of the malformed ``reply`` as fits under
+    MAX_MODEL_PROMPT_BYTES (its head and tail, the cut marked), at least
+    ``_MIN_PREVIOUS_REPLY_BYTES``.  When less than that fits, the prompt is
+    rebuilt by ``rebuild`` (with its SOURCE MATERIAL clipped to leave
+    ``_PREVIOUS_REPLY_ROOM`` more bytes free); a format repair needs the
+    reply more than the sources.  ``retry_user`` unchanged when not even
+    that leaves room."""
+    room = MAX_MODEL_PROMPT_BYTES - _utf8_size(retry_user) - _utf8_size(_PREVIOUS_REPLY_WRAPPER)
+    if room < _MIN_PREVIOUS_REPLY_BYTES:
+        rebuilt = f"{rebuild(_PREVIOUS_REPLY_ROOM)}\n\n<FORMAT_REMINDER>\n{reminder}\n</FORMAT_REMINDER>"
+        room = MAX_MODEL_PROMPT_BYTES - _utf8_size(rebuilt) - _utf8_size(_PREVIOUS_REPLY_WRAPPER)
+        if room < _MIN_PREVIOUS_REPLY_BYTES:
+            return retry_user
+        retry_user = rebuilt
+    excerpt = _clip_utf8(reply, min(_PREVIOUS_REPLY_BYTES, room))
+    return f"{retry_user}\n\n<PREVIOUS_REPLY>\n{excerpt}\n</PREVIOUS_REPLY>"
+
+
 def _call_and_parse(
     ctx: _Ctx,
     turn: _Turn,
@@ -1817,8 +1910,16 @@ def _call_and_parse(
     parse: Callable[[str], Any],
     family: str,
     resend_reply: bool = False,
+    rebuild: Callable[[int], str] | None = None,
 ) -> tuple[Any, Reply]:
-    """Call, parse, and on a malformed reply send one format reminder."""
+    """Call, parse, and on a malformed reply send one format reminder.
+
+    With ``resend_reply`` the reminder carries the malformed reply, whole
+    when it fits.  ``rebuild`` (a prompt with SOURCE MATERIAL: ``user``
+    rendered again with that many more bytes left free) lets the retry keep
+    a clipped copy of the reply when the whole one does not fit (see
+    :func:`_with_previous_reply`); without it the reply goes whole or not
+    at all, as before."""
     effort = _stage_effort(family, ctx.env)
     reply = _invoke(ctx, turn, stage=stage, system=system, user=user, effort=effort)
     try:
@@ -1833,12 +1934,16 @@ def _call_and_parse(
         # The reminder would push the prompt past its bound; no retry.
         raise ParseError(first_error)
     if resend_reply and reply.text:
-        excerpt = _clip_utf8(reply.text, 40_000)
+        excerpt = _clip_utf8(reply.text, _PREVIOUS_REPLY_BYTES)
         candidate_user = (
             f"{retry_user}\n\n<PREVIOUS_REPLY>\n{excerpt}\n</PREVIOUS_REPLY>"
         )
         if _utf8_size(candidate_user) <= MAX_MODEL_PROMPT_BYTES:
             retry_user = candidate_user
+        elif rebuild is not None:
+            retry_user = _with_previous_reply(
+                retry_user, reply.text, reminder=reminder, rebuild=rebuild
+            )
     retry = _invoke(
         ctx, turn, stage=f"{stage}-retry", system=system, user=retry_user, effort=effort
     )
@@ -1990,8 +2095,91 @@ def _task_context(problem: str, task: str, limit: int) -> str:
     )
 
 
-def _strategist_prompt(problem: str, task: str, count: int) -> str:
-    return (
+# The run's attached files as text (agent_monitor.cgm_sources) open the
+# strategist and worker prompts: a long prefix, identical from call to call,
+# that a provider can cache.  Repair, verifier, curator and write-up prompts
+# never carry it (the verifier stays cold), so workers restate what they use.
+_SOURCE_OPEN = "<SOURCE_MATERIAL>\n"
+_SOURCE_CLOSE = "\n</SOURCE_MATERIAL>\n\n"
+_SOURCE_WORKER_RULE = (
+    "SOURCE RULE: definitions and results you take from the SOURCE MATERIAL are "
+    "invisible to the independent verifier, who checks one lemma at a time. "
+    "Restate each one you use inside the statement of the lemma that needs it "
+    "(or as an explicit hypothesis of that lemma), citing it as [File n, p. k] "
+    "([File n] for a text file).\n\n"
+)
+_SOURCE_CUT = (
+    "\n\n[SOURCE MATERIAL cut here to fit this prompt: what the list of files "
+    "above includes but this prompt does not show is not available here.]"
+)
+# Room left free in a prompt that carries source material, so that a format
+# reminder still fits on a retry.
+_SOURCE_PROMPT_MARGIN = 2_000
+# What a worker's plan and strategy notes are assumed to take when the console
+# sizes the source material (source_room); longer ones clip it.
+_SOURCE_PLAN_RESERVE = 12_000
+
+
+def _clip_sources(sources: str, room: int) -> str:
+    """``sources`` within ``room`` UTF-8 bytes, cut at a page or file boundary
+    when one is near, and saying so."""
+    payload = sources.encode("utf-8")
+    if len(payload) <= room:
+        return sources
+    limit = room - _utf8_size(_SOURCE_CUT)
+    if limit < 512:
+        return "[SOURCE MATERIAL omitted: this prompt has no room left for it.]"
+    head = payload[:limit].decode("utf-8", errors="ignore")
+    boundary = max(head.rfind("\n[p. "), head.rfind("\n=== File "))
+    if boundary < len(head) // 2:
+        boundary = head.rfind("\n")
+    if boundary >= len(head) // 2:
+        head = head[:boundary]
+    return head.rstrip() + _SOURCE_CUT
+
+
+def _with_sources(sources: str, prompt: str, *, rule: str = "", reserve: int = 0) -> str:
+    """``prompt`` behind the run's SOURCE MATERIAL, which is clipped to the
+    room ``prompt`` (and ``reserve`` more bytes) leaves under
+    MAX_MODEL_PROMPT_BYTES; ``prompt`` itself, unchanged, when the run has
+    none."""
+    if not sources:
+        return prompt
+    room = (
+        MAX_MODEL_PROMPT_BYTES
+        - _SOURCE_PROMPT_MARGIN
+        - max(0, reserve)
+        - _utf8_size(_SOURCE_OPEN + _SOURCE_CLOSE + rule + prompt)
+    )
+    return f"{_SOURCE_OPEN}{_clip_sources(sources, room)}{_SOURCE_CLOSE}{rule}{prompt}"
+
+
+def source_room(problem: str, task: str) -> int:
+    """UTF-8 bytes of SOURCE MATERIAL that fit unclipped both in the
+    strategist prompt and in a worker prompt for ``problem`` and ``task`` (a
+    worker's plan and strategy notes taking ``_SOURCE_PLAN_RESERVE``).  The
+    console sizes a turn's source material with it."""
+    problem = str(problem or "").strip()
+    task_text = str(task or "").strip() or problem
+    strategy = cgm_parsing.fallback_strategy()
+    worker = _worker_prompt(
+        problem,
+        task_text,
+        index=1,
+        count=MAX_CANDIDATES,
+        plan=strategy.plans[0],
+        strategy=strategy,
+    )
+    used = max(
+        _utf8_size(_strategist_prompt(problem, task_text, MAX_CANDIDATES)),
+        _utf8_size(_SOURCE_WORKER_RULE + worker) + _SOURCE_PLAN_RESERVE,
+    )
+    wrapper = _utf8_size(_SOURCE_OPEN + _SOURCE_CLOSE)
+    return max(0, MAX_MODEL_PROMPT_BYTES - _SOURCE_PROMPT_MARGIN - wrapper - used)
+
+
+def _strategist_prompt(problem: str, task: str, count: int, *, sources: str = "") -> str:
+    prompt = (
         f"Propose between 1 and {count} materially different decomposition plans "
         f"for this problem (N = {count}).\n\n"
         "<UNTRUSTED_PROBLEM>\n"
@@ -1999,6 +2187,7 @@ def _strategist_prompt(problem: str, task: str, count: int) -> str:
         "</UNTRUSTED_PROBLEM>"
         f"{_task_context(problem, task, 40_000)}"
     )
+    return _with_sources(sources, prompt)
 
 
 def _plan_block(plan: cgm_parsing.Plan) -> str:
@@ -2043,8 +2232,10 @@ def _worker_prompt(
     count: int,
     plan: cgm_parsing.Plan,
     strategy: cgm_parsing.Strategy,
+    sources: str = "",
+    reserve: int = 0,
 ) -> str:
-    return (
+    prompt = (
         f"Carry out assigned plan {index} of {count} independently. You receive "
         "only your assigned plan, not any other worker's work.\n\n"
         "<UNTRUSTED_PROBLEM>\n"
@@ -2054,6 +2245,7 @@ def _worker_prompt(
         f"{_strategy_notes(strategy)}\n\n"
         f"{_plan_block(plan)}"
     )
+    return _with_sources(sources, prompt, rule=_SOURCE_WORKER_RULE, reserve=reserve)
 
 
 def _repair_prompt(
@@ -2202,7 +2394,7 @@ def _strategize(ctx: _Ctx, problem: str, task: str) -> cgm_parsing.Strategy:
                 turn,
                 stage="strategist",
                 system=cgm_prompts.STRATEGIST_SYSTEM,
-                user=_strategist_prompt(problem, task, count),
+                user=_strategist_prompt(problem, task, count, sources=ctx.sources),
                 limit=MAX_STRATEGIST_BYTES,
                 parse=lambda text: cgm_parsing.parse_strategist(text, max_plans=count),
                 family="strategist",
@@ -2361,14 +2553,20 @@ def _worker_job(
 ) -> _TurnJob:
     """The job of one worker turn carrying out plan ``plan_index`` (1-based)."""
     plan = plans[plan_index - 1]
-    user = _worker_prompt(
-        problem,
-        task,
-        index=plan_index,
-        count=len(plans),
-        plan=plan,
-        strategy=strategy,
-    )
+
+    def prompt(reserve: int = 0) -> str:
+        return _worker_prompt(
+            problem,
+            task,
+            index=plan_index,
+            count=len(plans),
+            plan=plan,
+            strategy=strategy,
+            sources=ctx.sources,
+            reserve=reserve,
+        )
+
+    user = prompt()
     return _TurnJob(
         turn,
         _bind_turn(
@@ -2384,6 +2582,9 @@ def _worker_job(
             ),
             family="worker",
             resend_reply=True,
+            # SOURCE MATERIAL fills a worker prompt: its format retry may
+            # clip it to keep the reply it asks to reformat.
+            rebuild=prompt if ctx.sources else None,
         ),
     )
 
@@ -2862,6 +3063,11 @@ def _run_cgm(
     else:
         models = f"{ctx.route.model} + {ctx.worker_route.model}"
     _emit_stage(ctx, "scaffold", f"{models} · no tools")
+    if ctx.sources:
+        _note(
+            f"1 Scaffold · {_utf8_size(ctx.sources):,} bytes of source material from "
+            "the attached files, for the strategist and workers"
+        )
     _emit_stage(ctx, "work", "strategist")
     strategy = _strategize(ctx, problem, task)
     plans, attempts = _run_workers(ctx, problem, task, strategy)
@@ -4266,7 +4472,14 @@ def _owned_fact_ids_from_receipt(
 
 
 def _prior_generated_fact_ids(root: Path) -> tuple[str, ...]:
-    """Fact ids owned by the previous adapter generation (validated)."""
+    """Fact ids owned by the previous adapter generation (validated).
+
+    Ownership rests on the generation's own files under
+    ``math_harness/project``: a valid receipt, and the target, problem and
+    fact bytes it binds.  The root ``proof.md`` is not one of them (see
+    below), so a generation whose ``proof.md`` was edited is still retired by
+    the next publication.
+    """
     try:
         project_fd = _open_rooted_directory(
             root, ("math_harness", "project"), create=False
@@ -4346,17 +4559,20 @@ def _prior_generated_fact_ids(root: Path) -> tuple[str, ...]:
             project_problem = _problem_from_project_payload(project_problem_payload)
             if _sha256(project_problem.encode("utf-8")) != receipt.get("problem_sha256"):
                 raise MathHarnessError("existing problem does not match its ownership receipt")
-
-            root_fd = _open_rooted_directory(root, (), create=False)
-            try:
-                proof_payload = _read_file_at(
-                    root_fd, "proof.md", limit=MAX_PROOF_BYTES + 10_000, missing_ok=False
-                )
-            finally:
-                os.close(root_fd)
-            assert proof_payload is not None
-            if _sha256(proof_payload) != receipt.get("proof_sha256"):
-                raise MathHarnessError("existing proof does not match its ownership receipt")
+            # proof.md is deliberately not compared with the receipt here.  It
+            # is the one file of a generation its owner may rewrite (the
+            # Sandbox editor saves up to 400 KB, at any time), and an edit
+            # changes what the receipt attests, not which files this adapter
+            # wrote.  Every reader that attributes the facts still requires
+            # proof.md to match (engine_graph shows them unattested and the
+            # write-up stale until it does), and the next publication retires
+            # this generation, receipt first, and binds its own proof.md, so
+            # these facts are never attributed to a proof they did not
+            # produce.  Until then the edited text is what the console's
+            # follow-up prompt quotes as the current proof (see
+            # jobs._continuation_proof_excerpt).  A receipt, target, problem
+            # or fact that no longer matches still fails here: before any call
+            # at the start of a pass, and before any write at its publication.
 
             listed = {
                 item.get("fact_id"): item
@@ -4490,6 +4706,27 @@ def _remove_regular(root: Path, relative_parts: tuple[str, ...]) -> None:
             os.fsync(parent_fd)
         except OSError as exc:
             raise MathHarnessError(f"could not remove stale artifact {name}") from exc
+    finally:
+        os.close(parent_fd)
+
+
+def _require_replaceable(root: Path, relative_parts: tuple[str, ...]) -> None:
+    """Fail unless the artifact is missing or a regular file, as
+    ``_atomic_write`` requires of the file it replaces; it is never read."""
+    if not relative_parts:
+        raise MathHarnessError("artifact path is empty")
+    _safe_components(relative_parts)
+    name = relative_parts[-1]
+    parent_fd = _open_rooted_directory(root, relative_parts[:-1], create=False)
+    try:
+        try:
+            info = os.stat(name, dir_fd=parent_fd, follow_symlinks=False)
+        except FileNotFoundError:
+            return
+        except OSError as exc:
+            raise MathHarnessError(f"unsafe artifact target: {name}") from exc
+        if not stat.S_ISREG(info.st_mode):
+            raise MathHarnessError(f"unsafe artifact target: {name}")
     finally:
         os.close(parent_fd)
 
@@ -4762,6 +4999,12 @@ def _write_artifacts(
     _ensure_secure_directory(root, ("math_harness", "project", "fact_graph", "facts"))
     if _prior_generated_fact_ids(root) != prior_fact_ids:
         raise MathHarnessError("existing fact generation changed during the run")
+    # That check does not read the root proof.md (its owner may rewrite it),
+    # so check here that the proof write below can replace it: a link or
+    # directory put there during the run fails now, before the previous
+    # generation is retired, not after, which would leave facts without a
+    # receipt and block every later pass.
+    _require_replaceable(root, ("proof.md",))
 
     # Retire the previous generation before publishing any replacement.  The
     # receipt is removed first, so a mid-write failure cannot retain a stale
@@ -5288,6 +5531,7 @@ def run_pipeline(
     task: str | None = None,
     problem_id: str | None = None,
     worker_route: Route | None = None,
+    sources: str | None = None,
 ) -> dict[str, Any]:
     """Run the full CGM pipeline in ``workspace`` and publish its artifacts.
 
@@ -5309,6 +5553,10 @@ def run_pipeline(
     calls may each take up to 3600 s of ``AGENT_MONITOR_CGM_API_TIMEOUT``,
     default 1800 s, as may an OpenAI route's at extra-high or maximum
     effort; other API calls up to 900 s).
+    ``sources`` is the run's SOURCE MATERIAL (``agent_monitor.cgm_sources``:
+    the text of the files attached to it, at most ``MAX_SOURCE_BYTES``),
+    which opens the strategist and worker prompts only, clipped to the room
+    each leaves; ``None`` leaves every prompt exactly as without it.
 
     Writes under ``<workspace>/math_harness/project/``: ``PROBLEM.md``,
     ``global_memory/*.jsonl``, ``fact_graph/facts/<id>.md`` for each verified
@@ -5365,6 +5613,7 @@ def run_pipeline(
                 cancel=cancel,
                 emitter=emitter,
                 worker_route=worker_route,
+                sources=sources,
             )
     except MathHarnessError:
         raise
@@ -5391,6 +5640,7 @@ def _run_pipeline(
     cancel: Any,
     emitter: _RunEmitter,
     worker_route: Route | None = None,
+    sources: str | None = None,
 ) -> dict[str, Any]:
     root = Path(workspace).resolve(strict=True)
     problem = str(problem_text or "").strip()
@@ -5401,6 +5651,9 @@ def _run_pipeline(
     task_text = (task or "").strip() or problem
     if _utf8_size(task_text) > MAX_TASK_BYTES:
         raise MathHarnessError("task exceeds its byte limit")
+    source_text = str(sources or "").strip()
+    if _utf8_size(source_text) > MAX_SOURCE_BYTES:
+        raise MathHarnessError("source material exceeds its byte limit")
     _cleanup_adapter_temps(root)
     _preflight_artifacts(root)
     prior_fact_ids = _prior_generated_fact_ids(root)
@@ -5462,6 +5715,7 @@ def _run_pipeline(
             kimi_k3.RetryAllowance(kimi_k3.SPONSORED_RUN_RETRIES) if sponsored_kimi else None
         ),
         busy_waits=list(_STRATEGIST_BUSY_WAITS) if sponsored_kimi else [],
+        sources=source_text,
     )
     _out({"type": "thread.started", "thread_id": "math-harness"})
     emit_item(
@@ -5532,8 +5786,52 @@ def _run_pipeline(
     return outcome
 
 
+def read_source_material(root: Path, env: Mapping[str, str] | None = None) -> str | None:
+    """The SOURCE MATERIAL the console prepared for this run, or ``None``.
+
+    ``AGENT_MONITOR_CGM_SOURCES`` names a file in the workspace root
+    (written 0600 by ``agent_monitor.cgm_sources``).  It is read once,
+    without following links and bounded by ``MAX_SOURCE_BYTES``, then deleted
+    as the prompt file is: it holds the text of the user's files.  A named
+    file that is missing, unsafe or not UTF-8 fails the run before any call.
+    """
+    name = str((os.environ if env is None else env).get(SOURCES_ENV) or "").strip()
+    if not name:
+        return None
+    _safe_components((name,))
+    root_fd = _open_rooted_directory(Path(root), (), create=False)
+    try:
+        try:
+            payload = _read_file_at(root_fd, name, limit=MAX_SOURCE_BYTES)
+        finally:
+            try:
+                os.unlink(name, dir_fd=root_fd)
+            except OSError:
+                pass  # The console removes what is left once the run ends.
+    finally:
+        os.close(root_fd)
+    try:
+        text = (payload or b"").decode("utf-8")
+    except UnicodeDecodeError as exc:
+        raise MathHarnessError("source material is not UTF-8") from exc
+    return text.strip() or None
+
+
 def main() -> int:
-    explicit_task = sys.argv[1].strip() if len(sys.argv) > 1 else ""
+    try:
+        explicit_task = read_task_prompt(sys.argv).strip()
+    except (OSError, UnicodeDecodeError) as exc:
+        emit_item(
+            {
+                "type": "error",
+                "message": f"Math Harness could not read its task prompt ({type(exc).__name__})",
+                "terminal": True,
+            }
+        )
+        return 2
+    # The console's task comes in a file (read, and deleted, before anything
+    # else): context for the canonical problem.txt, never a substitute.
+    from_console = len(sys.argv) > 2 and sys.argv[1] == "--prompt-file"
     task = explicit_task or DEFAULT_TASK_DIRECTIVE
     if _utf8_size(task) > MAX_TASK_BYTES:
         emit_item({"type": "error", "message": "task exceeds its byte limit"})
@@ -5543,16 +5841,23 @@ def main() -> int:
         initial_root = Path.cwd().resolve(strict=True)
         _cleanup_adapter_temps(initial_root)
         root = _preflight_artifacts(initial_root)
+        sources = read_source_material(root)
         problem = _canonical_problem(
             task,
             root,
-            require_problem_file=not bool(explicit_task),
+            require_problem_file=from_console or not bool(explicit_task),
         )
         _prior_generated_fact_ids(root)
         route, worker_route = _select_routes(os.environ)
         budgets = Budgets.from_env(os.environ)
         result = run_pipeline(
-            root, problem, route, budgets=budgets, task=task, worker_route=worker_route
+            root,
+            problem,
+            route,
+            budgets=budgets,
+            task=task,
+            worker_route=worker_route,
+            sources=sources,
         )
     except RunCancelled as exc:
         emit_item({"type": "error", "message": str(exc), "terminal": True})

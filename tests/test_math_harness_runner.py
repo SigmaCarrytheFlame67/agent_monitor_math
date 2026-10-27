@@ -1925,6 +1925,9 @@ class MathHarnessProviderRoutingTests(unittest.TestCase):
                     {
                         "type": "turn.completed",
                         "stage": "strategist",
+                        # The model Claude Code reported, which prices the
+                        # usage; never the route's alias ("fable").
+                        "model": "claude-fable-resolved",
                         "usage": {
                             "input_tokens": 13,
                             "output_tokens": 5,

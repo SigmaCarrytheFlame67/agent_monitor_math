@@ -2032,6 +2032,9 @@ def _refresh_readability_block(data: dict, ws: Path | None) -> None:
 
 
 def _list_workspace_files(ws: Path) -> list[dict]:
+    """The run's files for its owner's file list and export: never what is
+    internal, a dot-file or anything in a dot-directory (the attachments'
+    extracted-text cache ``attachments/.text/``, scratch space)."""
     out = []
     resolved_ws = ws.resolve()
     for p in sorted(resolved_ws.rglob("*")):
@@ -2041,6 +2044,8 @@ def _list_workspace_files(ws: Path) -> list[dict]:
             p.resolve().relative_to(resolved_ws)
             rel = str(p.relative_to(resolved_ws))
         except (OSError, RuntimeError, ValueError):
+            continue
+        if any(part.startswith(".") for part in p.relative_to(resolved_ws).parts):
             continue
         rel = str(p.relative_to(ws))
         if _workspace_target(ws, rel) is None:
@@ -4641,7 +4646,13 @@ class Handler(RunSharingMixin, ProjectsMixin, ResearchMixin, BaseHTTPRequestHand
             if self._refuse_analyze_continuation(run_id):
                 return
             # A repeated Continue on a running run starts nothing, so it is
-            # answered before a member's run start is reserved.
+            # answered before a member's run start is reserved.  So is one
+            # that comes while a stopped session still winds down: it would
+            # run beside that session's worker.
+            if job_manager.run_is_stopping(run_id):
+                self._send(409, json.dumps({"ok": False, "status": "stopping", "run_id": run_id,
+                                            "error": job_manager.RUN_STOPPING_ERROR}))
+                return
             if job_manager.run_is_active(run_id):
                 self._send(200, json.dumps({"ok": False, "status": "already_running", "run_id": run_id}))
                 return
@@ -4675,9 +4686,10 @@ class Handler(RunSharingMixin, ProjectsMixin, ResearchMixin, BaseHTTPRequestHand
                 self._send(500, json.dumps({"error": str(exc)}))
                 return
             if not result.get("ok"):
-                # Another request started this run's continuation first.
+                # Another request started this run's continuation first (or
+                # a Stop came first, and its session still winds down).
                 self._release_member_run(user)
-            self._send(200, json.dumps(result, ensure_ascii=False))
+            self._send(409 if result.get("status") == "stopping" else 200, json.dumps(result, ensure_ascii=False))
             return
 
         if path.startswith("/api/runs/") and path.endswith("/chat"):
@@ -5227,6 +5239,10 @@ class Handler(RunSharingMixin, ProjectsMixin, ResearchMixin, BaseHTTPRequestHand
 
                 data = normalize_run(data, engine=data.get("engine") or "hermes")
                 data["problems"] = job_manager.ensure_problems(data, run_id)
+                if job_manager.run_is_stopping(run_id):
+                    # Recorded stopped while its worker still winds down: the
+                    # console offers Continue once this is gone.
+                    data["stopping"] = True
                 ws = _workspace_for_run(run_id)
                 _refresh_analyze_block(data, ws)
                 _refresh_readability_block(data, ws)

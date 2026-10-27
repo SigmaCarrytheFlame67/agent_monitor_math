@@ -185,9 +185,10 @@ class CLIEventParser:
             self._log(
                 f"· usage in {input_tokens} / out {u.get('output_tokens', 0)}"
             )
-            # A Max (API) run names the model that answered each call, so the
-            # node is priced at that model's rates.  The run-level model
-            # stays unset: a CGM run's calls can use different models.
+            # The CGM runners name the model each call's usage is priced at
+            # (Codex's own events never do), so the node is priced at that
+            # model's rates.  The run-level model stays unset: a CGM run's
+            # calls can use different models.
             model = ev.get("model")
             model = model.strip() if isinstance(model, str) else ""
             self._close_turn(
@@ -538,7 +539,9 @@ class CLIEventParser:
                 last["cache_read_tokens"] += cache_read
                 last["cache_write_tokens"] += cache_write
                 last["reasoning_tokens"] += reasoning
-                # The usage's model, unless the node already names one.
+                # The usage's model, unless the node already names one.  Only
+                # the model: it is not evidence of who wrote the node's text,
+                # so model_source stays as it was.
                 if model and not last.get("model"):
                     last["model"] = model
             return

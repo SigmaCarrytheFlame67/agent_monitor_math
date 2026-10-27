@@ -95,6 +95,10 @@ body {
 .run-del:hover { background: color-mix(in srgb, var(--err) 12%, transparent); color: var(--err); }
 .run-act.stop:hover { background: color-mix(in srgb, var(--warn) 14%, transparent); color: var(--warn); }
 .run-act.cont:hover { background: color-mix(in srgb, var(--ok) 14%, transparent); color: var(--ok); }
+/* A Stop still settling keeps ■ in the spot ▶ takes next, inert (stopSettling).
+   Disabled, it swallows a second click; with pointer-events off, that click
+   would fall through to the run item and open the run. */
+.run-item .run-act:disabled, .run-item .run-act:disabled:hover { opacity: .45; cursor: default; background: transparent; color: var(--dim); }
 @keyframes pulse { 50% { opacity: .3; } }
 @keyframes logoGlow {
   0%, 100% { box-shadow: 0 0 0 0 color-mix(in srgb, var(--accent) 0%, transparent); }
@@ -321,6 +325,8 @@ button.start:disabled { opacity: .4; }
 .sess-btn.show { display: inline-flex; }
 .sess-btn.stop:hover { border-color: var(--err); color: var(--err); }
 .sess-btn.cont:hover { border-color: var(--ok); color: var(--ok); }
+/* "Stopping…": the Stop button stays in Continue's spot until the stop has settled. */
+.sess-btn:disabled { opacity: .55; cursor: default; pointer-events: none; }
 /* A run this account may only read (another project member's): the server
    refuses every change to it, so none is offered. */
 html.read-only-run #sess-stop, html.read-only-run #sess-cont,
@@ -2512,6 +2518,10 @@ function ensurePdfWorker(){
 <script>
 const THEME_KEY='proving-console-theme';
 const RUN_TUNING_KEY='proving-console-run-tuning-v1';
+/* Numbers (token and character counts, compact totals) are written in the
+   locale of the console's English text, not the browser's: in another one
+   13,723 tokens read "1.4万" or "13.723". Dates and times keep the viewer's. */
+const UI_LOCALE='en-US';
 const pcUrl=p=>(window.__pcUrl?window.__pcUrl(p):p);
 /* Session guard: any 401 from the API sends the user to /login (skipped in public mode),
    except while the admin view holds passwords shown once: it says to copy them first. */
@@ -3600,7 +3610,7 @@ const LIB_HINTS={
   tool:'Typed tools saved into each run workspace. Read-only tools can be automatic; write tools require approval.'
 };
 const HUB_TITLES={memory:'Memory',skill:'Skills',tool:'Tools'};
-const fmtInt=n=>new Intl.NumberFormat().format(Number(n||0));
+const fmtInt=n=>new Intl.NumberFormat(UI_LOCALE).format(Number(n||0));
 const fmtCost=n=>'$'+Number(n||0).toFixed(Number(n||0)>=1?2:4);
 const fmtDuration=n=>Number(n||0)>=60?(Number(n||0)/60).toFixed(1)+'m':Number(n||0).toFixed(1)+'s';
 function monitorStatusLabel(status){ return status==='finished'?'done':status||'unknown'; }
@@ -3778,7 +3788,7 @@ function renderMonitor(){
 }
 /* ── admin: usage and runs across all accounts (server enforces admin) ── */
 const ADMIN={offset:0,limit:50,metric:'cost_usd',group:'user',usage:null,optionsLoaded:false,timer:null};
-const fmtCompact=n=>new Intl.NumberFormat(undefined,{notation:'compact',maximumFractionDigits:1}).format(Number(n||0));
+const fmtCompact=n=>new Intl.NumberFormat(UI_LOCALE,{notation:'compact',maximumFractionDigits:1}).format(Number(n||0));
 const BILLING_LABEL={api:'API key',subscription:'Subscription',sponsored:'Sponsored',unknown:'Legacy'};
 const ADMIN_METRICS={cost_usd:['Est. cost',fmtCost],tokens:['Tokens',fmtCompact],runs:['Runs',fmtInt]};
 function adminIsoDay(d){ return d.toISOString().slice(0,10); }
@@ -5636,6 +5646,10 @@ document.addEventListener('visibilitychange',()=>{ if(!document.hidden)refreshEn
 
 /* Research files stay in the browser until the problem or feedback is sent. */
 const ATTACHMENT_EXTENSIONS=['pdf','txt','md','tex','bib','lean','csv','tsv','json','png','jpg','jpeg','webp','gif'];
+/* These engines open no file and see no image: the server refuses images for
+   them and their model reads the extracted text of text and PDF files. */
+const TOOL_FREE_ENGINES=new Set(['kimi','math_harness','plain']);
+const ATTACHMENT_IMAGE_EXTENSIONS=['png','jpg','jpeg','webp','gif'];
 function attachmentSize(bytes){ return bytes<1024*1024?Math.ceil(bytes/1024)+' KB':(bytes/(1024*1024)).toFixed(1)+' MB'; }
 /* Guests get the server's small text-only allowance (guest_policy.attachments).
    In Analyze mode the server's upload list applies (manuscripts, no images). */
@@ -5643,7 +5657,7 @@ function attachmentExtension(name){
   const lower=String(name||'').toLowerCase();
   return lower.endsWith('.tar.gz')?'tar.gz':lower.split('.').pop();
 }
-function attachmentLimits(){
+function attachmentLimits(engineId){
   let guest=null;
   try{ guest=CURRENT_USER?.guest?GUEST_POLICY?.attachments:null; }catch(e){ guest=null; }
   let analyze=null;
@@ -5656,25 +5670,53 @@ function attachmentLimits(){
       title:'Guests can attach TeX, Markdown or plain-text manuscripts. Sign in to attach PDFs and zip or tar.gz bundles.'};
     return {extensions:guest.extensions.map(x=>String(x).toLowerCase()),maxFiles:files,maxFileBytes:total,maxTotalBytes:total,
       help:`Text files only · ${files} files, ${attachmentSize(total)} total`,
-      title:'Guest runs read text attachments (Markdown, LaTeX, Lean, plain text, CSV, JSON). Sign in to attach PDFs and images.'};
+      title:'Guest runs read text attachments (Markdown, LaTeX, Lean, plain text, CSV, JSON) as text; long files are cut to fit. Sign in to attach PDFs too.'};
   }
   if(analyzeExtensions)return {extensions:analyzeExtensions,maxFiles:8,maxFileBytes:10*1024*1024,maxTotalBytes:20*1024*1024,analyze:true,
     help:'TeX, Markdown, text, PDF, zip or tar.gz · 8 files, 10 MB each, 20 MB total',
     title:'Manuscript files: TeX sources (or a zip or tar.gz bundle of them), Markdown, plain text or a PDF. Bundles are unpacked safely; nothing in them is compiled or run.'};
+  if(TOOL_FREE_ENGINES.has(String(engineId||'')))return {extensions:ATTACHMENT_EXTENSIONS.filter(x=>!ATTACHMENT_IMAGE_EXTENSIONS.includes(x)),
+    maxFiles:8,maxFileBytes:10*1024*1024,maxTotalBytes:20*1024*1024,toolFree:true,
+    help:'PDF and text files are read as extracted text (formulas may be garbled); long files are cut to fit, and the chat lists the pages read.',
+    title:'This engine opens no files and sees no images: its model reads the text extracted from PDF, TeX, Markdown, Lean and other text files · 8 files, 10 MB each, 20 MB total. For an image, paste the formula or statement as text; a run on Claude Code or Codex, where your account has them, can read images.'};
   return {extensions:ATTACHMENT_EXTENSIONS,maxFiles:8,maxFileBytes:10*1024*1024,maxTotalBytes:20*1024*1024,
     help:'Drop files or paste images · 8 files, 10 MB each, 20 MB total',
     title:'PDF, text, LaTeX, Lean, data and images. PDFs and images require file/vision tools in the selected harness.'};
 }
-function attachmentComposer(id, inputId){
+// Why a staged file of this extension cannot be attached under ``limits``.
+function attachmentRefusal(limits,ext){
+  if(limits.analyze)return limits.guest?': guests can attach TeX, Markdown or text manuscripts (sign in for PDFs and archives).':': manuscripts are read from TeX, Markdown, text and PDF files and zip or tar.gz bundles.';
+  if(!ATTACHMENT_EXTENSIONS.includes(ext))return ': unsupported file type.';
+  return limits.toolFree?': this engine reads text and PDF files but cannot see images. Paste the formula or statement as text instead; a run on Claude Code or Codex, where your account has them, can read images.':': not available for guest runs (text files only).';
+}
+/* The open run's engine, for its chat: its record's once loaded, else the
+   one its id starts with (run ids are "<engine>_<problem>_<job>"). */
+function chatRunEngine(){
+  try{ if(lastSandboxRun?.run_id===runId&&lastSandboxRun?.engine)return String(lastSandboxRun.engine); }catch(e){}
+  const id=String(runId||'');
+  return [...TOOL_FREE_ENGINES].find(engineId=>id.startsWith(engineId+'_'))||'';
+}
+// ``engineOf`` names the engine the files are for: the chosen one for a new
+// run, the run's own in the chat.
+function attachmentComposer(id, inputId, engineOf){
   const root=$(id), input=$(inputId);
   root.innerHTML=`<div class="attachment-toolbar"><button type="button" class="attach-button">+ Attach files</button><span class="attachment-help"></span></div><input type="file" class="attachment-picker" multiple hidden/><div class="attachment-list"></div><div class="attachment-error" role="status" aria-live="polite"></div>`;
   const picker=root.querySelector('input'), button=root.querySelector('button'), list=root.querySelector('.attachment-list'), error=root.querySelector('.attachment-error');
   const help=root.querySelector('.attachment-help');
   const state={files:[],busy:false};
+  const limitsNow=()=>{ let current=''; try{ current=engineOf?engineOf():''; }catch(e){ current=''; } return attachmentLimits(current); };
   state.refreshLimits=()=>{
-    const limits=attachmentLimits();
+    const limits=limitsNow();
     help.textContent=limits.help; button.title=limits.title;
     picker.accept=limits.extensions.map(x=>'.'+x).join(',');
+    // Files staged for another engine or mode that this one cannot read.
+    const dropped=state.busy?[]:state.files.filter(x=>!limits.extensions.includes(attachmentExtension(x.file.name)));
+    if(dropped.length){
+      for(const x of dropped)if(x.preview)URL.revokeObjectURL(x.preview);
+      state.files=state.files.filter(x=>!dropped.includes(x));
+      error.textContent=dropped.map(x=>x.file.name+attachmentRefusal(limits,attachmentExtension(x.file.name))).join(' ');
+      render();
+    }
   };
   state.refreshLimits();
   function render(){
@@ -5693,10 +5735,10 @@ function attachmentComposer(id, inputId){
   }
   function add(files){
     if(state.busy)return;
-    const errors=[], limits=attachmentLimits();
+    const errors=[], limits=limitsNow();
     for(const file of files){
       const ext=attachmentExtension(file.name);
-      if(!limits.extensions.includes(ext)){errors.push(file.name+(limits.analyze?(limits.guest?': guests can attach TeX, Markdown or text manuscripts (sign in for PDFs and archives).':': manuscripts are read from TeX, Markdown, text and PDF files and zip or tar.gz bundles.'):ATTACHMENT_EXTENSIONS.includes(ext)?': not available for guest runs (text files only).':': unsupported file type.'));continue;}
+      if(!limits.extensions.includes(ext)){errors.push(file.name+attachmentRefusal(limits,ext));continue;}
       if(!file.size||file.size>limits.maxFileBytes){errors.push(file.name+': files must be nonempty and at most '+attachmentSize(limits.maxFileBytes)+'.');continue;}
       if(state.files.length>=limits.maxFiles||state.files.reduce((n,x)=>n+x.file.size,0)+file.size>limits.maxTotalBytes){errors.push('Limit: '+limits.maxFiles+' files and '+attachmentSize(limits.maxTotalBytes)+' per message.');break;}
       state.files.push({file,preview:['png','jpg','jpeg','webp','gif'].includes(ext)?URL.createObjectURL(file):null});
@@ -5725,8 +5767,8 @@ function attachmentComposer(id, inputId){
   })));
   return state;
 }
-const initialAttachments=attachmentComposer('problem-attachments','problem-text');
-const chatAttachments=attachmentComposer('chat-attachments','chat-input');
+const initialAttachments=attachmentComposer('problem-attachments','problem-text',()=>engine);
+const chatAttachments=attachmentComposer('chat-attachments','chat-input',chatRunEngine);
 // In Analyze and Readability the attached files are the manuscript: keep the source note current.
 initialAttachments.onChange=()=>{ if(manuscriptMode())refreshAnalyzeSource(); };
 function attachmentLinks(items,rid){
@@ -5804,13 +5846,16 @@ async function loadRuns(){
   // A finished analysis (or readable version) is relabelled with its manuscript's title (its job keeps the link).
   const recordPreview=new Map(manifestAll.map(r=>[String(r.run_id),r.problem_preview]));
   syncIdlePill(runningRunCount([...jobs,...rechecks.values()],manifest));
-  const item=(rid,jid,en,pid,st,preview,kind)=>{
+  const item=(rid,jid,en,pid,st,preview,kind,stopping)=>{
     const analysis=kind==='analyze'||en==='analyze', readability=kind==='readability'||en==='readability', recheck=rechecks.get(rid);
     RUN_KIND_BY_ID.set(String(rid),analysis?'analyze':readability?'readability':'prove');
     if(recheck)st='running';
     // Analyze and Readability runs are never continued: a new run, a node
-    // re-check or a question replaces that.
-    const act=st==='running'
+    // re-check or a question replaces that.  A Stop still settling keeps ■
+    // in the spot, inert, where ▶ comes next (stopSettling).
+    const act=stopSettling(rid,st==='running',stopping)
+      ?`<button class="run-act stop" data-run="${rid}" title="Stopping…" disabled>■</button>`
+      :st==='running'
       ?`<button class="run-act stop" data-run="${rid}" title="${recheck?'Stop the re-check':'Stop'}">■</button>`
       :(CURRENT_USER?.guest||analysis||readability?'':`<button class="run-act cont" data-run="${rid}" title="Continue">▶</button>`);
     const title=(preview||'').trim()||pid;
@@ -5821,7 +5866,7 @@ async function loadRuns(){
     return `<div class="run-item ${rid===runId?'active':''}${analysis?' analysis':''}${readability?' readability':''}" data-run="${rid}" ${jid?`data-job="${jid}"`:''} title="${escapeHtml(title)}"><div class="run-top"><div class="en"><span class="sdot ${st||'archived'}"></span><span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${escapeHtml(title)}</span></div>${act}<button class="run-del" data-run="${rid}">×</button></div><div class="st">${sub}</div></div>`;
   };
   const manuscriptJob=j=>['analyze','readability'].includes(j.run_kind)||['analyze','readability'].includes(j.engine);
-  $('runs').innerHTML=jobs.map(j=>item(j.run_id,j.job_id,j.engine,j.problem_id,j.status,manuscriptJob(j)&&recordPreview.get(String(j.run_id))||j.problem_preview,j.run_kind)).join('')+manifest.map(r=>item(r.run_id,null,r.engine||'?',r.problem_id||r.run_id,r.status,r.problem_preview,r.run_kind)).join('')||'<div style="color:var(--dim);font-size:11px;padding:8px">No runs yet</div>';
+  $('runs').innerHTML=jobs.map(j=>item(j.run_id,j.job_id,j.engine,j.problem_id,j.status,manuscriptJob(j)&&recordPreview.get(String(j.run_id))||j.problem_preview,j.run_kind,!!j.stopping)).join('')+manifest.map(r=>item(r.run_id,null,r.engine||'?',r.problem_id||r.run_id,r.status,r.problem_preview,r.run_kind)).join('')||'<div style="color:var(--dim);font-size:11px;padding:8px">No runs yet</div>';
   $('runs').querySelectorAll('.run-item').forEach(el=>el.onclick=()=>{ selectRun(el.dataset.run,el.dataset.job||null); goSession(workspaceView||'sandbox'); });
   $('runs').querySelectorAll('.run-del').forEach(b=>b.onclick=e=>{e.stopPropagation();deleteRun(b.dataset.run);});
   $('runs').querySelectorAll('.run-act.stop').forEach(b=>b.onclick=e=>{e.stopPropagation();stopRun(b.dataset.run);});
@@ -5837,6 +5882,8 @@ function selectRun(rid,jid){
     if(typeof resetManuscriptAsk==='function')resetManuscriptAsk(rid);
   }
   runId=rid; jobId=jid; lastProofMtime=0; lastChatKey=''; convoKey=''; convoOpen.clear(); dagRunKey=''; leanRunKey=''; leanDirty=false; autoPipelineKey='';
+  // The chat attaches what this run's engine reads.
+  chatAttachments.refreshLimits?.();
   // Do not let the previous run's pipeline stages drive the new run's Lean
   // empty state while its own dashboard payload is still loading.
   lastSandboxRun=null;
@@ -5865,8 +5912,21 @@ async function deleteRun(rid){
 }
 
 async function stopRun(rid){
-  try{ await fetch('/api/runs/'+encodeURIComponent(rid)+'/stop',{method:'POST',headers:{'Content-Type':'application/json'},body:'{}'}); }catch(e){}
-  if(runId===rid) setPill('stopped','stopped');
+  // ■ turns "Stopping…" at once and stays, inert, until the stop has settled
+  // (stopSettling): ▶ Continue takes the same spot only then.
+  const stop={since:Date.now(),recorded:false};
+  STOPPING_RUNS.set(String(rid),stop);
+  if(runId===rid)updateSessionButtons('running');
+  let stopped=false;
+  try{
+    const r=await fetch('/api/runs/'+encodeURIComponent(rid)+'/stop',{method:'POST',headers:{'Content-Type':'application/json'},body:'{}'});
+    const d=await r.json().catch(()=>({}));
+    stopped=r.ok&&d.status!=='not_running';
+    stop.recorded=!(d.recheck||d.ask);
+  }catch(e){}
+  // Nothing was stopped (or the request failed): Stop is offered again.
+  if(!stopped)STOPPING_RUNS.delete(String(rid));
+  if(runId===rid){ setPill('stopped','stopped'); startPolling(); }
   loadRuns();
 }
 
@@ -5945,6 +6005,29 @@ document.addEventListener('visibilitychange',()=>{
   pollDelay=POLL_MIN_MS;
   pollLoop();
 });
+/* ── Stop, then Continue ──
+   ■ Stop and ▶ Continue take turns in one spot (the session bar, the run
+   list), and a stopped run's record reads "stopped" at once while its worker
+   still winds down on the server (run.stopping, job.stopping), which refuses
+   a Continue meanwhile. A Stop sent from this tab keeps ■ there, inert and
+   "Stopping…", until the run neither runs nor winds down and STOP_SETTLE_MS
+   have passed: a second click meant for Stop never lands on Continue. */
+const STOP_SETTLE_MS=3000;
+// Run id → {since: when this tab sent its Stop, recorded: whether the server
+// recorded the session stopped at once (a re-check or a question runs on
+// until its worker ends)}.
+const STOPPING_RUNS=new Map();
+// Whether a Stop of run `rid` is still settling, given whether the run still
+// runs and whether the server says it is stopping. A settled Stop is
+// forgotten; so is one whose run runs again once settled (a new session: a
+// message sent after the Stop continued it).
+function stopSettling(rid,running,stopping){
+  const key=String(rid||''), stop=STOPPING_RUNS.get(key);
+  if(!stop)return !!stopping;  // stopped elsewhere (another tab)
+  if(stopping||Date.now()-stop.since<STOP_SETTLE_MS||(running&&!stop.recorded))return true;
+  STOPPING_RUNS.delete(key);
+  return false;
+}
 async function tick(){
   // The run this tick polls. Its record is applied only while that run is
   // still the one shown: after each wait a tick whose run was left (another
@@ -5981,6 +6064,8 @@ async function tick(){
         loadChat();
       }
       if(!running){
+        // A Stop still settling keeps the poll going, so ▶ Continue appears as soon as it has.
+        if(stopSettling(rid,run.analyze?.recheck?.status==='running',!!run.stopping)){ pollDelay=POLL_MIN_MS; return true; }
         // The run list learns at once that the run ended (an analysis takes its title).
         if(pipelineRunning){ if(pollListedEnd!==run.run_id){ pollListedEnd=run.run_id; loadRuns(); } return true; }
         loadRuns();
@@ -6129,7 +6214,7 @@ function updateChatStatus(run){
   if(recheck?.status==='running'){ box.className='chat-status on'; $('chat-stage').textContent='Re-checking…'; $('chat-detail').textContent=String(recheck.label||recheck.node_id||''); }
   if(ask?.status==='running'){ box.className='chat-status on'; $('chat-stage').textContent='Answering…'; $('chat-detail').textContent=String(ask.question||'').slice(0,160); }
   updateLiveChips(run);
-  updateSessionButtons(recheck?.status==='running'?'running':run.status);
+  updateSessionButtons(recheck?.status==='running'?'running':run.status,!!run.stopping);
   updateProcLog(run);
 }
 
@@ -6239,9 +6324,13 @@ function renderCitations(text){
 }
 $('cite-toggle').onclick=()=>$('cite-strip').classList.toggle('collapsed');
 
-function updateSessionButtons(status){
-  $('sess-stop').classList.toggle('show', status==='running');
-  $('sess-cont').classList.toggle('show', status==='finished'||status==='failed'||status==='stopped'||status==='interrupted');
+function updateSessionButtons(status,stopping){
+  // A Stop still settling keeps ■ in Continue's spot, inert (stopSettling).
+  const running=status==='running', settling=stopSettling(runId,running,stopping), stop=$('sess-stop');
+  stop.classList.toggle('show', running||settling);
+  stop.disabled=settling;
+  stop.textContent=settling?'Stopping…':'■ Stop';
+  $('sess-cont').classList.toggle('show', !settling&&(status==='finished'||status==='failed'||status==='stopped'||status==='interrupted'));
 }
 
 /* ── simple process log ── */
@@ -6339,7 +6428,7 @@ function updatePromptStrip(run){
   if(best===lastPromptText)return;
   lastPromptText=best;
   $('prompt-body').textContent=best;
-  $('prompt-len').textContent=best.length.toLocaleString()+' chars';
+  $('prompt-len').textContent=best.length.toLocaleString(UI_LOCALE)+' chars';
 }
 $('prompt-toggle').onclick=()=>$('prompt-strip').classList.toggle('collapsed');
 $('sess-stop').onclick=()=>{ if(runId)stopRun(runId); };
@@ -6783,7 +6872,7 @@ function applySandboxPreview(run){
 }
 function problemCardHtml(text, n, total){
   const label=total>1?('Problem '+n):'Problem';
-  return `<div class="problem-message"><div class="problem-message-hdr"><span>${label}</span><span class="n">${text.length.toLocaleString()} chars</span></div><div class="problem-message-body">${escapeHtml(text)}</div></div>`;
+  return `<div class="problem-message"><div class="problem-message-hdr"><span>${label}</span><span class="n">${text.length.toLocaleString(UI_LOCALE)} chars</span></div><div class="problem-message-body">${escapeHtml(text)}</div></div>`;
 }
 function unwrapProofMarkdownFence(text,allowTail=false){
   const lines=text.split(/\r\n?|\n/);
@@ -7407,7 +7496,7 @@ function renderConversation(run,force){
         <div class="turn-hdr" style="background:color-mix(in srgb, #0ea5e9 6%, var(--panel))">
           <span class="kb" style="background:#0ea5e9">task prompt</span>
           <span class="stg">Prompt given to the engine</span>
-          <span class="stats"><span class="tk">${promptFull.length.toLocaleString()} chars</span></span>
+          <span class="stats"><span class="tk">${promptFull.length.toLocaleString(UI_LOCALE)} chars</span></span>
         </div>
         <details class="turn-extra" data-k="${escapeHtml(dk)}"${convoOpen.has(dk)?' open':''}>
           <summary>Show full prompt</summary>

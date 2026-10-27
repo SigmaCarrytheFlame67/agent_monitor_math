@@ -16,7 +16,11 @@ from agent_monitor.public_kimi_server import PUBLIC_ENGINES, SPONSORED_ENGINES
 
 class MathHarnessRoutingTests(unittest.TestCase):
     def test_registry_command_keeps_problem_text_out_of_process_argv(self) -> None:
-        from agent_monitor.engines_registry import build_cli_command
+        """The runner gets its task in a private file, never in argv (which
+        other local users can read); problem.txt stays the problem."""
+        import stat
+
+        from agent_monitor.engines_registry import PROMPT_FILENAME, build_cli_command
 
         with tempfile.TemporaryDirectory() as tmp:
             workspace = Path(tmp)
@@ -28,13 +32,22 @@ class MathHarnessRoutingTests(unittest.TestCase):
                 workspace=workspace,
                 problem_file=problem_file,
             )
+            prompt_file = workspace.absolute() / PROMPT_FILENAME
+            self.assertEqual(
+                prompt_file.read_text(encoding="utf-8"), "SECRET USER PROBLEM AND PERSONA"
+            )
+            self.assertEqual(stat.S_IMODE(prompt_file.stat().st_mode), 0o600)
+            self.assertEqual(
+                problem_file.read_text(encoding="utf-8"), "private mathematical statement"
+            )
 
         self.assertIsNotNone(argv)
         assert argv is not None
         rendered = " ".join(argv)
         self.assertNotIn("SECRET USER PROBLEM", rendered)
         self.assertNotIn("private mathematical statement", rendered)
-        self.assertTrue(argv[-1].endswith("math_harness_runner.py"))
+        self.assertTrue(argv[-3].endswith("math_harness_runner.py"))
+        self.assertEqual(argv[-2:], ["--prompt-file", str(prompt_file)])
 
     def test_api_child_uses_only_the_run_owners_provider_credentials(self) -> None:
         from agent_monitor import jobs

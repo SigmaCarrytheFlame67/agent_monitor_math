@@ -664,7 +664,7 @@ class ApiMaxRunnerTests(unittest.TestCase):
             self.assertEqual({call["timeout"] for call in calls}, {900})
             self.assertEqual(calls[-1]["effort"], "low")  # the Kimi curator, as before
 
-    def test_usage_events_name_the_billing_model_only_in_max_api(self) -> None:
+    def test_usage_events_name_the_billing_provider_only_in_max_api(self) -> None:
         empty = APIBackendError(
             "OpenAI returned an empty response for gpt-6-astra",
             usage={"input_tokens": 100, "output_tokens": 64_000, "reasoning_output_tokens": 64_000},
@@ -682,17 +682,25 @@ class ApiMaxRunnerTests(unittest.TestCase):
             failed = next(call for call in receipt["calls"] if call["stage"] == "worker-1")
             self.assertEqual((failed["provider"], failed["response_sha256"]), ("openai", None))
             self.assertEqual(_attestation(workspace), "harness-gate-receipt")
-        # A single-route API run and a subscription Max run are unchanged.
+        # A single-route API run and a subscription Max run name the model
+        # each call's usage is priced at, and no provider.
         with tempfile.TemporaryDirectory() as raw:
             code, _calls, events = _api_run(Path(raw), _accepted_outputs())
             self.assertEqual(code, 0)
             self.assertTrue(_usage_events(events))
-            self.assertTrue(all(set(e) == {"type", "stage", "usage"} for e in _usage_events(events)))
+            self.assertTrue(all(set(e) == {"type", "stage", "usage", "model"} for e in _usage_events(events)))
+            self.assertEqual({e["model"] for e in _usage_events(events)}, {"kimi-k3"})
         with tempfile.TemporaryDirectory() as raw:
             providers = _Providers([_strategist(2), _ok(), _ok(), _curator()], [_worker("first"), _worker("second")])
             code, events = _run_max(Path(raw), providers)
             self.assertEqual(code, 0)
-            self.assertTrue(all(set(e) == {"type", "stage", "usage"} for e in _usage_events(events)))
+            self.assertTrue(all(set(e) == {"type", "stage", "usage", "model"} for e in _usage_events(events)))
+            # Claude Code's reported model, never its alias ("fable"); Codex's run model.
+            self.assertEqual(
+                {(e["stage"].split("-")[0], e["model"]) for e in _usage_events(events)},
+                {("strategist", "claude-fable-5-1"), ("verify", "claude-fable-5-1"),
+                 ("curator", "claude-fable-5-1"), ("worker", "gpt-6-astra")},
+            )
 
     def test_a_refusal_fallback_is_recorded_under_the_model_that_answered(self) -> None:
         class _FallbackApis(_Apis):

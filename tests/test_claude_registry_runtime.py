@@ -218,8 +218,10 @@ class WrapperPromptFileTests(unittest.TestCase):
     def test_kimi_reads_its_prompt_file(self) -> None:
         tasks: list[str] = []
 
-        def pipeline(_root, _problem, _route, *, budgets, task):
+        def pipeline(_root, _problem, _route, *, budgets, task, sources):
             tasks.append(task)
+            # No attached files: no source material.
+            self.assertIsNone(sources)
             return {"written": [], "fact_ids": [], "accepted": False, "proof_text": ""}
 
         with tempfile.TemporaryDirectory() as td, patch.dict(

@@ -263,14 +263,14 @@ class FeedbackSentDuringAFollowUpTests(unittest.TestCase):
     def test_a_message_sent_as_the_follow_up_starts_its_turn_is_kept(self) -> None:
         """Recorded after the follow-up read the record, before its start write."""
         sender: dict = {}
-        original_context = jobs.research_attachments.context
+        original_task = jobs._cgm_follow_up_task
 
-        def context(workspace):  # called right before the start write
+        def task(**kwargs):  # the CGM task is built right before the start write
             self._send_now(sender)
-            return original_context(workspace)
+            return original_task(**kwargs)
 
         self._continue_while_sending(
-            sender, patch.object(jobs.research_attachments, "context", side_effect=context)
+            sender, patch.object(jobs, "_cgm_follow_up_task", side_effect=task)
         )
 
     def test_a_message_sent_right_after_the_final_merge_read_is_kept(self) -> None:

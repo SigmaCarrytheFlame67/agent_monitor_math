@@ -9,6 +9,7 @@ from types import SimpleNamespace
 import pytest
 
 from agent_monitor import attachments, console_server as console, jobs, engines_registry, settings
+from tests.pdf_samples import text_pdf
 
 
 PNG = base64.b64decode("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aO1cAAAAASUVORK5CYII=")
@@ -114,11 +115,16 @@ def test_pipeline_engines_receive_files_without_library_context(isolated_jobs, m
 
 
 def test_initial_and_queued_followup_files_reach_engine(isolated_jobs, monkeypatch):
-    job = jobs.start_job(engine="plain", user={"id": 7}, attachments=[upload(), upload("figure.png", PNG)])
+    # Plain is tool-free: it reads text and PDF files as text, never an image.
+    with pytest.raises(ValueError, match="cannot see images"):
+        jobs.start_job(engine="plain", user={"id": 7}, attachments=[upload(), upload("figure.png", PNG)])
+    assert isolated_jobs == []
+    paper = text_pdf(["Definition: a widget is a finite gadget."])
+    job = jobs.start_job(engine="plain", user={"id": 7}, attachments=[upload(), upload("paper.pdf", paper)])
     worker, kwargs = isolated_jobs[0]
     workspace = jobs.workspace_dir(job["run_id"])
     assert len(attachments.list_files(workspace)) == 2
-    assert jobs.list_chat(job["run_id"])[0]["attachments"][1]["name"] == "figure.png"
+    assert jobs.list_chat(job["run_id"])[0]["attachments"][1]["name"] == "paper.pdf"
     queued = jobs.send_human_message(job["run_id"], "", user={"id": 7}, attachments=[upload("new.md", b"Try strong induction.")])
     assert queued["status"] == "queued"
     pending = (workspace / jobs._PENDING_FEEDBACK_FILENAME).read_text()
@@ -134,14 +140,23 @@ def test_initial_and_queued_followup_files_reach_engine(isolated_jobs, monkeypat
     monkeypatch.setattr(jobs, "_record_run_memory", lambda **kw: None)
     worker(**{**kwargs, "guest": True})
     assert "Lemma: every even integer" in captured[0]
-    assert "figure.png" in captured[0]
+    assert "[p. 1]\nDefinition: a widget is a finite gadget." in captured[0]
     assert "Try strong induction." in captured[0]
+    # No server path or file-tool advice reaches a tool-free model.
+    assert str(workspace) not in captured[0] and "vision_analyze" not in captured[0]
 
 
 def test_finished_run_followup_preserves_existing_files(isolated_jobs, monkeypatch):
     job = jobs.start_job(engine="plain", user={"id": 7}, problem_text="Prove the lemma", attachments=[upload()])
     jobs._JOBS[job["job_id"]]["status"] = "finished"
-    response = jobs.send_human_message(job["run_id"], "Check this diagram", user={"id": 7}, attachments=[upload("diagram.png", PNG)])
+    chat = jobs.list_chat(job["run_id"])
+    with pytest.raises(ValueError, match="cannot see images"):
+        jobs.send_human_message(job["run_id"], "Check this diagram", user={"id": 7}, attachments=[upload("diagram.png", PNG)])
+    # Refused before anything was recorded or saved.
+    assert jobs.list_chat(job["run_id"]) == chat
+    assert len(attachments.list_files(jobs.workspace_dir(job["run_id"]))) == 1
+    paper = text_pdf(["The diagram commutes by Lemma 4."])
+    response = jobs.send_human_message(job["run_id"], "Check this paper", user={"id": 7}, attachments=[upload("diagram.pdf", paper)])
     assert response["status"] == "continuing"
     worker, kwargs = isolated_jobs[-1]
     captured = []
@@ -150,7 +165,7 @@ def test_finished_run_followup_preserves_existing_files(isolated_jobs, monkeypat
     monkeypatch.setattr(jobs, "_record_run_memory", lambda **kw: None)
     worker(**kwargs)
     assert "Lemma: every even integer" in captured[0]
-    assert "diagram.png" in captured[0]
+    assert "The diagram commutes by Lemma 4." in captured[0]
 
 
 def test_http_upload_download_ownership_and_limits(isolated_jobs, monkeypatch):
@@ -189,9 +204,13 @@ def test_http_upload_download_ownership_and_limits(isolated_jobs, monkeypatch):
         assert request("GET", path, user=8)[0] == 404
         assert request("GET", path, user=None)[0] == 401
         assert request("POST", f"/api/runs/{rid}/chat", {"attachments": [upload()]}, user=8)[0] == 404
+        # Plain is tool-free: an image is refused (400) before it is saved.
         status, _, raw = request("POST", f"/api/runs/{rid}/chat", {"attachments": [upload("figure.png", PNG)]})
+        assert status == 400 and "cannot see images" in json.loads(raw)["error"], raw
+        assert len(attachments.list_files(jobs.workspace_dir(rid))) == 1
+        status, _, raw = request("POST", f"/api/runs/{rid}/chat", {"attachments": [upload("figure.md", b"A diagram, as text.")]})
         assert status == 200, raw
-        assert json.loads(raw)["messages"][-2]["attachments"][0]["name"] == "figure.png"
+        assert json.loads(raw)["messages"][-2]["attachments"][0]["name"] == "figure.md"
         status, _, raw = request("POST", "/api/runs", {"engine": "plain", "attachments": [upload("fake.png")]})
         assert status == 400, raw
     finally:

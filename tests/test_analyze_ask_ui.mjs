@@ -402,7 +402,7 @@ test('the console polls an analysis while a question is answered, says so, and l
   assert.notEqual(sig(finished), sig({ ...finished, analyze: { ...finished.analyze, ask: { ask_id: 'q', status: 'running' } } }))
   assert.notEqual(sig(finished), sig({ ...finished, analyze: { asks: [DONE, DONE] } }))
   // Polling goes on after the analysis while its question runs, and stops once it is answered.
-  const poll = load(['tick', 'nextPollDelay'], ['POLL_MIN_MS'], `
+  const poll = load(['tick', 'nextPollDelay', 'stopSettling'], ['POLL_MIN_MS', 'STOP_SETTLE_MS', 'STOPPING_RUNS'], `
 let record=null, runId='a1', pollSig='', pollQuiet=0, pollDelay=2000, pollListedEnd=null, workspaceView='sandbox';
 const calls=[]; const $=()=>({textContent:''}); const setTimeout=()=>0;
 const fetch=async()=>({ok:true,json:async()=>JSON.parse(JSON.stringify(record))});
@@ -428,7 +428,7 @@ let lastProcText='';`)
       { run_id: 'a1', job_id: 'j2', kind: 'ask', engine: 'analyze', run_kind: 'analyze', status: 'running', problem_preview: 'Ask · why?' }] },
     '/api/runs': { runs: [{ run_id: 'a1', run_kind: 'analyze', engine: 'analyze', status: 'finished', problem_preview: 'Analysis · Short proofs' }] },
   }
-  const list = load(['escapeHtml', 'loadRuns'], [], `
+  const list = load(['escapeHtml', 'loadRuns', 'stopSettling'], ['STOP_SETTLE_MS', 'STOPPING_RUNS'], `
 const RUN_KIND_BY_ID=new Map(); let runId='a1', CURRENT_USER={id:4};
 const box={innerHTML:'',querySelectorAll:()=>[]}; const $=()=>box;
 const fetch=async url=>({json:async()=>replies[url]});
@@ -912,8 +912,8 @@ const mapButtons=()=>$('md-view').querySelectorAll('.rd-map-actions').map(row=>r
 
 test('a late poll of the run left behind is not applied: the Ask panel, its draft and the record shown stay the run shown\'s', async () => {
   // The real tick, selectRun and Ask panel; the rest of the console reduced to stubs.
-  const step = load(['tick', 'nextPollDelay', 'selectRun', ...ASK_STATE, 'resetManuscriptAsk', 'renderManuscriptAskContext', 'renderManuscriptAsks', 'syncManuscriptAskCompose'],
-    ['POLL_MIN_MS', 'MANUSCRIPT_ASK', 'MANUSCRIPT_ASK_VIEW_WORDS'], `
+  const step = load(['tick', 'nextPollDelay', 'stopSettling', 'selectRun', ...ASK_STATE, 'resetManuscriptAsk', 'renderManuscriptAskContext', 'renderManuscriptAsks', 'syncManuscriptAskCompose'],
+    ['POLL_MIN_MS', 'STOP_SETTLE_MS', 'STOPPING_RUNS', 'MANUSCRIPT_ASK', 'MANUSCRIPT_ASK_VIEW_WORDS'], `
 const els={};
 const $=id=>els[id]||(els[id]={id,value:'',textContent:'',title:'',disabled:false,hidden:false,kids:[],scrollTop:0,scrollHeight:0,clientHeight:0,
   replaceChildren(...kids){ this.kids=kids; },querySelectorAll:()=>[]});

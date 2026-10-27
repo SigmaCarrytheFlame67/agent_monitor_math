@@ -6127,6 +6127,9 @@ class HumanInterventionRegressionTests(unittest.TestCase):
                 max_iterations=7,
                 user={"id": 61, "is_admin": False, "full_access": False},
                 problems_recorded=True,
+                # Queued without saying whether they were added to the
+                # session problems: neither is tagged new this turn.
+                new_problems=[],
             )
             self.assertFalse((workspace / jobs._PENDING_FEEDBACK_FILENAME).exists())
 
