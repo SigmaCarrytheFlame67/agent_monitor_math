@@ -16,7 +16,7 @@ from __future__ import annotations
 import json
 import re
 from dataclasses import dataclass, field
-from typing import Any, Iterable, Mapping
+from typing import Any, Iterable, Mapping, Sequence
 
 from .schema import ANNOTATION_STATUSES, FINDING_KINDS, PLAN_TECHNIQUES, normalize_text
 
@@ -560,30 +560,142 @@ def _parse_uses(value: str) -> tuple[str, ...]:
     return tuple(labels)
 
 
-def _split_blocks(lines: list[str]) -> list[tuple[str, str, list[str]]]:
+def _squash(line: str) -> str:
+    return " ".join(line.split())
+
+
+def _problem_copies(problem: str | Sequence[str]) -> tuple[tuple[str, ...], ...]:
+    """The forms of the problem a worker may copy into THEOREM's Statement
+    (the whole text, the excerpt a prompt showed, one problem of a session),
+    as their non-blank lines with whitespace runs squashed."""
+    forms = (problem,) if isinstance(problem, str) else tuple(problem)
+    copies: list[tuple[str, ...]] = []
+    seen: set[tuple[str, ...]] = set()
+    for form in forms:
+        lines = tuple(
+            _squash(line) for line in normalize_text(str(form or "")).split("\n") if line.strip()
+        )
+        if lines and lines not in seen:
+            seen.add(lines)
+            copies.append(lines)
+    return tuple(copies)
+
+
+def _copy_ends(
+    lines: Sequence[str], start: int, first: str, copies: Sequence[tuple[str, ...]]
+) -> list[tuple[int, int | None, tuple[str, ...]]]:
+    """Every verbatim copy of a form of the problem that opens at the
+    "Statement:" line ``lines[start]``, longest first: the index of the copy's
+    last line, the index of the next non-blank line (None at the end), and
+    the form.
+
+    ``first`` is the Statement line's own text after the colon; the line's
+    pattern drops leading ``*``, ``_`` and backticks, so a first problem line
+    made only of them (a code fence) may be on the Statement line.  Blank
+    lines and runs of whitespace may differ; anything else must match.  The
+    reply's lines are squashed once, whatever the number of forms.
+    """
+    if not copies:
+        return []
+    budget = max(len(copy) for copy in copies) + 1
+    after: list[tuple[str, int]] = []  # non-blank lines after the Statement line
+    position = start + 1
+    while len(after) < budget and position < len(lines):
+        line = _squash(lines[position])
+        if line:
+            after.append((line, position))
+        position += 1
+    head = _squash(first)
+    found: dict[int, tuple[int, int | None, tuple[str, ...]]] = {}
+    for copy in copies:
+        if head:
+            skips: tuple[int, ...] = (1,) if head in {copy[0], copy[0].lstrip("*_` ")} else ()
+        else:
+            skips = (0, 1) if not copy[0].strip("*_` ") else (0,)
+        for skip in skips:
+            rest = copy[skip:]
+            if len(rest) > len(after) or any(after[i][0] != rest[i] for i in range(len(rest))):
+                continue
+            last = after[len(rest) - 1][1] if rest else start
+            following = after[len(rest)][1] if len(rest) < len(after) else None
+            found.setdefault(last, (last, following, copy))
+    return [found[last] for last in sorted(found, reverse=True)]
+
+
+def _is_proof_marker(line: str) -> re.Match[str] | None:
+    return _PROOF_RE.match(line) or _PROOF_OPEN_RE.match(line)
+
+
+def _copied_problem_marker(
+    lines: Sequence[str], start: int, first: str, copies: Sequence[tuple[str, ...]]
+) -> tuple[int, int] | None:
+    """For a THEOREM whose Statement (the line ``lines[start]``, with its own
+    text ``first``) copies the problem verbatim: the end of the copy and the
+    line of the reply's Proof marker.
+
+    The problem's own lines are then not the reply's markers ("Proof." in a
+    problem with a proof to complete, "=== END ===").  The reply's marker is
+    the line right after the copy; a problem that ends with its own "Proof:"
+    line, which the reply used as its marker too, keeps that line.  Of copies
+    of several forms (one a prefix of another: a session's problems), the
+    longest so followed is used.  None in any other case: the reply is read
+    as before.
+    """
+    for last, following, copy in _copy_ends(lines, start, first, copies):
+        if following is not None and _is_proof_marker(lines[following]):
+            return last + 1, following
+        if _is_proof_marker(copy[-1]) and last > start and _is_proof_marker(lines[last]):
+            return last + 1, last
+    return None
+
+
+def _split_blocks(
+    lines: list[str], copies: Sequence[tuple[str, ...]] = ()
+) -> list[tuple[str, str, list[str]]]:
     blocks: list[tuple[str, str, list[str]]] = []
     current: tuple[str, str, list[str]] | None = None
-    for line in lines:
+    # The first THEOREM's Statement may copy the problem verbatim; a marker
+    # line of the problem's own inside a copy that is used ("=== END ===", a
+    # block header) does not end the block.  Only the first THEOREM is tried:
+    # a second one is refused anyway.
+    before_statement = False
+    theorem_seen = False
+    index = 0
+    while index < len(lines):
+        line = lines[index]
+        index += 1
         header = _HEADER_RE.match(line)
         if header:
             if current is not None:
                 blocks.append(current)
             current = (header.group("kind").upper(), header.group("arg").strip(), [])
+            before_statement = bool(copies) and current[0] == "THEOREM" and not theorem_seen
+            theorem_seen = theorem_seen or current[0] == "THEOREM"
             continue
         if _END_RE.match(line):
             if current is not None:
                 blocks.append(current)
                 current = None
+            before_statement = False
             continue
         if current is not None:
             current[2].append(line)
+            if before_statement and line.strip() and not _KEY_RE.match(line):
+                before_statement = False
+                statement = _STATEMENT_RE.match(line)
+                found = statement and _copied_problem_marker(
+                    lines, index - 1, statement.group("rest") or "", copies
+                )
+                if found:
+                    current[2].extend(lines[index : found[0]])
+                    index = found[0]
     if current is not None:
         blocks.append(current)
     return blocks
 
 
 def _parse_statement_block(
-    body: list[str], *, label: str
+    body: list[str], *, label: str, copies: Sequence[tuple[str, ...]] = ()
 ) -> tuple[str, str, tuple[str, ...], str | None]:
     uses: tuple[str, ...] = ()
     subgoal: str | None = None
@@ -616,12 +728,22 @@ def _parse_statement_block(
         raise ParseError(f"block {label} has no Statement section")
     proof_start: int | None = None
     first_proof = ""
-    for position in range(statement_start, len(body)):
-        match = _PROOF_RE.match(body[position]) or _PROOF_OPEN_RE.match(body[position])
-        if match:
-            proof_start = position + 1
-            first_proof = match.group("rest") or ""
-            break
+    after_copy = (
+        _copied_problem_marker(body, statement_start - 1, first_statement, copies)
+        if copies
+        else None
+    )
+    marker = _is_proof_marker(body[after_copy[1]]) if after_copy is not None else None
+    if after_copy is not None and marker is not None:
+        proof_start = after_copy[1] + 1
+        first_proof = marker.group("rest") or ""
+    else:
+        for position in range(statement_start, len(body)):
+            match = _is_proof_marker(body[position])
+            if match:
+                proof_start = position + 1
+                first_proof = match.group("rest") or ""
+                break
     if proof_start is None:
         raise ParseError(f"block {label} has no Proof section")
     statement = normalize_text(
@@ -696,11 +818,21 @@ def _check_block_size(label: str, statement: str | None, proof: str) -> None:
         )
 
 
-def parse_worker(text: str, *, max_lemmas: int = 8) -> Candidate:
-    """Parse the delimited worker blocks into a validated candidate."""
+def parse_worker(
+    text: str, *, max_lemmas: int = 8, problem: str | Sequence[str] = ()
+) -> Candidate:
+    """Parse the delimited worker blocks into a validated candidate.
+
+    ``problem`` is the problem as the worker may have copied it (one text, or
+    each form a prompt showed): when the THEOREM's Statement copies one
+    verbatim and the reply's Proof marker follows the copy, a line of the
+    problem's own ("Proof.", "=== END ===") is not read as a marker.  Any
+    other reply is read as without it.
+    """
     _require_no_tools(text)
     lines = _strip_outer_fence(normalize_text(text).split("\n"))
-    blocks = _split_blocks(lines)
+    copies = _problem_copies(problem)
+    blocks = _split_blocks(lines, copies)
     if not blocks:
         raise ParseError("reply contains no delimited blocks")
     lemmas: dict[str, Block] = {}
@@ -723,7 +855,7 @@ def parse_worker(text: str, *, max_lemmas: int = 8) -> Candidate:
             if theorem is not None:
                 raise ParseError("more than one THEOREM block")
             statement, proof, uses, _subgoal = _parse_statement_block(
-                body, label=THEOREM_LABEL
+                body, label=THEOREM_LABEL, copies=copies
             )
             _check_block_size(THEOREM_LABEL, None, proof)
             theorem = Block(THEOREM_LABEL, statement, proof, uses, None)
