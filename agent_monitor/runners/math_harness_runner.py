@@ -929,6 +929,45 @@ def _clip_utf8(text: str, limit: int) -> str:
     )
 
 
+# How much of the problem a worker's and a repair's prompt show (a longer
+# problem is shown as an excerpt).  The THEOREM's Statement copies what it saw.
+_WORKER_PROBLEM_BYTES = 48_000
+_REPAIR_PROBLEM_BYTES = 30_000
+
+
+# A follow-up's problem is the session notebook (jobs._write_session_problems):
+# "## Problem 1", its text, "## Problem 2", its text, ...
+_SESSION_HEADING_RE = re.compile(r"^## Problem \d+$")
+
+
+def _problem_forms(problem: str) -> tuple[str, ...]:
+    """The problem as a worker may copy it into the THEOREM (for the parser):
+    as the worker and repair prompts show it, and, in a follow-up, each
+    problem of the session notebook with or without its heading."""
+    forms = [
+        problem,
+        _clip_utf8(problem, _WORKER_PROBLEM_BYTES),
+        _clip_utf8(problem, _REPAIR_PROBLEM_BYTES),
+    ]
+    sections: list[list[str]] = []
+    for line in problem.split("\n"):
+        if _SESSION_HEADING_RE.match(line.strip()):
+            sections.append([line])
+        elif sections:
+            sections[-1].append(line)
+    for section in sections:
+        forms += ["\n".join(section), "\n".join(section[1:])]
+    return tuple(forms)
+
+
+def _repair_forms(problem: str, shown: Candidate) -> tuple[str, ...]:
+    """What a repair may copy into the THEOREM: a form of the problem, or the
+    statement of the candidate its prompt showed, which the parser may have
+    trimmed (a first line's leading "**", the problem's own last "Proof." line)."""
+    theorem = shown.theorem
+    return _problem_forms(problem) + ((theorem.statement,) if theorem is not None else ())
+
+
 # ---------------------------------------------------------------------------
 # provider calls
 # ---------------------------------------------------------------------------
@@ -1481,8 +1520,43 @@ def _provider_call(
     def out(obj: dict[str, Any]) -> None:
         ctx.turn_out(turn, obj)
 
+    # A subscription CLI prints its reply before it exits, and the call's
+    # usage is known only once it has.  The latest reply is held and sent with
+    # the usage as one unit (as on the API routes): under concurrency another
+    # call's events could otherwise come between them, and the Monitor would
+    # book this call's usage on that other call's node.  So the reply shows
+    # when the CLI has exited (one that hangs after printing it shows it at
+    # its timeout).  Events that make no Monitor node (a session start, a
+    # stream notice) pass while a reply is held; a later node goes out after
+    # it.  The CLIs deliver events on the calling thread; the lock, and the
+    # path for events after the call has settled, are defensive.
+    held: list[dict[str, Any]] = []
+    held_lock = threading.Lock()
+    holding = [True]
+
+    def forward(obj: dict[str, Any]) -> None:
+        with held_lock:
+            if not holding[0] or obj.get("type") != "item.completed":
+                out(obj)
+                return
+            for prior in held:
+                out(prior)
+            held.clear()
+            item = obj.get("item")
+            if isinstance(item, dict) and item.get("type") == "agent_message":
+                held.append(obj)
+            else:
+                out(obj)
+
+    def release_held() -> list[dict[str, Any]]:
+        with held_lock:
+            holding[0] = False
+            released = held[:]
+            held.clear()
+            return released
+
     def backend_event(event: dict[str, Any]) -> None:
-        _emit_backend_event(event, out=out)
+        _emit_backend_event(event, out=forward)
 
     out({"type": "item.completed", "item": {"type": "reasoning", "text": f"{ctx.label} · {stage}"}})
     observed_model = None
@@ -1555,8 +1629,11 @@ def _provider_call(
                 }
             )
     except _TurnAbandoned:
+        release_held()  # an abandoned turn shows nothing more
         raise
     except (APIBackendError, ClaudeBackendError, CodexBackendError) as exc:
+        for obj in release_held():  # a reply the CLI printed before failing
+            out(obj)
         if not _not_processed(exc):
             # Only a refusal before processing is certainly free.
             ctx.note_processed(turn)
@@ -1598,12 +1675,21 @@ def _provider_call(
             f"{stage} provider call failed: {detail}", failure=failure, billed=billed
         ) from exc
     except Exception as exc:
+        for obj in release_held():
+            out(obj)
         ctx.note_processed(turn)
         # Mocked providers and future backend versions must also fail closed;
         # avoid reflecting an arbitrary exception (which could contain a key).
         raise ProviderCallError(f"{stage} provider call failed") from exc
 
     ctx.note_processed(turn)
+    # A CLI's reply goes with its usage (an API reply is in ``closing`` already).
+    released = release_held()
+    if not released and route.transport != "api_chat":
+        # The CLI printed no reply: its usage gets a node of its own, the bare
+        # call marker (which progress views skip), as for a failed billed call.
+        released = [{"type": "item.completed", "item": {"type": "reasoning", "text": f"{ctx.label} · {stage}"}}]
+    closing[:0] = released
     usage = _clean_usage(getattr(result, "usage", {}))
     text = cgm_parsing.without_lone_surrogates(str(result.text or "")).strip()
     reply = Reply(
@@ -2048,7 +2134,7 @@ def _worker_prompt(
         f"Carry out assigned plan {index} of {count} independently. You receive "
         "only your assigned plan, not any other worker's work.\n\n"
         "<UNTRUSTED_PROBLEM>\n"
-        f"{_clip_utf8(problem, 48_000)}\n"
+        f"{_clip_utf8(problem, _WORKER_PROBLEM_BYTES)}\n"
         "</UNTRUSTED_PROBLEM>"
         f"{_task_context(problem, task, 24_000)}"
         f"{_strategy_notes(strategy)}\n\n"
@@ -2073,7 +2159,7 @@ def _repair_prompt(
         "Repair the candidate and return the complete revised candidate in the "
         "exact block format.\n\n"
         "<UNTRUSTED_PROBLEM>\n"
-        f"{_clip_utf8(problem, 30_000)}\n"
+        f"{_clip_utf8(problem, _REPAIR_PROBLEM_BYTES)}\n"
         "</UNTRUSTED_PROBLEM>"
         f"{_task_context(problem, task, 8_000)}\n\n"
         f"{_plan_block(plan)}\n\n"
@@ -2380,7 +2466,7 @@ def _worker_job(
             user=user,
             limit=MAX_WORKER_BYTES,
             parse=lambda text: cgm_parsing.parse_worker(
-                text, max_lemmas=ctx.budgets.max_lemmas
+                text, max_lemmas=ctx.budgets.max_lemmas, problem=_problem_forms(problem)
             ),
             family="worker",
             resend_reply=True,
@@ -2779,7 +2865,9 @@ def _repair(
                 user=user,
                 limit=MAX_WORKER_BYTES,
                 parse=lambda text: cgm_parsing.parse_worker(
-                    text, max_lemmas=ctx.budgets.max_lemmas
+                    text,
+                    max_lemmas=ctx.budgets.max_lemmas,
+                    problem=_repair_forms(problem, attempt.candidate),
                 ),
                 family="repair",
                 resend_reply=True,
