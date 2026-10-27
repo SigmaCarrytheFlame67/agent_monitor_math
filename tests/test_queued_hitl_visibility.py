@@ -279,8 +279,8 @@ class FeedbackSentDuringAFollowUpTests(unittest.TestCase):
         original_merge = jobs._problems_with_recorded
         calls = []
 
-        def merge(problems, run_id):
-            merged = original_merge(problems, run_id)
+        def merge(problems, run_id, **kw):
+            merged = original_merge(problems, run_id, **kw)
             calls.append(run_id)
             if len(calls) == 2:  # the final write's merge
                 self._send_now(sender)

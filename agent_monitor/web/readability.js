@@ -26,8 +26,9 @@ const manuscriptAskSent=new Map();
 
 /* ── progress of a running readable version ──
    The runner's own notes ("Readability · 3 Rewrite · part 2 of 5"), never a
-   model's raw reply, a model-call marker ("rewrite-2-low") or a log line. */
-const READABILITY_CALL_MARKER=/^(?:guide|rewrite-\d+|(?:re)?check-\d+|repair-\d+|ask)(?:-retry)?(?:-low)?$/;
+   model's raw reply, a model-call marker ("rewrite-2-low", also with a
+   refusal fallback's "· declined first by <model>") or a log line. */
+const READABILITY_CALL_MARKER=/^(?:guide|rewrite-\d+|(?:re)?check-\d+|repair-\d+|ask)(?:-retry)?(?:-low)?(?: · declined first by .+)?$/;
 const READABILITY_STAGE_LINE=/^(\d) (Ingest|Guide|Rewrite|Check|Publish)(?: · (.*))?$/;
 function readabilityProgressLines(text){
   const out=[];

@@ -28,6 +28,8 @@ WORKER_PROOF = (
     "n(n + 1) = n^2 + n is even."
 )
 STATUS = "\n\n=== STATUS ===\nsolved\n=== END ==="
+# A follow-up's task tags each session problem new this turn (jobs._execute_continue).
+NEW_THIS_TURN = "  ← new this turn"
 # Problems whose THEOREM statement the parser keeps trimmed, with a worker
 # reply's Statement part for each ("{problem}" is the problem verbatim).
 TRIMMED_STATEMENTS = {
@@ -187,6 +189,67 @@ class ProblemCopyTests(unittest.TestCase):
             with self.subTest(copied=copied[:14]):
                 candidate = cgm_parsing.parse_worker(_theorem(copied), problem=forms)
                 self.assertEqual(candidate.theorem.proof, WORKER_PROOF)
+
+    def test_a_copy_from_a_follow_ups_numbered_list(self) -> None:
+        # A follow-up's task lists the session problems as "N. text", the one
+        # new this turn tagged (jobs._execute_continue); a worker may copy
+        # its problem from there.
+        first = "Prove that the sum of two odd integers is even."
+        notebook = f"## Problem 1\n{first}\n\n## Problem 2\n{PROOF_TO_COMPLETE}\n"
+        forms = runner._problem_forms(notebook)
+        item = f"2. {PROOF_TO_COMPLETE}"
+        copies = {
+            "item": item,
+            "tagged item": f"{item}{NEW_THIS_TURN}",
+            "list": f"1. {first}\n{item}",
+            "tagged list": f"1. {first}\n{item}{NEW_THIS_TURN}",
+        }
+        for name, copied in copies.items():
+            with self.subTest(name):
+                candidate = cgm_parsing.parse_worker(_theorem(copied), problem=forms)
+                self.assertEqual(candidate.theorem.proof, WORKER_PROOF)
+
+    def test_a_numbered_list_with_tags_on_any_of_its_problems(self) -> None:
+        # A turn may add several problems (queued feedback), and a message
+        # queued for the next turn may follow them in the list: the tags can
+        # fall on any of its lines.  Before, only a list tagged on its last
+        # line was a copy, and the problem's "Proof." line opened the proof.
+        first, also = "Prove that the sum of two odd integers is even.", "Also cover the case n = 0."
+        cases = {
+            "two new": ([first, also, PROOF_TO_COMPLETE], {2, 3}),
+            "a later problem after the new one": ([first, PROOF_TO_COMPLETE, also], {2}),
+            "all new": ([first, also, PROOF_TO_COMPLETE], {1, 2, 3}),
+        }
+        for name, (problems, new) in cases.items():
+            # As jobs writes the notebook and lists the problems.
+            notebook = "\n".join(f"## Problem {n}\n{text}\n" for n, text in enumerate(problems, 1))
+            listed = "\n".join(
+                f"{n}. {text}{NEW_THIS_TURN if n in new else ''}" for n, text in enumerate(problems, 1)
+            )
+            with self.subTest(name):
+                candidate = cgm_parsing.parse_worker(_theorem(listed), problem=runner._problem_forms(notebook))
+                self.assertEqual(candidate.theorem.proof, WORKER_PROOF)
+
+    def test_a_tagged_copy_whose_last_line_is_also_the_reply_marker(self) -> None:
+        # The problem ends with its own "Proof:" (or "Proof") line, which the
+        # reply used as its marker too: the line's tag is not proof text.
+        # Before, the tag opened the proof (after a bare "Proof", the
+        # claim's own "Proof." line did).
+        first = "Prove that the sum of two odd integers is even."
+        proof = (
+            "Claim. n(n + 1) is even.\nProof. One of n and n + 1 is even, so the product is even.\n"
+            "Hence n^2 + n = n(n + 1) is even."
+        )
+        for marker in ("Proof:", "Proof"):
+            problem = f"Prove that n^2 + n is even for every integer n.\n{marker}"
+            forms = runner._problem_forms(f"## Problem 1\n{first}\n\n## Problem 2\n{problem}\n")
+            for name, copied in {
+                "tagged item": f"2. {problem}{NEW_THIS_TURN}",
+                "tagged list": f"1. {first}\n2. {problem}{NEW_THIS_TURN}",
+            }.items():
+                with self.subTest(marker=marker, copy=name):
+                    candidate = cgm_parsing.parse_worker(_theorem(copied, proof, marker=None), problem=forms)
+                    self.assertEqual(candidate.theorem.proof, proof)
 
     def test_a_problem_that_begins_with_an_earlier_one(self) -> None:
         # Problem 2 re-sends problem 1 with a proof to complete: the one-line

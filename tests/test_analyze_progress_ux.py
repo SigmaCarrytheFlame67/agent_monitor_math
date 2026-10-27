@@ -251,6 +251,8 @@ def test_a_running_analysis_is_listed_by_its_title_and_ends_with_a_plain_summary
     finally:
         release.write_text("go")
     assert _wait(lambda: jobs.get_job(job["job_id"])["status"] != "running")
+    # The job's status is written just before its closing chat lines.
+    assert _wait(lambda: str(jobs.list_chat(run_id)[-1].get("content") or "").startswith("Analysis failed"))
     chat = jobs.list_chat(run_id)
     assert chat[-1]["role"] == "system"
     assert chat[-1]["content"] == "Analysis failed; no report was published.\n\nNo result could be checked: fake"

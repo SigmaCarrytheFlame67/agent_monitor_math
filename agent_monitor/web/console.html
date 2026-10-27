@@ -5912,6 +5912,7 @@ async function deleteRun(rid){
 }
 
 async function stopRun(rid){
+  if(STOPPING_RUNS.has(String(rid)))return;  // already stopping (the run list's ■ takes clicks until redrawn)
   // ■ turns "Stopping…" at once and stays, inert, until the stop has settled
   // (stopSettling): ▶ Continue takes the same spot only then.
   const stop={since:Date.now(),recorded:false};
@@ -6066,6 +6067,9 @@ async function tick(){
       if(!running){
         // A Stop still settling keeps the poll going, so ▶ Continue appears as soon as it has.
         if(stopSettling(rid,run.analyze?.recheck?.status==='running',!!run.stopping)){ pollDelay=POLL_MIN_MS; return true; }
+        // The stop may have settled since updateChatStatus drew "Stopping…"
+        // (during the proof's refresh): draw the bar again before polling ends.
+        updateSessionButtons(run.analyze?.recheck?.status==='running'?'running':run.status,!!run.stopping);
         // The run list learns at once that the run ended (an analysis takes its title).
         if(pipelineRunning){ if(pollListedEnd!==run.run_id){ pollListedEnd=run.run_id; loadRuns(); } return true; }
         loadRuns();
@@ -10042,9 +10046,10 @@ function renderAnalysisStages(run,stages){
 }
 /* Progress of a running (or unpublished) analysis: the runner's own notes
    ("Check · Lemma 3.7 · error — …"), never a verifier's raw JSON reply, a
-   model-call marker ("check-3-low") or a process-log line. The server sends
-   only the notes; this filter also keeps any older or mixed text readable. */
-const ANALYZE_CALL_MARKER=/^(?:map|segment-\d+|check-\d+)(?:-retry)?(?:-low)?$/;
+   model-call marker ("check-3-low", or a refusal fallback's "check-3-low ·
+   declined first by <model>") or a process-log line. The server sends only
+   the notes; this filter also keeps any older or mixed text readable. */
+const ANALYZE_CALL_MARKER=/^(?:map|segment-\d+|check-\d+)(?:-retry)?(?:-low)?(?: · declined first by .+)?$/;
 function analysisProgressLines(text){
   const out=[];
   String(text||'').split('\n').forEach(raw=>{

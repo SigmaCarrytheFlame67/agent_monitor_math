@@ -408,7 +408,7 @@ const calls=[]; const $=()=>({textContent:''}); const setTimeout=()=>0;
 const fetch=async()=>({ok:true,json:async()=>JSON.parse(JSON.stringify(record))});
 const consoleRunSignature=run=>JSON.stringify(run);
 const setPill=()=>{}, updateChatStatus=()=>{}, updateProblemStrip=()=>{}, updatePromptStrip=()=>{}, renderConversation=()=>{}, renderAutoPipeline=()=>{};
-const applySandboxPreview=run=>calls.push('preview'), refreshProofPreview=async()=>{}, loadChat=()=>{}, loadRuns=()=>calls.push('runs');`)
+const applySandboxPreview=run=>calls.push('preview'), refreshProofPreview=async()=>{}, loadChat=()=>{}, loadRuns=()=>calls.push('runs'), updateSessionButtons=()=>{};`)
   const tick = async record => { poll(`record=${JSON.stringify(record)}`); return poll('tick()') }
   assert.equal(await tick({ ...finished, analyze: { ask: { ask_id: 'q', status: 'running' } } }), true)
   assert.equal(await tick(finished), false)
@@ -923,7 +923,7 @@ let manuscriptAskContext=null, manuscriptAskSending='', manuscriptAskRunId='';
 const manuscriptAskSent=new Map(), convoOpen=new Set(), RUN_KIND_BY_ID=new Map(), chatAttachments={clear(){}}, calls=[], requests=[];
 const syncLeanControls=()=>{}, syncRunAccess=()=>{}, resetProofView=()=>{}, syncRunToMonitor=()=>{}, refreshConversation=()=>{}, applyRunKindView=()=>{};
 const syncDagRebuild=()=>{}, refreshDagView=()=>{}, refreshLeanView=()=>{}, startPolling=()=>{}, setTimeout=()=>0;
-const loadRuns=()=>calls.push('runs'), loadChat=()=>calls.push('chat'), updateChatStatus=run=>{ if(run)calls.push('status '+run.run_id); };
+const loadRuns=()=>calls.push('runs'), loadChat=()=>calls.push('chat'), updateChatStatus=run=>{ if(run)calls.push('status '+run.run_id); }, updateSessionButtons=()=>{};
 const viewerIsGuest=()=>false, analyzePolicy=()=>({enabled:true,asks:{enabled:true}}), readabilityPolicy=()=>null;
 const manuscriptAskLabels=()=>new Map(), manuscriptAskMacros=()=>({}), renderMathIn=()=>{}, syncManuscriptAskButtons=()=>{};
 const analyzeEl=(tag,cls,text)=>({tag,cls,text,setAttribute(){}}), manuscriptAskItem=item=>({tag:'li',cls:'ask-item',text:item.question});

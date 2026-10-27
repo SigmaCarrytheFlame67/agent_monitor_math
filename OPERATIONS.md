@@ -290,16 +290,21 @@ ends, they are derived again only when something is missing:
   so), `POST /api/runs/<id>/continue` answers 409 "This run is still
   stopping; try again in a few seconds", and the console keeps ■ in place,
   disabled and "Stopping…", for at least 3 s: ▶ Continue takes that spot
-  only once the stop has settled.
+  only once the stop has settled. A follow-up's worker counts from the
+  moment its job is registered, before its thread has started, so a Stop
+  and a Continue in that moment never run a second session.
 - Feedback queued for the stopped session is dropped, and the message leaves
   the session: it is no longer a session problem (`problem.txt` and
   `problems.json` follow), so no later turn, a bare Continue included,
-  answers it, and it no longer counts toward a member's feedback cap. The
-  chat says it was removed and must be sent again to be answered; files it
-  brought stay with the run (the chat says so), and a CGM turn no longer
-  shows them first as new. A queued copy of a message the session already
-  had takes nothing away. A message sent after the Stop waits for the
-  stopped worker, then continues the run.
+  answers it, and it no longer counts toward a member's feedback cap. It
+  stays out when the stopped turn still ends finished (a CGM turn that had
+  published, or a Stop just after a turn's runner ended), and a member gets
+  back the run start its queued message booked, while that start is still
+  within the hour. The chat says it was removed and must be sent again to
+  be answered; files it brought stay with the run (the chat says so), and
+  a CGM turn no longer shows them first as new. A queued copy of a
+  message the session already had takes nothing away. A message sent
+  after the Stop waits for the stopped worker, then continues the run.
 - A follow-up's task tags "← new this turn" only the session problems its
   own message added; a bare ▶ Continue (also right after a Stop) tags none.
 - A Stop or Delete while a run's attachments are being read (a CGM turn's
@@ -508,10 +513,16 @@ ceilings, so an environment value can only lower them.
     none, and the refusal stands). The declined attempt is billed when it
     declined mid-reply or in a billed category; the Monitor books every
     attempt Anthropic reports in `usage.iterations`, so its cost can exceed
-    the bill. Only Max (API) prices each model's share at its own rates;
-    other runs book the call as one. A refusal that remains is never used as an answer: it fails a
-    Plain or agent run, and a CGM or Analyze stage treats it like an empty
-    reply (Analyze says the model declined, and why).
+    the bill. A CGM, Analyze or Readability call, in Max (API) or not,
+    prices each model's share at its own rates (a re-check's or question's
+    call too), also when the refused call was still billed: in the run's
+    trace the reply's node names the model that answered, and each model
+    that declined first gets a node of its own ("declined first by
+    <model>"). Plain, Meta-Harness and the agent harnesses' audit calls
+    book the call as one. A refusal that remains is never used as an
+    answer: it fails a Plain or agent run, and a CGM or Analyze stage
+    treats it like an empty reply (Analyze says the model declined, and
+    why).
   - **Time limit.** An attempt must connect within 10 s and receive its
     response headers within what is left of the call; from then on the
     reply is ended at the call's timeout however it is still arriving, and
@@ -536,6 +547,16 @@ ceilings, so an environment value can only lower them.
   3-hour watchdog instead of 1 hour (`AGENT_MONITOR_CLI_TIMEOUT` and the
   engine's own timeout still win). An empty reply cut at its limit says so
   in the run's error; a reply cut after some text is used as it is.
+- **Estimated cost:** in a CLI engine's run (Plain, the CGM engines,
+  Analyze, Readability, the agent harnesses) a trace node is priced at the
+  model the node (or its stream) names when the price table has that
+  model; else, outside the two Max modes, at the run's requested model
+  when the table has an exact entry for it (a route alias such as `opus`
+  or `max` never has one); else at `gpt-4o` rates. So Plain on
+  `gpt-6-astra`, whose reply names a dated snapshot the table lacks
+  (`gpt-6-astra-2026-09-03`), is priced at `gpt-6-astra`. A CGM call on a
+  provider-prefixed route (`openai:gpt-5.2`) is priced at the id it
+  requested (`gpt-5.2`), a failed call that was still billed too.
 - Sponsored calls go through the Kimi broker's credential gateway, which runs
   at most `PUBLIC_KIMI_GATEWAY_CONCURRENCY` (default 8) upstream calls at once.
   Each guest run keeps up to 2 in flight, so a few concurrent runs can fill
@@ -607,12 +628,18 @@ open no file and see no image. A run's attachments reach them as text
   never includes it, deleting the run removes it, and neither the run's file
   list nor its export shows it. Images, PDFs without text (scanned), and
   encrypted or damaged PDFs are listed as NOT AVAILABLE with the reason;
-  none fails a run.
+  none fails a run. A PDF whose extraction stopped early (a CPU, memory or
+  file-size limit, a page it could not walk past, a timeout) keeps the pages
+  it read: the 📎 line says "at least N pp" and that the rest could not be
+  read, the SOURCE MATERIAL's file list (and Plain's) "at least N pages" and
+  the page it stopped after.
 - The files' text is data: a tag-like `<NAME` in it (also with whitespace,
-  zero-width or control characters in it, or fullwidth brackets) gets `‹` for
-  its `<`, and a line that imitates a file, page or excerpt marker starts with
-  `‹` (a line ends at any line break: a lone carriage return, a form feed or
-  a Unicode line separator too), so a file can neither close a prompt's
+  zero-width, blank-rendering (a braille blank, a Hangul filler) or control
+  characters in it, or fullwidth brackets) gets `‹` for its `<`, and a line
+  that imitates a file, page or excerpt marker starts with `‹` (such
+  characters in it read as nothing, as spaces, or as the line renders them;
+  a line ends at any line break: a lone carriage return, a form feed or a
+  Unicode line separator too), so a file can neither close a prompt's
   delimiter nor forge a file or page; file names are fenced alike, also in
   the list of files the server appends to a follow-up's message (which these
   engines' tasks and `problem.txt` quote; the chat shows the names as they
@@ -643,7 +670,8 @@ open no file and see no image. A run's attachments reach them as text
 - What a turn's message refers to comes first, else what the session's
   latest earlier message that refers to anything does. The server's words
   never count: the list of a message's attached files, the text standing for
-  a message that brought only files, and a bare Continue's feedback (whose
+  a message that brought only files (a first run's too, and each one in a
+  batch of queued messages), and a bare Continue's feedback (whose
   "problem" and "proof" would otherwise name problem.pdf or proof.tex). A
   file referred to by name or stem, as "File n" or as "the second file" (of
   files sharing a name, the latest upload) is served first: whole if it
@@ -916,8 +944,11 @@ when the server offers it.
   crash) left "running" becomes `interrupted` ("the previous verdict is
   kept") when the run is read, at startup (the manifest flags it with
   `recheck_running`) or on Stop. Each re-check call is booked in the usage
-  ledger as stage `recheck`, billed like the analysis; `totals` stay the
-  analysis's own engine usage, as for Lean and DAG calls. `run["analysis"]`
+  ledger as stage `recheck`, billed like the analysis, at the model the
+  call names (on a Claude account the model Claude Code reports, never the
+  run's `opus`; a call that names none, at the run's model only when the
+  price table has that model exactly); `totals` stay the analysis's own
+  engine usage, as for Lean and DAG calls. `run["analysis"]`
   stays the Monitor block. The run list shows "Analyze · <title>". The library
   and published DAG memory are never injected into an analysis; the
   operator's memory gets only its label and verdict counts, and an analysis
@@ -989,8 +1020,9 @@ when the server offers it.
   them. `AGENT_MONITOR_ANALYZE_ASKS=0` turns questions about analyses off
   (403 "Questions about analyses are turned off on this site."); the Analyze
   switches above cover them too. Project members read the answers but may
-  not ask; calls are booked as stage `ask`; a question a restart left running
-  becomes `interrupted`, and an in-flight question defers an automatic deploy.
+  not ask; calls are booked as stage `ask`, priced as re-checks are; a
+  question a restart left running becomes `interrupted`, and an in-flight
+  question defers an automatic deploy.
 - **What leaves the server.** The Sandbox shows `analysis/report.md`; the owner
   can open the stored source file, never anyone else. A shared snapshot holds
   the report, the Manuscript DAG (node statements, labels, verdicts:
