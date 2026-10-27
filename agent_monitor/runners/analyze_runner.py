@@ -65,7 +65,6 @@ import shutil
 import signal
 import sys
 import tempfile
-import threading
 import time
 from contextlib import contextmanager
 from dataclasses import dataclass
@@ -86,6 +85,7 @@ from agent_monitor.analyze import latex_structure, limits, prompts, report, sour
 from agent_monitor.analyze import request as analysis_request
 from agent_monitor.analyze.titles import PLACEHOLDER_TITLES, tex_text_refs
 from agent_monitor.cgm.parsing import ParseError
+from agent_monitor.runners import api_backend
 from agent_monitor.runners import math_harness_runner as harness
 
 STAGES = {"scaffold": "1 Ingest", "work": "2 Segment", "verify": "3 Check", "curate": "4 Roll-up", "finalize": "5 Report"}
@@ -215,6 +215,9 @@ def configure_route(env: dict[str, str], req: Mapping[str, Any], rules: RouteRul
     guest = str(env.get("AGENT_MONITOR_GUEST") or "").strip() == "1" or req["role"] == "guest"
     if harness._max_mode(env):
         raise ConfigError(f"Max is not available for {rules.mode}; choose one account route")
+    if harness._max_api_mode(env):
+        # Never run on one of its two API keys either.
+        raise ConfigError(f"Max (API) is not available for {rules.mode}; choose one model")
     use_codex = harness.codex_subscription_enabled(env)
     use_claude = harness.claude_subscription_enabled(env)
     if use_codex or use_claude:
@@ -318,7 +321,7 @@ class ManuscriptRun:
         env: Mapping[str, str],
         sink: Callable[[dict[str, Any]], None] | None = None,
         fetcher: safe_fetch.SafeFetcher | None = None,
-        cancel: threading.Event | None = None,
+        cancel: Any = None,
         sleep: Callable[[float], None] = time.sleep,
         caps_override: Mapping[str, int] | None = None,
     ) -> None:
@@ -338,15 +341,24 @@ class ManuscriptRun:
         )
         self.fetcher = fetcher
         self.sleep = sleep
-        self.cancel = cancel or threading.Event()
+        self.cancel = cancel or harness._StopRequest()
         self.emitter = harness._RunEmitter(sink or harness.emit)
         self.started_at = _utc_now()
+        # An OpenAI route at extra-high or maximum effort gets 64,000 output
+        # tokens per call (api_backend), and the time to write them.
+        long_effort = self.info.route.transport == "api_chat" and api_backend.openai_high_effort(
+            self.env, self.info.route.model
+        )
         api_timeout = harness._bounded_int(
             self.env,
             (self.API_TIMEOUT_ENV, "AGENT_MONITOR_CGM_API_TIMEOUT"),
-            default=kimi_k3.SPONSORED_TIMEOUT_SECONDS if self.info.sponsored else 300,
+            default=(
+                api_backend.HIGH_EFFORT_TIMEOUT
+                if long_effort
+                else kimi_k3.SPONSORED_TIMEOUT_SECONDS if self.info.sponsored else 300
+            ),
             minimum=60,
-            maximum=900,
+            maximum=3600 if long_effort else 900,
         )
         self.ctx = harness._Ctx(
             route=self.info.route,
@@ -849,6 +861,9 @@ class AnalysisRun(ManuscriptRun):
         if isinstance(error, harness.PromptBoundError):
             return ("failed", job, "The check prompt exceeded its size bound")
         if isinstance(error, harness.EmptyReplyError):
+            if harness._is_refusal(error):
+                # The model declined the check: say so, and why (its category).
+                return ("failed", job, self._failure_reason(error)[0])
             # No judgement at all (Kimi's reasoning can use the whole output
             # budget).  Only Kimi routes retry at low effort.
             low = ", even at low effort" if harness._is_kimi_route(self.info.route) else ""
@@ -1238,7 +1253,7 @@ def run_ask(
     about_id = question["node_id"]
     if about_id and about_id not in {node["id"] for node in graph["nodes"]}:
         raise ConfigError("node_id must be a result of this analysis")
-    run = AnalysisRun(root, req, env=route_env, sink=sink, cancel=threading.Event(),
+    run = AnalysisRun(root, req, env=route_env, sink=sink, cancel=harness._StopRequest(),
                       caps_override={"max_calls": ASK_MAX_CALLS, "max_seconds": ASK_SECONDS})
     segments = _json_file(folder / "segments.json") or {}
     manuscript = _json_file(folder / "manuscript.json") or {}

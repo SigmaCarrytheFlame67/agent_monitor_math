@@ -18,7 +18,6 @@ from __future__ import annotations
 
 import json
 import os
-import threading
 from pathlib import Path
 from typing import Any, Callable, Mapping
 
@@ -133,7 +132,7 @@ def run(
         os.environ["NO_PROXY"] = os.environ["no_proxy"] = "*"
     check = runner.AnalysisRun(root, req, env=env, sink=sink, fetcher=fetcher,
                                caps_override=runner.recheck_caps(node, bounded=info.bounded),
-                               cancel=threading.Event())
+                               cancel=harness._StopRequest())
     parts = len(check.prompts_for(node, segments))
     # Refused before any call (exit 2), so a sponsored start comes back.
     if info.guest and parts > 1:

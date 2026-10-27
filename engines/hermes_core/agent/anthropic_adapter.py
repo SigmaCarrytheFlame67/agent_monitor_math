@@ -751,7 +751,8 @@ def build_anthropic_client(
 
     normalize_proxy_env_vars()
 
-    from httpx import Timeout
+    # The SDK's own Timeout (httpx's before anthropic 1.0, httpx2's since).
+    Timeout = _anthropic_sdk.Timeout
 
     normalized_base_url = _normalize_base_url_text(base_url)
     if normalized_base_url:
@@ -856,7 +857,7 @@ def build_anthropic_bedrock_client(region: str):
             "anthropic.AnthropicBedrock not available. "
             "Upgrade with: pip install 'anthropic>=0.39.0'"
         )
-    from httpx import Timeout
+    Timeout = _anthropic_sdk.Timeout  # the SDK's own (httpx2's since anthropic 1.0)
 
     return _anthropic_sdk.AnthropicBedrock(
         aws_region=region,

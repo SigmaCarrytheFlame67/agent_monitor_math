@@ -18,6 +18,12 @@ dependencies = [
   "requests>=2.31.0",
   # Hermes agent core (aligned with vendored hermes_core pins where practical)
   "openai==2.24.0",
+  # Anthropic API calls (runners/api_backend.py).  1.13.0 sends API version
+  # 2023-06-01 and X-Api-Key, as the console's other Anthropic calls do; its
+  # HTTP stack is pinned at the release it shipped with (2.14+ are newer).
+  "anthropic==1.13.0",
+  "httpx2==2.13.1",
+  "httpcore2==2.13.1",
   "httpx[socks]==0.28.1",
   "tenacity==9.1.4",
   "ruamel.yaml==0.18.17",

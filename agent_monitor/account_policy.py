@@ -123,6 +123,11 @@ _MAX_CONTINUATION = (
     "Code and Codex accounts, so only the administrator can continue it. Start "
     "a new run with a model from your own API keys instead."
 )
+_MAX_API_CONTINUATION = (
+    "This run used Max (API), which is limited to the site administrator and "
+    "full-access accounts, so only they can continue it. Start a new run with "
+    "a model from your own API keys instead."
+)
 OWN_KEY_MODEL_NOTE = (
     "Members run the Ansatz CGM harness on a model from their own API keys; "
     "Kimi K3 runs on the included Ansatz CGM · Kimi K3 engine"
@@ -300,6 +305,7 @@ def member_run_model(
         return (
             bool(candidate)
             and not cgm_max.is_max_model(candidate)
+            and not cgm_max.is_max_api_model(candidate)
             and not member_model_error(user, engine, candidate)
         )
 
@@ -347,6 +353,9 @@ def member_model_error(
 
     if cgm_max.is_max_model(selected):
         return str(cgm_max.plan_for(user)["reason"]) or None
+    if cgm_max.is_max_api_model(selected):
+        # Full access and both of the member's own keys (plan_for_api).
+        return str(cgm_max.plan_for_api(user)["reason"]) or None
     if has_full_access(user):
         # Its own keys or linked subscriptions, with the account's default
         # model when none is named; never the sponsored Kimi K3 route.
@@ -385,13 +394,18 @@ def member_route_error(
 
 
 def member_continuation_error(
-    user: dict[str, Any] | None, auth_route: str | None
+    user: dict[str, Any] | None,
+    auth_route: str | None,
+    *,
+    record: dict[str, Any] | None = None,
 ) -> str | None:
     """Why a member may not continue a run recorded on ``auth_route``, or None.
 
     A run billed to a subscription or to Max (a member's own, started before
     subscriptions became administrator-only) stays the administrator's to
-    continue.  An account given full access continues its own.
+    continue, and so does a Max (API) run (``record`` tells it apart from
+    other runs on the API route) of an account whose full access has ended.
+    An account given full access continues its own.
     """
     if not is_restricted(user):
         return None
@@ -400,6 +414,8 @@ def member_continuation_error(
 
     if route == cgm_max.ROUTE:
         return _MAX_CONTINUATION
+    if cgm_max.is_max_api_record(record):
+        return _MAX_API_CONTINUATION
     return _ADMIN_ONLY_CONTINUATION.get(route)
 
 
@@ -429,9 +445,9 @@ PROJECT_TOOL_FREE_ERROR = (
     "Accounts that are not site administrators can write, or have written, in "
     "this project's document, which reaches the agent, so its runs use only "
     "tool-free engines (Ansatz CGM or Plain) on an API key, without subagents. "
-    "Coding agents, subscriptions and Max stay off for this project, even "
-    "after those members leave; to use them, copy text you have checked into "
-    "a new project"
+    "Coding agents, subscriptions and Max (also Max (API)) stay off for this "
+    "project, even after those members leave; to use them, copy text you have "
+    "checked into a new project"
 )
 
 
@@ -460,6 +476,7 @@ def project_run_error(
         engine in tool_free_engines()
         and route in {"", "api_key"}
         and not cgm_max.is_max_model(model)
+        and not cgm_max.is_max_api_model(model)
     ):
         return None
     return PROJECT_TOOL_FREE_ERROR

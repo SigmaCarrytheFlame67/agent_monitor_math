@@ -96,7 +96,10 @@ LAZY_DEPS: dict[str, tuple[str, ...]] = {
     # ─── Inference providers ───────────────────────────────────────────────
     # Native Anthropic SDK — needed when provider=anthropic (not via
     # OpenRouter / aggregators which use the openai SDK).
-    "provider.anthropic": ("anthropic==0.87.0",),  # CVE-2026-34450, CVE-2026-34452
+    # Agent Monitor pins the same SDK for its own Claude API calls (its
+    # pyproject.toml); any other pin would reinstall over it in the shared
+    # venv.  CVE-2026-34450 and CVE-2026-34452 are fixed in both.
+    "provider.anthropic": ("anthropic==1.13.0",),
     # AWS Bedrock provider
     "provider.bedrock": ("boto3==1.42.89",),
     # Google Vertex AI provider — OAuth2 token minting for the Gemini

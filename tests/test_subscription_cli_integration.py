@@ -833,15 +833,23 @@ class ClaudeDerivedModelTests(unittest.TestCase):
 
 
 class DerivedCodexEffortTests(unittest.TestCase):
-    def test_codex_runs_derive_at_no_more_than_high_effort(self) -> None:
-        record = {"auth_route": "codex_subscription", "model": "gpt-6-astra", "reasoning_effort": "max"}
-        view = cgm_max.formal_view(record)
-        self.assertEqual(view["reasoning_effort"], "high")
-        self.assertEqual(record["reasoning_effort"], "max")  # the record itself is untouched
+    def test_codex_and_api_key_runs_derive_at_no_more_than_high_effort(self) -> None:
+        # Derived calls have a fixed per-call limit (an API-key DAG call 180 s):
+        # on 2026-10-26 a gpt-6-astra run at maximum effort lost its DAG's
+        # model analysis to it.
+        for route, effort in (("codex_subscription", "max"), ("codex_subscription", "xhigh"),
+                              ("api_key", "max"), ("api_key", "xhigh")):
+            with self.subTest(route=route, effort=effort):
+                record = {"auth_route": route, "model": "gpt-6-astra", "reasoning_effort": effort}
+                view = cgm_max.formal_view(record)
+                self.assertEqual(view["reasoning_effort"], "high")
+                self.assertEqual((view["auth_route"], view["model"]), (route, "gpt-6-astra"))
+                self.assertEqual(record["reasoning_effort"], effort)  # the record itself is untouched
         for unchanged in (
             {"auth_route": "codex_subscription", "reasoning_effort": "medium"},
+            {"auth_route": "api_key", "reasoning_effort": "high"},
+            {"auth_route": "api_key", "reasoning_effort": "default"},
             {"auth_route": "claude_subscription", "reasoning_effort": "max"},
-            {"auth_route": "api_key", "reasoning_effort": "max"},
         ):
             self.assertIs(cgm_max.formal_view(unchanged), unchanged)
 

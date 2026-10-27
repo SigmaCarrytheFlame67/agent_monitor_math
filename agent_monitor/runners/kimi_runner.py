@@ -31,6 +31,7 @@ run before publication (nothing is published), and 1 for any other failure.
 from __future__ import annotations
 
 import os
+import re
 import signal
 import stat
 import sys
@@ -155,6 +156,20 @@ def _redact(text: str, *secrets: str) -> str:
     return value[-600:]
 
 
+def _empty_workers_message(exc: BaseException) -> str:
+    """A plain sentence when no worker answered because its replies came back
+    empty (the reasoning used the whole output budget), the most common
+    sponsored failure; "" otherwise."""
+    text = str(exc)
+    if "no worker produced a usable candidate" not in text or "returned an empty response" not in text:
+        return ""
+    retry = "Please try again; a shorter or more focused statement often helps."
+    summary = re.search(r"\((finish_reason=[^()]*)\)", text)
+    if summary and "finish_reason=length" in summary.group(1):
+        return f"Kimi used its whole answer budget on reasoning and returned no proof text ({summary.group(1)}). {retry}"
+    return f"Kimi returned no proof text. {retry}"
+
+
 def _failure_message(exc: BaseException) -> str:
     """What happened and what to do, when a sponsored Kimi provider failure
     ended the run (``kimi_k3.failure_message``); "" otherwise.
@@ -252,7 +267,7 @@ def main() -> int:
             {
                 "type": "error",
                 "message": "Kimi could not finish this proof: "
-                + (_failure_message(exc) or _redact(str(exc), key, base)),
+                + (_failure_message(exc) or _empty_workers_message(exc) or _redact(str(exc), key, base)),
                 "terminal": True,
             }
         )

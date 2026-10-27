@@ -96,6 +96,38 @@ def test_the_live_sandbox_shows_progress_notes_never_model_output():
     assert preview["text"] == text and preview["source"] == "live"
 
 
+def test_a_billed_call_with_no_usable_reply_adds_no_progress_line():
+    # The harness books such a call's usage on a node of its own (Max (API)
+    # review, 2026-10-27): it opens with the bare call marker, which both
+    # manuscript runners' progress views drop.
+    from unittest.mock import patch
+
+    from agent_monitor.runners import math_harness_runner as harness
+    from agent_monitor.runners.api_backend import APIBackendError
+
+    for label, stage, progress in (
+        ("Analyze", "check-4-retry-low", console._analysis_progress_text),
+        ("Readability", "rewrite-3-low", console._readability_progress_text),
+    ):
+        events: list[dict] = []
+        ctx = harness._Ctx(
+            route=harness.Route("openai", "gpt-6-astra", "api_chat"), budgets=harness.Budgets(max_calls=4),
+            started=time.monotonic(), env={"OPENAI_API_KEY": "test-key"},
+            emitter=harness._RunEmitter(events.append), label=label,
+        )
+        turn = ctx.open_turn(stage, 1)
+        billed = APIBackendError("OpenAI returned an empty response for gpt-6-astra",
+                                 usage={"input_tokens": 900, "output_tokens": 64_000})
+        with patch.object(harness, "api_chat", side_effect=billed), pytest.raises(harness.ProviderCallError):
+            harness._provider_call(ctx, turn, stage=stage, system="s", user="u", effort=None)
+        notes = [event["item"]["text"] for event in events
+                 if event.get("type") == "item.completed" and event["item"].get("type") == "reasoning"]
+        # The call's own marker, then the usage's node: both the bare marker.
+        assert notes == [f"{label} · {stage}"] * 2, notes
+        data = {"status": "running", "agents": [_agent(index, text) for index, text in enumerate(notes, 1)]}
+        assert progress(data) == "", (label, progress(data))
+
+
 def test_an_analysis_that_failed_shows_its_error_not_its_process_log():
     agents = [
         _agent(1, "Ansatz Analyze · kimi-k3 via sponsored_kimi · up to 30 results", kind="message", stage="scaffold"),

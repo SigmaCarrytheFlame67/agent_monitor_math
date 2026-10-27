@@ -349,7 +349,9 @@ accounts or keys
   response-only CGM pipeline as `kimi`. A member runs it only on the API route
   and only with a model from its own provider keys, for example a Claude model
   with its own Anthropic key. A `kimi-*` model is refused (Kimi K3 stays on the
-  sponsored `kimi` engine), and so is Max. The run and its automatic Formal,
+  sponsored `kimi` engine), and so are Max and Max (API) (`max-api`, which is
+  for the administrator and full-access accounts, the latter on their own
+  Anthropic and OpenAI keys). The run and its automatic Formal,
   DAG and Lean stages call the provider with that key and the run's model;
   they never use the server's keys, the administrator's subscriptions or the
   sponsored Kimi broker. A run started without a model (the Projects page's
@@ -376,15 +378,17 @@ accounts or keys
   never probes a member's Claude or Codex login, a member's runtime is always
   the API route, and member runs use it without subagents. A member cannot
   continue a run billed to a subscription or to Max (for example one it
-  started before this policy); the refusal says so. In a shared project,
+  started before this policy), nor a Max (API) run once its full access has
+  ended; the refusal says so. In a shared project,
   members can open each other's runs, but only the member who started a run
   can continue, stop or change it.
 - **Projects with members run tool-free.** A run started from a project gets
   a copy of its shared document, which every member can edit. Once a member
   who is not the administrator has joined (or created, or edited) a project,
   its runs (the administrator's too), their follow-ups and their Formal
-  harness use only `kimi`, `plain` or `math_harness` on an API key, without
-  subagents; anything else is refused with HTTP 403. Coding agents and the
+  harness use only `kimi`, `plain` or `math_harness` on an API key (never
+  Max or Max (API)), without subagents; anything else is refused with HTTP
+  403. Coding agents and the
   subscription CLIs run as `ubuntu`, with the administrator's sign-ins in
   their home, so text a member wrote must not steer them. The text stays in
   the document after the member is removed, so the project keeps the rule

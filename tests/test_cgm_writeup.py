@@ -1625,6 +1625,18 @@ def _assert_gone(pid: int) -> None:
 
 # A runner double in its round whose model call (a CLI in a session of its
 # own) takes 0.9 s to exit on SIGTERM; the runner itself reports at once.
+# Publishes a generation and exits normally.
+_PUBLISH_AND_EXIT_RUNNER = r"""
+import os
+from pathlib import Path
+Path("proof.md").write_text("# Proof\n\n" + "Both are even, so their sum is even. " * 20)
+project = Path("math_harness/project")
+project.mkdir(parents=True, exist_ok=True)
+(project / ".engine_receipt.json.tmp").write_text("{}")
+os.replace(project / ".engine_receipt.json.tmp", project / "engine_receipt.json")
+print('{"type": "item.completed", "item": {"type": "agent_message", "text": "Math Harness completed"}}', flush=True)
+"""
+
 _SLOW_CALL_RUNNER = r"""
 import json, os, signal, subprocess, sys, time
 from pathlib import Path
@@ -1720,6 +1732,21 @@ class WriteupStopTests(unittest.TestCase):
         self.assertFalse(thread.is_alive())
         self.wind_down = time.monotonic() - stopped_at
         return outcome["run"]
+
+    def test_a_published_run_stays_finished_when_a_stop_races_its_end(self) -> None:
+        # Review (2026-10-27): a Stop that reached the worker in the 5-15 ms
+        # after a published run exited turned it into "stopped" (and, on a
+        # follow-up, skipped its derived views).  The run says it published.
+        run_id = "math_harness_writeup_race"
+        workspace = self._workspace(run_id, f"job-{run_id}")
+        self.enterContext(patch("agent_monitor.engines_registry.build_cli_command",
+                                return_value=[sys.executable, "-c", _PUBLISH_AND_EXIT_RUNNER]))
+        self.enterContext(patch("agent_monitor.agent_config.persona_preamble", return_value=""))
+        run = jobs._run_cli_engine(run_id=run_id, engine="math_harness", problem_id="p", problem_text="Prove it.",
+                                   started=time.time(), workspace=workspace, extra_env={})
+        self.assertEqual(run["status"], "finished")
+        self.assertTrue(jobs._published_before_stop(run))
+        self.assertFalse(jobs._published_before_stop(run))  # read once
 
     def test_a_stop_in_the_round_leaves_the_published_run_finished(self) -> None:
         run = self._engine("publish", stop=True)
@@ -1967,7 +1994,8 @@ class WriteupStopTests(unittest.TestCase):
     def test_the_watchdog_in_the_round_keeps_the_published_run(self) -> None:
         run = self._engine("publish", stop=False, timeout=2)
         self.assertEqual((run["status"], run["error"]), ("finished", None))
-        self.assertFalse(jobs._published_before_stop(run))
+        # It published (a Stop that came now would not make it "stopped").
+        self.assertTrue(jobs._published_before_stop(run))
         self.assertIn("Written proof: not written", json.dumps(run["agents"]))
         failed = self._engine("hold", stop=False, timeout=2)
         self.assertEqual(failed["status"], "failed")

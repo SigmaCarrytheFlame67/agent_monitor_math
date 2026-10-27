@@ -608,11 +608,7 @@ def _receipt_response_only_contract(
         # A Max contract is only as good as the per-route contracts it binds.
         return None
     expected_version = {
-        # Version 4 Codex receipts predate the tool-free model catalog (their
-        # "no tools" claim was not true for every model); never attest them.
-        "codex_exec": 5,
-        "claude_code": 1,
-        "api_chat": 1,
+        **_ISOLATION_VERSIONS,
         _cgm_schema.HYBRID_TRANSPORT: _cgm_schema.HYBRID_CONTRACT["isolation_version"],
     }.get(transport)
     version = contract.get("isolation_version")
@@ -629,42 +625,45 @@ def _receipt_response_only_contract(
     }
 
 
+# The response-only isolation version a receipt names for each transport.
+# Version 4 Codex receipts predate the tool-free model catalog (their "no
+# tools" claim was not true for every model); never attest them.
+_ISOLATION_VERSIONS = {"codex_exec": 5, "claude_code": 1, "api_chat": 1}
 _HYBRID_ROUTE_FIELDS = frozenset(
     {"families", "provider", "model", "transport", "isolation_version", "effort"}
 )
-# Max: (provider, transport, isolation version, call families) per side.
-_HYBRID_SIDES = {
-    "advisor": (
-        "claude_subscription",
-        "claude_code",
-        1,
-        sorted(_cgm_schema.ADVISOR_CALL_FAMILIES),
-    ),
-    "worker": (
-        "codex_subscription",
-        "codex_exec",
-        5,
-        sorted(_cgm_schema.WORKER_CALL_FAMILIES),
-    ),
+# The call families each side of a schema-4 route table answers.
+_HYBRID_FAMILIES = {
+    "advisor": sorted(_cgm_schema.ADVISOR_CALL_FAMILIES),
+    "worker": sorted(_cgm_schema.WORKER_CALL_FAMILIES),
 }
 
 
 def _hybrid_routes(receipt: Mapping[str, Any]) -> dict[str, dict[str, Any]] | None:
-    """The validated Max route table of a schema-4 receipt, else ``None``."""
+    """The validated route table of a schema-4 receipt, else ``None``.
+
+    The receipt's requested model names its table (Max or Max (API); see
+    ``cgm_schema.HYBRID_ROUTE_TABLES``), which must match whole: a side from
+    the other table, or the other mode's model, never attests.
+    """
     workflow = receipt.get("workflow")
     routes = workflow.get("routes") if isinstance(workflow, dict) else None
-    if not isinstance(routes, dict) or set(routes) != set(_HYBRID_SIDES):
+    requested = receipt.get("requested_model")
+    table = (
+        _cgm_schema.HYBRID_ROUTE_TABLES.get(requested) if isinstance(requested, str) else None
+    )
+    if table is None or not isinstance(routes, dict) or set(routes) != set(table):
         return None
-    for side, (provider, transport, version, families) in _HYBRID_SIDES.items():
+    for side, (provider, transport) in table.items():
         route = routes[side]
         if (
             not isinstance(route, dict)
             or set(route) != _HYBRID_ROUTE_FIELDS
             or route["provider"] != provider
             or route["transport"] != transport
-            or route["isolation_version"] != version
+            or route["isolation_version"] != _ISOLATION_VERSIONS[transport]
             or isinstance(route["isolation_version"], bool)
-            or route["families"] != families
+            or route["families"] != _HYBRID_FAMILIES[side]
             or not isinstance(route["model"], str)
             or not route["model"].strip()
             or len(route["model"]) > 240

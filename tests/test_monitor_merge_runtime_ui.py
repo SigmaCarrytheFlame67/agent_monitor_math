@@ -520,16 +520,28 @@ console.log(JSON.stringify(out));
 
 
 class LauncherRuntimeTests(unittest.TestCase):
-    def _summary(self, settings: dict, *, model: str = "", issue: str = "", guest: bool = False) -> dict:
+    def _summary(
+        self,
+        settings: dict,
+        *,
+        model: str = "",
+        issue: str = "",
+        guest: bool = False,
+        engine: str = "plain",
+        engines: list | None = None,
+    ) -> dict:
+        constants = re.search(r"^const CGM_MAX_MODEL=.*$", SCRIPT, re.M).group(0)
         program = (
             "let SETTINGS=" + json.dumps(settings) + ", CURRENT_USER=" + json.dumps({"guest": guest}) + ", GUEST_POLICY=null;\n"
-            "let ENGINES=[{id:'plain'}], engine='plain';\n"
+            "let ENGINES=" + json.dumps(engines or [{"id": engine}]) + ", engine=" + json.dumps(engine) + ";\n"
+            + constants + "\n"
             "const currentModel=()=>" + json.dumps(model) + ";\n"
             "const engineRuntimeIssue=()=>" + json.dumps(issue) + ";\n"
             "const modelVisual=m=>({provider:String(m).startsWith('gpt')?'OpenAI':'Provider'});\n"
             "const isCgmMax=()=>" + json.dumps(model == "max") + ";\n"
+            "const isCgmMaxApi=()=>" + json.dumps(model == "max-api") + ";\n"
             "const cgmMaxSummary=()=>'Claude Code fable plans, verifies and curates; Codex gpt-6-astra writes and repairs, both at maximum effort.';\n"
-            + _functions("selectedAccountRuntime", "runRuntimeSummary")
+            + _functions("selectedAccountRuntime", "dagIsCgmEngine", "cgmMaxAvailable", "withMaxApiHint", "runRuntimeSummary")
             + "\nconsole.log(JSON.stringify(runRuntimeSummary()));"
         )
         return _run(program)
@@ -567,7 +579,22 @@ class LauncherRuntimeTests(unittest.TestCase):
         )
         self.assertTrue(blocked["warn"])
         self.assertIn("not connected", blocked["text"])
+        self.assertNotIn("Max (API)", blocked["text"])
         self.assertIsNone(self._summary({"account_runtime": "api"}, guest=True))
+
+    def test_launcher_points_to_max_api_when_the_runtime_blocks_ansatz_cgm(self) -> None:
+        issue = "Claude Code is selected for new runs but is not connected. Connect it in Settings."
+        harness = [{"id": "math_harness", "available": True, "auth_modes": ["api_key", "claude_subscription"]}]
+        settings = {"account_runtime": "claude", "claude_connected": False, "cgm_max_api": {"available": True}}
+        hinted = self._summary(settings, issue=issue, engine="math_harness", engines=harness)
+        self.assertTrue(hinted["warn"])
+        self.assertEqual(
+            hinted["text"], issue + " Max (API) can still run on your API keys: choose it in the model menu."
+        )
+        # Not when Max (API) is unavailable, nor for another harness.
+        unavailable = {**settings, "cgm_max_api": {"available": False}}
+        self.assertEqual(self._summary(unavailable, issue=issue, engine="math_harness", engines=harness)["text"], issue)
+        self.assertEqual(self._summary(settings, issue=issue)["text"], issue)
 
     def test_launcher_text_is_built_without_html(self) -> None:
         body = _function(SCRIPT, "renderRunRuntime")

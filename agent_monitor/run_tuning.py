@@ -50,9 +50,10 @@ _OPENAI_PROFILES = (
     ("gpt-6-luna", (_OPENAI_REASONING_WITH_NONE, _SPEEDS), (_OPENAI_REASONING, _SPEEDS)),
     ("gpt-5.6", (_OPENAI_REASONING, _SPEEDS), (_OPENAI_REASONING, _SPEEDS)),
 )
-# Ansatz CGM Max (see agent_monitor/cgm_max.py).
+# Ansatz CGM Max and Max (API) (see agent_monitor/cgm_max.py).
 _MAX_ROUTE = "dual_subscription"
 _MAX_MODEL = "max"
+_MAX_API_MODEL = "max-api"
 _KIMI_TUNING_ENGINES = frozenset(
     {
         "codex", "deepagents", "deepseek_harness", "math_harness",
@@ -129,6 +130,12 @@ def capabilities(
     if route == _MAX_ROUTE:
         # Ansatz CGM Max always runs both models at maximum effort.
         if selected == _MAX_MODEL:
+            profiles = {"math_harness": (("max",), (DEFAULT_SPEED,))}
+    elif selected == _MAX_API_MODEL:
+        # So does Max (API), on the API route only.  Its OpenAI worker reads
+        # this run-level effort (openai_payload_options); the runner passes
+        # the Claude side's effort with each call.
+        if route == "api_key":
             profiles = {"math_harness": (("max",), (DEFAULT_SPEED,))}
     elif selected.startswith("kimi-") and route == "api_key":
         profiles = dict.fromkeys(
