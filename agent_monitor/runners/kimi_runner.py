@@ -21,7 +21,9 @@ No-tools guarantees (unchanged from the former draft/critique/refine runner):
 Model-verifier acceptance is never a Lean certificate.
 
 Usage: ``kimi_runner.py --prompt-file PATH`` (or ``kimi_runner.py "<prompt>"``)
-from a run workspace that contains the canonical ``problem.txt``.  Emits
+from a run workspace that contains the canonical ``problem.txt``;
+``AGENT_MONITOR_CGM_SOURCES`` may name the run's SOURCE MATERIAL there
+(``math_harness_runner.read_source_material``).  Emits
 Codex-shaped JSONL events on stdout.  Exit status: 0 when the pipeline
 published its artifacts (accepted or not; a stop request during the
 written-proof round after publication ends only that round), 2 for a missing
@@ -236,12 +238,14 @@ def main() -> int:
         problem = _read_problem(root, harness.MAX_PROBLEM_BYTES)
         if problem is None:
             problem = prompt.strip()
+        # The text of the run's attached files, read once and deleted.
+        sources = harness.read_source_material(root)
         route = harness.Route("api", MODEL_ID, "api_chat")
         budgets = harness.Budgets.from_env(os.environ)
         # Called on this (the main) thread so run_pipeline's SIGTERM handler
         # applies: a stop abandons in-flight calls and publishes nothing.
         result = harness.run_pipeline(
-            root, problem, route, budgets=budgets, task=prompt
+            root, problem, route, budgets=budgets, task=prompt, sources=sources
         )
     except ProblemFileError as exc:
         emit_item(

@@ -26,6 +26,9 @@ _RUN_RE = re.compile(r"^[a-z0-9_]{1,180}$")
 _SPONSOR_TOKEN_RE = re.compile(r"^[A-Za-z0-9_-]{43,128}$")
 _TERMINAL = frozenset({"finished", "failed", "stopped", "cancelled", "error"})
 _MAX_RESPONSE_BYTES = 512 * 1024
+# The longest problem run_plain sends (the console fits a Plain run's
+# attachment excerpts within it: jobs._plain_attachments).
+MAX_PROBLEM_CHARS = 12_000
 _SPONSORED_ENGINES = frozenset(
     {
         "codex", "deepagents", "deepseek_harness", "formal", "improof",
@@ -351,9 +354,9 @@ def run_plain(
 ) -> dict[str, Any]:
     if not isinstance(problem, str) or not problem.strip():
         raise SponsoredKimiError("Sponsored Kimi requires a nonempty problem")
-    if len(problem) > 12_000:
+    if len(problem) > MAX_PROBLEM_CHARS:
         raise SponsoredKimiError(
-            "Sponsored Kimi problems are limited to 12,000 characters"
+            f"Sponsored Kimi problems are limited to {MAX_PROBLEM_CHARS:,} characters"
         )
 
     started, cookie = _request(

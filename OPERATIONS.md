@@ -282,6 +282,35 @@ ends, they are derived again only when something is missing:
   action started from the console (Verify, Revise, Audit) stops the same way
   and answers 410.
 
+## Stop, Continue and Delete
+
+- **Stop** records the run stopped at once, while the session's worker may
+  still wind down (a CGM runner for up to 30 s). Until that worker is done,
+  `GET /api/run/<id>` has `"stopping": true` (and `/api/jobs` marks its job
+  so), `POST /api/runs/<id>/continue` answers 409 "This run is still
+  stopping; try again in a few seconds", and the console keeps ■ in place,
+  disabled and "Stopping…", for at least 3 s: ▶ Continue takes that spot
+  only once the stop has settled.
+- Feedback queued for the stopped session is dropped, and the message leaves
+  the session: it is no longer a session problem (`problem.txt` and
+  `problems.json` follow), so no later turn, a bare Continue included,
+  answers it, and it no longer counts toward a member's feedback cap. The
+  chat says it was removed and must be sent again to be answered; files it
+  brought stay with the run (the chat says so), and a CGM turn no longer
+  shows them first as new. A queued copy of a message the session already
+  had takes nothing away. A message sent after the Stop waits for the
+  stopped worker, then continues the run.
+- A follow-up's task tags "← new this turn" only the session problems its
+  own message added; a bare ▶ Continue (also right after a Stop) tags none.
+- A Stop or Delete while a run's attachments are being read (a CGM turn's
+  or Plain's PDFs extracted, or waiting for an extraction slot) ends it at
+  once: no runner starts, and a deleted run stays deleted. Plain reads its
+  files only once the run's record says running, as a CGM turn does.
+- **Delete** stops the run's session for good. A worker still running writes
+  no record, manifest entry or chat line afterwards, so the run stays deleted
+  (the usage it still reports is booked under the run's owner). A call already
+  in flight is paid and booked as usual, and its result dropped.
+
 ## Ansatz CGM runs
 
 The `kimi` and `math_harness` engines run the CGM pipeline in
@@ -342,6 +371,20 @@ ceilings, so an environment value can only lower them.
   isolation version 4 (see "Codex vetting"), is shown as unattested.
   Validation is fail-closed, and an attested result is labelled model-verifier
   accepted, never a Lean certificate.
+- The run's owner may edit `proof.md` in the Sandbox, also while a follow-up
+  runs. The edit unbinds the receipt and deletes nothing: Facts shows the
+  facts unattested (the Outline keeps their lemma names), the write-up is
+  stale, and the DAGs, Lean and coverage are marked stale. Explore, whose
+  receipt no longer binds `proof.md`, says the exploration graph is not
+  published yet until the next pass publishes one. The next follow-up
+  or Continue still runs: its prompt quotes the edited `proof.md` as the
+  previous turn's write-up (both CGM engines hand that prompt to the
+  pipeline; see "Attached files" for how a long one is quoted), and its
+  publication retires the edited generation, receipt first, like any
+  earlier one, with its own `proof.md` bound to a new receipt. An edit
+  saved while a pass runs is replaced by that pass's `proof.md`. A receipt,
+  `TARGET.md`, `PROBLEM.md` or fact file that no longer matches still fails
+  the pass (before any call when it is found at the start).
 - **Max** (model `max`, route `dual_subscription`) runs `math_harness` on
   both of the run owner's linked subscriptions at once. Claude Code, on the
   first of `fable`, `opus`, `sonnet` the account offers, answers the
@@ -550,6 +593,79 @@ ceilings, so an environment value can only lower them.
   `proof_rendering: verified-closure@2`; runs published earlier keep their
   numbered `verified-closure@1` proof and attest as before.
 
+### Attached files
+
+The CGM engines (`kimi`, `math_harness`) and Plain make tool-free calls: they
+open no file and see no image. A run's attachments reach them as text
+(`agent_monitor/cgm_sources.py`):
+
+- Text files as they are, of which a turn reads only what it can use (its
+  budget plus 4 KB; the rest is counted, never held in memory); PDFs through
+  Analyze's sandboxed pypdf extractor (a resource-limited child, at most two
+  at a time in the console process, which never parses a PDF itself). The
+  text is cached per attachment in `attachments/.text/` (0600), so a share
+  never includes it, deleting the run removes it, and neither the run's file
+  list nor its export shows it. Images, PDFs without text (scanned), and
+  encrypted or damaged PDFs are listed as NOT AVAILABLE with the reason;
+  none fails a run.
+- The files' text is data: a tag-like `<NAME` in it (also with whitespace,
+  zero-width or control characters in it, or fullwidth brackets) gets `‹` for
+  its `<`, and a line that imitates a file, page or excerpt marker starts with
+  `‹` (a line ends at any line break: a lone carriage return, a form feed or
+  a Unicode line separator too), so a file can neither close a prompt's
+  delimiter nor forge a file or page; file names are fenced alike, also in
+  the list of files the server appends to a follow-up's message (which these
+  engines' tasks and `problem.txt` quote; the chat shows the names as they
+  are). Mathematics keeps its `<` and `>`.
+- Uploads refuse images for `kimi`, `math_harness` and `plain` (for a
+  follow-up, the run's own engine) before anything is saved, saying the
+  engine cannot see images, to paste the formula or statement as text, and
+  that a run on Claude Code or Codex, where the account has them, can read
+  images; those engines and the others with tools keep images and file
+  paths.
+- Every CGM turn (a first run, a follow-up, queued feedback) renders SOURCE
+  MATERIAL from all of the run's files, those attached since the last turn
+  first, into `.agent-monitor-sources.md` (0600) in the workspace, which the
+  runner reads once and deletes (`AGENT_MONITOR_CGM_SOURCES` names it). Only
+  the strategist and worker prompts carry it, at their start and within
+  120,000 bytes; repair, verifier, curator and write-up prompts never do, so
+  workers restate what they use from it (a worker's format retry keeps a
+  clipped copy of its reply, clipping the sources further when it must). It
+  never enters `problem.txt`, the run record or the receipt. The chat says
+  what the model reads, each file numbered as the model cites it
+  (`[File n, p. k]`), and how to bring in pages that did not fit, for example
+  `📎 Read for the model: File 1 "notes.pdf" (12 pp, all) · File 2 "paper.pdf" (40 pp: pages 1–17; the rest did not fit). To read other pages, name them in a message, e.g. "pp. 18–23 of paper.pdf".`
+- Its size in UTF-8 bytes is at most `AGENT_MONITOR_CGM_SOURCE_BYTES`
+  (default 96,000) on API-key and subscription routes and
+  `AGENT_MONITOR_CGM_SPONSORED_SOURCE_BYTES` (default 48,000) on guest,
+  public and sponsored runs (both 4,000–112,000), less when a long problem or
+  task leaves less room. Small files are whole and large ones share the rest.
+- What a turn's message refers to comes first, else what the session's
+  latest earlier message that refers to anything does. The server's words
+  never count: the list of a message's attached files, the text standing for
+  a message that brought only files, and a bare Continue's feedback (whose
+  "problem" and "proof" would otherwise name problem.pdf or proof.tex). A
+  file referred to by name or stem, as "File n" or as "the second file" (of
+  files sharing a name, the latest upload) is served first: whole if it
+  fits, within 70% of the room or what the other files do not need, each
+  other file keeping its 8,000-byte reserve; the chat line says it was given
+  priority. Pages named ("p. 12", "pp. 3–5", "pages 3, 7 and 9", LaTeX's
+  "pp.~3--5") in this turn's message, then in the session's earlier ones (at
+  most 24 a file), come first in their file, which is the file named right
+  after them ("pp. 3–5 of paper.pdf"), else a file the message refers to
+  that has them, else every PDF that has them.
+- A CGM task has no persona or user library (the published DAG memory still
+  applies), no server path and no file-tool advice; `math_harness` receives
+  it through `--prompt-file`, as `kimi` does. A follow-up's task puts the
+  feedback first, then the session problems and the previous turn's
+  write-up: whole up to 8,000 characters; a longer one as its first 2,000 or
+  so, a marked cut, and its end from a heading when its last `## Main
+  theorem` section fits (the lemmas before it when they fit too), else its
+  last characters, the header saying it is an excerpt.
+- Plain gets excerpts in its single prompt: at most 12,000 bytes per file and
+  40,000 in all; the chat says what it read, as for a CGM turn (Plain reads
+  no page a message names).
+
 ### Written proof (write-up)
 
 After an accepted run is published, a written-proof round turns the verified
@@ -581,7 +697,8 @@ that text alone. A rejected text may be revised and checked again.
   reports and exits 0, and the console records the run as finished (a
   receipt written during the run is the evidence; the Stop itself is
   recorded before the runner is signalled, so the run's outcome is the last
-  word) without starting queued follow-ups. Stop pressed again meanwhile
+  word) and drops the feedback queued for it (see Stop, Continue and
+  Delete). Stop pressed again meanwhile
   sends nothing more; a runner that
   has not exited 30 s after the first is killed. The watchdog firing during
   the round likewise leaves the run finished. A server restart during the

@@ -70,6 +70,12 @@ _MODEL_ALIASES = {
     "claude-3-5-haiku-20241022-v1": "us.anthropic.claude-3-5-haiku-20241022-v1:0",
     "claude-haiku-4-5-20251001-v1": "us.anthropic.claude-haiku-4-5-20251001-v1:0",
     "claude-sonnet-4-5-20250929-v1": "us.anthropic.claude-sonnet-4-5-20250929-v1:0",
+    # Kimi K3 has no bare key.  The family match (strategy 4) would take the
+    # first "*kimi-k3" key in the file's order: another host's listing today
+    # (databricks/databricks-kimi-k3), whose next key has no prices at all.
+    # Pin Moonshot's own list price instead.  The console's Kimi endpoint is
+    # a third-party gateway, so this estimates a call, not that gateway's bill.
+    "kimi-k3": "moonshot/kimi-k3",
 }
 
 
@@ -169,3 +175,25 @@ def has_real_pricing(model: str) -> bool:
     if info is None:
         return False
     return info.get("input_cost_per_token") is not None
+
+
+def has_exact_pricing(model: str) -> bool:
+    """Return True if ``model`` itself names an entry with real pricing.
+
+    Only the alias table and an exact key count (strategies 0 and 1 of
+    ``_lookup_model``).  The prefix and family fallbacks can resolve a short
+    name to an unrelated model: the Claude Code alias "opus" family-matches a
+    Claude 3 Opus key, and "max" a Codex-max one.  A caller that only
+    supposes a call was served by ``model`` (the call did not say) checks
+    this before pricing the call at it.
+    """
+    data = _fetch_pricing()
+    if not data or not isinstance(model, str):
+        return False
+    info = None
+    alias_key = _MODEL_ALIASES.get(model)
+    if alias_key in data:
+        info = data[alias_key]
+    elif model in data:
+        info = data[model]
+    return isinstance(info, dict) and info.get("input_cost_per_token") is not None

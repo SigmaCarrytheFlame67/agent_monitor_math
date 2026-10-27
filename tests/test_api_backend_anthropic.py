@@ -1324,7 +1324,10 @@ class CallModelPricingTests(unittest.TestCase):
                 usage = [event for event in call(api_max, by_model) if event["type"] == "turn.completed"]
                 self.assertEqual(len(usage), 1)
                 self.assertEqual(usage[0]["usage"]["input_tokens"], 2100)
-                self.assertEqual(usage[0].get("model"), "claude-opus-4-8" if api_max else None)
+                # Every run's usage names the model it is priced at; only Max
+                # (API), whose two sides bill apart, names the provider too.
+                self.assertEqual(usage[0].get("model"), "claude-opus-4-8")
+                self.assertEqual(usage[0].get("provider"), "anthropic" if api_max else None)
 
 
 if __name__ == "__main__":

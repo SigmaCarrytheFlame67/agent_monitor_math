@@ -919,6 +919,9 @@ const RUN_KIND_BY_ID=new Map(); let runId='r1', CURRENT_USER={id:4};
 const box={innerHTML:'',querySelectorAll:()=>[]}; const $=()=>box;
 const fetch=async url=>({json:async()=>replies[url]});
 const syncIdlePill=()=>{}, runningRunCount=()=>0;
+${constant('STOP_SETTLE_MS')}
+${constant('STOPPING_RUNS')}
+${fn('stopSettling')}
 ${fn('escapeHtml')}
 ${fn('loadRuns')}`, Object.assign(context, { replies }))
   await vm.runInContext('loadRuns()', context)

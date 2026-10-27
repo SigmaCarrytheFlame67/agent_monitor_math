@@ -265,7 +265,7 @@ function consolePage() {
       if(url.includes('path=proof.md'))return {ok:true,text:async()=>JSON.stringify({path:'proof.md',content:files.proof,revision:'rev-'+files.mtime})};
       throw new Error('unexpected fetch '+url);
     }`,
-    ...['SAFE_MARKDOWN_TAGS', 'WRITEUP_BANNER', 'WRITEUP_STALE_NOTE', 'proofDocChoice'].map(constant),
+    ...['UI_LOCALE', 'SAFE_MARKDOWN_TAGS', 'WRITEUP_BANNER', 'WRITEUP_STALE_NOTE', 'proofDocChoice'].map(constant),
     ...CONSOLE_FUNCTIONS.map(fn),
     switchWiring(),
     sourceFrom(script.indexOf("$('make-readable-btn').onclick="), ';'),

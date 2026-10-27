@@ -152,9 +152,11 @@ CLI_ENGINES: dict[str, dict[str, Any]] = {
         "url": None,
         "check_file": "agent_monitor/runners/math_harness_runner.py",
         "cmd_env": "MATH_HARNESS_CMD",
+        # The task (the problem in context, follow-up feedback, the list of
+        # attached files) goes in a file; problem.txt stays the problem.
         "default_cmd": (
             "{python} -u "
-            "{root}/agent_monitor/runners/math_harness_runner.py"
+            "{root}/agent_monitor/runners/math_harness_runner.py --prompt-file {prompt_file}"
         ),
         "install_hint": "Ansatz CGM harness runner is missing",
         "ready_detail": "bounded response-only CGM pipeline ready",

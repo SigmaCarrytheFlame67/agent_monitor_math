@@ -7,6 +7,9 @@
   const PUBLIC_ENGINE='plain';
   const TERMINAL_STATES=new Set(['done','finished','completed','failed','stopped','cancelled','canceled']);
   const STORAGE_KEY='proving-console-public:last-run';
+  // Character counts are written in the locale of the page's English text,
+  // not the browser's ("12,000", never "12.000"); dates keep the viewer's.
+  const UI_LOCALE='en-US';
   const state={
     config:null,
     plainAvailable:false,
@@ -98,7 +101,7 @@
     const size=$('problem').value.length;
     const limit=problemLimit();
     $('problem').maxLength=limit;
-    $('counter').textContent=`${size.toLocaleString()} / ${limit.toLocaleString()}`;
+    $('counter').textContent=`${size.toLocaleString(UI_LOCALE)} / ${limit.toLocaleString(UI_LOCALE)}`;
     $('counter').classList.toggle('over',size>limit);
     syncControls();
   }
@@ -327,7 +330,7 @@
       return;
     }
     if(problem.length>problemLimit()){
-      setValidation(`The problem is longer than the ${problemLimit().toLocaleString()} character public limit.`);
+      setValidation(`The problem is longer than the ${problemLimit().toLocaleString(UI_LOCALE)} character public limit.`);
       return;
     }
     cancelPolling();

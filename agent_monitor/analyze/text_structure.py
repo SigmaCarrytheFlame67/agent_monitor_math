@@ -606,8 +606,11 @@ def extract_pdf_text(pdf: Path, out: Path, *, max_pages: int = MAX_PDF_PAGES) ->
                 break
             try:
                 # A broken ToUnicode map can yield lone surrogates: replace
-                # them, so one bad page never stops the pages after it.
-                text = normalize(page.extract_text() or "").encode("utf-8", "replace").decode("utf-8")
+                # them, so one bad page never stops the pages after it.  A
+                # form feed of the page's own would read as a page break and
+                # shift the number of every later page.
+                text = normalize(page.extract_text() or "").replace(PAGE_MARK, "\n")
+                text = text.encode("utf-8", "replace").decode("utf-8")
                 handle.write(text)
             except Exception:  # noqa: BLE001 - one bad page must not stop the rest
                 pass
