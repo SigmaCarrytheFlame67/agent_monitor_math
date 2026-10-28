@@ -77,6 +77,25 @@ class ProofTurnsModuleTest(unittest.TestCase):
                 proof_turns.end(self.ws, n, status="finished", finished_at=f"f{i}")
         self.assertEqual([t["n"] for t in proof_turns.summary(self.ws)], [3, 4, 5])
 
+    def test_only_the_part_kept_of_a_long_proof_is_read(self) -> None:
+        # A runaway proof.md is never loaded whole: only the prefix kept is
+        # read, and a character cut by that prefix never reaches the copy.
+        text = ("é" * 7 + "😀" * 5 + "x") * 400
+        (self.ws / "proof.md").write_text(text, encoding="utf-8")
+        real_read_text = Path.read_text
+
+        def read_text(path, *args, **kwargs):
+            if path.name == "proof.md":
+                raise AssertionError("proof.md was read whole")
+            return real_read_text(path, *args, **kwargs)
+
+        with patch.object(proof_turns, "MAX_CHARS", 101), patch.object(Path, "read_text", read_text):
+            n = proof_turns.begin(self.ws, started_at="t1")
+            proof_turns.end(self.ws, n, status="finished", finished_at="t2")
+        kept = (self.ws / ".proof_turns" / "1.md").read_text(encoding="utf-8")
+        self.assertEqual(kept, text[:101])
+        self.assertEqual(proof_turns.summary(self.ws)[0]["chars"], 101)
+
     def test_a_symlinked_folder_is_never_written_through(self) -> None:
         outside = Path(self.enterContext(tempfile.TemporaryDirectory()))
         (self.ws / ".proof_turns").symlink_to(outside, target_is_directory=True)
@@ -157,6 +176,30 @@ class ProofTurnsWorkerTest(unittest.TestCase):
 
         self._follow_up(engine, lambda *a, **k: None)
         self.assertEqual([t["status"] for t in proof_turns.summary(self.workspace)], ["failed"])
+
+    def test_an_error_while_keeping_the_turn_never_keeps_the_worker(self) -> None:
+        # _proof_turn_end runs in the worker's finally just before _end_worker:
+        # an error of any kind there must not escape, or the worker would stay
+        # registered (the run left running, no Continue able to start).
+        def engine(*args, **kwargs):
+            return {"run_id": self.run_id, "status": "finished", "edges": [], "totals": {},
+                    "agents": [{"trace_id": f"{self.run_id}::turn-2", "output": "second", "status": "finished"}]}
+
+        launched = []
+        with patch.object(proof_turns, "end", side_effect=RuntimeError("index unreadable")):
+            self._follow_up(engine, lambda *a, **k: launched.append(True))
+        self.assertEqual(launched, [True])
+        self.assertNotIn("job_turn_2", jobs._WORKERS)
+        self.assertEqual(jobs._load_run_record(self.run_id)["status"], "finished")
+
+    def test_the_turn_hooks_never_raise(self) -> None:
+        for error in (RuntimeError("x"), MemoryError(), RecursionError(), AttributeError("x"), KeyError("x")):
+            with patch.object(proof_turns, "begin", side_effect=error):
+                self.assertIsNone(jobs._proof_turn_begin(self.run_id, self.workspace))
+            with patch.object(proof_turns, "end", side_effect=error):
+                jobs._proof_turn_end(self.run_id, self.workspace, 1)
+            with patch.object(jobs, "_load_run_record", side_effect=error):
+                jobs._proof_turn_end(self.run_id, self.workspace, 1)
 
     def test_an_analysis_follow_up_records_no_turn(self) -> None:
         record = jobs._load_run_record(self.run_id)

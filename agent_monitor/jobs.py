@@ -6370,28 +6370,39 @@ def _track_worker(job_id: str, run_id: str, thread: Any) -> None:
 
 def _proof_turn_begin(run_id: str, ws: Path) -> int | None:
     """A proof turn starting (proof_turns): never for a deleted run, whose
-    workspace must not come back."""
-    if _run_deleted(run_id):
-        return None
-    from agent_monitor import proof_turns
+    workspace must not come back.  Best-effort: it never raises, so keeping
+    a turn's copy can never fail the turn."""
+    try:
+        if _run_deleted(run_id):
+            return None
+        from agent_monitor import proof_turns
 
-    return proof_turns.begin(ws, started_at=_now())
+        return proof_turns.begin(ws, started_at=_now())
+    except Exception as exc:  # noqa: BLE001 - a turn's copy is best-effort
+        print(f"[proof_turns] a turn start was not recorded: {type(exc).__name__}", file=sys.stderr, flush=True)
+        return None
 
 
 def _proof_turn_end(run_id: str, ws: Path, turn: int | None) -> None:
     """A proof turn ending: its proof kept, with the status its record says
-    (once: a turn already ended is left as it is)."""
-    if not turn or _run_deleted(run_id):
-        return
+    (once: a turn already ended is left as it is).  It runs in the workers'
+    ``finally`` blocks just before ``_end_worker``, so it never raises: an
+    error here must never leave the run's worker registered (the run would
+    stay running and no Continue could start)."""
     try:
-        status = str(_load_run_record(run_id).get("status") or "finished")
-    except (FileNotFoundError, OSError, ValueError):
-        status = "finished"
-    if status not in {"finished", "failed", "stopped"}:
-        status = "finished"
-    from agent_monitor import proof_turns
+        if not turn or _run_deleted(run_id):
+            return
+        try:
+            status = str(_load_run_record(run_id).get("status") or "finished")
+        except (FileNotFoundError, OSError, ValueError):
+            status = "finished"
+        if status not in {"finished", "failed", "stopped"}:
+            status = "finished"
+        from agent_monitor import proof_turns
 
-    proof_turns.end(ws, turn, status=status, finished_at=_now())
+        proof_turns.end(ws, turn, status=status, finished_at=_now())
+    except Exception as exc:  # noqa: BLE001 - a turn's copy is best-effort
+        print(f"[proof_turns] a turn end was not recorded: {type(exc).__name__}", file=sys.stderr, flush=True)
 
 
 def _end_worker(job_id: str) -> None:
