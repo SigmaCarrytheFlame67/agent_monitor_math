@@ -1820,6 +1820,7 @@ def start_job(
     analyze: object = None,
     readability: object = None,
     tool_free: bool = False,
+    easy_route: bool = False,
 ) -> dict[str, Any]:
     """Start one run (``run_kind`` ``"prove"``, the default, ``"analyze"`` or
     ``"readability"``).
@@ -1836,6 +1837,10 @@ def start_job(
     is not an administrator: it runs only a tool-free engine on an API key,
     without subagents (``account_policy.PROJECT_TOOL_FREE_ERROR``, an
     ``account_policy.ProjectPolicyError``).
+
+    ``easy_route`` marks an Ansatz CGM start moved to Plain (start_job_routed):
+    it is refused, before anything is written, where Plain would not use the
+    route Ansatz CGM would (the sponsored Kimi service).
     """
     from agent_monitor.engines_registry import all_engine_ids, list_engines, supported_models
 
@@ -2102,6 +2107,11 @@ def start_job(
             "choose a model from your own API keys or linked accounts, or add your own "
             "Kimi API key in Settings"
         )
+    if easy_route and sponsored_kimi:
+        # An easy request moves to Plain only on the account route Ansatz CGM
+        # would use, never onto the sponsored service (start_job_routed then
+        # starts Ansatz CGM as asked).
+        raise ValueError("Plain would run on the sponsored Kimi service")
     if sponsored_kimi:
         # The sponsored service asks for Kimi K3 whatever any engine names, so
         # another Kimi model that a coding-agent harness would send as named
@@ -2719,6 +2729,163 @@ def _account_awaits_reconnect(route: str, user_id: int | None) -> bool:
 
         return claude_login.account_reauth_required(claude_login.account_home(int(user_id)))
     return False
+
+
+def start_job_routed(**kwargs: Any) -> dict[str, Any]:
+    """``start_job``, with the easy-request rating (easy_route): a proof
+    started on Ansatz CGM by a signed-in account that the judge rates easy
+    runs on Plain instead, on the same model and account route (a start that
+    Plain cannot make that way starts Ansatz CGM as asked).  Every other start
+    is ``start_job`` unchanged."""
+    from agent_monitor import easy_route
+
+    user = kwargs.get("user") or {}
+    kind = str(kwargs.get("run_kind") or "prove").strip().lower()
+    if (
+        kwargs.get("engine") != easy_route.HOME
+        or kind != "prove"
+        or user.get("guest")
+        or not easy_route.enabled()
+        # Max and Max (API) are Ansatz CGM's alone.
+        or str(kwargs.get("auth_route") or "").strip().lower() == cgm_max.ROUTE
+        or cgm_max.is_max_model(kwargs.get("model"))
+        or cgm_max.is_max_api_model(kwargs.get("model"))
+    ):
+        return start_job(**kwargs)
+    text = str(kwargs.get("problem_text") or "").strip()
+    verdict: dict[str, Any] | None = None
+    why = "judged"
+    if not text:
+        why = "no text"
+    elif easy_route.asks_for_cgm(text):
+        why = "asked"
+    else:
+        verdict = easy_route.judge(text)
+    job = None
+    if verdict and verdict.get("verdict") == "easy" and _easy_plain_allowed(user, kwargs):
+        try:
+            job = start_job(**{**kwargs, "engine": easy_route.EASY_ENGINE, "easy_route": True})
+        except (ValueError, account_policy.ProjectPolicyError):
+            job = None
+    engine = easy_route.EASY_ENGINE if job is not None else easy_route.HOME
+    if job is None:
+        job = start_job(**kwargs)
+    run_id = str(job.get("run_id") or "")
+    if run_id:
+        easy_route.note_turn(
+            RUNS_DIR / "workspaces" / run_id, home=easy_route.HOME, engine=engine, verdict=verdict, why=why
+        )
+        if engine == easy_route.EASY_ENGINE and verdict:
+            _append_chat(run_id, "system", easy_route.plain_note(verdict))
+    return job
+
+
+def _easy_plain_allowed(user: dict[str, Any], kwargs: dict[str, Any]) -> bool:
+    """Whether the account may run Plain for this start (member policy)."""
+    if not account_policy.is_member(user):
+        return True
+    try:
+        plain_model = account_policy.member_run_model(user, "plain", kwargs.get("model"))
+        if plain_model != kwargs.get("model"):
+            return False  # Plain would answer with another model
+        return not account_policy.member_run_error(
+            user, "plain", model=plain_model, auth_route=kwargs.get("auth_route")
+        )
+    except Exception:  # noqa: BLE001
+        return False
+
+
+def _easy_route_follow_up(
+    run_id: str,
+    run_data: dict[str, Any],
+    ws: Path,
+    *,
+    message: str | None,
+    user: dict[str, Any] | None,
+    model: str | None,
+    has_files: bool = False,
+) -> dict[str, Any]:
+    """The engine of one follow-up turn of a run started on Ansatz CGM
+    (easy_route): Plain when the judge rates the message easy, Ansatz CGM
+    otherwise or when the message asks for it.  A bare Continue, a message
+    with files, a Max run, or a turn Plain cannot run on the run's own route
+    and model keeps the run's engine.  Returns the record to continue with
+    (its ``engine`` switched, and the switch said in the chat, when it
+    changes).  Never raises: any failure keeps the run's engine."""
+    from agent_monitor import easy_route
+
+    try:
+        if not easy_route.enabled() or easy_route.home(ws) != easy_route.HOME:
+            return run_data
+        current = str(run_data.get("engine") or "")
+        if current not in {easy_route.HOME, easy_route.EASY_ENGINE}:
+            return run_data
+        text = (message or "").strip()
+        if not text or text.startswith(_BARE_CONTINUE_PREFIX) or has_files:
+            return run_data
+        verdict: dict[str, Any] | None = None
+        if easy_route.asks_for_cgm(text):
+            target, why = easy_route.HOME, "asked"
+        else:
+            problems = ensure_problems(run_data, run_id)
+            first = _problem_item_text(problems[0]) if problems else str(run_data.get("problem_text") or "")
+            verdict = easy_route.judge(text, problem=first)
+            why = "judged"
+            target = easy_route.EASY_ENGINE if verdict.get("verdict") == "easy" else easy_route.HOME
+        if target == easy_route.EASY_ENGINE and not _easy_plain_follow_up_ok(run_id, run_data, user, model):
+            target = easy_route.HOME
+        easy_route.note_turn(ws, home=easy_route.HOME, engine=target, verdict=verdict, why=why)
+        if target == current:
+            return run_data
+        with _RUN_WRITE_LOCK:
+            fresh = _load_run_record(run_id)
+            fresh["engine"] = target
+            fresh["updated_at"] = _now()
+            _write_run(fresh)
+        _append_chat(
+            run_id,
+            "system",
+            easy_route.plain_note(verdict or {}) if target == easy_route.EASY_ENGINE
+            else easy_route.cgm_note(why, verdict),
+        )
+        return fresh
+    except Exception:  # noqa: BLE001 - routing never stops a follow-up
+        traceback.print_exc()
+        return run_data
+
+
+def _easy_plain_follow_up_ok(
+    run_id: str, run_data: dict[str, Any], user: dict[str, Any] | None, model: str | None
+) -> bool:
+    """Whether Plain can run this follow-up on the run's own route and model."""
+    try:
+        if cgm_max.is_max_record(run_data) or cgm_max.is_max_api_record(run_data) or run_data.get("route_plan"):
+            return False  # Max and Max (API) are Ansatz CGM's alone
+        if cgm_max.is_max_model(model) or cgm_max.is_max_api_model(model):
+            return False
+        if _route_from_record(run_data) == cgm_max.ROUTE:
+            return False
+        plain_data = {**run_data, "engine": "plain"}
+        plain_model = _member_continuation_model(user, "plain", plain_data, model)
+        if plain_model != _member_continuation_model(user, str(run_data.get("engine") or ""), run_data, model):
+            return False
+        if account_policy.is_member(user) and account_policy.member_run_error(
+            user, "plain", model=plain_model, auth_route=_route_from_record(run_data)
+        ):
+            return False
+        _tool_free_follow_up(run_id, plain_data, "plain", plain_model)
+        _continuation_auth_environment(
+            run_data=plain_data,
+            engine="plain",
+            model=plain_model,
+            user=user,
+            env=_user_extra_env(
+                user, *_run_provider_models(plain_data, plain_model, plain_data.get("subagent_model"))
+            ),
+        )
+        return True
+    except Exception:  # noqa: BLE001
+        return False
 
 
 def _continuation_auth_environment(
@@ -7340,6 +7507,11 @@ def _continue_with_message(
     _write_session_problems(ws, problems)
 
     _stop_event(run_id).clear()
+    # A run started on Ansatz CGM: this turn's engine (easy_route).
+    run_data = _easy_route_follow_up(
+        run_id, run_data, ws, message=message, user=user, model=effective_model,
+        has_files=bool(user_entry.get("attachments")),
+    )
     engine = run_data.get("engine") or run_id.split("_", 1)[0]
     # Re-checked at launch, after send_human_message's check.
     tool_free = _tool_free_follow_up(run_id, run_data, engine, effective_model)
@@ -9333,6 +9505,8 @@ def _continue_claimed_run(
     if not ws.is_dir():
         raise FileNotFoundError("workspace not found")
     run_data = _load_run_record(run_id)
+    # A run started on Ansatz CGM: this turn's engine (easy_route).
+    run_data = _easy_route_follow_up(run_id, run_data, ws, message=message, user=user, model=model)
     # Stored engine identity is provenance, not a catalog alias. In particular,
     # an old UCLA continuation must stay on its explicit legacy path below and
     # must never be rewritten to ``math_harness``.

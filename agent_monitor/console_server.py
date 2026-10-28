@@ -2102,11 +2102,17 @@ def _compile_workspace_pdf(ws: Path, tex_rel: str) -> Path | None:
     with _tempfile.TemporaryDirectory(prefix="console_latex_") as tmp:
         work = Path(tmp)
         (work / "doc.tex").write_text(tex, encoding="utf-8")
+        # The document is a run's: TeX expands environment variables in file
+        # names, so it compiles without the server's secrets.
+        from agent_monitor.subprocess_env import child_process_env
+
+        tex_env = child_process_env()
         try:
             if tectonic:
                 _subprocess.run(
                     [tectonic, "--outfmt", "pdf", "doc.tex"],
                     cwd=work,
+                    env=tex_env,
                     capture_output=True,
                     timeout=90,
                     check=False,
@@ -2116,6 +2122,7 @@ def _compile_workspace_pdf(ws: Path, tex_rel: str) -> Path | None:
                     _subprocess.run(
                         [pdflatex, "-interaction=nonstopmode", "doc.tex"],
                         cwd=work,
+                        env=tex_env,
                         capture_output=True,
                         timeout=90,
                         check=False,
@@ -4580,7 +4587,8 @@ class Handler(RunSharingMixin, ProjectsMixin, ResearchMixin, BaseHTTPRequestHand
                 max_iterations = max(1, min(max_iterations, guest_max_iterations()))
             try:
                 def start() -> dict:
-                    return research_projects.start_run(body.get("project_id"), user["id"], body.get("project_task"), lambda tool_free: job_manager.start_job(
+                    # An Ansatz CGM proof the judge rates easy runs on Plain (easy_route).
+                    return research_projects.start_run(body.get("project_id"), user["id"], body.get("project_task"), lambda tool_free: job_manager.start_job_routed(
                         engine=engine,
                         problem_id=body.get("problem_id"),
                         problem_text=body.get("problem_text"),
