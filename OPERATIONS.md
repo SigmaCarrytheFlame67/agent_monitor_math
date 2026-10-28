@@ -419,8 +419,10 @@ and DAG views are unchanged.
   registered the turn's job, but its worker writes the record "running"
   only once the turn is prepared (the record, the proof and, for most
   engines, the files' text read first), so the polls just after may still
-  read the record as it ended. Until the record changes the turn is
-  awaited: the run shows as continuing (`Continuing…`, the `continuing…`
+  read the record as it ended. Until the record's turn changes (its
+  status, time, error or job; an edit of proof.md, a Lean check or the
+  derived views moving meanwhile do not count) the turn is awaited: the
+  run shows as continuing (`Continuing…`, the `continuing…`
   pill and the session bar's line, ■ Stop, no ▶ Continue to press a second
   time), and the record is read again every two seconds (nothing drawn or
   queued again), so the turn is followed within two seconds of its record
