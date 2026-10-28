@@ -1880,7 +1880,7 @@ ${fn('followRunAgain')}`, ctx)
 function pollingLoop() {
   const ctx = vm.createContext({ console, netTick: fn => setImmediate(fn) })
   vm.runInContext(`
-let runId='p1', jobId=null, workspaceView='sandbox', pollTimer=null, CURRENT_USER={id:1};
+let runId='p1', jobId=null, workspaceView='sandbox', pollTimer=null, CURRENT_USER={id:1}, lastSandboxRun=null;
 ${constant('POLL_MIN_MS')}
 ${constant('POLL_AWAIT_MS')}
 ${constant('STOP_SETTLE_MS')}
@@ -1912,13 +1912,13 @@ const fetch=async url=>{
   if(!body)throw new Error('unexpected fetch '+url);
   const copy=JSON.parse(JSON.stringify(body)); return {ok:true,json:async()=>copy};
 };
-const setPill=(state,text)=>pills.push(text), updateProblemStrip=()=>{}, updatePromptStrip=()=>{}, renderConversation=()=>{}, renderAutoPipeline=()=>{}, applySandboxPreview=()=>{};
+const setPill=(state,text)=>pills.push(text), updateProblemStrip=run=>{ lastSandboxRun=run; }, updatePromptStrip=()=>{}, renderConversation=()=>{}, renderAutoPipeline=()=>{}, applySandboxPreview=()=>{};
 const refreshProofPreview=async force=>{ if(force)forced.push(now); }, loadChat=()=>chats.push(now), syncIdlePill=()=>{}, escapeHtml=s=>String(s);
 const alert=message=>alerts.push(message);
 // A test that continues a run not shown says what selectRun does to polling.
 let selectRun=()=>{ throw new Error('selectRun'); };
 ${constant('CONTINUE_PENDING')}
-${['nextPollDelay', 'consoleRunSignature', 'startPolling', 'stopPolling', 'followRunAgain', 'awaitTurn', 'turnAwaited', 'showTurnAwaited', 'stopSettling', 'tick', 'loadRuns', 'runningRunCount', 'continueRun'].map(fn).join('\n')}
+${['nextPollDelay', 'consoleRunSignature', 'startPolling', 'stopPolling', 'followRunAgain', 'turnSignature', 'awaitTurn', 'turnAwaited', 'showTurnAwaited', 'stopSettling', 'tick', 'loadRuns', 'runningRunCount', 'continueRun'].map(fn).join('\n')}
 ${script.match(/^setInterval\(\(\)=>\{ if\(!document\.hidden\)loadRuns\(\)[^\n]*$/m)[0]}`, ctx)
   const step = code => vm.runInContext(code, ctx)
   const flush = async (n = 40) => { for (let i = 0; i < n; i++) await new Promise(resolve => setImmediate(resolve)); step('sample()') }
@@ -2150,7 +2150,7 @@ test('a turn awaited is no longer awaited once its record changes (it may end be
     await step("continueRun('p1')")
     await flush(400)
     step("now=9000; STOPPING_RUNS.set('p1',{since:now,recorded:true})")
-    assert.equal(step("turnAwaited('p1',record,consoleRunSignature(record))"), false)
+    assert.equal(step("turnAwaited('p1',record)"), false)
     assert.equal(step('pollAwait'), null)
     await advance(10000)
     assert.notEqual(step("$('chat-stage').textContent"), 'Continuing…')
@@ -2160,14 +2160,68 @@ test('a turn awaited is no longer awaited once its record changes (it may end be
     const { step, flush } = pollingLoop()
     step("startPolling()")
     await flush(400)
-    step("pollAwait={rid:'p1',sig:pollSig,job:'j3',since:now}")
-    assert.deepEqual([step("turnAwaited('p2',record,pollSig)"), step('!!pollAwait')], [false, true])
-    assert.deepEqual([step("turnAwaited('p1',record,pollSig)"), step("turnAwaited('p1',{...record,status:'running'},pollSig)"), step('pollAwait')], [true, false, null])
+    step("pollAwait={rid:'p1',sig:turnSignature(record),job:'j3',since:now}")
+    assert.deepEqual([step("turnAwaited('p2',record)"), step('!!pollAwait')], [false, true])
+    assert.deepEqual([step("turnAwaited('p1',record)"), step("turnAwaited('p1',{...record,status:'running'})"), step('pollAwait')], [true, false, null])
     // One whose record this page had not read ('' for its signature): the first record read since is the one before
-    // (unless it says running); one that differs from it is not.
+    // (unless it says running); one whose turn differs from it is not.
     step("pollAwait={rid:'p1',sig:'',job:'j3',since:now}")
-    assert.deepEqual([step("turnAwaited('p1',{...record,updated_at:'t9'},'x')"), step('pollAwait.sig'), step("turnAwaited('p1',{...record,updated_at:'t9'},'x')")], [true, 'x', true])
-    assert.deepEqual([step("turnAwaited('p1',{...record,status:'failed',updated_at:'t10'},'y')"), step('pollAwait')], [false, null])
+    assert.deepEqual([step("turnAwaited('p1',{...record,updated_at:'t9'})"), step("pollAwait.sig===turnSignature({...record,updated_at:'t9'})"), step("turnAwaited('p1',{...record,updated_at:'t9'})")], [true, true, true])
+    assert.deepEqual([step("turnAwaited('p1',{...record,status:'failed',updated_at:'t10'})"), step('pollAwait')], [false, null])
+  }
+})
+
+// The wait for a turn this page started is judged by what only a turn changes (status, time, error, job):
+// an edit of proof.md, a Lean check or the derived views moving meanwhile never end it.
+test('a turn awaited after ▶ Continue is not ended by a change that is no turn (an edit, a Lean check, the derived views)', async () => {
+  {
+    const { step, flush, advance, shownFrom } = pollingLoop()
+    step("record={...record,status:'stopped',sandbox_preview:{revision:'r1'}}; job={...job,status:'stopped'}")
+    step('startPolling()')
+    await flush(400)
+    await advance(8000)
+    assert.equal(step('pollActive'), false)
+    // proof.md is edited and saved (a new preview revision) while nothing polls.
+    step("record={...record,sandbox_preview:{revision:'r2'}}")
+    // ▶ Continue: the job is registered running; the worker writes the record running later.
+    step("job={run_id:'p1',job_id:'j3',status:'running',engine:'kimi'}; samples.length=0")
+    await step("continueRun('p1')")
+    await flush(400)
+    await advance(9500)
+    step("record={...record,status:'running',updated_at:'t2'}")
+    await advance(16000)
+    const shown = shownFrom(/Continuing…/, 9500)
+    assert.ok(shown.length > 0, 'the turn was awaited')
+    assert.ok(shown.every(s => !/^▶|Stopped/.test(s)), 'shown while the turn was prepared: ' + JSON.stringify(shown))
+    assert.deepEqual(plain(step('alerts')), [])
+  }
+  {
+    // Continue while the run is still polled for its derived pipeline, which moves on while the turn is prepared.
+    const { step, flush, advance, shownFrom } = pollingLoop()
+    step("record={...record,status:'finished',auto_pipeline:{status:'running',updated_at:'a1'}}; job={...job,status:'finished'}")
+    step('startPolling()')
+    await flush(400)
+    await advance(3000)
+    assert.equal(step('pollActive'), true)
+    step("job={run_id:'p1',job_id:'j3',status:'running',engine:'kimi'}; samples.length=0")
+    await step("continueRun('p1')")
+    await flush(400)
+    step("record={...record,auto_pipeline:{status:'running',updated_at:'a2'},lean_verification:{status:'running',attempt_count:2}}")
+    await advance(8000)
+    step("record={...record,status:'running',updated_at:'t2'}")
+    await advance(12000)
+    const shown = shownFrom(/Continuing…/, 8000)
+    assert.ok(shown.length > 0, 'the turn was awaited')
+    assert.ok(shown.every(s => !/^▶|Finished/.test(s)), 'shown while the turn was prepared: ' + JSON.stringify(shown))
+  }
+  {
+    // The turn signature itself: only a turn's fields count.
+    const { step } = pollingLoop()
+    const same = "turnSignature(record)===turnSignature({...record,sandbox_preview:{revision:'r9'},auto_pipeline:{status:'done'},lean_verification:{status:'verified'},agents:[{}]})"
+    assert.equal(step(same), true)
+    for (const change of ["status:'running'", "updated_at:'t9'", "error:'boom'", "job_id:'j9'"])
+      assert.equal(step(`turnSignature(record)===turnSignature({...record,${change}})`), false, change)
+    assert.equal(step('turnSignature(null)'), '')
   }
 })
 

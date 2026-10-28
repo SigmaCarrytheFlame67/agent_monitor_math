@@ -6312,19 +6312,23 @@ function followRunAgain(jobs){
    nothing is drawn or queued again), and the run shows as continuing
    (■ Stop; ▶ Continue is not offered again meanwhile), for up to a minute,
    until a Stop from this page, or until the run list shows its job ended.
-   pollAwait: {rid, sig: the record's signature before the turn ('' when
+   pollAwait: {rid, sig: the record's turn signature before the turn ('' when
    this page had not read it yet: the first record read since, unless it
    says running, is then the one before), job: the turn's job ('' unknown),
    since}. */
 const POLL_AWAIT_MS=60000;
+// What a turn's start or end always changes in the record (its status and time, its error, its job).
+// An edit of proof.md, a Lean check or the derived views changing the record meanwhile are no turn.
+function turnSignature(run){ return run&&typeof run==='object'?JSON.stringify([run.run_id,run.status,run.updated_at,run.error,run.job_id]):''; }
 function awaitTurn(rid,job){
-  pollAwait={rid:String(rid),sig:pollSig,job:String(job||''),since:Date.now()};
+  const shown=String(lastSandboxRun?.run_id||'')===String(rid)?lastSandboxRun:null;
+  pollAwait={rid:String(rid),sig:pollSig?turnSignature(shown):'',job:String(job||''),since:Date.now()};
   showTurnAwaited();
 }
-// Whether the record read (its signature `sig`) is still the one from before the turn awaited.
-function turnAwaited(rid,run,sig){
+// Whether the record read is still the one from before the turn awaited (by its turn signature).
+function turnAwaited(rid,run){
   const wait=pollAwait; if(!wait||wait.rid!==String(rid))return false;
-  const stop=STOPPING_RUNS.get(String(rid));
+  const sig=turnSignature(run), stop=STOPPING_RUNS.get(String(rid));
   if(run?.status==='running'||(wait.sig&&sig!==wait.sig)||Date.now()-wait.since>=POLL_AWAIT_MS||(stop&&stop.since>=wait.since)){ pollAwait=null; return false; }
   if(!wait.sig)wait.sig=sig;
   return true;
@@ -6381,7 +6385,7 @@ async function tick(){
       const t=run.totals||{};
       const sig=consoleRunSignature(run), changed=sig!==pollSig;
       // A turn this page asked for that is still being prepared (awaitTurn): the record is the one from before it.
-      const awaited=typeof turnAwaited==='function'&&turnAwaited(rid,run,sig);
+      const awaited=typeof turnAwaited==='function'&&turnAwaited(rid,run);
       pollSig=sig; pollQuiet=changed?0:pollQuiet+1;
       pollDelay=nextPollDelay(pollDelay,changed);
       const refreshSide=changed||pollQuiet%POLL_SIDE_EVERY===0;
