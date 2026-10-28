@@ -219,13 +219,134 @@ def _without_models(events: list[dict]) -> list[dict]:
 def test_exact_pricing_counts_only_aliases_and_exact_keys(prices):
     for model in ("gpt-6-astra", "gpt-4o", "claude-opus-5-5", "kimi-k3"):
         assert prices.has_exact_pricing(model), model
-    # The family match prices these route aliases as unrelated models.
+    # The family match prices this route alias as an unrelated model; a family shorter than
+    # four characters ("max", once priced as a Codex-max model) is never matched.
     assert prices.get_token_price("opus") == (15.0, 75.0)
-    assert prices.get_token_price("max") == (1.25, 10.0)
+    assert prices.get_token_price("max") == (0.0, 0.0)
     for alias in ("opus", "sonnet", "fable", "max", "", "gpt-6"):
         assert not prices.has_exact_pricing(alias), alias
     assert not prices.has_exact_pricing("databricks/system.ai.kimi-k3")  # listed without prices
     assert not prices.has_exact_pricing(None)  # type: ignore[arg-type]
+
+
+# The lookup's own strategies over a table shaped like LiteLLM's (decoys first:
+# the family match returns the first key, in the table's order, that matches).
+_LOOKUP = {
+    "claude-opus-5-5": _entry(4, 20, 0.2, 5),
+    "anthropic.claude-haiku-4-5-20251001-v1:0": _entry(1, 5, 0.1),
+    "azure/gpt-5.1-codex-max": _entry(1.25, 10, 0.125),
+    "us.anthropic.claude-3-5-haiku-20241022-v1:0": _entry(0.8, 4, 0.08),
+    "claude-3-5-haiku-20241022": _entry(0.9, 4.5, 0.09),
+    "anthropic.claude-3-opus-20240229-v1:0": _entry(15, 75, 1.5),
+    "azure/gpt-5.2": _entry(1.75, 14, 0.175),
+    "openai/gpt-5.5": _entry(5, 30, 0.5),
+    "gpt-6.1-sol": _entry(2, 10, 0.2),
+    "xai/grok-4.5": _entry(3, 15, 0.75),
+    "gpt-4o": _entry(2.5, 10, 1.25),
+    # A dated key whose date a letterless family ("2024") would match.
+    "gpt-4o-2024-08-06": _entry(7, 21, 0.7),
+}
+
+
+def test_a_dotted_name_is_priced_at_its_own_entry_never_an_unrelated_familys(monkeypatch):
+    """The lookup used to split any name at its first dot as if a Bedrock
+    provider prefix came before it: "kimi-k2.5" became the slug "5", whose
+    family match took the first key with a "5" in it (claude-opus-5-5 here).
+    A provider prefix is a plain word ("anthropic.", "meta.", after a region
+    such as "us.") before a model whose name starts with a letter, so a
+    model family before its version's dot ("qwen3" of "qwen3.5-flash",
+    "flux" of "flux.2-pro") is none, and a family shorter than four
+    characters or without a letter is never matched.  Every name that
+    resolved correctly resolves to the same entry."""
+    monkeypatch.setattr(pricing, "_pricing_cache", dict(_LOOKUP))
+    expected = {
+        # Bedrock names: exact, region and provider prefixes stripped, the bare id, the family, an alias.
+        "us.anthropic.claude-3-5-haiku-20241022-v1:0": (0.8, 4.0),
+        "eu.anthropic.claude-3-5-haiku-20241022-v1:0": (0.9, 4.5),
+        "anthropic.claude-3-5-haiku-20241022-v1:0": (0.9, 4.5),
+        "anthropic.claude-3-opus-20240229-v1:0": (15.0, 75.0),
+        "anthropic.claude-haiku-4-5-20251001-v2:0": (1.0, 5.0),
+        "claude-3-5-haiku-20241022-v1": (0.8, 4.0),
+        # Aliases and exact dotted names.
+        "gpt-5.2": (1.75, 14.0),
+        "gpt-5.5": (5.0, 30.0),
+        "gpt-6.1-sol": (2.0, 10.0),
+        # A dotted name whose own family is listed.
+        "grok-4.5": (3.0, 15.0),
+        # Dotted names with no entry of their own, families too short to match, and one without a
+        # letter (a provider prefix, then only a number).
+        "kimi-k2.5": (0.0, 0.0),
+        "kimi:kimi-k2.5": (0.0, 0.0),
+        "gemini-3.6-flash": (0.0, 0.0),
+        "2.5": (0.0, 0.0),
+        "max": (0.0, 0.0),
+        "anthropic.2024": (0.0, 0.0),
+    }
+    assert {name: pricing.get_token_price(name) for name in expected} == expected
+    for name in ("kimi-k2.5", "kimi:kimi-k2.5", "gemini-3.6-flash", "2.5", "max", "anthropic.2024"):
+        assert pricing._lookup_model(name) is None and not pricing.has_real_pricing(name), name
+    # An unpriced model is estimated at gpt-4o's rates, as designed, never at Claude's.
+    assert jobs._estimate_cost("kimi-k2.5", input_tokens=1_000_000, output_tokens=1_000_000) == 12.5
+    # With an entry of its own family, that one.
+    monkeypatch.setitem(pricing._pricing_cache, "moonshot/kimi-k2.5", _entry(0.6, 3, 0.1))
+    assert pricing.get_token_price("kimi-k2.5") == (0.6, 3.0)
+    # A model family that ends in a digit, or a bare one, before its version's dot was taken
+    # for a provider prefix: the number after it ("5-flash", "5-mini", "5-large", "2-pro")
+    # found unrelated models (these decoys are keys of LiteLLM's table, listed first).  Each
+    # name is priced at its own family's entry, or not at all, and the names above as before.
+    monkeypatch.setattr(pricing, "_pricing_cache", {
+        "databricks/databricks-gemini-2-5-flash": _entry(0.3, 2.5, 0.03),
+        "azure/eu/gpt-5-mini-2025-08-07": _entry(0.275, 2.2, 0.0275),
+        "jamba-1.5-large": _entry(2, 8, 0.2),
+        "azure/gpt-5.2-pro": _entry(21, 168, 2.1),
+        "stability/sd3.5-large": _entry(6.5, 6.5, 0.65),
+        "azure_ai/flux.2-pro": _entry(4, 4, 0.4),
+        **_LOOKUP,
+    })
+    families = {"qwen3.5-flash": (0.0, 0.0), "phi3.5-mini": (0.0, 0.0), "sd3.5-large": (6.5, 6.5),
+                "flux.2-pro": (4.0, 4.0)}
+    assert {name: pricing.get_token_price(name) for name in {**expected, **families}} == {**expected, **families}
+
+
+def test_an_openrouter_vendor_model_id_is_priced_at_its_model(monkeypatch):
+    """A custom OpenRouter id ("vendor/model") that no key contains whole is
+    looked up by the model after its last "/", under the same family rules
+    (at least four characters, with a letter).  Before, such ids were found
+    only by accident of their first dot ("x-ai/grok-4.5" at Claude's rates),
+    and then not at all ("meta-llama/llama-3.1-70b-instruct" at gpt-4o's)."""
+    monkeypatch.setattr(pricing, "_pricing_cache", {
+        **_LOOKUP,
+        "oci/meta.llama-3.1-70b-instruct": _entry(0.72, 0.72, 0.07),
+        "replicate/anthropic/claude-3.5-sonnet": _entry(3.75, 18.75, 0.375),
+    })
+    expected = {
+        "meta-llama/llama-3.1-70b-instruct": (0.72, 0.72),
+        "x-ai/grok-4.5": (3.0, 15.0),
+        # A key that contains the whole id still comes first.
+        "anthropic/claude-3.5-sonnet": (3.75, 18.75),
+        # Too short, without a letter (the dated gpt-4o key), or with no entry of its family.
+        "openai/max": (0.0, 0.0),
+        "vendor/2024": (0.0, 0.0),
+        "moonshotai/kimi-k2.5": (0.0, 0.0),
+    }
+    assert {name: pricing.get_token_price(name) for name in expected} == expected
+
+
+def test_the_suite_prices_from_a_fixed_table_and_never_downloads_one(capsys):
+    """tests/conftest.py gives the pricing module a fixed table for every
+    test, never LiteLLM's live one, and an emptied cache never reaches
+    GitHub either: the conftest refuses the download itself (nothing is
+    priced), whether or not the network could be reached."""
+    import conftest
+
+    assert pricing._fetch_pricing() == conftest.PRICE_TABLE
+    assert pricing.get_token_price("claude-opus-5-5") == (4.0, 20.0)
+    assert pricing.get_token_price("kimi-k3") == (3.0, 15.0)
+    assert pricing.urllib.request.urlopen is conftest._refuse_download
+    capsys.readouterr()
+    pricing._pricing_cache = None  # the conftest's patch restores it after this test
+    assert pricing._fetch_pricing() == {} and pricing.get_token_price("gpt-4o") == (0.0, 0.0)
+    assert "(tests never download the live price table (tests/conftest.py))" in capsys.readouterr().out
 
 
 def test_exact_pricing_is_false_without_a_pricing_table(monkeypatch):
@@ -260,6 +381,26 @@ def test_exact_price_model_trims_and_refuses_aliases(prices):
     assert jobs._exact_price_model(" gpt-6-astra ") == "gpt-6-astra"
     for model in (None, "", "  ", "opus", "fable", "max", cgm_max.MODEL_ID):
         assert jobs._exact_price_model(model) is None, model
+
+
+def test_the_launcher_offers_max_apis_claude_models_and_prices_them_at_their_own_entries(prices, monkeypatch):
+    """The Anthropic models the console lists for an Anthropic key include
+    the two Max (API) runs on (an Analyze or Readability run can name them
+    without the custom box), and a run on either is priced at its own
+    entry, never a family match or the gpt-4o fallback."""
+    from agent_monitor import settings
+
+    anthropic = next(spec for spec in settings.PROVIDERS if spec["id"] == "anthropic")["models"]
+    assert anthropic[:2] == ["claude-fable-5-1", "claude-opus-5-5"]
+    assert set(cgm_max.API_ADVISOR_MODELS[:2]) <= set(anthropic) and len(set(anthropic)) == len(anthropic)
+    # An account with an Anthropic key is offered them.
+    monkeypatch.setattr(settings, "resolved_user_env", lambda _user: {"ANTHROPIC_API_KEY": "sk-ant-member-123456789"})
+    offered = settings.get_settings({"id": 7, "email": "m@example.test", "is_admin": False})["api_models"]
+    assert {"claude-fable-5-1", "claude-opus-5-5"} <= set(offered)
+    for model, (inp, out) in (("claude-opus-5-5", (4.0, 20.0)), ("claude-fable-5-1", (10.0, 50.0))):
+        assert jobs._exact_price_model(model) == model and jobs._exact_price_model("anthropic:" + model) == model
+        assert prices.get_token_price(model) == (inp, out)
+        assert jobs._estimate_cost(model, input_tokens=1_000_000, output_tokens=1_000_000) == inp + out
 
 
 # ── runner: every usage event names the model that served it ─────────────

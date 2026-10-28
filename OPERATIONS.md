@@ -65,8 +65,10 @@ base); account-level base URLs are ignored for this engine. The one-call
 `plain` baseline is also eligible when enabled. Guests cannot set custom provider origins or inherit
 unrelated server credentials. The allowance is **10 cumulative run starts** per
 guest session, after which sign-in is required; deleting runs does not restore
-starts. Claude Code and Codex are for the administrator only (a sign-up is a
-member account, which cannot use them). A `PLAIN_CMD` or
+starts. A sign-up is a member account: one with full access (the default;
+the administrator can turn it off for an account) can link its own Claude
+Code and Codex, one without it cannot, and the administrator's own accounts
+are never shared. A `PLAIN_CMD` or
 `KIMI_PROOF_CMD` override disables the corresponding engine for guests because
 arbitrary local commands are outside the built-in contract.
 Guest Formal/Lean and informal/formal DAG views are enabled by the reviewed
@@ -307,6 +309,13 @@ ends, they are derived again only when something is missing:
   after the Stop waits for the stopped worker, then continues the run.
 - A follow-up's task tags "← new this turn" only the session problems its
   own message added; a bare ▶ Continue (also right after a Stop) tags none.
+- A Plain run on the included Kimi K3 (`credential_source`
+  `sponsored_kimi`) takes no follow-up: the sponsored service ran its
+  problem as one isolated run of its own, and the Plain runner a follow-up
+  would start has no sponsored credential. ▶ Continue and a chat message are
+  refused before anything is recorded or a member's run start kept ("A
+  Plain run on the included Kimi K3 can't be continued; start a new Plain
+  run with your feedback").
 - A Stop or Delete while a run's attachments are being read (a CGM turn's
   or Plain's PDFs extracted, or waiting for an extraction slot) ends it at
   once: no runner starts, and a deleted run stays deleted. Plain reads its
@@ -353,6 +362,60 @@ ceilings, so an environment value can only lower them.
   with the run's wall clock.
 - A problem statement may be at most 44,000 bytes of UTF-8 text; larger ones
   are refused before a run slot or a sponsored credential is used.
+- **Kimi models.** Kimi K3 (`kimi-k3`) is the only Kimi model of the
+  engines that serve every Kimi model name as Kimi K3, or as no Kimi model
+  at all, so that a run named for another one (`kimi-k2.5` typed as a
+  custom model, on an account's own Kimi key) would run under a name its
+  record, receipt and usage do not match: Plain, the two Ansatz CGM
+  engines, Meta-Harness, Analyze and Readability call Kimi through
+  `api_backend.api_chat`, which always asks for Kimi K3
+  (`kimi_k3.chat_payload`), and DeepSeek Harness and IMProof run Kimi K3 for
+  `kimi-k3` alone (another Kimi name runs DeepSeek, or IMProof's default
+  workflow). These engines (`engines_registry.KIMI_K3_ONLY_ENGINE_IDS`, each
+  listed to the console as `kimi_k3_only`) refuse another Kimi model when
+  the run starts, on every route, with or without a Kimi key of the
+  account's own, before any key is projected or sponsored credential
+  issued, whatever the sponsored service's health: "Plain (no harness) calls
+  Kimi K3 for every Kimi model name; choose kimi-k3" ("DeepSeek Harness runs
+  Kimi K3 as its only Kimi model; …", as IMProof; Analyze and Readability
+  word it for their mode, below; Ansatz CGM · Kimi K3 says "Kimi Proof uses
+  kimi-k3", and to a member "Ansatz CGM · Kimi K3 runs only kimi-k3"). The
+  coding-agent harnesses (Codex CLI, DeepAgents, OpenHands,
+  OpenClaw, OpenClaude, Hermes) send the model they are given to an
+  account's own Kimi key, so there they run another Kimi model as named;
+  only the sponsored service asks for Kimi K3 whatever an engine names, so
+  on that route another Kimi model is refused for them too ("The sponsored
+  Kimi service calls Kimi K3 for every Kimi model name; choose kimi-k3, or
+  add your own Kimi API key in Settings"). Follow-ups keep the rule: one of
+  a run recorded on another Kimi model where it would run as Kimi K3 is
+  refused ("…; this run ran on kimi-k2.5, so it cannot continue: start a
+  new run on kimi-k3"), and a follow-up that names one for a Kimi K3 run
+  there stays on Kimi K3; `api_backend.api_chat` never sends a call named
+  for one. A run that names no model, whose saved default is another Kimi
+  model, runs Kimi K3 on those engines where the account runs it (its own
+  Kimi key, or the sponsored service), else the first model of its keys
+  that runs, as the console's menu would select it (never one it cannot
+  run); a coding-agent harness takes that default as named on an own Kimi
+  key, and as Kimi K3 on the sponsored route. The launcher offers no other
+  Kimi model for those engines. Analyze and Readability take Kimi K3 in any
+  case or with its provider prefix (`Kimi-K3`, `kimi:kimi-k3`) and record it
+  as `kimi-k3`, a member's start in public mode included; the other engines
+  are offered the `kimi-k3` of the menus. Ansatz CGM · Kimi K3 refuses any
+  other spelling. Plain also runs `Kimi-K3` on an own Kimi key, recorded as
+  typed, and on the sponsored route, recorded as `kimi-k3`; on a linked
+  account it is refused like any API model. Plain runs `kimi:kimi-k3`,
+  recorded as typed, only when a Kimi key is the account's only key: with
+  another key beside it, or no key, the start is refused ("No compatible API
+  key is configured; …"), and with another provider's key alone it starts
+  on that key and the run fails for want of a Kimi key. An administrator's
+  or a full-access account's own-key Kimi K3 runs of Plain, Ansatz CGM,
+  Meta-Harness, DeepSeek Harness and IMProof, and their follow-ups, go to
+  the operator's Kimi endpoint (`AGENT_MONITOR_KIMI_BASE_URL`) unless the
+  account set a `KIMI_API_BASE` of its own, which stands; Ansatz CGM · Kimi
+  K3 runs and a restricted member's always go to the operator's. The
+  derived Lean and DAG calls of such a run do not follow this: they still
+  use the account's own `KIMI_API_BASE` or, without one, the built-in Kimi
+  base, whatever `AGENT_MONITOR_KIMI_BASE_URL` says.
 - Calls still in flight 15 s after `AGENT_MONITOR_CGM_MAX_SECONDS` are
   abandoned. Stop sends SIGTERM: the runner abandons its in-flight calls
   (the console then ends their Claude Code or Codex processes), publishes
@@ -547,6 +610,18 @@ ceilings, so an environment value can only lower them.
   3-hour watchdog instead of 1 hour (`AGENT_MONITOR_CLI_TIMEOUT` and the
   engine's own timeout still win). An empty reply cut at its limit says so
   in the run's error; a reply cut after some text is used as it is.
+  Readability's rewrites and repairs on an own key get their own long
+  limits, 64,000 tokens and 1800 s, at any effort (Readability runs, below):
+  `AGENT_MONITOR_API_MAX_TOKENS` and `AGENT_MONITOR_CGM_API_TIMEOUT` may
+  only raise those, never lower them, so either at its documented default
+  (16,384 tokens, 300 s) leaves them as they are; only Readability's own
+  `AGENT_MONITOR_READABILITY_REWRITE_MAX_TOKENS` and
+  `AGENT_MONITOR_READABILITY_API_TIMEOUT` set them exactly. A rewrite or
+  repair that the provider says stopped at its output limit (OpenAI
+  `incomplete_details.reason` `max_output_tokens`, Anthropic `stop_reason`
+  `max_tokens`, a Chat Completions `finish_reason` `length`, Gemini's
+  `finishReason` `MAX_TOKENS`) is reported as "the reply reached the model's
+  output limit (64,000 tokens) before it finished", with the call's limit.
 - **Estimated cost:** in a CLI engine's run (Plain, the CGM engines,
   Analyze, Readability, the agent harnesses) a trace node is priced at the
   model the node (or its stream) names when the price table has that
@@ -556,7 +631,16 @@ ceilings, so an environment value can only lower them.
   `gpt-6-astra`, whose reply names a dated snapshot the table lacks
   (`gpt-6-astra-2026-09-03`), is priced at `gpt-6-astra`. A CGM call on a
   provider-prefixed route (`openai:gpt-5.2`) is priced at the id it
-  requested (`gpt-5.2`), a failed call that was still billed too.
+  requested (`gpt-5.2`), a failed call that was still billed too. A name
+  the table lacks is looked up without its Bedrock region and provider
+  prefix (`us.anthropic.…`, a plain word before the dot and a name that
+  starts with a letter after it), then by its family, which can land on
+  another listing of that family (`llama3.3-70b` on a distilled variant's
+  entry) but never on a fragment of the name: a dotted name keeps its dots
+  (`kimi-k2.5` is not `5`, nor `qwen3.5-flash` `5-flash`), a family under
+  four characters or without a letter is never matched, and an
+  OpenRouter-style `vendor/model` id no entry contains whole is looked up by
+  its model (`meta-llama/llama-3.1-70b-instruct` by `llama-3.1-70b-instruct`).
 - Sponsored calls go through the Kimi broker's credential gateway, which runs
   at most `PUBLIC_KIMI_GATEWAY_CONCURRENCY` (default 8) upstream calls at once.
   Each guest run keeps up to 2 in flight, so a few concurrent runs can fill
@@ -851,8 +935,15 @@ the CGM runners; it reads `analysis/request.json` (written by `jobs.py` with
 `agent_monitor.analyze.request`) and makes tool-free model calls through the
 same response-only turn machinery and routes as `math_harness` (sponsored
 Kimi through the loopback broker with the `math_harness` credential scope, an
-own key, or, for administrators only, a Codex or Claude account; Max and
-Max (API) are refused).
+own key, or the Codex or Claude Code account an administrator, or an account
+given full access, linked itself; Max and Max (API) are refused). The
+request says whether the account may use its linked accounts
+(`own_subscriptions`, written from the stored account as for every route);
+the runner refuses a linked account's route without it, and the run (and
+its re-checks and questions) gets that account's own `CODEX_HOME` or
+`CLAUDE_CONFIG_DIR`, never the service's. A model variable in the service's
+environment (`MATH_HARNESS_MODEL`, `AGENT_MONITOR_ANALYZE_MODEL`,
+`AGENT_MONITOR_READABILITY_MODEL`) never replaces the run's model.
 
 The console offers it as the third mode next to "Informal only" and
 "Informal + formalization": `POST /api/runs` with `run_kind: "analyze"`
@@ -886,7 +977,7 @@ when the server offers it.
   | Role | Route | Sources | Results / calls / wall clock |
   |---|---|---|---|
   | guest | sponsored Kimi K3 only (a guest's own key is not used) | arXiv, GitHub and openai/math links; paste ≤ 20,000 characters; the text-only guest uploads (2 files, 64 KB) | 12 / 16 / 2,400 s |
-  | member | sponsored Kimi K3, or its own API key (never a subscription or Max) | + any public HTTPS PDF/TeX/zip/tar.gz link; paste ≤ 400,000 characters; TeX/Markdown/text/PDF and zip/tar(.gz) uploads | sponsored 30 / 36 / 3,600 s; own key 120 / 140 / 3,600 s |
+  | member | sponsored Kimi K3, or its own API key; with full access (the default) also its own linked Codex or Claude Code account (never Max) | + any public HTTPS PDF/TeX/zip/tar.gz link; paste ≤ 400,000 characters; TeX/Markdown/text/PDF and zip/tar(.gz) uploads | sponsored 30 / 36 / 3,600 s; own key 120 / 140 / 3,600 s |
   | admin | any route, including a Codex or Claude account (response-only, tool-free) | all | 256 / 300 / 14,400 s |
 
   A guest's generic HTTPS link is refused with "Guests can analyze arXiv and
@@ -898,9 +989,40 @@ when the server offers it.
   Formal/DAG limits. A member's analysis counts against the member run limits
   (2 at once, 12 per hour). In public mode (`AGENT_MONITOR_PUBLIC=1`, where
   every account inherits the server's provider keys) a member analyzes on
-  sponsored Kimi K3 only, like the own-key CGM harness, which public mode
-  removes. Every refusal is a plain message: 400 for the request, 403 for a
-  switch, 429 with `Retry-After` for capacity.
+  sponsored Kimi K3 only, full access or not, like the own-key CGM harness,
+  which public mode removes: its `analyze` policy (as a guest's) lists
+  `api_models: ["kimi-k3"]`, so the console offers Kimi K3 alone whatever
+  the account runtime, and its start names no model and the API route. A
+  start that names a linked account's route (an older console sent the
+  runtime's) runs on sponsored Kimi K3 on the API route; another model is
+  refused ("Members analyze on the included Kimi K3 on this site"). Kimi K3
+  is Analyze's only Kimi model, as it is that of every engine whose Kimi
+  calls ask for Kimi K3 whatever is named ("Kimi models" under Ansatz CGM
+  runs), on every route, with or without a Kimi key of the account's own:
+  another Kimi model (`kimi-k2.5` typed as a custom model) is refused before
+  anything is reserved, whatever the sponsored service's health ("Analyze
+  runs Kimi K3 as its only Kimi model (kimi-k3)"; the runner refuses it
+  too), and so are a re-check of, and a question about, an analysis
+  recorded on one; Kimi K3 typed in another case (`Kimi-K3`) or with its
+  provider prefix (`kimi:kimi-k3`) is Kimi K3. A start that names no model
+  (an API caller's, or the Projects page's "Default account model") runs on
+  the account's saved default where its route runs it, never Max, and a
+  saved Kimi model other than Kimi K3 counts as Kimi K3. On a linked Codex
+  or Claude Code account (the route asked for, or the account runtime's) it
+  is else the first model that account offers, as the console's menu
+  selects it (refused when it offers none). On the API route, for every
+  account but a guest or a member in public mode (Kimi K3), the saved
+  default runs where the account's keys run it, or, for Kimi K3, where its
+  own Kimi key or the sponsored service does; else the start takes the
+  first model of the account's API keys that runs, in the order of the
+  console's menu (Kimi K3 first while the sponsored service runs it), so
+  with the sponsored service down and an OpenAI key, a saved `kimi-k2.5`
+  (or none) runs on that key's first model; when nothing runs, the saved
+  default (Kimi K3 when there is none) is refused with what is missing
+  ("Kimi K3 requires your own API key, or the sponsored Kimi service must
+  be available", "No compatible API key is configured; …"). Every refusal
+  is a plain message: 400 for the request, 403 for a switch, 429 with
+  `Retry-After` for capacity.
 - **Sponsored capacity.** At most two sponsored analyses (and re-checks) run
   at once (`AGENT_MONITOR_ANALYZE_SPONSORED_CONCURRENCY`, 1-8, default 2): an
   in-memory semaphore keyed by run, released when the worker exits however it
@@ -1129,16 +1251,63 @@ the listing, with a per-viewer `readability` policy).
   the text-only guest uploads; accounts also HTTPS PDF/TeX/zip links, pastes
   of 400,000 characters and PDF or archive uploads). The run list shows
   "Readability · <title>"; a project's task becomes the focus.
-- **Routes.**
+- **Routes and models.** As for Analyze:
 
   | Role | Route | Parts / calls / wall clock |
   |---|---|---|
-  | guest | sponsored Kimi K3 only | 6 / 16 / 2,400 s |
-  | member | sponsored Kimi K3, or its own Kimi key (Kimi K3 only; never a subscription or Max) | sponsored 12 / 30 / 3,600 s; own key 40 / 90 / 3,600 s |
-  | admin | also its own Kimi key, or a Codex or Claude Code account (response-only, tool-free, one call in flight) | 120 / 300 / 14,400 s |
+  | guest | sponsored Kimi K3 only (a guest's own key is not used) | 6 / 16 / 2,400 s |
+  | member | sponsored Kimi K3, or any model of its own API keys; with full access (the default) also its own linked Codex or Claude Code account (never Max) | sponsored 12 / 30 / 3,600 s; own key 40 / 90 / 3,600 s |
+  | admin | any route, including a Codex or Claude Code account (response-only, tool-free, one call in flight) | 120 / 300 / 14,400 s |
 
-  On an API key Readability runs Kimi K3 only (another provider's model is
-  refused, by `start_job` and by the runner); Max and Max (API) are refused.
+  On an API key a readability run takes any model the account's keys run,
+  as Settings lists them (OpenAI, Anthropic, an own Kimi key on the
+  operator's endpoint, the other providers), or a custom `provider:model`;
+  its only Kimi model is Kimi K3, as for Analyze (below).
+  Each model is called exactly as in Analyze: an OpenAI model at the run's
+  reasoning effort (the run profile; at Extra high or Ultra a call gets
+  64,000 output tokens and 30 minutes), an Anthropic model at its own
+  default effort, and every other call with a 16,384-token output limit
+  unless `AGENT_MONITOR_API_MAX_TOKENS` sets one; only a Kimi route gets a
+  per-stage effort and the low-effort retry of an empty reply. One
+  exception, Readability's own: a part's rewrite and its repair (and their
+  format reminders) are long replies, so on an own key an Anthropic model,
+  or an OpenAI model of GPT-5 or later that is not a chat model, gets
+  64,000 output tokens (reasoning or thinking included) and 30 minutes for
+  them, held to the run's deadline (`readability_runner.LONG_OUTPUT_TOKENS`);
+  the Claude API streams them. Only Readability's own settings set these
+  two limits, exactly: `AGENT_MONITOR_READABILITY_REWRITE_MAX_TOKENS`
+  (1,024–128,000) and `AGENT_MONITOR_READABILITY_API_TIMEOUT` (60–3,600 s
+  for them; it sets every other Readability call's timeout too). The
+  settings of every API call, `AGENT_MONITOR_API_MAX_TOKENS` and
+  `AGENT_MONITOR_CGM_API_TIMEOUT`, may only raise them (to 128,000 tokens
+  and 3,600 s), never lower them: at their documented defaults (16,384,
+  300 s) they leave the long limits as they are. A rewrite or repair that
+  stopped at its output limit says so, with the limit ("the reply reached
+  the model's output limit (64,000 tokens) before it finished"), in the
+  part's reason and the run's progress; a repair that fails keeps the first
+  rewrite. Guest and sponsored runs keep their ceiling, and Kimi and the
+  other providers their limits. The bounded
+  sizes (12,000-character parts, a short guide at low effort, the
+  8,192-token output ceiling) belong to guest and sponsored runs; an
+  own-key run uses the full sizes whatever its model. A part whose rewrite
+  the model declines (an Anthropic refusal) says so in its reason. In
+  public mode (`AGENT_MONITOR_PUBLIC=1`) a member runs on sponsored Kimi K3
+  only, on the API route whatever its account runtime, as for Analyze
+  ("Members use Readability on the included Kimi K3 on this site" for
+  another model). Max and Max (API) are refused ("Max is available only for
+  Ansatz CGM", and by the runner). Kimi K3 is Readability's only Kimi model,
+  as it is Analyze's ("Kimi models" under Ansatz CGM runs), on every route
+  and with or without a Kimi key of the account's own (its Kimi calls ask
+  for Kimi K3 whatever is named): another one (`kimi-k2.5` typed as a
+  custom model) is refused before a sponsored start is taken or anything
+  launched, whatever the sponsored service's health ("Readability runs Kimi
+  K3 as its only Kimi model (kimi-k3)"; the runner refuses it too), and so
+  is a question about a run recorded on one; `kimi:kimi-k3` is Kimi K3; the
+  launcher offers no other Kimi model in either mode. A start that names no
+  model runs on the model Analyze's would (above). A viewer on sponsored
+  Kimi K3 only (guests, members in public mode) is offered Kimi K3 alone and
+  no custom model in either mode, whatever its account runtime (each mode's
+  policy lists `api_models: ["kimi-k3"]`).
   A sponsored run is also held to 150 calls and 5,400 s. Guests start one
   readability run per hour (three per client network) on top of the guest
   run limits; members count against the member run limits (2 at once, 12 per
@@ -1272,7 +1441,8 @@ the listing, with a per-viewer `readability` policy).
 | `READABILITY_CMD` | unset (an override removes Readability from guests and members) |
 | `AGENT_MONITOR_READABILITY_<PROFILE>_MAX_PARTS`, `_MAX_CALLS`, `_MAX_SECONDS` (`GUEST`, `MEMBER_SPONSORED`, `MEMBER_OWN_KEY`, `ADMIN`) | 6/16/2400, 12/30/3600, 40/90/3600, 120/300/14400 (ceilings 120/300/14400) |
 | `AGENT_MONITOR_READABILITY_CONCURRENCY` | 3 (sponsored and guest at most 2, subscriptions 1) |
-| `AGENT_MONITOR_READABILITY_API_TIMEOUT` | 300 s (630 s on sponsored Kimi; 1800 s, up to 3600, on an OpenAI model at Extra high or Ultra) |
+| `AGENT_MONITOR_READABILITY_API_TIMEOUT` | 300 s (630 s on sponsored Kimi; 1800 s, up to 3600, on an OpenAI model at Extra high or Ultra); an own key's rewrites and repairs 1800 s. When set, every call's timeout (60–900 s, 3600 at Extra high or Ultra) and exactly the rewrites' and repairs' (60–3600 s); `AGENT_MONITOR_CGM_API_TIMEOUT` may only raise theirs |
+| `AGENT_MONITOR_READABILITY_REWRITE_MAX_TOKENS` | 64,000: the output limit of an own key's rewrites and repairs (Anthropic, OpenAI GPT-5 or later but chat models), exactly (1,024–128,000); `AGENT_MONITOR_API_MAX_TOKENS` may only raise it |
 | `AGENT_MONITOR_READABILITY_WATCHDOG_SECONDS` | set per run: its deadline + one call + 300 s |
 | `AGENT_MONITOR_READABILITY_SPONSORED_ASKS_PER_DAY` | 200 sponsored questions per UTC day, about readable versions and analyses together (0 turns them off) |
 | `AGENT_MONITOR_READABILITY_GUEST_SPONSORED_ASKS_PER_DAY` | half of the above |

@@ -17,7 +17,15 @@ not validate.  Fields::
      "model": "kimi-k3",
      "reasoning_effort": "default|low|high|max|...",
      "sponsored": true,
+     "own_subscriptions": false,          # optional; see below
      "created_at": "2026-10-11T12:00:00Z"}
+
+``own_subscriptions`` is true when the account may use the Codex and Claude
+Code subscriptions it linked itself (an administrator, or an account given
+full access: ``auth.may_use_own_subscriptions``, as ``jobs`` decides it for
+every route); never for a guest.  The runner runs a subscription route only
+for an administrator or such an account, and ``jobs`` gives it that
+account's own linked login.
 """
 from __future__ import annotations
 
@@ -81,7 +89,7 @@ def clean_source(source: object, *, noun: str = "analysis") -> dict[str, Any]:
 
 def clean_route(data: Mapping[str, Any], *, noun: str = "analysis") -> dict[str, Any]:
     """The validated ``role``, ``route``, ``model``, ``reasoning_effort``,
-    ``sponsored`` and ``created_at`` of a request."""
+    ``sponsored``, ``own_subscriptions`` and ``created_at`` of a request."""
     role = data.get("role")
     if role not in ROLES:
         raise RequestError(f"The {noun} request has no valid role")
@@ -97,12 +105,16 @@ def clean_route(data: Mapping[str, Any], *, noun: str = "analysis") -> dict[str,
     sponsored = data.get("sponsored") is True
     if sponsored != (route == "sponsored_kimi"):
         raise RequestError(f"The {noun} request's sponsored flag does not match its route")
+    own_subscriptions = data.get("own_subscriptions") is True
+    if own_subscriptions and role == "guest":
+        raise RequestError(f"The {noun} request gives a guest account subscriptions")
     return {
         "role": role,
         "route": route,
         "model": model.strip(),
         "reasoning_effort": effort,
         "sponsored": sponsored,
+        "own_subscriptions": own_subscriptions,
         "created_at": str(data.get("created_at") or "")[:40],
     }
 
@@ -131,6 +143,7 @@ def validate(data: object) -> dict[str, Any]:
         "model": route["model"],
         "reasoning_effort": route["reasoning_effort"],
         "sponsored": route["sponsored"],
+        "own_subscriptions": route["own_subscriptions"],
         "created_at": route["created_at"],
     }
 

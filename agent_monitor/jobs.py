@@ -88,6 +88,12 @@ _READABILITY_ENGINE = "readability"
 # derived proof views, no library, no continuation; see
 # analyze_runs.is_manuscript_record).
 _MANUSCRIPT_ENGINES = frozenset({_ANALYZE_ENGINE, _READABILITY_ENGINE})
+# Each manuscript runner's own model variable (analyze_runner.RouteRules
+# .model_env), which, like MATH_HARNESS_MODEL, it reads before the selection.
+_MANUSCRIPT_MODEL_ENV = {
+    _ANALYZE_ENGINE: "AGENT_MONITOR_ANALYZE_MODEL",
+    _READABILITY_ENGINE: "AGENT_MONITOR_READABILITY_MODEL",
+}
 # Kimi reasoning tokens count against max_tokens; guest and sponsored CGM runs
 # get exactly this bounded ceiling (the sponsored gateway's default clamp).
 _CGM_BOUNDED_OUTPUT_TOKENS = 8192
@@ -124,6 +130,32 @@ def _operator_kimi_base() -> str:
     from agent_monitor.settings import operator_kimi_base_url
 
     return operator_kimi_base_url()
+
+
+def _own_kimi_base_env(env: dict[str, str], *, engine: str, model: str | None) -> None:
+    """Send an own Kimi key of a proof engine that runs Kimi K3 alone (Plain,
+    the CGM harness, Meta-Harness, DeepSeek Harness, IMProof: the proof
+    engines of engines_registry.KIMI_K3_ONLY_ENGINE_IDS) to the operator's
+    Kimi endpoint (``AGENT_MONITOR_KIMI_BASE_URL``), as the ``kimi`` engine
+    and the manuscript engines do, unless the account chose one: an
+    administrator's or a full-access account's own ``KIMI_API_BASE`` stands,
+    and a restricted member's runs have the operator's already
+    (settings.restrict_account_base_urls).  Their runners would otherwise
+    use the built-in Kimi base.  Starts and continuations alike; nothing on
+    the sponsored route, without a Kimi key or for another model, and the
+    coding-agent harnesses keep their own endpoint resolution."""
+    from agent_monitor import kimi_k3
+    from agent_monitor.engines_registry import KIMI_K3_ONLY_ENGINE_IDS
+
+    if engine == "kimi" or engine in _MANUSCRIPT_ENGINES or engine not in KIMI_K3_ONLY_ENGINE_IDS:
+        return
+    if not (_is_kimi_model(model) or kimi_k3.names_kimi_k3(model)):
+        return
+    if str(env.get("AGENT_MONITOR_SPONSORED_KIMI") or "").strip() == "1":
+        return
+    if not str(env.get("KIMI_API_KEY") or "").strip() or str(env.get(kimi_k3.BASE_VAR) or "").strip():
+        return
+    env[kimi_k3.BASE_VAR] = _operator_kimi_base()
 
 _RESEARCH_AUDIT_GATE_MARKER = "CANDIDATE AUDIT GATE:"
 _RESEARCH_AUDIT_RUNTIME_MARKER = "STRICT FILE-BACKED AUDIT CONTRACT:"
@@ -320,13 +352,26 @@ def _check_cgm_problem_size(engine: str, text: str) -> None:
         )
 
 
-def _analyze_model(user: dict[str, Any] | None, model: str | None) -> str:
-    """The model of an Analyze run: Kimi K3 for guests (sponsored only), the
-    requested one, else the account's saved default (a member's as
-    account_policy.member_run_model resolves it), else Kimi K3."""
+def _analyze_model(
+    user: dict[str, Any] | None,
+    model: str | None,
+    *,
+    engine: str = _ANALYZE_ENGINE,
+    auth_route: str | None = None,
+) -> str:
+    """The model of an Analyze run (or, with its ``engine``, a readability
+    run): Kimi K3 for guests (sponsored only), the requested one (Kimi K3
+    named in any case, or as ``kimi:kimi-k3``, as ``kimi-k3``:
+    analyze_runs.manuscript_model), else Kimi K3 in public mode, a restricted
+    member's default as account_policy.member_run_model resolves it, or the
+    account's default for the run's route (:func:`_manuscript_default_model`);
+    Kimi K3 when there is none.  A saved Max is passed over, and a saved Kimi
+    model other than Kimi K3 stands for Kimi K3, the mode's only Kimi model
+    (analyze_runs.kimi_model_error)."""
+    from agent_monitor import analyze_runs
     from agent_monitor.settings import GUEST_DEFAULT_MODEL
 
-    requested = str(model or "").strip()
+    requested = analyze_runs.manuscript_model(model)
     if user is not None and user.get("guest"):
         if requested and requested != GUEST_DEFAULT_MODEL:
             raise ValueError(f"Guest analyses use {GUEST_DEFAULT_MODEL}")
@@ -341,66 +386,173 @@ def _analyze_model(user: dict[str, Any] | None, model: str | None) -> str:
         # As for a blank Plain model: the model the console's Analyze form
         # offers, not a saved default (a new account's Kimi K3) that the
         # member's keys cannot run.
-        return account_policy.member_run_model(user, _ANALYZE_ENGINE, None) or GUEST_DEFAULT_MODEL
+        return analyze_runs.manuscript_model(account_policy.member_run_model(user, engine, None)) or GUEST_DEFAULT_MODEL
     if user is not None:
-        from agent_monitor.settings import resolved_user_env
-
-        saved = str(resolved_user_env(user).get("AGENT_MONITOR_MODEL") or "").strip()
-        if saved and not (cgm_max.is_max_model(saved) or cgm_max.is_max_api_model(saved)):
-            return saved
+        return _manuscript_default_model(user, engine=engine, auth_route=auth_route) or GUEST_DEFAULT_MODEL
     return GUEST_DEFAULT_MODEL
 
 
 def _readability_model(
     user: dict[str, Any] | None, model: str | None, auth_route: str | None
 ) -> str:
-    """The model of a readability run: Kimi K3 for guests and members (the
-    sponsored one or their own key), the requested one for an administrator,
-    else, on an account route, the saved default that route can run, else
-    Kimi K3."""
+    """The model of a readability run, as an analysis's (:func:`_analyze_model`):
+    Kimi K3 for guests (sponsored only), the requested one (any model the
+    account's keys or linked account run), else Kimi K3 in public mode, a
+    restricted member's default as account_policy.member_run_model resolves
+    it, or the account's default for the run's route; Kimi K3 when there is
+    none."""
+    from agent_monitor import analyze_runs
     from agent_monitor.settings import GUEST_DEFAULT_MODEL
 
-    requested = str(model or "").strip()
+    requested = analyze_runs.manuscript_model(model)
     if user is not None and user.get("guest"):
         if requested and requested != GUEST_DEFAULT_MODEL:
             raise ValueError(f"Guest readability runs use {GUEST_DEFAULT_MODEL}")
         return GUEST_DEFAULT_MODEL
-    if requested:
-        return requested
-    if user is not None and not account_policy.is_restricted(user) and str(auth_route or "") in {
-        "codex_subscription", "claude_subscription",
-    }:
-        return _saved_default_model(user, engine=_READABILITY_ENGINE, auth_route=auth_route) or GUEST_DEFAULT_MODEL
-    return GUEST_DEFAULT_MODEL
+    return _analyze_model(user, requested or None, engine=_READABILITY_ENGINE, auth_route=auth_route)
+
+
+# A linked account's routes, and the route of each account runtime.
+_LINKED_ROUTES = frozenset({"codex_subscription", "claude_subscription"})
+_RUNTIME_ROUTES = {"api": "api_key", "codex": "codex_subscription", "claude": "claude_subscription"}
+
+
+def _manuscript_default_model(user: dict[str, Any], *, engine: str, auth_route: str | None) -> str | None:
+    """The model of an administrator's (or a full-access account's) Analyze
+    or Readability run that names none (an API caller's, or the Projects
+    page's "Default account model").
+
+    On a linked account's route (the requested one, or the account
+    runtime's when none is) the saved default that route can run
+    (:func:`_saved_default_model`), else the first model the account offers
+    the mode (:func:`_first_linked_model`), as the console's model menu
+    selects it; refused when it offers none.  On the API route the saved
+    default where the account's keys or the sponsored service run it (a
+    saved Kimi model other than Kimi K3 stands for Kimi K3, these modes'
+    only Kimi model), else the first model of the account's API keys that
+    runs, as :func:`_first_api_model` finds it (Kimi K3 first where the
+    sponsored service runs it); when none runs, the saved default (Kimi K3
+    when there is none), whose refusal says what is missing.  Never Max."""
+    from agent_monitor import analyze_runs, kimi_k3
+    from agent_monitor.settings import account_runtime, resolved_user_env
+
+    env = resolved_user_env(user)
+    route = str(auth_route or "").strip().lower() or _RUNTIME_ROUTES.get(account_runtime(user, env=env), "api_key")
+    if route in _LINKED_ROUTES:
+        model = analyze_runs.manuscript_model(
+            _saved_default_model(user, engine=engine, auth_route=route)
+        ) or _first_linked_model(user, engine=engine, route=route)
+        if not model:
+            account = "Codex" if route == "codex_subscription" else "Claude Code"
+            noun = "readability run" if engine == _READABILITY_ENGINE else "analysis"
+            raise ValueError(
+                f"Choose a model for this {noun}: your linked {account} account offers none; "
+                "connect it in Settings, or switch the account runtime"
+            )
+        return model
+    saved = analyze_runs.manuscript_model(env.get("AGENT_MONITOR_MODEL"))
+    if kimi_k3.is_other_kimi_model(saved):
+        saved = kimi_k3.MODEL_ID
+    if cgm_max.is_max_model(saved) or cgm_max.is_max_api_model(saved):
+        saved = ""
+    return _first_api_model(user, env, engine=engine, first=saved) or saved or None
+
+
+def _first_api_model(user: dict[str, Any], env: dict[str, str], *, engine: str, first: str | None) -> str | None:
+    """``first``, else the first of the account's API models (as Settings and
+    the console's menu list them: Kimi K3 first where the sponsored service
+    runs it, then each key's models), that ``user`` may run on ``engine``
+    on the API route: one its keys run (``_api_keys_run``), or Kimi K3 where
+    the sponsored service serves the engine for this account.  Never Max, a
+    model the account may not run there (account_policy.member_model_error),
+    nor a Kimi model other than Kimi K3, which these engines would run as
+    Kimi K3 under its name.  None when none runs.  As
+    account_policy.member_run_model resolves a restricted member's.  The
+    list comes from the account's keys (``env``) and the sponsored
+    service's health alone (settings.account_api_models): a start never
+    probes a linked Claude Code or Codex account for it."""
+    from agent_monitor import kimi_k3
+    from agent_monitor.settings import account_api_models
+
+    member = account_policy.is_member(user)
+
+    def runs(candidate: object) -> bool:
+        name = str(candidate or "").strip()
+        if (
+            not name
+            or cgm_max.is_max_model(name)
+            or cgm_max.is_max_api_model(name)
+            or kimi_k3.is_other_kimi_model(name)
+            or account_policy.member_model_error(user, engine, name)
+        ):
+            return False
+        if _api_keys_run(env, name):
+            return True
+        return _sponsored_broker_serves(engine, name) and (
+            not member or engine in account_policy.MEMBER_SPONSORED_ENGINES
+        )
+
+    if runs(first):
+        return str(first).strip()
+    return next((str(name) for name in account_api_models(user, env=env) if runs(name)), None)
+
+
+def _first_linked_model(user: dict[str, Any], *, engine: str, route: str) -> str | None:
+    """The first model a linked account's ``route`` offers ``engine``, in the
+    order the console's model menu lists them (Claude Code's models, or the
+    account's Codex models but its chat ones), or None."""
+    from agent_monitor.engines_registry import supported_models
+
+    if route == "claude_subscription":
+        from agent_monitor.claude_login import DEFAULT_CLAUDE_MODELS
+
+        models = list(DEFAULT_CLAUDE_MODELS)
+    else:
+        from agent_monitor import codex_login
+
+        owner_id = user.get("id")
+        models = [
+            name for name in (codex_login.available_models(int(owner_id)) if owner_id is not None else [])
+            if not re.search(r"(?:^|[:/])chat-latest$", str(name), re.IGNORECASE)
+        ]
+    allowed = supported_models(engine)
+    return next((name for name in models if name and (not allowed or name in allowed)), None)
 
 
 def _saved_default_model(
     user: dict[str, Any], *, engine: str, auth_route: str | None
 ) -> str | None:
-    """An administrator's saved default model, for a run that names none.
+    """An administrator's (or a full-access account's) saved default model,
+    for a run that names none.
 
     Only a model the run's route can run (the requested route or, as
     ``_selected_auth_route`` picks it, the account runtime's): one of the
     linked Claude Code or Codex account that the engine supports, or on the
     API route one the account's keys can run (``_api_keys_run``), or Kimi K3
     where the sponsored service serves the engine.  Never Max, which is always
-    a deliberate choice.  Otherwise None, and the harness uses its own default.
+    a deliberate choice.  A saved Kimi model other than Kimi K3 runs as named
+    only where a coding-agent harness sends it to the account's own Kimi
+    key.  Where it would be served as Kimi K3 it stands for Kimi K3: on the
+    sponsored route, and on an engine that runs Kimi K3 alone
+    (engines_registry.KIMI_K3_ONLY_ENGINE_IDS), which otherwise takes the
+    first model of the account's keys that runs (:func:`_first_api_model`)
+    or, when none does, Kimi K3, whose refusal says what is missing: never a
+    model the account cannot run.  Otherwise None, and the harness uses its
+    own default.
     """
-    from agent_monitor.engines_registry import supported_models
+    from agent_monitor import kimi_k3
+    from agent_monitor.engines_registry import KIMI_K3_ONLY_ENGINE_IDS, supported_models
     from agent_monitor.settings import account_runtime, resolved_user_env
 
     env = resolved_user_env(user)
     saved = str(env.get("AGENT_MONITOR_MODEL") or "").strip()
     if not saved or cgm_max.is_max_model(saved) or cgm_max.is_max_api_model(saved):
         return None
-    route = str(auth_route or "").strip().lower() or {
-        "api": "api_key",
-        "codex": "codex_subscription",
-        "claude": "claude_subscription",
-    }[account_runtime(user, env=env)]
+    route = str(auth_route or "").strip().lower() or _RUNTIME_ROUTES[account_runtime(user, env=env)]
+    other_kimi = kimi_k3.is_other_kimi_model(saved)
     if route in {"claude_subscription", "codex_subscription"}:
         allowed = supported_models(engine)
-        if allowed and saved not in allowed:
+        if other_kimi or (allowed and saved not in allowed):
             return None
         try:
             _validate_subscription_model(route=route, model=saved, user=user, field="Selected model")
@@ -409,6 +561,14 @@ def _saved_default_model(
         return saved
     if route != "api_key":
         return None
+    if other_kimi:
+        if engine in KIMI_K3_ONLY_ENGINE_IDS:
+            return _first_api_model(user, env, engine=engine, first=kimi_k3.MODEL_ID) or kimi_k3.MODEL_ID
+        if _api_keys_run(env, saved):
+            # A coding-agent harness sends it as named to the account's own Kimi key.
+            return saved
+        # The sponsored route asks for Kimi K3 whatever is named.
+        return kimi_k3.MODEL_ID if _sponsored_broker_serves(engine, saved) else None
     if _is_kimi_model(saved) and _sponsored_broker_serves(engine, saved):
         return saved
     return saved if _api_keys_run(env, saved) else None
@@ -1295,6 +1455,62 @@ def _is_kimi_model(model: str | None) -> bool:
     return str(model or "").strip().lower().startswith("kimi-")
 
 
+def _engine_label(engine: str) -> str:
+    """An engine's name as the console shows it ("Plain (no harness)")."""
+    from agent_monitor.engines_registry import BUILTIN_ENGINES, CLI_ENGINES
+
+    spec = CLI_ENGINES.get(engine) or next((item for item in BUILTIN_ENGINES if item["id"] == engine), {})
+    return str(spec.get("label") or engine)
+
+
+# Engines of engines_registry.KIMI_K3_ONLY_ENGINE_IDS that run another Kimi
+# model name as a model that is no Kimi model (DeepSeek's, IMProof's default
+# workflow) rather than as Kimi K3.
+_OTHER_KIMI_NAME_RUNS_NO_KIMI = frozenset({"deepseek_harness", "improof"})
+
+
+def _other_kimi_model_error(
+    engine: str, kind: str, model: str | None, *, ran: bool = False, sponsored: bool = False
+) -> str | None:
+    """Why a run of ``engine`` (``kind``) may not use ``model``, a Kimi model
+    other than Kimi K3 (``kimi_k3.is_other_kimi_model``), or None.
+
+    Only where the run would be served as Kimi K3 whatever Kimi model it
+    names, or as no Kimi model at all, so that its record, receipt and usage
+    would name a model it never ran on: Analyze and Readability (worded for
+    their mode, analyze_runs.kimi_model_error), the other engines of
+    engines_registry.KIMI_K3_ONLY_ENGINE_IDS on any route, and any engine on
+    the sponsored route (``sponsored``: that service asks for Kimi K3
+    whatever is named).  A coding-agent harness (Codex CLI, DeepAgents,
+    OpenHands, OpenClaw, OpenClaude, Hermes) sends the name it is given to an
+    account's own Kimi endpoint, where another Kimi model runs as named.
+    ``ran``: the model of an existing run (a follow-up of it), which the
+    refusal names."""
+    from agent_monitor import analyze_runs, kimi_k3
+    from agent_monitor.engines_registry import KIMI_K3_ONLY_ENGINE_IDS
+
+    if kind in {"analyze", "readability"}:
+        return analyze_runs.kimi_model_error(kind, model, ran=ran)
+    if not kimi_k3.is_other_kimi_model(model):
+        return None
+    if engine in KIMI_K3_ONLY_ENGINE_IDS:
+        verb = (
+            "runs Kimi K3 as its only Kimi model"
+            if engine in _OTHER_KIMI_NAME_RUNS_NO_KIMI
+            else "calls Kimi K3 for every Kimi model name"
+        )
+        reason, hint = f"{_engine_label(engine)} {verb}", ""
+    elif sponsored:
+        reason = "The sponsored Kimi service calls Kimi K3 for every Kimi model name"
+        hint = ", or add your own Kimi API key in Settings"
+    else:
+        return None
+    if ran:
+        return (f"{reason}; this run ran on {str(model).strip()}, so it cannot continue: "
+                f"start a new run on {kimi_k3.MODEL_ID}")
+    return f"{reason}; choose {kimi_k3.MODEL_ID}{hint}"
+
+
 def _route_from_record(run: dict[str, Any] | None) -> str | None:
     """Recover the immutable billing/runtime route recorded for a run."""
     record = run or {}
@@ -1419,6 +1635,25 @@ def _configure_auth_route(
     configured["AGENT_MONITOR_AUTH_MODE"] = "claude_subscription"
     scrub_control_plane_env(configured)
     return configured
+
+
+def _own_subscriptions_allowed(user: dict[str, Any] | None) -> bool:
+    """Whether a manuscript run's request lets its runner use a linked
+    account subscription (``own_subscriptions`` in ``analysis/request.json``
+    and ``readability/request.json``): an administrator's, or that of an
+    account given full access, each its own linked login.
+
+    As ``_configure_auth_route`` decides it for every route: the stored
+    account (``auth.may_use_own_subscriptions``), never only the session's
+    copy of it; never a guest or a restricted member.  Fails closed."""
+    if not user or user.get("guest") or account_policy.is_restricted(user):
+        return False
+    from agent_monitor.auth import may_use_own_subscriptions
+
+    try:
+        return bool(may_use_own_subscriptions(user.get("id")))
+    except Exception:  # noqa: BLE001 - fail closed
+        return False
 
 
 def _selected_auth_route(
@@ -1644,7 +1879,7 @@ def start_job(
         problem_text = analyze_runs.problem_text(
             analyze_request["label"], analyze_request["focus"]
         )
-        model = _analyze_model(user, model)
+        model = _analyze_model(user, model, auth_route=auth_route)
         use_subagents = False
         subagent_model = None
     elif kind == "readability":
@@ -1668,6 +1903,16 @@ def start_job(
         subagent_model = None
     elif formalize is None:
         formalize = True
+    if kind in {"analyze", "readability"} and account_policy.member_analyze_sponsored_only(user):
+        # Public mode: a member's manuscript runs on sponsored Kimi K3 alone,
+        # full access or not, on the API route whatever its account runtime
+        # (its start names no model, and the route of a linked Codex or
+        # Claude Code account that runs nothing here).  Another model is
+        # refused as for a restricted member (account_policy.member_model_error).
+        refusal_text = account_policy.member_model_error(user, engine, model)
+        if refusal_text:
+            raise ValueError(refusal_text)
+        auth_route = "api_key"
     tool_free = tool_free and kind == "prove"
     if tool_free:
         refusal = account_policy.project_run_error(engine, model=model, auth_route=auth_route)
@@ -1751,6 +1996,20 @@ def start_job(
         # API caller's) is the saved default, as it is for members.  Resolved
         # before the provider keys are projected for it.
         model = _saved_default_model(user, engine=engine, auth_route=auth_route) or model
+    # Kimi K3 is the only Kimi model of Analyze, Readability and the engines
+    # that serve every Kimi model name as Kimi K3 (or as no Kimi model:
+    # engines_registry.KIMI_K3_ONLY_ENGINE_IDS), on every route, with or
+    # without a Kimi key of the account's own: another one (kimi-k2.5 typed
+    # as a custom model) would run under a name it never ran on.  Refused once
+    # the model is final, before any key is projected, a sponsored start taken
+    # or a broker credential issued, whatever the sponsored service's health
+    # (the runners refuse it too: analyze_runner.configure_route,
+    # api_backend.api_chat).  A coding-agent harness takes it on an account's
+    # own Kimi key (it sends the model as named), not on the sponsored route
+    # (below).
+    kimi_refusal = _other_kimi_model_error(engine, kind, model)
+    if kimi_refusal:
+        raise ValueError(kimi_refusal)
 
     extra_env = _user_extra_env(
         user,
@@ -1843,6 +2102,14 @@ def start_job(
             "choose a model from your own API keys or linked accounts, or add your own "
             "Kimi API key in Settings"
         )
+    if sponsored_kimi:
+        # The sponsored service asks for Kimi K3 whatever any engine names, so
+        # another Kimi model that a coding-agent harness would send as named
+        # to an account's own Kimi key is refused on this route (the other
+        # engines refused it above), before any broker credential is issued.
+        kimi_refusal = _other_kimi_model_error(engine, kind, model, sponsored=True)
+        if kimi_refusal:
+            raise ValueError(kimi_refusal)
     if engine in _MANUSCRIPT_ENGINES and not sponsored_kimi and _is_kimi_model(model):
         # Own-key Kimi manuscript runs use the operator's endpoint, like the kimi engine.
         extra_env["AGENT_MONITOR_KIMI_BASE_URL"] = _operator_kimi_base()
@@ -1853,6 +2120,10 @@ def start_job(
         extra_env["KIMI_API_BASE"] = operator_base
         extra_env["KIMI_BASE_URL"] = operator_base
         extra_env["AGENT_MONITOR_KIMI_BASE_URL"] = operator_base
+    if kind == "prove" and not sponsored_kimi:
+        # Plain and the other proof engines that run Kimi K3 alone send an
+        # own Kimi key to the operator's endpoint too (_own_kimi_base_env).
+        _own_kimi_base_env(extra_env, engine=engine, model=model)
     has_kimi_key = bool(str(extra_env.get("KIMI_API_KEY") or "").strip())
     if selected_kimi and not supports_api:
         raise ValueError(f"{engine_info.get('label') or engine} does not support API models")
@@ -1888,9 +2159,10 @@ def start_job(
             auth_modes=auth_modes,
             user=user,
             env=extra_env,
-            # A member's runtime (and a tool-free run's) is always the API
+            # A member's runtime (and a tool-free run's, and that of a
+            # manuscript run on sponsored Kimi K3 only) is always the API
             # route, whatever the account stored.
-            enforce_account_runtime=not (account_policy.is_restricted(user) or tool_free),
+            enforce_account_runtime=not (account_policy.is_restricted(user) or tool_free or sponsored_only),
         )
     if route not in auth_modes and route != cgm_max.ROUTE:
         raise ValueError(
@@ -1909,12 +2181,6 @@ def start_job(
         )
     if route != "api_key" and selected_kimi:
         raise ValueError("Kimi K3 is an API model and cannot use a linked account subscription")
-    if readability_request is not None:
-        from agent_monitor import readability_runs
-
-        refusal_text = readability_runs.model_error(model, route)
-        if refusal_text:
-            raise ValueError(refusal_text)
     if route == "api_key" and user is not None and not has_api_key:
         raise ValueError("No compatible API key is configured; add and verify one in Settings")
     if (
@@ -2177,6 +2443,13 @@ def _start_job_launch(
     attached = research_attachments.save(ws, attachment_batch)
     (ws / "problem.txt").write_text(text, encoding="utf-8")
     manuscript_fields: dict[str, Any] = {}
+    # A manuscript runner takes a linked account's route only for an account
+    # that may use its own (an administrator, or one given full access).
+    own_subscriptions = (
+        _own_subscriptions_allowed(user)
+        if analyze_request is not None or readability_request is not None
+        else False
+    )
     if analyze_request is not None:
         from agent_monitor import analyze_runs
         from agent_monitor.analyze import record as analyze_record
@@ -2196,6 +2469,7 @@ def _start_job_launch(
             model=str(model or ""),
             reasoning_effort=str(tuning.get("reasoning_effort") or "default"),
             sponsored=bool(sponsored_kimi),
+            own_subscriptions=own_subscriptions,
         )
         manuscript_fields = {
             "run_kind": "analyze",
@@ -2220,6 +2494,7 @@ def _start_job_launch(
             model=str(model or ""),
             reasoning_effort=str(tuning.get("reasoning_effort") or "default"),
             sponsored=bool(sponsored_kimi),
+            own_subscriptions=own_subscriptions,
         )
         manuscript_fields = {
             "run_kind": "readability",
@@ -2561,6 +2836,9 @@ def _continuation_auth_environment(
                 minimum_ttl_seconds=_cli_timeout_seconds(engine, configured) + _SPONSORED_KIMI_TOKEN_MARGIN,
             )
         )
+    if route == "api_key" and not sponsored_run:
+        # As the run's start did: an own Kimi key to the operator's endpoint.
+        _own_kimi_base_env(configured, engine=engine, model=model)
     if route == cgm_max.ROUTE:
         cgm_max.apply_models(configured, cgm_max.record_plan(run_data))
     elif route == cgm_max.API_ROUTE and cgm_max.is_max_api_record(run_data):
@@ -3257,8 +3535,8 @@ def _exact_price_model(model: str | None) -> str | None:
     selected only through this check.  A selection may be a route alias
     (Claude Code's "opus", "sonnet" or "fable"; Max's "max") that the
     lookup's family match resolves to an unrelated model's price ("opus" to
-    Claude 3 Opus, "max" to a Codex-max model), so only an exact entry is
-    trusted; None leaves ``_estimate_cost`` its gpt-4o fallback.
+    Claude 3 Opus), so only an exact entry is trusted; None leaves
+    ``_estimate_cost`` its gpt-4o fallback.
     """
     name = _requested_model_id(model)
     if not name:
@@ -4819,6 +5097,15 @@ def _apply_selected_model_env(
 ) -> None:
     """Route the UI model selection into the selected runner only."""
     requested = str(model or "").strip()
+    if engine in _MANUSCRIPT_MODEL_ENV:
+        # A manuscript runner reads these before the selection
+        # (analyze_runner.configure_route), so one the service inherited
+        # would replace the model the run was started with and is recorded
+        # and billed at: only the runner's own variable stays, set to it.
+        for name in ("MATH_HARNESS_MODEL", *_MANUSCRIPT_MODEL_ENV.values()):
+            env.pop(name, None)
+        if requested:
+            env[_MANUSCRIPT_MODEL_ENV[engine]] = requested
     if not requested:
         return
     if cgm_max.route_mode(env) is not None:
@@ -6482,6 +6769,13 @@ def _member_continuation_model(
     run on its recorded model: an older console's chat composer sends the
     launcher's current model, which may belong to another route or to the
     other Ansatz CGM engine (Kimi K3, or a model from the member's own keys).
+    So does a Kimi model other than Kimi K3 where the follow-up would run as
+    Kimi K3 under its name (an engine that runs Kimi K3 alone, or a run on
+    the sponsored route: :func:`_other_kimi_model_error`), for every account;
+    a run recorded on one there (started before such models were refused) is
+    not continued.  A coding-agent harness's own-key run continues on the
+    Kimi model it names, as it started.  Nor is a Plain run on the included
+    Kimi K3 continued (:data:`SPONSORED_PLAIN_FOLLOW_UP_ERROR`).
     """
     route_error = account_policy.member_continuation_error(
         user, _route_from_record(run_data), record=run_data
@@ -6489,16 +6783,31 @@ def _member_continuation_model(
     error = account_policy.member_engine_error(user, engine) or route_error
     if error:
         raise ValueError(error)
+    sponsored = str(run_data.get("credential_source") or "").strip() == "sponsored_kimi"
+    if engine == "plain" and sponsored:
+        raise ValueError(SPONSORED_PLAIN_FOLLOW_UP_ERROR)
     model = _continuation_model(run_data, requested)
     if str(requested or "").strip() and (
         account_policy.member_model_error(user, engine, model)
         or not _recorded_route_runs(user, engine, run_data, model)
+        or _other_kimi_model_error(engine, "prove", model, sponsored=sponsored)
     ):
         model = _continuation_model(run_data, None)
-    error = account_policy.member_model_error(user, engine, model)
+    error = account_policy.member_model_error(user, engine, model) or _other_kimi_model_error(
+        engine, "prove", model, ran=True, sponsored=sponsored
+    )
     if error:
         raise ValueError(error)
     return model
+
+
+# The sponsored service runs a Plain problem as one isolated run of its own
+# (_run_sponsored_kimi_plain), and a follow-up has no such route: the Plain
+# runner it would start has no sponsored credential.  Refused before the
+# message is recorded or a run start is kept, rather than failing after.
+SPONSORED_PLAIN_FOLLOW_UP_ERROR = (
+    "A Plain run on the included Kimi K3 can't be continued; start a new Plain run with your feedback"
+)
 
 
 def _owner_user(owner_id: int | None) -> dict[str, Any] | None:
@@ -7819,6 +8128,13 @@ def start_analysis_recheck(
         # The model the analysis selected (an account route's selector, not
         # the provider's resolved name), exactly as a continuation would.
         model = _continuation_model(record, None)
+        # Never another Kimi model than Kimi K3 (an analysis started on one
+        # before Analyze refused it ran as Kimi K3 under its name); nothing is
+        # reserved or counted.  Kimi K3 in another case is Kimi K3.
+        refusal_text = analyze_runs.kimi_model_error(analyze_runs.RUN_KIND, model, ran=True)
+        if refusal_text:
+            raise analyze_runs.AnalyzeRequestError(refusal_text)
+        model = analyze_runs.manuscript_model(model) or model
         sponsored = str(record.get("credential_source") or "") == "sponsored_kimi"
         guest = bool(record.get("guest"))
         too_long = analyze_recheck.guest_refusal(ws, node_id) if guest else ""
@@ -8446,8 +8762,13 @@ def start_manuscript_ask(
                 raise analyze_runs.AnalyzeRequestError(
                     message.format(limit=analyze_runs.GUEST_ASKS_PER_RUN), status=403
                 )
-        # The model and route the run used, exactly as a re-check does.
+        # The model and route the run used, exactly as a re-check does (and
+        # as there, never another Kimi model than Kimi K3).
         model = _continuation_model(record, None)
+        refusal_text = analyze_runs.kimi_model_error(kind, model, ran=True)
+        if refusal_text:
+            raise analyze_runs.AnalyzeRequestError(refusal_text)
+        model = analyze_runs.manuscript_model(model) or model
         sponsored = str(record.get("credential_source") or "") == "sponsored_kimi"
         guest = bool(record.get("guest"))
         if not sponsored and account_policy.member_analyze_sponsored_only(user):

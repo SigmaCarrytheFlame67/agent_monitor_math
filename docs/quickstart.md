@@ -131,7 +131,7 @@ On [Problems](/problems), **Analyze the claimed solution** opens a claimed proof
 An independent model call compares each rewritten part with the original. A part it found problems in is marked, and so is a part that was not checked or not rewritten. The rewrite can still be wrong; compare with the original before you rely on it.
 :::
 
-Guests can make one manuscript readable per hour and ask 3 questions about it. Accounts run on the included Kimi K3 or their own Kimi key. Like [Analyze](#analyze), Readability sends the manuscript to the model provider, so don't submit work you aren't allowed to share.
+Guests can make one manuscript readable per hour and ask 3 questions about it. Accounts run on the included Kimi K3 or on any model of their own API keys, as for Analyze. Like [Analyze](#analyze), Readability sends the manuscript to the model provider, so don't submit work you aren't allowed to share.
 
 ## Good to know {#good-to-know}
 
@@ -141,7 +141,7 @@ Guests can make one manuscript readable per hour and ask 3 questions about it. A
 - Guest history is tied to a 24-hour cookie in that browser. It is lost if you clear site data or switch browser. It does not move into an account later, and ending the session deletes any saved provider key.
 - If hosted Kimi access is unavailable, add your own Kimi API key in **Settings**.
 - Anyone can create an account: open [Sign up](/sign-in) and use an email and password. An account keeps your runs private and lets you add your own API keys, add feedback and continue a run, and set the iteration budget. Accounts run **Ansatz CGM** and **Plain**, and can [analyze manuscripts](#analyze). Kimi K3 is included; any other model runs on your own API key, which you add under **Settings → API providers** (an Anthropic key for Claude models, an OpenAI key for GPT models). Accounts have hourly limits on run starts and on feedback messages, and a feedback message holds up to 20,000 characters.
-- Signing in with a Claude or ChatGPT subscription, which Claude Code and Codex use, is only for the site administrator. Anthropic does not let third-party sites sign in with or route requests through members’ Claude plans, and OpenAI requires partner approval for hosted sites to use members’ ChatGPT plans. To use Claude or OpenAI models, add your own API key and choose the model in Ansatz CGM or Plain. The coding-agent harnesses (Codex, Claude Code, OpenClaw, OpenHands and others) also run tools on the server, so only the site administrator can use them.
+- Accounts with full access (the default; the site administrator can turn it off for an account) can link their own Claude Code and Codex accounts in **Settings** and use them for runs, Analyze and Readability, and can use the coding-agent harnesses (Codex, Claude Code, OpenClaw, OpenHands and others), which run tools on the server. Hermes, which runs inside the console with the server’s own keys, stays the site administrator’s. Accounts without full access use their own API keys: add one and choose the model in Ansatz CGM or Plain. The site administrator’s own Claude Code and Codex accounts are never shared with other accounts.
 - Provider keys saved in the console are encrypted at rest. Signed-in local proving engines share the host’s operating-system trust boundary; they are not a sandbox for untrusted code.
 - Forgot your password? Choose **Forgot password?** on the sign-in page and use only the newest reset email. Each link works once.
 
@@ -152,13 +152,13 @@ Availability depends on the deployment and on the account’s connected provider
 | Engine | Workflow |
 | --- | --- |
 | **Ansatz CGM · Kimi K3** | The CGM pipeline on Kimi K3; the default for guests. Publishes Facts and Explore graphs. |
-| **Ansatz CGM harness** | The same pipeline on a model from your own API key. The site administrator can also run it on a linked Codex or Claude Code subscription. |
+| **Ansatz CGM harness** | The same pipeline on a model from your own API key. Accounts with full access can also run it on the Codex or Claude Code account they linked. |
 | **IMProof** | An author–critic proving workflow based on ProofStack. |
-| **Hermes** | An embedded agent harness for reasoning and tools. |
+| **Hermes** | An embedded agent harness for reasoning and tools, for the site administrator only: it runs inside the console with the server’s own keys. |
 | **DeepAgents** | A LangGraph agent with a dedicated runtime. |
 | **Meta-Harness** | A solver, evaluator and proposer loop. |
 | **OpenClaw** | An embedded local agent. |
-| **Codex, Claude Code / OpenClaude, OpenHands** | Coding-agent integrations for the site administrator. Claude Code runs on the administrator’s linked subscription; Codex on that subscription or an API key. |
+| **Codex, Claude Code / OpenClaude, OpenHands** | Coding-agent integrations for accounts with full access. Claude Code runs on the account’s own linked subscription; Codex on that subscription or an API key. |
 | **Plain** | A single-model-call baseline. |
 | **Ansatz Analyze** | The engine of the [Analyze](#analyze) mode: checks an existing manuscript result by result with a model verifier. Tool-free, on the included Kimi K3 or your own API key. |
 

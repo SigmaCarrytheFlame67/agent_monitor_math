@@ -86,7 +86,12 @@ PROVIDERS: list[dict[str, Any]] = [
         "key_var": "ANTHROPIC_API_KEY",
         "base_var": "ANTHROPIC_BASE_URL",
         "default_base": "https://api.anthropic.com",
-        "models": ["claude-fable-5", "claude-opus-4-8", "claude-sonnet-5", "claude-haiku-4-5"],
+        # Most capable first, as for OpenAI; the first two are Max (API)'s
+        # advisors (cgm_max.API_ADVISOR_MODELS).
+        "models": [
+            "claude-fable-5-1", "claude-opus-5-5", "claude-fable-5", "claude-opus-4-8", "claude-sonnet-5",
+            "claude-haiku-4-5",
+        ],
         "docs": "https://docs.litellm.ai/docs/providers/anthropic",
     },
     {
@@ -601,14 +606,25 @@ def claude_enabled(
     return account_runtime(user, env=env) == "claude"
 
 
-def get_settings(user: dict[str, Any] | None = None) -> dict[str, Any]:
+def _settings_env(user: dict[str, Any] | None) -> dict[str, str]:
+    """The environment Settings reads for ``user``: its resolved one
+    (:func:`resolved_user_env`), or the server's without an account."""
     if user is not None:
-        env = resolved_user_env(user)
-    else:
-        known = _known_env_keys()
-        env = {**_read_env_file(), **{k: v for k, v in os.environ.items() if k in known}}
-        env.update(_read_env_file())
+        return resolved_user_env(user)
+    known = _known_env_keys()
+    env = {**_read_env_file(), **{k: v for k, v in os.environ.items() if k in known}}
+    env.update(_read_env_file())
+    return env
 
+
+def _api_provider_states(
+    user: dict[str, Any] | None, env: dict[str, str]
+) -> tuple[list[dict[str, Any]], bool, bool]:
+    """``user``'s API provider cards as Settings shows them, from ``env``
+    (:func:`_settings_env`), with whether the sponsored Kimi K3 service and
+    the hosted guest key serve the account: ``(providers, sponsored_kimi,
+    hosted_guest_available)``.  Read from the environment and the sponsored
+    service's health alone, never a linked account."""
     sponsored_kimi = (
         user is not None
         and sponsored_kimi_available()
@@ -637,6 +653,47 @@ def get_settings(user: dict[str, Any] | None = None) -> dict[str, Any]:
         if provider["id"] == "kimi":
             provider["sponsored_available"] = sponsored_kimi
             provider["using_sponsored"] = sponsored_kimi and not bool(env.get("KIMI_API_KEY"))
+    return providers, sponsored_kimi, hosted_guest_available
+
+
+def _api_model_list(
+    user: dict[str, Any] | None, providers: list[dict[str, Any]], *, sponsored_kimi: bool
+) -> list[str]:
+    """The API models of these provider cards (:func:`_api_provider_states`),
+    as Settings and the console's menus list them: each model of a provider
+    whose key is set, in the catalog's order, with Kimi K3 first where the
+    sponsored service serves the account, and before all for a guest."""
+    api_models: list[str] = []
+    visible_providers = [p for p in providers if p["api_key_set"]]
+    for provider in visible_providers:
+        for model_id in provider["models"]:
+            if model_id not in api_models:
+                api_models.append(model_id)
+    if sponsored_kimi and kimi_k3.MODEL_ID not in api_models:
+        api_models.insert(0, kimi_k3.MODEL_ID)
+    if user is not None and user.get("guest") and GUEST_DEFAULT_MODEL not in api_models:
+        # A guest always has the tool-free Kimi harness available, whether it is
+        # served by the hosted credential or by a key the visitor supplies.
+        api_models.insert(0, GUEST_DEFAULT_MODEL)
+    return api_models
+
+
+def account_api_models(user: dict[str, Any] | None, *, env: dict[str, str] | None = None) -> list[str]:
+    """``get_settings(user)["api_models"]``, without the rest of Settings:
+    from the account's provider keys and the sponsored service's health
+    alone, so no linked Claude Code or Codex account is probed (Claude
+    Code's ``claude auth status`` contacts Anthropic).  ``env``: the
+    account's resolved environment (:func:`resolved_user_env`), when the
+    caller has it."""
+    providers, sponsored_kimi, _hosted = _api_provider_states(
+        user, _settings_env(user) if env is None else env
+    )
+    return _api_model_list(user, providers, sponsored_kimi=sponsored_kimi)
+
+
+def get_settings(user: dict[str, Any] | None = None) -> dict[str, Any]:
+    env = _settings_env(user)
+    providers, sponsored_kimi, hosted_guest_available = _api_provider_states(user, env)
     configured = [p["id"] for p in providers if p["api_key_set"]]
     kimi_user_key_set = bool(env.get("KIMI_API_KEY"))
 
@@ -746,18 +803,7 @@ def get_settings(user: dict[str, Any] | None = None) -> dict[str, Any]:
         cgm_max_plan = cgm_max.plan_for(user)
         cgm_max_api_plan = cgm_max.plan_for_api(user)
 
-    api_models: list[str] = []
-    visible_providers = [p for p in providers if p["api_key_set"]]
-    for provider in visible_providers:
-        for model_id in provider["models"]:
-            if model_id not in api_models:
-                api_models.append(model_id)
-    if sponsored_kimi and kimi_k3.MODEL_ID not in api_models:
-        api_models.insert(0, kimi_k3.MODEL_ID)
-    if user is not None and user.get("guest") and GUEST_DEFAULT_MODEL not in api_models:
-        # A guest always has the tool-free Kimi harness available, whether it is
-        # served by the hosted credential or by a key the visitor supplies.
-        api_models.insert(0, GUEST_DEFAULT_MODEL)
+    api_models = _api_model_list(user, providers, sponsored_kimi=sponsored_kimi)
     # A model selector is also a billing selector. Never mix dormant API
     # models into an active subscription catalog (or vice versa): a stale
     # ``kimi-*``/Anthropic model left in a dropdown can otherwise redirect a

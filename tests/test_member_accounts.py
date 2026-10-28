@@ -1463,6 +1463,35 @@ def test_feedback_queued_behind_a_continuation_that_fails_still_starts(member_co
     assert len(console._MEMBER_RUN_WINDOWS.get(member_id) or []) == 1
 
 
+def test_a_plain_run_on_the_included_kimi_k3_takes_no_follow_up(member_console, monkeypatch, tmp_path):
+    """The sponsored service ran the problem as one isolated Plain run of its
+    own (jobs._run_sponsored_kimi_plain), and the Plain runner a follow-up
+    would start has no sponsored credential.  So Continue and a chat message
+    are refused (400) before anything is recorded or launched, and the
+    member's run start is given back (they were accepted, booked a start and
+    then failed with "Model kimi-k3 requires KIMI_API_KEY")."""
+    from agent_monitor import sponsored_kimi_client
+
+    threads = _record_continuations(monkeypatch)
+    # The sponsored service is up: the refusal is not its absence.
+    monkeypatch.setattr(sponsored_kimi_client, "configured", lambda: True)
+    monkeypatch.setattr(sponsored_kimi_client, "endpoint", lambda: "http://127.0.0.1:9")
+    with running_server() as port:
+        user, cookie = _member(port)
+        member_id = int(user["id"])
+        run_id = _member_run(monkeypatch, tmp_path, member_id, running=False)
+        jobs._write_run({**jobs._load_run_record(run_id), "model": "kimi-k3", "requested_model": "kimi-k3",
+                         "credential_source": "sponsored_kimi"})
+        replies = [request(port, "POST", f"{APP_MOUNT}/api/runs/{run_id}/{path}", body={"message": "Check step 2."},
+                           headers={"Cookie": cookie}) for path in ("continue", "chat")]
+    assert [(status, json.loads(raw)["error"]) for status, _headers, raw in replies] == [
+        (400, "A Plain run on the included Kimi K3 can't be continued; start a new Plain run with your feedback")] * 2
+    assert threads.launched == [] and not jobs.run_is_active(run_id)
+    assert [entry for entry in jobs.list_chat(run_id) if entry.get("role") == "user"] == []
+    assert not jobs.feedback_pending(run_id)
+    assert len(console._MEMBER_RUN_WINDOWS.get(member_id) or []) == 0
+
+
 def test_feedback_queued_behind_a_failed_continuation_says_why_it_waits(monkeypatch, tmp_path):
     threads = _record_continuations(monkeypatch)
     monkeypatch.setattr("agent_monitor.auth.is_operator_account", lambda owner_id: owner_id == 1)

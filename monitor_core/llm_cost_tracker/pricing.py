@@ -2,8 +2,9 @@
 
 Token pricing is fetched dynamically from LiteLLM's pricing JSON at startup.
 Lookup strategy: exact match → strip region prefix (us./eu./apac./au.) → strip
-provider prefix entirely (just the model slug). This avoids hardcoding prices
-that drift as providers update rates.
+a provider prefix (``anthropic.``, ``meta.``: just the model slug) → the
+model's family. This avoids hardcoding prices that drift as providers update
+rates.
 """
 
 import json
@@ -41,6 +42,17 @@ def _fetch_pricing() -> dict:
 
 # Region prefixes used by Bedrock cross-region inference profiles
 _REGION_PREFIX_RE = re.compile(r"^(us|eu|apac|au)\.")
+# A Bedrock provider prefix ("anthropic." of "anthropic.claude-…-v1:0",
+# "meta.", "amazon.", "cohere.", "mistral.", "ai21."): one plain word, before
+# a model whose name starts with a letter.  What comes before the first dot
+# of another name is not one ("kimi-k2" of "kimi-k2.5", "gpt-5" of "gpt-5.2",
+# nor a model family before its version: "qwen3" of "qwen3.5-flash", "flux"
+# of "flux.2-pro"), and the rest of such a name ("5", "5-flash", "2-pro") is
+# no model.
+_PROVIDER_PREFIX_RE = re.compile(r"[a-z][a-z0-9]*")
+# The family match (strategy 4) never looks for a family shorter than this,
+# or one without a letter: "5" or "max" would match unrelated models.
+_MIN_FAMILY_CHARS = 4
 
 # Alias mapping: custom/proxy model names → LiteLLM pricing keys.
 # All pricing is fetched dynamically from:
@@ -85,8 +97,14 @@ def _lookup_model(model: str) -> Optional[dict]:
     Strategy:
       1. Exact match (e.g. "us.anthropic.claude-3-5-haiku-20241022-v1:0")
       2. Strip region prefix (e.g. "anthropic.claude-3-5-haiku-20241022-v1:0")
-      3. Strip region + provider prefix, bare slug (e.g. "claude-3-5-haiku-20241022")
+      3. Strip region + provider prefix, bare slug (e.g. "claude-3-5-haiku-20241022"),
+         only where the part before the first dot is a provider prefix (a
+         plain word) and the part after it starts with a letter: "kimi-k2.5",
+         "gpt-5.2", "qwen3.5-flash" and "flux.2-pro" keep their dots
       4. Family match: strip date/version, find any key sharing the same family
+         (at least ``_MIN_FAMILY_CHARS`` long, with a letter); for an
+         OpenRouter-style "vendor/model" id no key contains, the family of
+         the model after its last "/"
     """
     data = _fetch_pricing()
     if not data:
@@ -107,10 +125,10 @@ def _lookup_model(model: str) -> Optional[dict]:
     if stripped != model and stripped in data:
         return data[stripped]
 
-    # Strategy 3: strip provider prefix entirely and version suffix
-    parts = stripped.split(".", 1)
-    if len(parts) == 2:
-        slug = parts[1]
+    # Strategy 3: strip a provider prefix (a plain word, before a model that
+    # starts with a letter) and version suffix
+    provider, dot, slug = stripped.partition(".")
+    if dot and _PROVIDER_PREFIX_RE.fullmatch(provider) and slug[:1].isalpha():
         if slug in data:
             return data[slug]
         bare = re.sub(r"-v\d+:\d+$", "", slug)
@@ -119,12 +137,17 @@ def _lookup_model(model: str) -> Optional[dict]:
     else:
         bare = re.sub(r"-v\d+:\d+$", "", stripped)
 
-    # Strategy 4: family match — strip date stamp, find a key with same family
-    family = re.sub(r"-\d{8}.*$", "", bare if len(parts) == 2 else re.sub(r"-v\d+:\d+$", "", stripped))
-    if family:
+    # Strategy 4: family match — strip date stamp, find a key with same family.
+    # An OpenRouter-style "vendor/model" id that no key contains whole
+    # ("meta-llama/llama-3.1-70b-instruct") then tries the model after its
+    # last "/" ("llama-3.1-70b-instruct"), under the same rules.
+    region_prefix = _REGION_PREFIX_RE.match(model)
+    prefix = region_prefix.group(0) if region_prefix else ""
+    for name in dict.fromkeys((bare, bare.rsplit("/", 1)[-1])):
+        family = re.sub(r"-\d{8}.*$", "", name)
+        if len(family) < _MIN_FAMILY_CHARS or not re.search(r"[A-Za-z]", family):
+            continue
         family_re = re.compile(re.escape(family) + r"(-\d|$)")
-        region_prefix = _REGION_PREFIX_RE.match(model)
-        prefix = region_prefix.group(0) if region_prefix else ""
         for key in data:
             if family_re.search(key) and key.startswith(prefix) and key != model:
                 return data[key]
@@ -183,9 +206,9 @@ def has_exact_pricing(model: str) -> bool:
     Only the alias table and an exact key count (strategies 0 and 1 of
     ``_lookup_model``).  The prefix and family fallbacks can resolve a short
     name to an unrelated model: the Claude Code alias "opus" family-matches a
-    Claude 3 Opus key, and "max" a Codex-max one.  A caller that only
-    supposes a call was served by ``model`` (the call did not say) checks
-    this before pricing the call at it.
+    Claude 3 Opus key.  A caller that only supposes a call was served by
+    ``model`` (the call did not say) checks this before pricing the call at
+    it.
     """
     data = _fetch_pricing()
     if not data or not isinstance(model, str):

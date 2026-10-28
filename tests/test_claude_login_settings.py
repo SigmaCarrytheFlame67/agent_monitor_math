@@ -11,6 +11,8 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
 
+import pytest
+
 from agent_monitor import claude_login, console_server, settings
 
 # Stands in for `claude auth login`: prints the sign-in URL, waits for the
@@ -61,6 +63,7 @@ class ClaudeLoginTests(unittest.TestCase):
             self.assertNotIn("CLAUDE_CODE_USE_BEDROCK", env)
             self.assertNotIn("AWS_ACCESS_KEY_ID", env)
 
+    @pytest.mark.real_claude_auth_status
     def test_auth_status_whitelists_metadata_and_never_returns_tokens(self) -> None:
         raw = {
             "loggedIn": True,
@@ -620,6 +623,105 @@ class ClaudeSettingsRouteTests(unittest.TestCase):
             handler.do_POST()
         submit.assert_called_once_with(42, "oauth-once")
         self.assertEqual(sent[0][0], 200)
+
+
+# A stand-in for `claude` that records each run (`claude auth status` of the
+# installed CLI would contact Anthropic).
+RECORDING_CLI = """#!/bin/sh
+printf '%s\\n' "$*" >> "$(dirname "$0")/runs.log"
+printf '{"loggedIn": true, "authMethod": "claude.ai", "apiProvider": "firstParty"}\\n'
+"""
+
+
+def test_the_suite_never_runs_the_installed_clis_sign_in_probe(tmp_path, monkeypatch, tmp_path_factory):
+    """tests/conftest.py runs a test's own fake CLI for the probe (a file
+    under the session's temporary directories), and never the Claude Code
+    CLI installed on the host, whose `auth status` would contact Anthropic
+    (the next test: it answers "not signed in")."""
+    import conftest
+
+    roots = conftest._temporary_roots(tmp_path_factory)
+    # The CLI this host has where the console looks for it (on a host without one there is
+    # nothing to guard) is no test's own.
+    installed = claude_login.claude_binary()
+    if installed:
+        assert not conftest._made_by_a_test(installed, roots), installed
+    cli = tmp_path / "bin" / "claude"
+    cli.parent.mkdir()
+    cli.write_text(RECORDING_CLI, encoding="utf-8")
+    cli.chmod(0o755)
+    runs = tmp_path / "bin" / "runs.log"
+    assert conftest._made_by_a_test(str(cli), roots)
+    monkeypatch.setattr(claude_login, "claude_binary", lambda: str(cli))
+    # A test's own fake: the real probe runs it.
+    assert claude_login._run_auth_status(tmp_path / "home")["loggedIn"] is True
+    assert runs.read_text(encoding="utf-8").splitlines() == ["auth status --json"]
+
+
+# A session of its own whose HOME holds an installed `claude`: a symlink into
+# the CLI's versions, as Claude Code's installer makes it, which its updater
+# re-points at a new version while the session runs.
+INSTALLED_PROBE_TEST = """
+import os
+from pathlib import Path
+
+from agent_monitor import claude_login
+
+SIGNED_OUT = {"loggedIn": False, "authMethod": "none", "apiProvider": "firstParty"}
+
+
+def test_the_installed_cli_is_never_probed(tmp_path):
+    link = Path(os.environ["HOME"]) / ".local" / "bin" / "claude"
+    assert claude_login.claude_binary() == str(link)
+    assert claude_login._run_auth_status(tmp_path / "account") == SIGNED_OUT
+    # The updater re-points the installed CLI at a new version.
+    link.unlink()
+    link.symlink_to(os.environ["NEXT_CLAUDE_VERSION"])
+    assert claude_login._run_auth_status(tmp_path / "account") == SIGNED_OUT
+"""
+
+
+def test_the_installed_cli_is_never_probed_even_after_its_updater_re_points_it(tmp_path):
+    """The guard of tests/conftest.py, in a pytest session of its own (the
+    files below lie outside that session's temporary directories, as an
+    installed CLI does): neither the version its ``claude`` points at when
+    the session starts nor the one an auto-update re-points it at meanwhile
+    is ever run (each stand-in records a run).  A guard that knew only the
+    versions installed when the session started ran the new one."""
+    import subprocess
+    import sys
+
+    home, versions, runs = tmp_path / "home", tmp_path / "versions", tmp_path / "runs.log"
+    for version in ("1", "2"):
+        stand_in = versions / version / "claude"
+        stand_in.parent.mkdir(parents=True)
+        stand_in.write_text(f'#!/bin/sh\nprintf "{version} %s\\n" "$*" >> "{runs}"\n'
+                            "printf '{\"loggedIn\": true, \"authMethod\": \"claude.ai\"}\\n'\n", encoding="utf-8")
+        stand_in.chmod(0o755)
+    link = home / ".local" / "bin" / "claude"
+    link.parent.mkdir(parents=True)
+    link.symlink_to(versions / "1" / "claude")
+    inner = tmp_path / "session"
+    inner.mkdir()
+    (inner / "test_installed_probe.py").write_text(INSTALLED_PROBE_TEST, encoding="utf-8")
+    (inner / "pytest.ini").write_text("[pytest]\n", encoding="utf-8")
+    (tmp_path / "session-tmp").mkdir()
+    repo = Path(__file__).resolve().parents[1]
+    env = {
+        "PATH": os.defpath, "HOME": str(home), "TMPDIR": str(tmp_path / "session-tmp"),
+        "PYTHONPATH": os.pathsep.join([str(repo / "tests"), str(repo)]), "PYTHONDONTWRITEBYTECODE": "1",
+        "NEXT_CLAUDE_VERSION": str(versions / "2" / "claude"),
+        # A network guard this suite runs under guards the session too.
+        **{name: os.environ[name] for name in ("LD_PRELOAD", "NETBLOCK_LOG") if os.environ.get(name)},
+    }
+    completed = subprocess.run(
+        [sys.executable, "-m", "pytest", "-p", "conftest", "-p", "no:cacheprovider", "-q",
+         "-c", str(inner / "pytest.ini"), "--rootdir", str(inner), "--basetemp", str(tmp_path / "session-pt"),
+         str(inner / "test_installed_probe.py")],
+        cwd=repo, env=env, capture_output=True, text=True, timeout=300, check=False,
+    )
+    assert completed.returncode == 0, (completed.stdout + completed.stderr)[-4000:]
+    assert not runs.exists(), runs.read_text(encoding="utf-8")
 
 
 if __name__ == "__main__":

@@ -197,7 +197,9 @@ MARKER_RE = re.compile(r"\[\[\s*result\s*:\s*([A-Za-z0-9][A-Za-z0-9:_-]{0,79})\s
 # repair are long outputs, so under the 8,192-token sponsored ceiling they run
 # at low effort; the guide, the checks and the answers use the configured one,
 # except that a guide on a bounded route (guests and sponsored Kimi K3, whose
-# ceiling counts reasoning too) takes the curator's family, always low.
+# ceiling counts reasoning too) takes the curator's family, always low.  Only
+# a Kimi route sends this per-stage effort; another provider's model runs at
+# the run's own reasoning effort, as in Analyze.
 GUIDE_FAMILY = "strategist"
 BOUNDED_GUIDE_FAMILY = "curator"
 REWRITE_FAMILY = "worker"

@@ -14,13 +14,15 @@ not validate.  Fields::
      "focus": "optional note from the reader",
      "role": "guest|member|admin",
      "route": "sponsored_kimi|api_key|codex_subscription|claude_subscription",
-     "model": "kimi-k3",
+     "model": "kimi-k3",                  # or any model of the route: gpt-6-astra, claude-opus-5-5, ...
      "reasoning_effort": "default|low|high|max|...",
      "sponsored": true,
+     "own_subscriptions": false,          # optional: the account's own linked subscriptions
      "created_at": "2026-10-22T12:00:00Z"}
 
 The source and route fields are validated exactly as Analyze's
-(``analyze.request.clean_source`` and ``clean_route``).
+(``analyze.request.clean_source`` and ``clean_route``, which says what
+``own_subscriptions`` allows).
 """
 from __future__ import annotations
 

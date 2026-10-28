@@ -5,9 +5,10 @@ gates a manuscript run shares with Analyze (no proof promotion, no derived
 proof views, no compilation, no continuation, shares without the source).
 
 Job creation is stubbed for the start tests; finished runs are built by the
-real runner in-process against a scripted model, and the end-to-end test
-runs the runner subprocess through ``jobs`` against a loopback stand-in for
-the sponsored broker.  Nothing touches the network.
+real runner in-process against a scripted model, and the end-to-end tests
+run the runner subprocess through ``jobs`` against loopback stand-ins for
+the sponsored broker and for OpenAI's and Anthropic's APIs.  Nothing touches
+the network.
 """
 from __future__ import annotations
 
@@ -42,6 +43,7 @@ from test_console_guest_access import (  # noqa: E402,F401  (fixture import)
     request,
     running_server,
 )
+from test_kimi_k3_only import linked_account_probes  # noqa: E402
 from test_member_accounts import _member, member_console  # noqa: E402,F401
 from test_readability_runner import KINDS, PAPER, FakeModel, check_json, guide_json, kimi_env, readable  # noqa: E402
 
@@ -145,13 +147,20 @@ def test_the_listing_offers_readability_with_each_viewers_policy(readability_con
     member = next(engine for engine in member_listing["engines"] if engine["id"] == "readability")
     assert member["auth_modes"] == ["api_key"] and member["subscription_supported"] is False
     assert member["readability"]["routes"] == ["sponsored_kimi", "api_key"]
+    # Any model of the account's own keys, as for Analyze: no list of Readability's own.
+    assert member["readability"]["api_models"] is None
     assert member["readability"]["caps"]["sponsored"]["max_calls"] == 30
     assert member["readability"]["caps"]["own_key"] == {"max_parts": 40, "max_calls": 90, "max_seconds": 3600}
     assert member["readability"]["asks"]["per_hour"] == 30 and member["readability"]["asks"]["per_run"] is None
     admin = next(engine for engine in admin_listing["engines"] if engine["id"] == "readability")
     assert admin["readability"]["routes"] == ["sponsored_kimi", "api_key", "codex_subscription", "claude_subscription"]
     assert admin["auth_modes"] == ["codex_subscription", "claude_subscription", "api_key"]
-    assert admin["readability"]["caps"]["own_key"]["max_parts"] == 120
+    assert admin["readability"]["caps"]["own_key"]["max_parts"] == 120 and admin["readability"]["api_models"] is None
+    # Each viewer is offered the routes Analyze offers it.
+    for listing in (guest_listing, member_listing, admin_listing):
+        engines = {engine["id"]: engine for engine in listing["engines"]}
+        assert engines["readability"]["readability"]["routes"] == engines["analyze"]["analyze"]["routes"]
+        assert engines["readability"]["auth_modes"] == engines["analyze"]["auth_modes"]
 
 
 def test_switches_hide_and_refuse_readability(readability_console, monkeypatch):
@@ -237,7 +246,7 @@ def test_run_kind_and_engine_must_agree(readability_console):
     assert readability_console["started"] == []
 
 
-def test_members_read_more_than_guests_but_only_on_kimi(readability_console):
+def test_members_read_more_than_guests_on_any_model_of_their_keys(readability_console):
     archive = io.BytesIO()
     with zipfile.ZipFile(archive, "w") as bundle:
         bundle.writestr("main.tex", PAPER)
@@ -250,11 +259,13 @@ def test_members_read_more_than_guests_but_only_on_kimi(readability_console):
         foreign = _post(port, "/api/runs", cookie, _readable({"url": ARXIV}, model="gpt-5.2"))
         subscription = _post(port, "/api/runs", cookie, _readable({"url": ARXIV}, auth_route="codex_subscription"))
     assert (link[0], paste[0], bundle[0]) == (200, 200, 200), (link, paste, bundle)
-    assert foreign[0] == 403 and "Kimi K3" in foreign[2]["error"]
-    assert subscription[0] == 403
+    # Another provider's model, as for an analysis; a subscription stays the administrator's.
+    assert foreign[0] == 200, foreign
+    assert subscription[0] == 403 and "only for the site administrator" in subscription[2]["error"]
     calls = readability_console["started"]
     assert [call["source"] for call in calls[:2]] == [{"url": PDF_LINK}, calls[1]["source"]]
-    assert calls[2]["attachments"][0]["name"] == "paper.zip" and len(calls) == 3
+    assert calls[2]["attachments"][0]["name"] == "paper.zip" and len(calls) == 4
+    assert calls[3]["model"] == "gpt-5.2" and calls[3]["source"] == {"url": ARXIV}
 
 
 def test_sponsored_capacity_refusals_name_readability(readability_console, gate, monkeypatch):
@@ -351,16 +362,167 @@ def test_member_and_admin_routes(gate, monkeypatch, captured_start):
     assert env["AGENT_MONITOR_SPONSORED_KIMI"] == "0" and env["AGENT_MONITOR_KIMI_BASE_URL"].startswith("https://")
     req = readability_request.load(Path(captured_start.records[-1]["workspace"]))
     assert req["route"] == "api_key" and req["caps"] == {"max_parts": 40, "max_calls": 90, "max_seconds": 3600}
-    with pytest.raises(ValueError, match="Readability runs on Kimi K3 for members"):
-        jobs.start_job(engine="readability", run_kind="readability", source={"text": PAPER}, user=MEMBER,
-                       model="gpt-5.2")
+    # Any model of the member's own keys, as for an analysis: here OpenAI's, at extra-high effort.
     monkeypatch.setattr(jobs, "_user_extra_env", lambda user, *models: {
-        "AGENT_MONITOR_PYTHON": "python", "OPENAI_API_KEY": "sk-admin-openai-123456789"})
-    with pytest.raises(ValueError, match=readability_runs.KIMI_ONLY_MESSAGE):
+        "AGENT_MONITOR_PYTHON": "python", "OPENAI_API_KEY": "sk-member-openai-123456789"})
+    openai = jobs.start_job(engine="readability", run_kind="readability", source={"text": PAPER}, user=MEMBER,
+                            model="gpt-6-astra", reasoning_effort="xhigh")
+    env = captured_start.threads[-1]["kwargs"]["extra_env"]
+    assert (openai["model"], openai["credential_source"], openai["auth_route"]) == ("gpt-6-astra", "user", "api_key")
+    assert env["OPENAI_API_KEY"] == "sk-member-openai-123456789" and env["AGENT_MONITOR_SPONSORED_KIMI"] == "0"
+    assert env["AGENT_MONITOR_RUN_REASONING_EFFORT"] == "xhigh" and "AGENT_MONITOR_KIMI_BASE_URL" not in env
+    req = readability_request.load(Path(captured_start.records[-1]["workspace"]))
+    assert (req["role"], req["route"], req["model"], req["sponsored"], req["reasoning_effort"]) == (
+        "member", "api_key", "gpt-6-astra", False, "xhigh")
+    assert req["caps"] == {"max_parts": 40, "max_calls": 90, "max_seconds": 3600}
+    # An administrator's Anthropic model on its API key.
+    monkeypatch.setattr(jobs, "_user_extra_env", lambda user, *models: {
+        "AGENT_MONITOR_PYTHON": "python", "ANTHROPIC_API_KEY": "sk-ant-admin-123456789"})
+    admin = jobs.start_job(engine="readability", run_kind="readability", source={"text": PAPER}, user=ADMIN,
+                           model="claude-opus-5-5", auth_route="api_key")
+    assert (admin["model"], admin["auth_route"], admin["credential_source"]) == ("claude-opus-5-5", "api_key", "user")
+    req = readability_request.load(Path(captured_start.records[-1]["workspace"]))
+    assert (req["role"], req["model"], req["caps"]["max_parts"]) == ("admin", "claude-opus-5-5", 120)
+    assert issued == [] and gate.usage_today() == 0 and len(captured_start.threads) == 3
+    # Max and Max (API) stay refused, as for an analysis; a guest names Kimi K3 or nothing.
+    for user in (MEMBER, ADMIN):
+        for model, refusal in (("max", "Max is available only for Ansatz CGM"),
+                               ("max-api", r"Max \(API\) is available only for Ansatz CGM")):
+            with pytest.raises(ValueError, match=refusal):
+                jobs.start_job(engine="readability", run_kind="readability", source={"text": PAPER}, user=user,
+                               model=model)
+    with pytest.raises(ValueError, match="Max is available only for Ansatz CGM"):
         jobs.start_job(engine="readability", run_kind="readability", source={"text": PAPER}, user=ADMIN,
-                       model="gpt-5.2", auth_route="api_key")
+                       model="gpt-5.6-sol", auth_route="dual_subscription")
+    with pytest.raises(ValueError, match="Guest readability runs use kimi-k3"):
+        jobs.start_job(engine="readability", run_kind="readability", source={"url": ARXIV}, user=GUEST,
+                       model="gpt-6-astra")
+    assert len(captured_start.threads) == 3 and gate.usage_today() == 0
     with pytest.raises(ValueError, match="Readability mode"):
         jobs.start_job(engine="readability", problem_text="Prove it.", user=ADMIN, run_kind="prove")
+
+
+def test_a_member_blank_model_readability_run_uses_a_model_its_keys_run(gate, monkeypatch, captured_start):
+    """As for an analysis: a request without a model (the Projects page's
+    "Default account model") runs on the model the console offers, here the
+    first of the member's OpenAI key, not a saved Kimi K3 it cannot run."""
+    from cryptography.fernet import Fernet
+
+    from agent_monitor import auth
+
+    for name in ("AGENT_MONITOR_PUBLIC", "AGENT_MONITOR_SPONSORED_KIMI", "OPENAI_API_KEY", "KIMI_API_KEY"):
+        monkeypatch.delenv(name, raising=False)
+    monkeypatch.setenv("AGENT_MONITOR_DATA_ENCRYPTION_KEY", Fernet.generate_key().decode("ascii"))
+    auth.register("owner@example.test", "long-enough-password")
+    member = auth.register("member@example.test", "long-enough-password")
+    own_key = "sk-member-openai-123456789"
+    auth.set_user_env(int(member["id"]), {"OPENAI_API_KEY": own_key})
+    job = jobs.start_job(engine="readability", run_kind="readability", source={"text": PAPER}, user=member)
+    assert (job["model"], job["credential_source"], job["auth_route"]) == ("gpt-6-astra", "user", "api_key")
+    assert captured_start.threads[0]["kwargs"]["extra_env"]["OPENAI_API_KEY"] == own_key
+    req = readability_request.load(Path(captured_start.records[0]["workspace"]))
+    assert (req["route"], req["sponsored"], req["model"]) == ("api_key", False, "gpt-6-astra")
+    assert gate.usage_today() == 0
+
+
+def test_public_mode_keeps_member_readability_runs_on_sponsored_kimi(gate, monkeypatch, captured_start):
+    """As for an analysis: in public mode a member's "own" keys would be the
+    server's, so it reads on sponsored Kimi K3 only, inside the gate."""
+    from agent_monitor import account_policy, settings
+
+    issued: list = []
+    _broker(monkeypatch, issued)
+    operator = {"AGENT_MONITOR_PYTHON": "python", "OPENAI_API_KEY": "sk-operator-shared-0000000000",
+                "KIMI_API_KEY": "kimi-operator-shared-0000000000"}
+    monkeypatch.setattr(jobs, "_user_extra_env", lambda user, *models: dict(operator))
+    monkeypatch.setattr(settings, "resolved_user_env", lambda user: {"AGENT_MONITOR_MODEL": "gpt-6-astra"})
+    monkeypatch.setenv("AGENT_MONITOR_PUBLIC", "1")
+    note = account_policy.READABILITY_SPONSORED_ONLY_NOTE
+    assert account_policy.member_model_error(MEMBER, "readability", "gpt-6-astra") == note
+    assert account_policy.member_model_error(MEMBER, "readability", "kimi-k3") is None
+    with pytest.raises(ValueError, match=note):
+        jobs.start_job(engine="readability", run_kind="readability", source={"text": PAPER}, user=MEMBER,
+                       model="gpt-6-astra")
+    assert captured_start.threads == [] and gate.usage_today() == 0
+    job = jobs.start_job(engine="readability", run_kind="readability", source={"text": PAPER}, user=MEMBER)
+    assert job["model"] == "kimi-k3" and job["credential_source"] == "sponsored_kimi"
+    env = captured_start.threads[0]["kwargs"]["extra_env"]
+    assert env["KIMI_API_KEY"] == TOKEN and "kimi-operator-shared" not in json.dumps(env)
+    req = readability_request.load(Path(captured_start.records[0]["workspace"]))
+    assert (req["route"], req["sponsored"], req["model"]) == ("sponsored_kimi", True, "kimi-k3")
+    assert gate.holds(job["run_id"]) and gate.usage_today() == 1
+    # Without public mode the member's own keys run any of their models.
+    monkeypatch.delenv("AGENT_MONITOR_PUBLIC")
+    for model in ("gpt-6-astra", "claude-opus-5-5", "deepseek-v4", "kimi-k3"):
+        assert account_policy.member_model_error(MEMBER, "readability", model) is None
+
+
+def test_the_viewer_policy_offers_the_routes_and_models_analyze_offers(gate, monkeypatch):
+    full = {"id": 84, "email": "full@example.test", "is_admin": False, "full_access": True}
+    every = ["sponsored_kimi", "api_key", "codex_subscription", "claude_subscription"]
+    # (viewer, routes, the API models Readability lists: None is any model of the account's keys).
+    viewers = {"guest": (GUEST, ["sponsored_kimi"], ["kimi-k3"]),
+               "member": (MEMBER, ["sponsored_kimi", "api_key"], None),
+               "full access": (full, every, None),
+               "admin": (ADMIN, every, None)}
+    for name, (user, routes, models) in viewers.items():
+        policy = readability_runs.viewer_policy(user)
+        assert (policy["routes"], policy["api_models"]) == (routes, models), name
+        # Analyze's policy says the same, so the console's two menus are alike.
+        analysis = analyze_runs.viewer_policy(user)
+        assert (analysis["routes"], analysis["api_models"]) == (routes, models), name
+        assert (policy["caps"]["own_key"] is None) == (name == "guest"), name
+    # Public mode: Kimi K3 alone for members, full access or not, in both modes (an Analyze start
+    # then names no model: its menu must not offer the account's).
+    monkeypatch.setenv("AGENT_MONITOR_PUBLIC", "1")
+    for user in (MEMBER, full):
+        policy = readability_runs.viewer_policy(user)
+        assert (policy["routes"], policy["api_models"], policy["caps"]["own_key"]) == (["sponsored_kimi"], ["kimi-k3"], None)
+        analysis = analyze_runs.viewer_policy(user)
+        assert (analysis["routes"], analysis["api_models"], analysis["caps"]["own_key"]) == (
+            ["sponsored_kimi"], ["kimi-k3"], None)
+    assert readability_runs.viewer_policy(ADMIN)["api_models"] is None
+    assert analyze_runs.viewer_policy(ADMIN)["api_models"] is None
+
+
+REAL_START_JOB = jobs.start_job  # the member console fixture replaces it
+
+
+def test_the_server_starts_a_members_other_models_and_refuses_max_and_a_guests(readability_console, gate,
+                                                                                monkeypatch):
+    # Every check of start_job runs; the launch (credentials, workspace, worker) is recorded instead.
+    launched: list[dict] = []
+    monkeypatch.setattr(console.job_manager, "start_job", REAL_START_JOB)
+    monkeypatch.setattr(jobs, "_start_job_launch", lambda **kwargs: launched.append(kwargs) or {
+        "run_id": kwargs["run_id"], "job_id": kwargs["job_id"], "model": kwargs["model"]})
+    monkeypatch.setattr(jobs, "_user_extra_env", lambda user, *models: {
+        "AGENT_MONITOR_PYTHON": "python", "OPENAI_API_KEY": "sk-member-openai-123456789",
+        "ANTHROPIC_API_KEY": "sk-ant-member-123456789"})
+    with running_server() as port:
+        _user, cookie = _member(port)
+        openai = _post(port, "/api/runs", cookie, _readable({"text": PAPER}, model="gpt-6-astra", auth_route="api_key",
+                                                            reasoning_effort="xhigh"))
+        anthropic = _post(port, "/api/runs", cookie, _readable({"text": PAPER}, model="claude-opus-5-5",
+                                                               auth_route="api_key"))
+        max_model = _post(port, "/api/runs", cookie, _readable({"text": PAPER}, model="max"))
+        max_api = _post(port, "/api/runs", cookie, _readable({"text": PAPER}, model="max-api"))
+        max_route = _post(port, "/api/runs", cookie, _readable({"text": PAPER}, auth_route="dual_subscription"))
+        _guest, guest_cookie, _ = _issue_guest(port)
+        guest_other = _post(port, "/api/runs", guest_cookie, _readable({"url": ARXIV}, model="gpt-6-astra"))
+    assert (openai[0], anthropic[0]) == (200, 200), (openai, anthropic)
+    assert [(item["model"], item["route"], item["readability_route"], item["sponsored_kimi"],
+             item["tuning"]["reasoning_effort"]) for item in launched] == [
+        ("gpt-6-astra", "api_key", "api_key", False, "xhigh"), ("claude-opus-5-5", "api_key", "api_key", False, "default")]
+    # The member's own-key caps, and its keys alone (never a sponsored credential).
+    assert {json.dumps(item["readability_caps"], sort_keys=True) for item in launched} == {
+        json.dumps({"max_calls": 90, "max_parts": 40, "max_seconds": 3600}, sort_keys=True)}
+    assert all(item["extra_env"]["AGENT_MONITOR_SPONSORED_KIMI"] == "0" for item in launched)
+    assert max_model[0] == 400 and max_model[2]["error"] == "Max is available only for Ansatz CGM"
+    assert max_api[0] == 400 and max_api[2]["error"] == "Max (API) is available only for Ansatz CGM"
+    # Max runs on linked accounts, which this member may not use.
+    assert max_route[0] == 403 and "Max" in max_route[2]["error"]
+    assert guest_other[0] == 400 and guest_other[2]["error"] == "Guest readability runs use kimi-k3"
+    assert len(launched) == 2 and gate.usage_today() == 0
 
 
 def test_readability_refusals_never_keep_the_sponsored_start(gate, monkeypatch, captured_start):
@@ -375,6 +537,586 @@ def test_readability_refusals_never_keep_the_sponsored_start(gate, monkeypatch, 
     with pytest.raises(OSError):
         jobs.start_job(engine="readability", run_kind="readability", source={"url": ARXIV}, user=GUEST)
     assert gate.usage_today() == 0 and gate.active() == 0
+
+
+def _manuscript_request(engine: str, workspace) -> dict:
+    from agent_monitor.analyze import request as analysis_request
+
+    return (readability_request if engine == "readability" else analysis_request).load(Path(workspace))
+
+
+@pytest.mark.parametrize(("engine", "label"), [("readability", "Readability"), ("analyze", "Analyze")])
+@pytest.mark.parametrize("user", [MEMBER, ADMIN], ids=["member", "admin"])
+def test_kimi_k3_is_the_only_kimi_model_of_a_manuscript_run(gate, monkeypatch, captured_start, engine, label, user):
+    """A Kimi endpoint is always asked for Kimi K3 (kimi_k3.chat_payload), so
+    kimi-k2.5 (typed in the custom box) would run as Kimi K3 while its
+    receipt, record and usage named kimi-k2.5.  Another Kimi model is refused
+    on every route, without a Kimi key of the account's own (the sponsored
+    route) and with one, before the day's sponsored start is taken, a broker
+    credential issued or anything launched, in both manuscript modes.  Kimi
+    K3 typed in another case is Kimi K3."""
+    issued: list = []
+    _broker(monkeypatch, issued)
+    refusal = f"^{label} runs Kimi K3 as its only Kimi model \\(kimi-k3\\)$"
+    own_key = {"KIMI_API_KEY": "sk-own-kimi-123456789"}
+    for keys in ({}, own_key):
+        monkeypatch.setattr(jobs, "_user_extra_env", lambda user, *models, keys=keys: {
+            "AGENT_MONITOR_PYTHON": "python", **keys})
+        for model in ("kimi-k2.5", " Kimi-K2.5 ", "kimi:kimi-k2.5", "kimi-k3-preview"):
+            with pytest.raises(ValueError, match=refusal):
+                jobs.start_job(engine=engine, run_kind=engine, source={"text": PAPER}, user=user, model=model,
+                               auth_route="api_key")
+    assert (gate.usage_today(), gate.active(), issued, captured_start.threads, captured_start.records) == (
+        0, 0, [], [], [])
+    # Kimi K3 in any case, or with its provider prefix (which the API runners resolve to Kimi K3):
+    # sponsored without a Kimi key of the account's own ...
+    monkeypatch.setattr(jobs, "_user_extra_env", lambda user, *models: {"AGENT_MONITOR_PYTHON": "python"})
+    for model in ("Kimi-K3", "kimi:kimi-k3"):
+        job = jobs.start_job(engine=engine, run_kind=engine, source={"text": PAPER}, user=user, model=model,
+                             auth_route="api_key")
+        assert (job["model"], job["credential_source"]) == ("kimi-k3", "sponsored_kimi"), model
+    assert gate.usage_today() == 2
+    # ... and on that key with one.
+    monkeypatch.setattr(jobs, "_user_extra_env", lambda user, *models: {"AGENT_MONITOR_PYTHON": "python", **own_key})
+    for model in (" KIMI-K3 ", "KIMI : Kimi-K3"):
+        own = jobs.start_job(engine=engine, run_kind=engine, source={"text": PAPER}, user=user, model=model,
+                             auth_route="api_key")
+        assert (own["model"], own["credential_source"]) == ("kimi-k3", "user"), model
+    assert gate.usage_today() == 2
+    assert [_manuscript_request(engine, record["workspace"])["model"] for record in captured_start.records] == [
+        "kimi-k3"] * 4
+    assert [record["model"] for record in captured_start.records] == ["kimi-k3"] * 4
+
+
+FULL_ACCESS = {"id": 84, "email": "full@example.test", "is_admin": False, "full_access": True}
+
+
+@pytest.mark.parametrize(("engine", "label"), [("readability", "Readability"), ("analyze", "Analyze")])
+@pytest.mark.parametrize("user", [MEMBER, FULL_ACCESS, ADMIN], ids=["restricted", "full-access", "admin"])
+def test_another_kimi_model_is_refused_as_such_while_the_sponsored_service_is_down(gate, monkeypatch, captured_start,
+                                                                                    engine, label, user):
+    """The refusal of another Kimi model does not wait for the sponsored
+    service: while it is down (its health check fails), an account without
+    a Kimi key of its own is told that Kimi K3 is the mode's only Kimi model,
+    not that Kimi K3 needs a key (adding one would unlock no other model).
+    Nothing is projected for the run, reserved or launched."""
+    from agent_monitor import sponsored_kimi_client
+
+    monkeypatch.setattr(sponsored_kimi_client, "configured", lambda: False)
+    projected: list = []
+    monkeypatch.setattr(jobs, "_user_extra_env",
+                        lambda user, *models: projected.append(models) or {"AGENT_MONITOR_PYTHON": "python"})
+    for model in ("kimi-k2.5", "kimi:kimi-k2.5"):
+        with pytest.raises(ValueError, match=f"^{label} runs Kimi K3 as its only Kimi model \\(kimi-k3\\)$"):
+            jobs.start_job(engine=engine, run_kind=engine, source={"text": PAPER}, user=user, model=model,
+                           auth_route="api_key")
+    assert (projected, gate.usage_today(), gate.active(), captured_start.threads) == ([], 0, 0, [])
+    # Kimi K3 itself gets the service's own refusal.
+    with pytest.raises(ValueError, match="or the sponsored Kimi service must be available"):
+        jobs.start_job(engine=engine, run_kind=engine, source={"text": PAPER}, user=user, model="kimi-k3",
+                       auth_route="api_key")
+    assert (gate.usage_today(), captured_start.threads) == (0, [])
+
+
+@pytest.mark.parametrize("engine", ["readability", "analyze"])
+def test_a_blank_model_passes_over_a_saved_kimi_model_the_mode_does_not_run(gate, monkeypatch, captured_start, engine):
+    """A request without a model (the Projects page's "Default account
+    model") whose saved default is kimi-k2.5 is not refused: the saved Kimi
+    model stands for Kimi K3, the mode's only Kimi model, here run on the
+    account's own Kimi key (a member's, and the administrator's)."""
+    from cryptography.fernet import Fernet
+
+    from agent_monitor import auth, settings
+
+    for name in ("AGENT_MONITOR_PUBLIC", "AGENT_MONITOR_SPONSORED_KIMI", "OPENAI_API_KEY", "KIMI_API_KEY"):
+        monkeypatch.delenv(name, raising=False)
+    monkeypatch.setenv("AGENT_MONITOR_DATA_ENCRYPTION_KEY", Fernet.generate_key().decode("ascii"))
+    auth.register("owner@example.test", "long-enough-password")
+    member = auth.register("member@example.test", "long-enough-password")
+    kimi_key = "sk-member-kimi-123456789"
+    auth.set_user_env(int(member["id"]), {"KIMI_API_KEY": kimi_key, "AGENT_MONITOR_MODEL": "kimi-k2.5"})
+    job = jobs.start_job(engine=engine, run_kind=engine, source={"text": PAPER}, user=member)
+    assert (job["model"], job["credential_source"]) == ("kimi-k3", "user")
+    assert captured_start.threads[-1]["kwargs"]["extra_env"]["KIMI_API_KEY"] == kimi_key
+    # The administrator's: Kimi K3, here on its own key.
+    saved = {"AGENT_MONITOR_MODEL": "kimi-k2.5", "KIMI_API_KEY": "sk-admin-kimi-123456789"}
+    monkeypatch.setattr(settings, "resolved_user_env", lambda _user, saved=saved: dict(saved))
+    monkeypatch.setattr(jobs, "_user_extra_env", lambda user, *models: {"AGENT_MONITOR_PYTHON": "python", **saved})
+    job = jobs.start_job(engine=engine, run_kind=engine, source={"text": PAPER}, user=ADMIN, auth_route="api_key")
+    assert (job["model"], job["credential_source"]) == ("kimi-k3", "user")
+    assert [_manuscript_request(engine, record["workspace"])["model"] for record in captured_start.records] == [
+        "kimi-k3", "kimi-k3"]
+    # So does a proof's saved default on an engine that runs Kimi K3 alone (tests/test_kimi_k3_only.py).
+    for name in (engine, "plain", "math_harness"):
+        assert jobs._saved_default_model(ADMIN, engine=name, auth_route="api_key") == "kimi-k3", name
+    assert gate.usage_today() == 0
+
+
+@pytest.mark.parametrize("engine", ["readability", "analyze"])
+@pytest.mark.parametrize("user", [ADMIN, {"id": 84, "email": "full@example.test", "is_admin": False,
+                                          "full_access": True}], ids=["admin", "full-access"])
+def test_a_blank_model_runs_on_the_accounts_keys_while_kimi_k3_is_unavailable(gate, monkeypatch, captured_start,
+                                                                              engine, user):
+    """An administrator's, or a full-access account's, start that names no
+    model on the API route, whose saved default is kimi-k2.5 (Kimi K3 here)
+    or nothing, while it cannot run Kimi K3 (no Kimi key of its own, the
+    sponsored service down): the first model of its keys, as the console's
+    menu offers it, not a refusal (HEAD refused it).  With no key that runs
+    anything, it is refused with what is missing, whatever the saved
+    default: a saved Max or Max (API), which these modes never run, is
+    passed over too (not refused as a Max run); nothing is reserved or
+    launched."""
+    from agent_monitor import settings, sponsored_kimi_client
+
+    monkeypatch.setattr(sponsored_kimi_client, "configured", lambda: False)
+    monkeypatch.setattr(settings, "sponsored_kimi_available", lambda: False)
+    keys = {"OPENAI_API_KEY": "sk-own-openai-" + "o" * 24}
+    for saved_model in ("kimi-k2.5", "", "claude-opus-5-5"):
+        saved = {"AGENT_MONITOR_MODEL": saved_model, "AGENT_MONITOR_ACCOUNT_RUNTIME": "api", **keys}
+        monkeypatch.setattr(settings, "resolved_user_env", lambda _user, saved=saved: dict(saved))
+        monkeypatch.setattr(jobs, "_user_extra_env", lambda _user, *models: {"AGENT_MONITOR_PYTHON": "python", **keys})
+        job = jobs.start_job(engine=engine, run_kind=engine, source={"text": PAPER}, user=user, auth_route="api_key")
+        assert (job["model"], job["credential_source"], job["auth_route"]) == ("gpt-6-astra", "user", "api_key"), saved_model
+        assert _manuscript_request(engine, captured_start.records[-1]["workspace"])["model"] == "gpt-6-astra"
+    # A saved model its keys run stays.
+    saved = {"AGENT_MONITOR_MODEL": "gpt-6.1-sol", "AGENT_MONITOR_ACCOUNT_RUNTIME": "api", **keys}
+    monkeypatch.setattr(settings, "resolved_user_env", lambda _user: dict(saved))
+    assert jobs.start_job(engine=engine, run_kind=engine, source={"text": PAPER}, user=user,
+                          auth_route="api_key")["model"] == "gpt-6.1-sol"
+    launched = len(captured_start.threads)
+    monkeypatch.setattr(jobs, "_user_extra_env", lambda _user, *models: {"AGENT_MONITOR_PYTHON": "python"})
+    for saved_model in ("kimi-k2.5", "max", "max-api", ""):
+        saved = {"AGENT_MONITOR_MODEL": saved_model, "AGENT_MONITOR_ACCOUNT_RUNTIME": "api"}
+        monkeypatch.setattr(settings, "resolved_user_env", lambda _user, saved=saved: dict(saved))
+        with pytest.raises(ValueError, match="^Kimi K3 requires your own API key, or the sponsored Kimi service must "
+                                             "be"):
+            jobs.start_job(engine=engine, run_kind=engine, source={"text": PAPER}, user=user, auth_route="api_key")
+    assert len(captured_start.threads) == launched == 4 and gate.usage_today() == 0
+
+
+@pytest.mark.parametrize("user", [ADMIN, FULL_ACCESS], ids=["admin", "full-access"])
+def test_a_blank_model_is_found_without_probing_a_linked_account(gate, monkeypatch, captured_start, user):
+    """The fallback of a start that names no model on the API route (the
+    first model of the account's keys, as Settings lists them) reads those
+    keys and the sponsored service's health alone
+    (settings.account_api_models): never the account's linked Claude Code
+    or Codex sign-in, which Settings checks (Claude Code's ``claude auth
+    status`` contacts Anthropic) and the start never did.  Settings lists
+    the same API models, a guest's included."""
+    from agent_monitor import settings, sponsored_kimi_client
+
+    probes = linked_account_probes(monkeypatch)
+    monkeypatch.setattr(sponsored_kimi_client, "configured", lambda: False)
+    monkeypatch.setattr(settings, "sponsored_kimi_available", lambda: False)
+    keys = {"OPENAI_API_KEY": "sk-own-openai-" + "o" * 24}
+    saved = {"AGENT_MONITOR_MODEL": "claude-opus-5-5", "AGENT_MONITOR_ACCOUNT_RUNTIME": "api", **keys}
+    monkeypatch.setattr(settings, "resolved_user_env", lambda _user: dict(saved))
+    monkeypatch.setattr(jobs, "_user_extra_env", lambda _user, *models: {"AGENT_MONITOR_PYTHON": "python", **keys})
+    for engine in ("readability", "analyze"):
+        job = jobs.start_job(engine=engine, run_kind=engine, source={"text": PAPER}, user=user, auth_route="api_key")
+        assert (job["model"], job["credential_source"]) == ("gpt-6-astra", "user"), engine
+    assert probes == []
+    openai = next(provider["models"] for provider in settings.PROVIDERS if provider["id"] == "openai")
+    assert settings.get_settings(user)["api_models"] == settings.account_api_models(user) == openai
+    assert settings.get_settings(GUEST)["api_models"] == settings.account_api_models(GUEST) == ["kimi-k3", *openai]
+    assert probes, "Settings shows whether the linked accounts are signed in"
+
+
+def test_a_question_about_a_readable_version_on_another_kimi_model_is_refused(gate, monkeypatch):
+    """As for an analysis: a readable version recorded on kimi-k2.5 ran as
+    Kimi K3 under that name, so a question about it is refused before a
+    slot is taken or the question is registered."""
+    _finished_run("readability_other_kimi_1", MEMBER["id"], monkeypatch)
+    record = jobs._load_run_record("readability_other_kimi_1")
+    jobs._write_run({**record, "model": "kimi-k2.5"})
+    monkeypatch.setattr(jobs, "_user_extra_env", lambda user, *models: {
+        "AGENT_MONITOR_PYTHON": "python", "KIMI_API_KEY": "sk-own-kimi-123456789"})
+    launched: list = []
+    monkeypatch.setattr(jobs, "_execute_ask", lambda **kwargs: launched.append(kwargs))
+    with pytest.raises(analyze_runs.AnalyzeRequestError) as refused:
+        jobs.start_readability_ask("readability_other_kimi_1", {"question": "Why?"}, user=MEMBER)
+    assert (str(refused.value), refused.value.status) == (
+        "Readability runs Kimi K3 as its only Kimi model (kimi-k3); this readability run ran on kimi-k2.5", 400)
+    assert launched == [] and gate.usage_today() == 0 and not jobs.run_is_active("readability_other_kimi_1")
+    block = jobs._load_run_record("readability_other_kimi_1")["readability"]
+    assert "ask" not in block and not block.get("asks")
+    # A readable version recorded on Kimi K3 named in another case (or with its provider prefix)
+    # ran on Kimi K3: a question about it is asked of kimi-k3.
+    for recorded in (" Kimi-K3 ", "kimi:Kimi-K3"):
+        jobs._write_run({**record, "model": recorded})
+        monkeypatch.setattr(jobs, "_execute_ask", lambda **kwargs: launched.append(kwargs) or jobs._update_job(
+            kwargs["job_id"], status="finished"))
+        jobs.start_readability_ask("readability_other_kimi_1", {"question": "Why?"}, user=MEMBER)
+        assert _wait(lambda: not jobs.run_is_active("readability_other_kimi_1"))
+    assert [(item["model"], item["env"]["AGENT_MONITOR_READABILITY_MODEL"]) for item in launched] == [
+        ("kimi-k3", "kimi-k3")] * 2
+
+
+def _full_access_member(monkeypatch, tmp_path, runtime: str) -> tuple[dict, dict]:
+    """The administrator and a registered member with full access, whose
+    Codex and Claude Code are linked (no CLI runs) and whose account runtime
+    is ``runtime``; the service's own logins (the operator's) are in its
+    environment."""
+    from cryptography.fernet import Fernet
+
+    from agent_monitor import accounts_admin, auth, claude_login, codex_login
+
+    for name in ("AGENT_MONITOR_PUBLIC", "OPENAI_API_KEY", "ANTHROPIC_API_KEY", "KIMI_API_KEY"):
+        monkeypatch.delenv(name, raising=False)
+    monkeypatch.setenv("AGENT_MONITOR_DATA_ENCRYPTION_KEY", Fernet.generate_key().decode("ascii"))
+    monkeypatch.setenv("AGENT_MONITOR_CODEX_ACCOUNT_HOME", str(tmp_path / "codex-homes"))
+    monkeypatch.setenv("AGENT_MONITOR_CLAUDE_ACCOUNT_HOME", str(tmp_path / "claude-homes"))
+    monkeypatch.setenv("CODEX_HOME", str(tmp_path / "operator-codex"))
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(tmp_path / "operator-claude"))
+    # Linked and ready, with no CLI probe (Claude Code's `auth status` would reach Anthropic).
+    monkeypatch.setattr(claude_login, "_run_auth_status", lambda _home: {"loggedIn": False})
+    monkeypatch.setattr(claude_login, "account_login_ready", lambda _home: True)
+    monkeypatch.setattr(codex_login, "account_login_ready", lambda _home: True)
+    monkeypatch.setattr(codex_login, "available_models", lambda _user_id: ["gpt-5.6-sol"])
+    owner = auth.register("owner@example.test", "long-enough-password")
+    member = auth.register("member@example.test", "long-enough-password")
+    accounts_admin.set_full_access(["member@example.test"], on=True)
+    auth.set_user_env(int(member["id"]), {"AGENT_MONITOR_ACCOUNT_RUNTIME": runtime})
+    return owner, {**member, "full_access": True}
+
+
+def _linked_account(seen: list):
+    """Codex's or Claude Code's response-only call, answering by system prompt."""
+    def call(system, user_prompt, **kwargs):
+        kind = KINDS[system]
+        seen.append({"kind": kind, **kwargs})
+        text = {"guide": guide_json, "check": check_json, "rewrite": lambda: readable(user_prompt),
+                "ask": lambda: "Because $2a+2b=2(a+b)$; see [[result:lem:sum]]."}[kind]()
+        return SimpleNamespace(text=text, usage={"input_tokens": 3, "output_tokens": 2})
+
+    return call
+
+
+@pytest.mark.parametrize("linked", ["codex", "claude"])
+def test_a_full_access_member_reads_on_its_own_linked_account_never_the_operators(gate, monkeypatch, captured_start,
+                                                                                   tmp_path, linked):
+    """Full access lets a member use the Codex and Claude Code it linked
+    itself: start_job gives the run that account's login, the request says
+    the account may use it (``own_subscriptions``, from the stored account),
+    and the runner, which refuses a restricted member's, makes every call on
+    it, a question about the run too.  Never the operator's login, and not
+    once full access is taken back, whatever the session still says."""
+    from agent_monitor import accounts_admin, claude_login, codex_login
+    from agent_monitor.runners import claude_backend
+
+    owner, user = _full_access_member(monkeypatch, tmp_path, linked)
+    logins = codex_login if linked == "codex" else claude_login
+    route, model_id = ("codex_subscription", "gpt-5.6-sol") if linked == "codex" else ("claude_subscription", "opus")
+    home_var = "CODEX_HOME" if linked == "codex" else "CLAUDE_CONFIG_DIR"
+    home = logins.account_home(int(user["id"]))
+    home.mkdir(parents=True)
+    assert home != logins.account_home(int(owner["id"]))
+    job = jobs.start_job(engine="readability", run_kind="readability", source={"text": MARKED_PAPER}, user=user,
+                         model=model_id, auth_route=route)
+    assert (job["auth_route"], job["credential_source"], job["model"]) == (route, "user", model_id)
+    extra_env = captured_start.threads[-1]["kwargs"]["extra_env"]
+    assert extra_env[home_var] == str(home)
+    ws = Path(captured_start.records[-1]["workspace"])
+    req = readability_request.load(ws)
+    assert (req["role"], req["route"], req["own_subscriptions"], req["sponsored"]) == ("member", route, True, False)
+    assert gate.usage_today() == 0
+
+    # The runner's environment, as the worker builds it: the service's login scrubbed, the account's set.
+    child = jobs._analyze_recheck_env(extra_env, model=model_id, engine="readability")
+    assert child[home_var] == str(home) and not any(key.endswith("_API_KEY") for key in child)
+    seen: list[dict] = []
+    monkeypatch.setattr(harness, "codex_exec" if linked == "codex" else "claude_code_exec", _linked_account(seen))
+    # The fixture's thread double runs nothing: the runner's own call threads need the real class.
+    capture = jobs.threading.Thread
+    monkeypatch.setattr(jobs.threading, "Thread", jobs._THREAD_CLASS)
+    outcome = readability_runner.run_readability(ws, req, env=child, sink=lambda _event: None, sleep=lambda _s: None)
+    receipt = outcome["receipt"]
+    assert (receipt["route"], receipt["role"], receipt["caps"]["concurrency"]) == (route, "member", 1)
+    assert receipt["parts"]["faithful"] == 1 and [call["kind"] for call in seen] == ["guide", "rewrite", "check"]
+    assert {call["source_env"][home_var] for call in seen} == {str(home)}
+    assert {call["enable_tools"] for call in seen} == {False}
+    if linked == "claude":
+        # What Claude Code itself is started with: the account's own configuration directory.
+        assert claude_backend._claude_environment(seen[0]["source_env"])["CLAUDE_CONFIG_DIR"] == str(home.resolve())
+
+    # A question about the run goes the same way, through start_readability_ask and the runner.
+    record = {**captured_start.records[-1], "status": "finished"}
+    monkeypatch.setattr(jobs, "_load_run_record", lambda _run_id: dict(record))
+    jobs._JOBS[job["job_id"]]["status"] = "finished"
+    monkeypatch.setattr(jobs.threading, "Thread", capture)
+    asked = jobs.start_readability_ask(job["run_id"], {"question": "Why is it even?", "node_id": "lem:sum"}, user=user)
+    ask = captured_start.threads[-1]["kwargs"]
+    assert asked["status"] == "asking" and ask["env"][home_var] == str(home)
+    monkeypatch.setattr(jobs.threading, "Thread", jobs._THREAD_CLASS)
+    answer = readability_runner.run_ask(ws, ask["state"]["ask_id"], route_env=ask["env"])
+    assert (answer["status"], answer["route"]) == ("done", route)
+    assert seen[-1]["kind"] == "ask" and seen[-1]["source_env"][home_var] == str(home)
+
+    # Taken back: the stored account decides, so neither a run nor a question uses the login.
+    accounts_admin.set_full_access(["member@example.test"], on=False)
+    jobs._JOBS.clear()
+    monkeypatch.setattr(jobs.threading, "Thread", capture)
+    with pytest.raises(ValueError, match="only for the site administrator"):
+        jobs.start_readability_ask(job["run_id"], {"question": "And now?"}, user=user)
+    with pytest.raises(ValueError, match="only for the site administrator"):
+        jobs.start_job(engine="readability", run_kind="readability", source={"text": PAPER}, user=user,
+                       model=model_id, auth_route=route)
+    assert jobs._own_subscriptions_allowed(user) is False and len(seen) == 4
+
+
+def test_a_full_access_members_analysis_runs_on_its_own_linked_account(gate, monkeypatch, captured_start, tmp_path):
+    from agent_monitor import codex_login
+    from agent_monitor.analyze import request as analysis_request
+    from agent_monitor.runners import analyze_runner
+
+    _owner, user = _full_access_member(monkeypatch, tmp_path, "codex")
+    jobs.start_job(engine="analyze", run_kind="analyze", source={"text": PAPER}, user=user, model="gpt-5.6-sol",
+                   auth_route="codex_subscription")
+    extra_env = captured_start.threads[-1]["kwargs"]["extra_env"]
+    assert extra_env["CODEX_HOME"] == str(codex_login.account_home(int(user["id"])))
+    req = analysis_request.load(Path(captured_start.records[-1]["workspace"]))
+    assert (req["role"], req["route"], req["own_subscriptions"]) == ("member", "codex_subscription", True)
+    child = jobs._analyze_recheck_env(extra_env, model="gpt-5.6-sol")
+    info = analyze_runner.configure_route(dict(child), req)
+    assert (info.name, info.route.transport, info.route.model) == ("codex_subscription", "codex_exec", "gpt-5.6-sol")
+    # The flag is the account's: a restricted member's run never carries it.
+    monkeypatch.setattr(jobs, "_user_extra_env", lambda user, *models: {
+        "AGENT_MONITOR_PYTHON": "python", "OPENAI_API_KEY": "sk-member-openai-123456789"})
+    jobs.start_job(engine="analyze", run_kind="analyze", source={"text": PAPER}, user=MEMBER, model="gpt-6-astra")
+    assert analysis_request.load(Path(captured_start.records[-1]["workspace"]))["own_subscriptions"] is False
+    assert jobs._own_subscriptions_allowed(GUEST) is False and jobs._own_subscriptions_allowed(None) is False
+
+
+@pytest.mark.parametrize("linked", ["codex", "claude"])
+def test_a_full_access_member_in_public_mode_reads_on_sponsored_kimi_whatever_its_runtime(gate, monkeypatch,
+                                                                                         captured_start, tmp_path,
+                                                                                         linked):
+    """In public mode a member, full access or not, analyzes and makes
+    manuscripts readable on sponsored Kimi K3 alone.  The console's start
+    names no model; a member whose account runtime is its linked Codex or
+    Claude Code account starts on Kimi K3 on the API route (an older
+    console sent the runtime's route, and the start was refused as Kimi K3
+    on a linked account), never on that account.  Another model is refused
+    with the site's note, before anything is reserved."""
+    _owner, user = _full_access_member(monkeypatch, tmp_path, linked)
+    issued: list = []
+    _broker(monkeypatch, issued)
+    monkeypatch.setenv("AGENT_MONITOR_PUBLIC", "1")
+    route = f"{linked}_subscription"
+    for kind in ("readability", "analyze"):
+        for requested in (route, "api_key", None):
+            job = jobs.start_job(engine=kind, run_kind=kind, source={"text": PAPER}, user=user, auth_route=requested)
+            assert (job["model"], job["credential_source"], job["auth_route"]) == (
+                "kimi-k3", "sponsored_kimi", "api_key"), (kind, requested)
+            assert gate.release(job["run_id"])  # no worker here gives the slot back
+            env = captured_start.threads[-1]["kwargs"]["extra_env"]
+            assert env["AGENT_MONITOR_SPONSORED_KIMI"] == "1" and env["KIMI_API_KEY"] == TOKEN
+            assert "1" not in {env.get("AGENT_MONITOR_CODEX_SUBSCRIPTION"), env.get("AGENT_MONITOR_CLAUDE_SUBSCRIPTION")}
+            req = _manuscript_request(kind, captured_start.records[-1]["workspace"])
+            assert (req["route"], req["sponsored"], req["model"]) == ("sponsored_kimi", True, "kimi-k3")
+    assert gate.usage_today() == 6 and len(issued) == 6
+    # The linked account's own model is refused with the site's note.
+    for kind, note in (("readability", "Members use Readability on the included Kimi K3 on this site"),
+                       ("analyze", "Members analyze on the included Kimi K3 on this site")):
+        model = "gpt-5.6-sol" if linked == "codex" else "opus"
+        with pytest.raises(ValueError, match=f"^{note}$"):
+            jobs.start_job(engine=kind, run_kind=kind, source={"text": PAPER}, user=user, model=model,
+                           auth_route=route)
+    assert gate.usage_today() == 6 and len(captured_start.threads) == 6
+
+
+@pytest.mark.parametrize(("linked", "first"), [("codex", "gpt-5.6-sol"), ("claude", "sonnet")])
+@pytest.mark.parametrize("saved", ["kimi-k2.5", "gpt-6-astra", ""])
+def test_a_blank_model_on_a_linked_account_runs_on_a_model_that_account_offers(gate, monkeypatch, captured_start,
+                                                                               tmp_path, linked, first, saved):
+    """A start that names no model on a linked account's route (an API
+    caller's, or the Projects page's "Default account model") runs on the
+    saved default when that account can run it, else on the first model it
+    offers the mode, as the console's menu selects it: never Kimi K3, which
+    a linked account cannot run (the start was refused).  An account that
+    offers none is told to choose a model."""
+    from agent_monitor import auth, codex_login
+
+    _owner, user = _full_access_member(monkeypatch, tmp_path, linked)
+    auth.set_user_env(int(user["id"]), {"AGENT_MONITOR_MODEL": saved} if saved else {},
+                      clear=[] if saved else ["AGENT_MONITOR_MODEL"])
+    route = f"{linked}_subscription"
+    for kind in ("readability", "analyze"):
+        for requested in (route, None):  # the route asked for, or the account runtime's
+            job = jobs.start_job(engine=kind, run_kind=kind, source={"text": PAPER}, user=user, auth_route=requested)
+            assert (job["model"], job["auth_route"], job["credential_source"]) == (first, route, "user"), (kind, requested)
+    # The saved default where the account runs it.
+    auth.set_user_env(int(user["id"]), {"AGENT_MONITOR_MODEL": "opus" if linked == "claude" else "gpt-5.6-sol"})
+    job = jobs.start_job(engine="readability", run_kind="readability", source={"text": PAPER}, user=user,
+                         auth_route=route)
+    assert job["model"] == ("opus" if linked == "claude" else "gpt-5.6-sol")
+    assert gate.usage_today() == 0 and len(captured_start.threads) == 5
+    if linked == "codex":
+        # A Codex account that offers no model (none of its own but chat ones): the start says so.
+        monkeypatch.setattr(codex_login, "available_models", lambda _user_id: ["chat-latest"])
+        auth.set_user_env(int(user["id"]), {}, clear=["AGENT_MONITOR_MODEL"])
+        for kind, noun in (("readability", "readability run"), ("analyze", "analysis")):
+            with pytest.raises(ValueError, match=f"^Choose a model for this {noun}: your linked Codex account offers "
+                                                 "none; connect it in Settings, or switch the account runtime$"):
+                jobs.start_job(engine=kind, run_kind=kind, source={"text": PAPER}, user=user, auth_route=route)
+        assert len(captured_start.threads) == 5
+
+
+def test_a_full_access_member_reads_on_its_own_keys_through_the_server(readability_console, gate, monkeypatch):
+    """Members have full access by default.  Such a member's readability run
+    on gpt-6-astra or claude-opus-5-5 runs on the keys saved on its account
+    (never the operator's), with the own-key caps and no sponsored start;
+    kimi-k2.5 is refused in both modes, without a Kimi key of its own and
+    with one, with the pool left untouched and nothing launched."""
+    from agent_monitor import auth, claude_login
+
+    monkeypatch.setenv("AGENT_MONITOR_FULL_ACCESS_DEFAULT", "1")
+    monkeypatch.setattr(claude_login, "_run_auth_status", lambda _home: {"loggedIn": False})
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-operator-openai-0000000000")
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-operator-0000000000")
+    monkeypatch.delenv("KIMI_API_KEY", raising=False)
+    issued: list = []
+    _broker(monkeypatch, issued)
+    launched: list[dict] = []
+    monkeypatch.setattr(console.job_manager, "start_job", REAL_START_JOB)
+    monkeypatch.setattr(jobs, "_start_job_launch", lambda **kwargs: launched.append(kwargs) or {
+        "run_id": kwargs["run_id"], "job_id": kwargs["job_id"], "model": kwargs["model"]})
+    own_keys = {"OPENAI_API_KEY": "sk-member-openai-123456789", "ANTHROPIC_API_KEY": "sk-ant-member-123456789"}
+    with running_server() as port:
+        user, cookie = _member(port)
+        auth.set_user_env(int(user["id"]), own_keys)
+        openai = _post(port, "/api/runs", cookie, _readable({"text": PAPER}, model="gpt-6-astra", auth_route="api_key"))
+        anthropic = _post(port, "/api/runs", cookie, _readable({"text": PAPER}, model="claude-opus-5-5",
+                                                               auth_route="api_key"))
+        other_kimi = _post(port, "/api/runs", cookie, _readable({"text": PAPER}, model="kimi-k2.5", auth_route="api_key"))
+        auth.set_user_env(int(user["id"]), {**own_keys, "KIMI_API_KEY": "sk-member-kimi-123456789"})
+        own_kimi = {kind: _post(port, "/api/runs", cookie, {"run_kind": kind, "engine": kind, "source": {"text": PAPER},
+                                                            "model": "kimi-k2.5", "auth_route": "api_key"})
+                    for kind in ("readability", "analyze")}
+    assert auth.is_full_access_account(int(user["id"]))
+    assert (openai[0], anthropic[0]) == (200, 200), (openai, anthropic)
+    assert [(item["model"], item["route"], item["readability_route"], item["sponsored_kimi"]) for item in launched] == [
+        ("gpt-6-astra", "api_key", "api_key", False), ("claude-opus-5-5", "api_key", "api_key", False)]
+    for item, key in zip(launched, ("OPENAI_API_KEY", "ANTHROPIC_API_KEY")):
+        env = item["extra_env"]
+        # Its own key for the model, the own-key caps, and nothing sponsored or the operator's.
+        assert env[key] == own_keys[key] and "operator" not in json.dumps(env)
+        assert env["AGENT_MONITOR_SPONSORED_KIMI"] == "0" and "AGENT_MONITOR_SPONSORED_KIMI_URL" not in env
+        assert item["readability_caps"] == {"max_parts": 40, "max_calls": 90, "max_seconds": 3600}
+        assert item["user"]["full_access"] is True
+    assert other_kimi[0] == 400, other_kimi
+    assert other_kimi[2]["error"] == "Readability runs Kimi K3 as its only Kimi model (kimi-k3)"
+    assert [(own_kimi[kind][0], own_kimi[kind][2]["error"]) for kind in ("readability", "analyze")] == [
+        (400, "Readability runs Kimi K3 as its only Kimi model (kimi-k3)"),
+        (400, "Analyze runs Kimi K3 as its only Kimi model (kimi-k3)")]
+    assert len(launched) == 2 and gate.usage_today() == 0 and gate.active() == 0 and issued == []
+
+
+def test_a_public_mode_member_on_its_linked_codex_runtime_starts_through_the_server(readability_console, gate,
+                                                                                   monkeypatch, tmp_path):
+    """In public mode the console of a member with full access whose
+    account runtime is its linked Codex account sent that route with no
+    model, and both modes were refused (400 "Kimi K3 is an API model and
+    cannot use a linked account subscription").  They start on sponsored
+    Kimi K3 on the API route."""
+    from agent_monitor import auth, claude_login, codex_login
+
+    monkeypatch.setenv("AGENT_MONITOR_FULL_ACCESS_DEFAULT", "1")
+    monkeypatch.setenv("AGENT_MONITOR_CODEX_ACCOUNT_HOME", str(tmp_path / "codex-homes"))
+    monkeypatch.setattr(claude_login, "_run_auth_status", lambda _home: {"loggedIn": False})
+    monkeypatch.setattr(codex_login, "account_login_ready", lambda _home: True)
+    monkeypatch.setattr(codex_login, "available_models", lambda _user_id: ["gpt-5.6-sol"])
+    monkeypatch.delenv("KIMI_API_KEY", raising=False)
+    issued: list = []
+    _broker(monkeypatch, issued)
+    launched: list[dict] = []
+    monkeypatch.setattr(console.job_manager, "start_job", REAL_START_JOB)
+    monkeypatch.setattr(jobs, "_start_job_launch", lambda **kwargs: launched.append(kwargs) or {
+        "run_id": kwargs["run_id"], "job_id": kwargs["job_id"], "model": kwargs["model"]})
+    with running_server() as port:
+        user, cookie = _member(port)
+        auth.set_user_env(int(user["id"]), {"AGENT_MONITOR_ACCOUNT_RUNTIME": "codex"})
+        monkeypatch.setenv("AGENT_MONITOR_PUBLIC", "1")
+        started = [_post(port, "/api/runs", cookie, {"run_kind": kind, "engine": kind, "source": {"text": PAPER},
+                                                     "model": None, "auth_route": "codex_subscription"})
+                   for kind in ("readability", "analyze")]
+    assert [item[0] for item in started] == [200, 200], started
+    assert [(item["model"], item["route"], item["sponsored_kimi"], item["user"]["full_access"]) for item in launched] == [
+        ("kimi-k3", "api_key", True, True)] * 2
+    assert all(item["extra_env"].get("AGENT_MONITOR_CODEX_SUBSCRIPTION") != "1" for item in launched)
+    assert gate.usage_today() == 2
+
+
+@pytest.mark.parametrize("full_access", [False, True], ids=["restricted", "full-access"])
+def test_a_public_mode_member_names_kimi_k3_in_any_spelling_through_the_server(readability_console, gate, monkeypatch,
+                                                                               full_access):
+    """In public mode a member's Analyze and Readability run Kimi K3 alone.
+    The console checks a request's model before start_job reads it, and that
+    check took Kimi K3 only as ``kimi-k3``: ``kimi:kimi-k3`` (with its
+    provider prefix, which start_job records as kimi-k3) got 403 "Members
+    analyze on the included Kimi K3 on this site".  Every spelling start_job
+    takes for Kimi K3 now starts on sponsored Kimi K3, recorded as kimi-k3;
+    another model, another Kimi model included, still gets the 403 before
+    anything is reserved or launched."""
+    from agent_monitor import account_policy
+
+    monkeypatch.setenv("AGENT_MONITOR_FULL_ACCESS_DEFAULT", "1" if full_access else "0")
+    monkeypatch.setenv(analyze_runs.CONCURRENCY_ENV, "8")
+    monkeypatch.delenv("KIMI_API_KEY", raising=False)
+    issued: list = []
+    _broker(monkeypatch, issued)
+    launched: list[dict] = []
+    monkeypatch.setattr(console.job_manager, "start_job", REAL_START_JOB)
+    monkeypatch.setattr(jobs, "_start_job_launch", lambda **kwargs: launched.append(kwargs) or {
+        "run_id": kwargs["run_id"], "job_id": kwargs["job_id"], "model": kwargs["model"]})
+    kinds = ("readability", "analyze")
+
+    def start(port, cookie, kind, model):
+        return _post(port, "/api/runs", cookie, {"run_kind": kind, "engine": kind, "source": {"text": PAPER},
+                                                 "model": model, "auth_route": "api_key"})
+
+    with running_server() as port:
+        user, cookie = _member(port)
+        monkeypatch.setenv("AGENT_MONITOR_PUBLIC", "1")
+        refused = {(kind, model): start(port, cookie, kind, model) for kind in kinds
+                   for model in ("gpt-6-astra", "kimi-k2.5", "kimi:kimi-k2.5")}
+        started = {(kind, model): start(port, cookie, kind, model) for kind in kinds
+                   for model in ("kimi:kimi-k3", " KIMI : Kimi-K3 ", "Kimi-K3")}
+    assert bool(user.get("full_access")) is full_access
+    notes = {"readability": account_policy.READABILITY_SPONSORED_ONLY_NOTE,
+             "analyze": account_policy.ANALYZE_SPONSORED_ONLY_NOTE}
+    assert {key: (status, body["error"]) for key, (status, _headers, body) in refused.items()} == {
+        (kind, model): (403, notes[kind]) for kind, model in refused}
+    assert {key: status for key, (status, _headers, _body) in started.items()} == dict.fromkeys(started, 200), started
+    assert [(item["model"], item["route"], item["sponsored_kimi"]) for item in launched] == [
+        ("kimi-k3", "api_key", True)] * 6
+    assert gate.usage_today() == 6
+
+
+@pytest.mark.parametrize("engine", ["readability", "analyze"])
+def test_the_runs_own_model_wins_over_a_model_variable_the_service_inherited(monkeypatch, engine):
+    """A manuscript runner reads its own model variable and MATH_HARNESS_MODEL
+    before the selection: one in the service's environment must never replace
+    the model a run (or its question) was started with, and is recorded and
+    billed at.  The child gets the selection in the runner's own variable."""
+    from agent_monitor.runners import analyze_runner
+
+    rules = readability_runner.ROUTES if engine == "readability" else analyze_runner.ANALYZE_ROUTES
+    for name in ("MATH_HARNESS_MODEL", "AGENT_MONITOR_ANALYZE_MODEL", "AGENT_MONITOR_READABILITY_MODEL"):
+        monkeypatch.setenv(name, "gpt-5.2")
+    extra = {"AGENT_MONITOR_PYTHON": "python", "ANTHROPIC_API_KEY": "sk-ant-member-123456789",
+             "AGENT_MONITOR_SPONSORED_KIMI": "0"}
+    env = jobs._analyze_recheck_env(extra, model="claude-opus-5-5", engine=engine)
+    assert "MATH_HARNESS_MODEL" not in env and env[rules.model_env] == "claude-opus-5-5"
+    assert {name for name in jobs._MANUSCRIPT_MODEL_ENV.values() if name in env} == {rules.model_env}
+    info = analyze_runner.configure_route(dict(env), {"role": "member", "model": "claude-opus-5-5"}, rules)
+    assert (info.route.model, info.name) == ("claude-opus-5-5", "api_key")
+    # Another engine's variables are left to it.
+    from agent_monitor.subprocess_env import child_process_env
+
+    plain = child_process_env(extra=extra)
+    jobs._apply_selected_model_env(plain, engine="plain", model="claude-opus-5-5")
+    assert plain["MATH_HARNESS_MODEL"] == "gpt-5.2" and plain["PLAIN_MODEL"] == "claude-opus-5-5"
 
 
 def test_the_cli_watchdog_follows_the_readability_caps():
@@ -822,6 +1564,10 @@ def _wait(predicate, timeout=120.0):
     return False
 
 
+def _chat_says(run_id: str, line: str) -> bool:
+    return line in "\n".join(message["content"] for message in jobs.list_chat(run_id))
+
+
 def test_a_sponsored_run_and_a_question_through_jobs(gate, monkeypatch):
     monkeypatch.setattr(jobs, "_estimate_cost", lambda *_args, **_kwargs: None)
     server = ThreadingHTTPServer(("127.0.0.1", 0), Broker)
@@ -854,8 +1600,9 @@ def test_a_sponsored_run_and_a_question_through_jobs(gate, monkeypatch):
         assert not (workspace / "proof.md").exists() and not (workspace / "proof.tex").exists()
         assert not (workspace / "auto_pipeline.json").exists()
         assert server.seen == ["guide", "rewrite", "check"]
-        assert "Readable version published: 1 of 1 parts rewritten (1 faithful)." in "\n".join(
-            message["content"] for message in jobs.list_chat(job["run_id"]))
+        # The job is marked finished before its closing chat lines are written.
+        assert _wait(lambda: _chat_says(job["run_id"], "Readable version published: 1 of 1 parts rewritten "
+                                                       "(1 faithful)."))
 
         result = jobs.start_readability_ask(job["run_id"], {"question": "Why is it even?", "node_id": "lem:sum"},
                                             user=None)
@@ -871,6 +1618,109 @@ def test_a_sponsored_run_and_a_question_through_jobs(gate, monkeypatch):
         # One sponsored start today (the run); its question counts among the day's questions.
         usage = json.loads(gate.usage_path.read_text())
         assert (usage["runs"], usage["asks"]) == (1, 1) and gate.usage_today() == 1
+    finally:
+        server.shutdown()
+        server.server_close()
+
+
+class ProviderAPI(BaseHTTPRequestHandler):
+    """OpenAI's Responses API and Anthropic's Messages API on loopback,
+    scripted by system prompt: what an own key reaches through the runner's
+    real ``api_chat``."""
+
+    def log_message(self, *_args):
+        return
+
+    def do_POST(self):  # noqa: N802
+        payload = json.loads(self.rfile.read(int(self.headers.get("Content-Length") or 0)))
+        anthropic = self.path.endswith("/messages")
+        system = payload["system"] if anthropic else payload["instructions"]
+        user = payload["messages"][-1]["content"] if anthropic else payload["input"]
+        kind = KINDS.get(system)
+        self.server.seen.append({"path": self.path, "kind": kind, "payload": payload,
+                                 "key": self.headers.get("x-api-key" if anthropic else "Authorization")})
+        text = {"guide": guide_json, "check": check_json, "rewrite": lambda: readable(user),
+                "ask": lambda: "Because $2a+2b=2(a+b)$; see [[result:lem:sum]]."}[kind]()
+        if anthropic:
+            reply = {"id": "msg_loopback", "type": "message", "role": "assistant", "model": payload["model"],
+                     "content": [{"type": "text", "text": text}], "stop_reason": "end_turn", "stop_sequence": None,
+                     "usage": {"input_tokens": 21, "output_tokens": 13}}
+        else:
+            reply = {"id": "resp_loopback", "object": "response", "status": "completed", "model": payload["model"],
+                     "output": [{"type": "message", "role": "assistant",
+                                 "content": [{"type": "output_text", "text": text}]}],
+                     "usage": {"input_tokens": 21, "output_tokens": 13}}
+        body = json.dumps(reply).encode()
+        self.send_response(200)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+
+@pytest.mark.parametrize(("provider", "model"), [("openai", "gpt-6-astra"), ("anthropic", "claude-opus-5-5")])
+def test_an_own_key_run_and_a_question_through_jobs_on_another_providers_model(gate, monkeypatch, provider, model):
+    import sqlite3
+
+    from agent_monitor import usage_ledger
+
+    # Every call is priced at the model that served it (and no price table is fetched).
+    priced: list = []
+    monkeypatch.setattr(jobs, "_has_price", lambda _model: True)
+    monkeypatch.setattr(jobs, "_exact_price_model", lambda name: name)
+    monkeypatch.setattr(jobs, "_estimate_cost", lambda name, **_kwargs: priced.append(name) or 0.001)
+    server = ThreadingHTTPServer(("127.0.0.1", 0), ProviderAPI)
+    server.seen = []
+    threading.Thread(target=server.serve_forever, kwargs={"poll_interval": 0.05}, daemon=True).start()
+    try:
+        base = f"http://127.0.0.1:{server.server_address[1]}"
+        key = f"sk-loopback-{provider}-" + "k" * 24
+        for name in ("OPENAI_API_KEY", "OPENAI_BASE_URL", "ANTHROPIC_API_KEY", "ANTHROPIC_BASE_URL", "KIMI_API_KEY"):
+            monkeypatch.delenv(name, raising=False)
+        if provider == "openai":
+            monkeypatch.setenv("OPENAI_API_KEY", key)
+            monkeypatch.setenv("OPENAI_BASE_URL", base + "/v1")
+        else:
+            monkeypatch.setenv("ANTHROPIC_API_KEY", key)
+            monkeypatch.setenv("ANTHROPIC_BASE_URL", base)
+        monkeypatch.setenv("NO_PROXY", "*")
+        monkeypatch.setenv("no_proxy", "*")
+        # Model variables in the service's own environment never replace the run's model.
+        for name in ("MATH_HARNESS_MODEL", "AGENT_MONITOR_READABILITY_MODEL", "AGENT_MONITOR_ANALYZE_MODEL"):
+            monkeypatch.setenv(name, "gpt-5.2")
+        job = jobs.start_job(engine="readability", run_kind="readability", source={"text": MARKED_PAPER}, user=None,
+                             model=model, auth_route="api_key")
+        assert (job["model"], job["credential_source"], job["auth_route"]) == (model, "user", "api_key")
+        assert _wait(lambda: jobs.get_job(job["job_id"])["status"] != "running")
+        assert jobs.get_job(job["job_id"])["status"] == "finished", jobs.get_job(job["job_id"])
+        record = jobs._load_run_record(job["run_id"])
+        summary = record["readability"]["summary"]
+        assert record["model"] == model and record["run_kind"] == "readability" and record["status"] == "finished"
+        assert (summary["model"], summary["route"], summary["faithful"], summary["calls"]) == (model, "api_key", 1, 3)
+        assert [seen["kind"] for seen in server.seen] == ["guide", "rewrite", "check"]
+        path, sent_key = ("/v1/messages", key) if provider == "anthropic" else ("/v1/responses", f"Bearer {key}")
+        assert {(seen["path"], seen["key"], seen["payload"]["model"]) for seen in server.seen} == {(path, sent_key, model)}
+        # The job is marked finished before its closing chat lines are written.
+        assert _wait(lambda: _chat_says(job["run_id"], "Readable version published: 1 of 1 parts rewritten "
+                                                       "(1 faithful)."))
+
+        result = jobs.start_readability_ask(job["run_id"], {"question": "Why is it even?", "node_id": "lem:sum"},
+                                            user=None)
+        assert result["status"] == "asking"
+        assert _wait(lambda: not jobs.run_is_active(job["run_id"]))
+        entry = jobs._load_run_record(job["run_id"])["readability"]["asks"][-1]
+        assert entry["status"] == "done", entry
+        assert entry["model"] == model and entry["refs"] == ["lem:sum"] and entry["usage"]["calls"] == 1
+        assert server.seen[-1]["kind"] == "ask" and server.seen[-1]["payload"]["model"] == model
+        # The run and its question are booked, and priced, at the model.
+        assert priced and set(priced) == {model}
+        with sqlite3.connect(usage_ledger.DB_PATH) as conn:
+            booked = {row[0]: row[1:] for row in conn.execute(
+                "SELECT stage, model, calls FROM usage_daily WHERE run_id=?", (job["run_id"],)).fetchall()}
+            indexed = conn.execute("SELECT model FROM runs_index WHERE run_id=?", (job["run_id"],)).fetchone()
+        assert booked["engine"][0] == model and booked["ask"] == (model, 1) and indexed == (model,)
+        # Nothing sponsored: neither the run nor its question touched the pool.
+        assert gate.usage_today() == 0
     finally:
         server.shutdown()
         server.server_close()

@@ -2,8 +2,9 @@
 
 Model calls go to a scripted stand-in for ``api_chat`` (or, for the sponsored
 transport, to a real HTTP server on 127.0.0.1 shaped like the sponsored
-broker); sources are pasted text, uploads or an injected fetcher.  Nothing
-touches the network.
+broker; for OpenAI and Anthropic models, through the real ``api_chat`` to
+scripted stand-ins of the two transports below it); sources are pasted text,
+uploads or an injected fetcher.  Nothing touches the network.
 """
 from __future__ import annotations
 
@@ -28,10 +29,10 @@ import pytest
 
 pytest.importorskip("pylatexenc")
 
-from agent_monitor import attachments, kimi_k3  # noqa: E402
+from agent_monitor import attachments, kimi_k3, settings  # noqa: E402
 from agent_monitor.readability import ask, document, limits, paper_map, parse, prompts, record, report  # noqa: E402
 from agent_monitor.readability import request  # noqa: E402
-from agent_monitor.runners import analyze_runner  # noqa: E402
+from agent_monitor.runners import analyze_runner, api_backend  # noqa: E402
 from agent_monitor.runners import math_harness_runner as harness  # noqa: E402
 from agent_monitor.runners import readability_runner as runner  # noqa: E402
 
@@ -118,7 +119,8 @@ class FakeModel:
                  retry_allowance=None):
         kind = KINDS.get(system, "other")
         with self.lock:
-            self.calls.append({"kind": kind, "user": user, "effort": effort, "model": model})
+            self.calls.append({"kind": kind, "user": user, "effort": effort, "model": model, "max_tokens": max_tokens,
+                               "timeout": timeout})
         handler = self.script.get(kind)
         if handler is None:
             handler = {"guide": lambda _user: guide_json(), "rewrite": readable,
@@ -151,10 +153,11 @@ def kimi_env(**extra) -> dict[str, str]:
 
 
 def write_request(workspace: Path, *, text=PAPER, role="admin", route="api_key", model="kimi-k3", sponsored=False,
-                  caps=None, audience="graduate", focus="", source=None) -> dict:
+                  caps=None, audience="graduate", focus="", source=None, own_subscriptions=False) -> dict:
     workspace.mkdir(parents=True, exist_ok=True)
     request.write(workspace, source=source or {"kind": "paste", "text": text}, caps=caps or {}, audience=audience,
-                  focus=focus, role=role, route=route, model=model, reasoning_effort="default", sponsored=sponsored)
+                  focus=focus, role=role, route=route, model=model, reasoning_effort="default", sponsored=sponsored,
+                  own_subscriptions=own_subscriptions)
     return request.load(workspace)
 
 
@@ -719,18 +722,31 @@ def test_a_stop_before_any_rewrite_publishes_nothing(tmp_path, model, monkeypatc
     ("env_extra", "req_extra", "message"),
     [
         ({"AGENT_MONITOR_CGM_ROUTE_MODE": "max"}, {}, "Max is not available for Readability"),
+        # A linked account is an administrator's, or one given full access (below); never a
+        # restricted member's or a guest's, whatever the request says.
         ({"AGENT_MONITOR_CODEX_SUBSCRIPTION": "1", "CODEX_HOME": "/nonexistent",
           "AGENT_MONITOR_SELECTED_MODEL": "gpt-5.6-sol"}, {"role": "member", "model": "gpt-5.6-sol"},
-         "administrators only"),
-        ({"AGENT_MONITOR_CLAUDE_SUBSCRIPTION": "1"}, {"role": "guest"}, "administrators only"),
-        ({"AGENT_MONITOR_SELECTED_MODEL": "deepseek-chat", "DEEPSEEK_API_KEY": "x"}, {"model": "deepseek-chat"},
-         "Readability runs on an API key use Kimi K3"),
-        ({"AGENT_MONITOR_SELECTED_MODEL": "gpt-5.2", "OPENAI_API_KEY": "x"}, {"role": "member", "model": "gpt-5.2"},
-         "Readability runs on an API key use Kimi K3"),
+         "administrators and full-access accounts only"),
+        ({"AGENT_MONITOR_CLAUDE_SUBSCRIPTION": "1"}, {"role": "guest"}, "administrators and full-access accounts only"),
+        ({"AGENT_MONITOR_CLAUDE_SUBSCRIPTION": "1", "AGENT_MONITOR_GUEST": "1"},
+         {"role": "member", "own_subscriptions": True}, "administrators and full-access accounts only"),
+        ({"AGENT_MONITOR_CGM_ROUTE_MODE": "max_api", "AGENT_MONITOR_SELECTED_MODEL": "max-api"}, {"model": "max-api"},
+         r"Max \(API\) is not available for Readability"),
+        # An own key runs any of its models (below), but a guest runs Kimi K3 only ...
+        ({"AGENT_MONITOR_SELECTED_MODEL": "gpt-5.2", "OPENAI_API_KEY": "x", "AGENT_MONITOR_GUEST": "1"},
+         {"role": "guest", "model": "gpt-5.2"}, "Guest readability runs use Kimi K3"),
+        # ... and so does the sponsored route.
+        ({"AGENT_MONITOR_SPONSORED_KIMI": "1", "AGENT_MONITOR_SELECTED_MODEL": "gpt-5.2"},
+         {"route": "sponsored_kimi", "sponsored": True, "model": "gpt-5.2"}, "Sponsored readability runs use Kimi K3"),
         ({}, {"route": "sponsored_kimi", "sponsored": True}, "not configured"),
         ({"AGENT_MONITOR_SPONSORED_KIMI": "1", "KIMI_API_BASE": "https://evil.example/internal/v1"},
          {"route": "sponsored_kimi", "sponsored": True}, "attestation failed"),
         ({"KIMI_API_KEY": ""}, {}, "Add a Kimi API key"),
+        # Kimi K3 is Readability's only Kimi model, on the account's own Kimi key too.
+        ({"AGENT_MONITOR_SELECTED_MODEL": "kimi-k2.5"}, {"model": "kimi-k2.5"},
+         r"^Readability runs Kimi K3 as its only Kimi model \(kimi-k3\)$"),
+        ({"AGENT_MONITOR_SELECTED_MODEL": "kimi:kimi-k2.5"}, {"model": "kimi:kimi-k2.5"},
+         r"^Readability runs Kimi K3 as its only Kimi model \(kimi-k3\)$"),
     ],
 )
 def test_route_attestation_refuses_before_any_call(tmp_path, model, env_extra, req_extra, message):
@@ -740,6 +756,42 @@ def test_route_attestation_refuses_before_any_call(tmp_path, model, env_extra, r
     with pytest.raises(analyze_runner.ConfigError, match=message):
         run(tmp_path, req, kimi_env(**env_extra))
     assert fake.calls == []
+
+
+@pytest.mark.parametrize("named", [" KIMI-K3", "kimi:kimi-k3", "KIMI : Kimi-K3"])
+def test_kimi_k3_named_in_another_case_runs_as_kimi_k3(tmp_path, model, named):
+    """An older run's record may name Kimi K3 in another case ("Kimi-K3"),
+    or with its provider prefix ("kimi:kimi-k3"): the runner takes it as
+    Kimi K3, never as another Kimi model."""
+    fake = model()
+    outcome = run(tmp_path, write_request(tmp_path, model="Kimi-K3"), kimi_env(AGENT_MONITOR_SELECTED_MODEL=named))
+    assert outcome["receipt"]["model"] == "kimi-k3" and {call["model"] for call in fake.calls} == {"kimi-k3"}
+
+
+@pytest.mark.parametrize("linked", ["codex", "claude"])
+def test_a_full_access_account_runs_on_its_own_linked_account_and_a_restricted_one_never(tmp_path, linked):
+    """``own_subscriptions`` (jobs writes it for an administrator or an
+    account given full access) lets the runner take a linked account's route,
+    for the run and for a question about it; without it a member's request is
+    refused before any call, and a guest's request may not carry it."""
+    env = {"PATH": os.environ.get("PATH", ""), f"AGENT_MONITOR_{linked.upper()}_SUBSCRIPTION": "1",
+           **({"CODEX_HOME": str(tmp_path / "codex"), "AGENT_MONITOR_CODEX_MODEL": "gpt-5.6-sol"} if linked == "codex"
+              else {"CLAUDE_CONFIG_DIR": str(tmp_path / "claude"), "AGENT_MONITOR_CLAUDE_MODEL": "opus"})}
+    route, model_id = (("codex_subscription", "gpt-5.6-sol") if linked == "codex" else ("claude_subscription", "opus"))
+    full = write_request(tmp_path / "full", role="member", route=route, model=model_id, own_subscriptions=True)
+    assert full["own_subscriptions"] is True
+    info = analyze_runner.configure_route(dict(env), full, runner.ROUTES)
+    assert (info.name, info.route.transport, info.guest) == (
+        route, "codex_exec" if linked == "codex" else "claude_code", False)
+    restricted = write_request(tmp_path / "restricted", role="member", route=route, model=model_id)
+    assert restricted["own_subscriptions"] is False
+    with pytest.raises(analyze_runner.ConfigError, match="administrators and full-access accounts only"):
+        analyze_runner.configure_route(dict(env), restricted, runner.ROUTES)
+    # The administrator's own needs no flag; a guest's request may not carry one.
+    admin = write_request(tmp_path / "admin", role="admin", route=route, model=model_id)
+    assert analyze_runner.configure_route(dict(env), admin, runner.ROUTES).name == route
+    with pytest.raises(request.RequestError, match="gives a guest account subscriptions"):
+        write_request(tmp_path / "guest", role="guest", route=route, model=model_id, own_subscriptions=True)
 
 
 def test_an_administrators_codex_account_answers_response_only(tmp_path, monkeypatch):
@@ -757,6 +809,496 @@ def test_an_administrators_codex_account_answers_response_only(tmp_path, monkeyp
     outcome = run(tmp_path / "ws", req, env)
     assert outcome["receipt"]["transport"] == "codex_exec" and outcome["receipt"]["caps"]["concurrency"] == 1
     assert {call["sandbox"] for call in seen} == {"read-only"} and {call["enable_tools"] for call in seen} == {False}
+
+
+# ---------------------------------------------------------------------------
+# other providers' models on an own key (the real api_chat)
+# ---------------------------------------------------------------------------
+
+OPENAI_KEY = "sk-own-openai-" + "o" * 24
+ANTHROPIC_KEY = "sk-ant-own-" + "a" * 24
+DEEPSEEK_KEY = "sk-own-deepseek-" + "d" * 24
+KIMI_KEY = "sk-own-kimi-" + "k" * 24
+GEMINI_KEY = "synthetic-gemini-key-" + "g" * 24
+# A reply the model declines (an Anthropic refusal).
+DECLINE = object()
+# A reply that reached its output limit, as each provider says so: OpenAI ends
+# it "incomplete" (max_output_tokens), Anthropic with the stop reason
+# max_tokens, Chat Completions with finish_reason "length", Gemini with
+# finishReason "MAX_TOKENS"; each with what the model wrote by then (CUT_OFF)
+# or nothing at all, its reasoning having used the whole limit (EMPTY_CUT_OFF).
+CUT_OFF = object()
+EMPTY_CUT_OFF = object()
+# The same partial text and an empty reply, which the provider says ended normally.
+TRUNCATED = object()
+EMPTY = object()
+PARTIAL = "=== READABLE ===\n## A part\n\nThis part explains the argu"
+
+
+class ProviderSeams:
+    """The transports below the real ``api_chat``: OpenAI's Responses API,
+    the Chat Completions APIs (Kimi, DeepSeek, ...) and Gemini's
+    generateContent (``settings._http_json``), and Anthropic's Messages API
+    (``api_backend._anthropic_message``), scripted by system prompt as
+    :class:`FakeModel` is.  Each call therefore carries the effort, output
+    limit and timeout ``api_backend`` gives that model."""
+
+    def __init__(self, **script):
+        self.script = script
+        self.requests: list[dict] = []
+        self.lock = threading.Lock()
+
+    def text(self, kind: str, user: str):
+        handler = self.script.get(kind) or {
+            "guide": lambda _user: guide_json(), "rewrite": readable, "check": lambda _user: check_json(),
+            "ask": lambda _user: "Because $2a+2b=2(a+b)$; see [[result:lem:sum]]."}[kind]
+        return handler(user)
+
+    def kinds(self) -> list[str]:
+        return [request["kind"] for request in self.requests]
+
+    def http_json(self, url, *, headers, method="GET", payload=None, timeout=20):
+        if url.endswith("/chat/completions"):
+            return self.chat_completion(url, headers=headers, payload=payload, timeout=timeout)
+        if ":generateContent?" in url:
+            return self.generate_content(url, payload=payload, timeout=timeout)
+        kind = KINDS.get(payload["instructions"], "other")
+        with self.lock:
+            self.requests.append({"provider": "openai", "kind": kind, "url": url, "payload": dict(payload),
+                                  "timeout": timeout, "authorization": headers.get("Authorization")})
+        text = self.text(kind, payload["input"])
+        if text is CUT_OFF or text is EMPTY_CUT_OFF:
+            # Reasoning took most of the limit (or all of it); the visible text stops mid-part.
+            limit = payload["max_output_tokens"]
+            return 200, {"model": payload["model"], "status": "incomplete",
+                         "incomplete_details": {"reason": "max_output_tokens"},
+                         "output_text": PARTIAL if text is CUT_OFF else "",
+                         "usage": {"input_tokens": 13, "output_tokens": limit,
+                                   "output_tokens_details": {"reasoning_tokens": limit - 12}}}
+        text = {TRUNCATED: PARTIAL, EMPTY: ""}.get(text, text)
+        return 200, {"model": payload["model"], "status": "completed", "output_text": text,
+                     "usage": {"input_tokens": 13, "output_tokens": 8, "output_tokens_details": {"reasoning_tokens": 5}}}
+
+    def chat_completion(self, url, *, headers, payload, timeout):
+        system = next(message["content"] for message in payload["messages"] if message["role"] == "system")
+        kind = KINDS.get(system, "other")
+        with self.lock:
+            self.requests.append({"provider": "chat", "kind": kind, "url": url, "payload": dict(payload),
+                                  "timeout": timeout, "authorization": headers.get("Authorization")})
+        text = self.text(kind, payload["messages"][-1]["content"])
+        limited = text is CUT_OFF or text is EMPTY_CUT_OFF
+        content = {CUT_OFF: PARTIAL, EMPTY_CUT_OFF: "", TRUNCATED: PARTIAL, EMPTY: ""}.get(text, text)
+        return 200, {"model": payload["model"],
+                     "choices": [{"index": 0, "message": {"role": "assistant", "content": content},
+                                  "finish_reason": "length" if limited else "stop"}],
+                     "usage": {"prompt_tokens": 13, "completion_tokens": payload["max_tokens"] if limited else 8}}
+
+    def generate_content(self, url, *, payload, timeout):
+        kind = KINDS.get(payload["systemInstruction"]["parts"][0]["text"], "other")
+        with self.lock:
+            # The key is in the URL's query: only the path is kept.
+            self.requests.append({"provider": "google", "kind": kind, "url": url.split("?", 1)[0],
+                                  "payload": dict(payload), "timeout": timeout})
+        text = self.text(kind, payload["contents"][-1]["parts"][0]["text"])
+        limited = text is CUT_OFF or text is EMPTY_CUT_OFF
+        content = {CUT_OFF: PARTIAL, EMPTY_CUT_OFF: "", TRUNCATED: PARTIAL, EMPTY: ""}.get(text, text)
+        limit = payload["generationConfig"]["maxOutputTokens"]
+        return 200, {"candidates": [{"content": {"role": "model", "parts": [{"text": content}] if content else []},
+                                     "finishReason": "MAX_TOKENS" if limited else "STOP"}],
+                     "usageMetadata": {"promptTokenCount": 13, "candidatesTokenCount": limit if limited else 8}}
+
+    def anthropic_message(self, options, request):
+        from anthropic.types.beta import BetaMessage
+
+        kind = KINDS.get(request["system"], "other")
+        with self.lock:
+            self.requests.append({"provider": "anthropic", "kind": kind, "options": dict(options),
+                                  "request": dict(request)})
+        text = self.text(kind, request["messages"][-1]["content"])
+        declined = text is DECLINE
+        limited = text is CUT_OFF or text is EMPTY_CUT_OFF
+        content = {DECLINE: "A partial reply.", CUT_OFF: PARTIAL, EMPTY_CUT_OFF: "", TRUNCATED: PARTIAL,
+                   EMPTY: ""}.get(text, text)
+        return BetaMessage.model_validate({
+            "id": "msg_test", "type": "message", "role": "assistant", "model": request["model"],
+            "content": [{"type": "text", "text": content}],
+            "stop_reason": "refusal" if declined else "max_tokens" if limited else "end_turn", "stop_sequence": None,
+            **({"stop_details": {"type": "refusal", "category": "cyber"}} if declined else {}),
+            "usage": {"input_tokens": 17, "output_tokens": request["max_tokens"] if limited else 9}})
+
+
+@pytest.fixture()
+def providers(monkeypatch):
+    def install(**script):
+        seams = ProviderSeams(**script)
+        monkeypatch.setattr(settings, "_http_json", seams.http_json)
+        monkeypatch.setattr(api_backend, "_anthropic_message", seams.anthropic_message)
+        return seams
+
+    return install
+
+
+def own_key_env(model: str, **extra) -> dict[str, str]:
+    env = {"PATH": os.environ.get("PATH", "/usr/bin:/bin"), "AGENT_MONITOR_SELECTED_MODEL": model,
+           "AGENT_MONITOR_SPONSORED_KIMI": "0", "OPENAI_API_KEY": OPENAI_KEY, "ANTHROPIC_API_KEY": ANTHROPIC_KEY}
+    env.update(extra)
+    return env
+
+
+@pytest.mark.parametrize(("effort", "output_limit", "seconds"), [("default", 16_384, 300), ("xhigh", 64_000, 1800)])
+def test_a_members_openai_model_rewrites_checks_and_answers_as_analyze_calls_it(tmp_path, providers, effort,
+                                                                                output_limit, seconds):
+    seams = providers()
+    env = own_key_env("gpt-6-astra", AGENT_MONITOR_RUN_REASONING_EFFORT=effort)
+    # One section of about 19,500 characters: one part on an own key (12,000 on bounded routes).
+    req = write_request(tmp_path, text=sections(1, 650), role="member", model="gpt-6-astra")
+    events: list[dict] = []
+    outcome = run(tmp_path, req, env, events)
+    receipt = outcome["receipt"]
+    assert (receipt["model"], receipt["route"], receipt["transport"]) == ("gpt-6-astra", "api_key", "api_chat")
+    assert receipt["caps"]["profile"] == "member_own_key" and receipt["guide"] == "model" and receipt["notes"] == []
+    counts = receipt["parts"]
+    assert counts["rewritten"] == counts["faithful"] == counts["total"] and counts["not_rewritten"] == 0
+    # Every call went to OpenAI with the key, the effort, the output limit and the time Analyze gives
+    # it, except that a rewrite, the run's long reply, always gets 64,000 tokens and 30 minutes.
+    assert seams.kinds() == ["guide"] + ["rewrite"] * counts["total"] + ["check"] * counts["total"]
+    for request in seams.requests:
+        assert request["url"] == "https://api.openai.com/v1/responses" and request["authorization"] == f"Bearer {OPENAI_KEY}"
+        payload = request["payload"]
+        long_reply = request["kind"] == "rewrite"
+        assert payload["model"] == "gpt-6-astra"
+        assert payload["max_output_tokens"] == (runner.LONG_OUTPUT_TOKENS if long_reply else output_limit)
+        assert payload.get("reasoning") == ({"effort": "xhigh"} if effort == "xhigh" else None)
+        assert request["timeout"] == (1800 if long_reply else seconds) and payload["store"] is False
+    assert {(entry["provider"], entry["model"], entry["effort"]) for entry in receipt["call_log"]} == {
+        ("openai", "gpt-6-astra", None)}
+    # Each call's usage names the model the server prices it at, reasoning included.
+    usage = [event for event in events if event.get("type") == "turn.completed"]
+    assert len(usage) == len(seams.requests) and {event["model"] for event in usage} == {"gpt-6-astra"}
+    assert {event["usage"]["reasoning_output_tokens"] for event in usage} == {5}
+    # Own-key sizes: the full guide and parts longer than a bounded route's.
+    guide = next(request for request in seams.requests if request["kind"] == "guide")
+    assert prompts.BOUNDED_GUIDE_NOTE not in guide["payload"]["input"]
+    parts = [part for part in load(tmp_path, "check.json")["parts"] if part["kind"] == "text"]
+    assert max(part["chars"] for part in parts) > prompts.BOUNDED_PART_CHARS
+    assert any(event.get("item", {}).get("text", "").startswith("Ansatz Readability · gpt-6-astra via api_key · up to 40 parts")
+               for event in events)
+    assert "gpt-6-astra via the owner's API key" in (tmp_path / "readability" / "readable.md").read_text()
+    # A question on the run's own route and model.
+    ask.write_request(tmp_path, "a1b2c3d4e5f6", {"question": "Why is the sum even?", "node_id": "lem:sum"})
+    answer = runner.run_ask(tmp_path, "a1b2c3d4e5f6", route_env=env)
+    assert (answer["status"], answer["model"], answer["route"], answer["calls"]) == ("done", "gpt-6-astra", "api_key", 1)
+    assert answer["answer"].startswith("Because $2a+2b=2(a+b)$") and answer["refs"] == ["lem:sum"]
+    assert answer["usage"]["input_tokens"] == 13 and answer["usage"]["reasoning_output_tokens"] == 5
+    asked = seams.requests[-1]
+    assert asked["kind"] == "ask" and asked["payload"]["max_output_tokens"] == output_limit
+    if effort == "default":
+        assert asked["timeout"] == 300
+    else:
+        # The long call, held to the question's own 900 s.
+        assert 880 <= asked["timeout"] <= 915
+
+
+def test_an_anthropic_model_rewrites_checks_and_answers_as_analyze_calls_it(tmp_path, providers):
+    seams = providers()
+    env = own_key_env("claude-opus-5-5")
+    events: list[dict] = []
+    outcome = run(tmp_path, write_request(tmp_path, model="claude-opus-5-5"), env, events)
+    receipt = outcome["receipt"]
+    assert (receipt["model"], receipt["route"], receipt["caps"]["profile"]) == ("claude-opus-5-5", "api_key", "admin")
+    assert receipt["parts"]["faithful"] == 1 and seams.kinds() == ["guide", "rewrite", "check"]
+    for request in seams.requests:
+        sent = request["request"]
+        # No effort of Kimi's per stage, and no thinking or sampling parameters: Anthropic's defaults.
+        # The rewrite, a long reply, gets 64,000 tokens and 30 minutes (streamed from the Claude API).
+        long_reply = request["kind"] == "rewrite"
+        assert sent["model"] == "claude-opus-5-5" and sent["max_tokens"] == (64_000 if long_reply else 16_384)
+        assert not {"output_config", "thinking", "temperature"} & set(sent)
+        assert request["options"]["api_key"] == ANTHROPIC_KEY
+        assert request["options"]["timeout"] == (1800 if long_reply else 300) and request["options"]["stream"] is True
+    assert {(entry["provider"], entry["model"], entry["effort"]) for entry in receipt["call_log"]} == {
+        ("anthropic", "claude-opus-5-5", None)}
+    usage = [event for event in events if event.get("type") == "turn.completed"]
+    assert len(usage) == 3 and {event["model"] for event in usage} == {"claude-opus-5-5"}
+    ask.write_request(tmp_path, "f6e5d4c3b2a1", {"question": "What is the key idea?",
+                                                 "selection": "This part explains the argument.", "view": "readable"})
+    answer = runner.run_ask(tmp_path, "f6e5d4c3b2a1", route_env=env)
+    assert (answer["status"], answer["model"], answer["part"], answer["calls"]) == ("done", "claude-opus-5-5", 1, 1)
+    assert (answer["usage"]["input_tokens"], answer["usage"]["output_tokens"]) == (17, 9)
+    assert seams.requests[-1]["kind"] == "ask" and seams.requests[-1]["request"]["max_tokens"] == 16_384
+
+
+def test_a_rewrite_the_model_declines_says_so(tmp_path, providers):
+    seams = providers(rewrite=lambda _user: DECLINE)
+    with pytest.raises(analyze_runner.AnalyzeError,
+                       match=r"No part could be rewritten: the rewrite failed: Anthropic declined the request for "
+                             r"claude-opus-5-5 \(cyber\)"):
+        run(tmp_path, write_request(tmp_path, model="claude-opus-5-5"), own_key_env("claude-opus-5-5"))
+    # Declined once: no low-effort retry (Kimi's) and no format reminder.
+    assert seams.kinds() == ["guide", "rewrite"]
+    part = next(part for part in load(tmp_path, "check.json")["parts"] if part["kind"] == "text")
+    assert part["status"] == "not-rewritten" and "empty answer" not in part["reason"]
+    assert "provider-failure" not in load(tmp_path, "receipt.json")["degraded"]
+
+
+# The part's reason when the provider said the rewrite stopped at its output limit.
+def _limit_reason(tokens: int) -> str:
+    return f"the rewrite failed: the reply reached the model's output limit ({tokens:,} tokens) before it finished"
+
+
+def test_a_rewrite_on_an_own_key_is_asked_with_the_long_output_limit(tmp_path, providers):
+    """A part's rewrite is a long reply, reasoning included: on an own key it
+    is asked for with 64,000 output tokens and 30 minutes even below Extra
+    high (the other calls keep 16,384 tokens and 300 s), so a reply OpenAI
+    still ends "incomplete" at max_output_tokens has had that room, and so
+    has its format reminder."""
+    seams = providers(rewrite=lambda _user: CUT_OFF)
+    # One section of about 19,500 characters: one part on an own key.
+    req = write_request(tmp_path, text=sections(1, 650), role="member", model="gpt-6-astra")
+    with pytest.raises(analyze_runner.AnalyzeError,
+                       match=r"No part could be rewritten: the rewrite failed: the reply reached the model's output "
+                             r"limit \(64,000 tokens\) before it finished"):
+        run(tmp_path, req, own_key_env("gpt-6-astra"))
+    assert [(item["kind"], item["payload"]["max_output_tokens"], item["timeout"]) for item in seams.requests] == [
+        ("guide", 16_384, 300), ("rewrite", 64_000, 1800), ("rewrite", 64_000, 1800)]
+    assert [entry["stage"] for entry in load(tmp_path, "receipt.json")["call_log"]] == [
+        "guide", "rewrite-1", "rewrite-1-retry"]
+    part = next(part for part in load(tmp_path, "check.json")["parts"] if part["kind"] == "text")
+    assert part["status"] == "not-rewritten"
+    assert part["reason"] == _limit_reason(64_000)
+    # Why the format reminder was sent stays the parser's own reason.
+    assert "rewrite-1: the reply was cut off before === END ===" in " ".join(load(tmp_path, "receipt.json")["notes"])
+
+
+@pytest.mark.parametrize(("model_id", "keys", "tokens"), [
+    # OpenAI's Responses API: status "incomplete", incomplete_details.reason "max_output_tokens".
+    ("gpt-6-astra", {}, 64_000),
+    # Anthropic's Messages API: stop_reason "max_tokens".
+    ("claude-opus-5-5", {}, 64_000),
+    # Chat Completions: finish_reason "length" (another provider's limit, and an own Kimi key's).
+    ("deepseek-v4-pro", {"DEEPSEEK_API_KEY": DEEPSEEK_KEY}, 16_384),
+    ("kimi-k3", {"KIMI_API_KEY": KIMI_KEY}, 16_384),
+    # Gemini's generateContent: finishReason "MAX_TOKENS".
+    ("gemini-3.6-flash", {"GEMINI_API_KEY": GEMINI_KEY}, 16_384),
+], ids=["openai", "anthropic", "chat-completions", "own-kimi", "gemini"])
+@pytest.mark.parametrize("reply", [CUT_OFF, EMPTY_CUT_OFF], ids=["partial", "empty"])
+def test_a_rewrite_that_reached_the_output_limit_says_so_with_the_limit(tmp_path, providers, model_id, keys,
+                                                                       tokens, reply):
+    """A rewrite the provider says stopped at its output limit, after some
+    text or with none at all (its reasoning used the whole limit), is not
+    reported as unreadable or empty: the part's reason, the run's error and
+    the notes say the reply reached the model's output limit, and name it."""
+    seams = providers(rewrite=lambda _user: reply)
+    req = write_request(tmp_path, text=sections(1, 650), role="member", model=model_id)
+    events: list[dict] = []
+    with pytest.raises(analyze_runner.AnalyzeError,
+                       match="No part could be rewritten: " + re.escape(_limit_reason(tokens))):
+        run(tmp_path, req, own_key_env(model_id, **keys), events)
+    assert "rewrite" in seams.kinds()
+    part = next(part for part in load(tmp_path, "check.json")["parts"] if part["kind"] == "text")
+    assert (part["status"], part["reason"]) == ("not-rewritten", _limit_reason(tokens))
+    assert any(event.get("item", {}).get("text", "").endswith("not rewritten — " + _limit_reason(tokens))
+               for event in events)
+
+
+@pytest.mark.parametrize("model_id", ["gpt-6-astra", "claude-opus-5-5", "deepseek-v4-pro", "gemini-3.6-flash"])
+def test_a_reply_that_ended_without_reaching_the_limit_keeps_its_reason(tmp_path, providers, model_id):
+    """The same partial text, or no text, that the provider says ended
+    normally is reported as before: unreadable, or an empty answer."""
+    keys = {"DEEPSEEK_API_KEY": DEEPSEEK_KEY, "GEMINI_API_KEY": GEMINI_KEY}
+    seams = providers(rewrite=lambda _user: TRUNCATED)
+    with pytest.raises(analyze_runner.AnalyzeError,
+                       match=r"the rewrite failed: the model's reply could not be read \(the reply was cut off before "
+                             r"=== END ==="):
+        run(tmp_path, write_request(tmp_path, text=sections(1, 650), role="member", model=model_id),
+            own_key_env(model_id, **keys))
+    empty = tmp_path / "empty"
+    providers(rewrite=lambda _user: EMPTY)
+    with pytest.raises(analyze_runner.AnalyzeError, match="the rewrite failed: the model returned an empty answer$"):
+        run(empty, write_request(empty, text=sections(1, 650), role="member", model=model_id),
+            own_key_env(model_id, **keys))
+    assert "rewrite" in seams.kinds()
+
+
+@pytest.mark.parametrize(("first", "retry", "reason"), [
+    (EMPTY_CUT_OFF, EMPTY, "the model returned an empty answer, even at low effort"),
+    (EMPTY, EMPTY_CUT_OFF, "the reply reached the model's output limit (16,384 tokens) before it finished"),
+], ids=["limit-then-normal", "normal-then-limit"])
+def test_an_own_kimi_keys_low_effort_retry_decides_why_its_rewrite_is_empty(tmp_path, providers, first, retry, reason):
+    """An own Kimi key's empty rewrite is asked again once at low effort; the
+    reason is the retry's: an empty answer that ended normally after a first
+    reply that stopped at the output limit is an empty answer, and the other
+    way round the limit is named."""
+    replies: list = []
+
+    def rewrite(_user):
+        # kimi_k3.request_with_retry asks three times on an empty reply: the first
+        # call's three replies, then the low-effort retry's.
+        replies.append(first if len(replies) < 3 else retry)
+        return replies[-1]
+
+    seams = providers(rewrite=rewrite)
+    req = write_request(tmp_path, text=sections(1, 650), role="member", model="kimi-k3")
+    with pytest.raises(analyze_runner.AnalyzeError, match="No part could be rewritten: the rewrite failed: "
+                                                          + re.escape(reason) + "$"):
+        run(tmp_path, req, own_key_env("kimi-k3", KIMI_API_KEY=KIMI_KEY))
+    efforts = [item["payload"]["reasoning_effort"] for item in seams.requests if item["kind"] == "rewrite"]
+    assert len(efforts) == 6 and "low" not in efforts[:3] and efforts[3:] == ["low"] * 3
+    part = next(part for part in load(tmp_path, "check.json")["parts"] if part["kind"] == "text")
+    assert part["reason"] == "the rewrite failed: " + reason
+
+
+def test_a_cut_off_rewrite_with_no_call_left_for_a_reminder_says_it_reached_the_limit(tmp_path, providers):
+    """A rewrite that stopped at its output limit when its turn has no call
+    left for a format reminder (a tight call budget: the guide, one rewrite
+    and its check) names the limit, as a reminder's reply would."""
+    seams = providers(rewrite=lambda _user: CUT_OFF)
+    req = write_request(tmp_path, text=sections(1, 650), role="member", model="gpt-6-astra", caps={"max_calls": 3})
+    with pytest.raises(analyze_runner.AnalyzeError,
+                       match="No part could be rewritten: " + re.escape(_limit_reason(64_000)) + "$"):
+        run(tmp_path, req, own_key_env("gpt-6-astra"))
+    assert seams.kinds() == ["guide", "rewrite"]
+
+
+def test_a_cut_off_rewrite_whose_reminder_would_be_too_long_says_it_reached_the_limit(tmp_path, providers,
+                                                                                      monkeypatch):
+    """A rewrite that stopped at its output limit when the format reminder
+    would push the prompt past its bound (no retry is sent) names the limit
+    too."""
+    from agent_monitor.cgm import prompts as cgm_prompts
+
+    monkeypatch.setattr(cgm_prompts, "FORMAT_REMINDER", "x" * harness.MAX_MODEL_PROMPT_BYTES + " {reason}")
+    seams = providers(rewrite=lambda _user: CUT_OFF)
+    req = write_request(tmp_path, text=sections(1, 650), role="member", model="gpt-6-astra")
+    with pytest.raises(analyze_runner.AnalyzeError,
+                       match="No part could be rewritten: " + re.escape(_limit_reason(64_000)) + "$"):
+        run(tmp_path, req, own_key_env("gpt-6-astra"))
+    assert seams.kinds() == ["guide", "rewrite"]
+
+
+@pytest.mark.parametrize("model_id", ["gpt-6-astra", "claude-opus-5-5"])
+def test_a_repair_on_an_own_key_is_asked_with_the_long_output_limit(tmp_path, providers, model_id):
+    """A repair rewrites the part again (major problems found by the check):
+    it is as long a reply as the rewrite, so it and its format reminder get
+    64,000 output tokens and 30 minutes too (OpenAI's max_output_tokens,
+    Anthropic's max_tokens); the checks keep 16,384 tokens and 300 s."""
+    verdicts = iter([check_json("unfaithful", [MAJOR]), check_json("faithful")])
+    rewrites = iter([readable, lambda _user: CUT_OFF, readable])
+    seams = providers(check=lambda _user: next(verdicts), rewrite=lambda user: next(rewrites)(user))
+    req = write_request(tmp_path, text=sections(1, 650), role="member", model=model_id)
+    run(tmp_path, req, own_key_env(model_id))
+    stages = [entry["stage"] for entry in load(tmp_path, "receipt.json")["call_log"]]
+    assert stages == ["guide", "rewrite-1", "check-1", "repair-1", "repair-1-retry", "recheck-1"]
+
+    def limits(request):
+        if request["provider"] == "openai":
+            return request["payload"]["max_output_tokens"], request["timeout"]
+        return request["request"]["max_tokens"], request["options"]["timeout"]
+
+    assert [limits(request) for request in seams.requests] == [
+        (16_384, 300), (64_000, 1800), (16_384, 300), (64_000, 1800), (64_000, 1800), (16_384, 300)]
+    part = next(part for part in load(tmp_path, "check.json")["parts"] if part["kind"] == "text")
+    assert part["status"] == "faithful" and part["repaired"] is True
+
+
+def test_a_repair_that_reached_the_output_limit_is_named_in_the_notes(tmp_path, providers):
+    """A repair that stops at its output limit (and so does its format
+    reminder) keeps the first rewrite, and the run says why."""
+    seams = providers(check=lambda _user: check_json("unfaithful", [MAJOR]),
+                      rewrite=lambda user: CUT_OFF if "<CHECK_ISSUES>" in user else readable(user))
+    events: list[dict] = []
+    run(tmp_path, write_request(tmp_path, text=sections(1, 650), role="member", model="gpt-6-astra"),
+        own_key_env("gpt-6-astra"), events)
+    assert [request["kind"] for request in seams.requests] == ["guide", "rewrite", "check", "rewrite", "rewrite"]
+    part = next(part for part in load(tmp_path, "check.json")["parts"] if part["kind"] == "text")
+    assert part["status"] == "issues" and part["repaired"] is False
+    notes = [event["item"]["text"] for event in events if event.get("item", {}).get("type") == "reasoning"]
+    assert [note for note in notes if " · Repair · part 1" in note and note.endswith(
+        " · not repaired, the first rewrite is kept — the repair failed: the reply reached the model's output limit "
+        "(64,000 tokens) before it finished")], notes
+
+
+def test_only_own_key_long_output_models_get_the_long_limit_and_kimi_keeps_its_own(tmp_path, model):
+    keys = {"OPENAI_API_KEY": OPENAI_KEY, "ANTHROPIC_API_KEY": ANTHROPIC_KEY, "KIMI_API_KEY": "sk-kimi-test-key",
+            "DEEPSEEK_API_KEY": "sk-deepseek-test-key"}
+
+    def limits(model_id, *, sponsored=False, guest=False, transport="api_chat", **env):
+        route = harness.Route("api" if transport == "api_chat" else "codex_subscription", model_id, transport)
+        info = analyze_runner.RouteInfo(route, "sponsored_kimi" if sponsored else "api_key", sponsored, guest)
+        return runner.long_call_limits(info, {**keys, **env})
+
+    for model_id in ("gpt-6-astra", "gpt-5.6-sol", "gpt-5-mini-2025-08-07", "openai:gpt-6.1-sol", "claude-opus-5-5",
+                     "claude-fable-5-1", "claude-haiku-4-5"):
+        assert limits(model_id) == (64_000, 1800), model_id
+    # A chat model or an older one may write less; another provider's limits are its own.
+    for model_id in ("chat-latest", "gpt-5-chat-latest", "gpt-4o", "deepseek-v4-pro", "kimi-k3", "anthropic:kimi-k3"):
+        assert limits(model_id) is None, model_id
+    # Guest and sponsored runs keep their bounded ceiling; a linked account its own limits.
+    assert limits("gpt-6-astra", guest=True) is None and limits("kimi-k3", sponsored=True) is None
+    assert limits("gpt-5.6-sol", transport="codex_exec") is None
+    # Readability's own settings set the long limits exactly (see the test below).
+    assert limits("claude-opus-5-5", AGENT_MONITOR_READABILITY_REWRITE_MAX_TOKENS="20000") == (20_000, 1800)
+    assert limits("gpt-6-astra", AGENT_MONITOR_READABILITY_API_TIMEOUT="600") == (64_000, 600)
+    # An own Kimi key's rewrites are sent as before: no output limit of their own, the run's call timeout.
+    fake = model()
+    run(tmp_path, write_request(tmp_path), kimi_env())
+    assert {(call["kind"], call["max_tokens"]) for call in fake.calls} == {
+        ("guide", None), ("rewrite", None), ("check", None)}
+    assert {call["timeout"] for call in fake.calls} <= {300}
+
+
+def test_only_readabilitys_own_settings_set_the_long_limits_exactly(tmp_path):
+    """The general settings of every API call (and of CGM's) may only raise
+    the long limits: at their documented defaults, 16,384 tokens and 300 s,
+    they would otherwise bring back the cut-off rewrites.  Readability's own
+    two settings set them exactly, in their bounds."""
+    route = analyze_runner.RouteInfo(harness.Route("api", "gpt-6-astra", "api_chat"), "api_key", False, False)
+
+    def limits(**env):
+        return runner.long_call_limits(route, {"OPENAI_API_KEY": OPENAI_KEY, **env})
+
+    assert limits() == (64_000, 1800)
+    # AGENT_MONITOR_API_MAX_TOKENS: never lower, only higher (to 128,000).
+    for value, tokens in (("16384", 64_000), ("1024", 64_000), ("64000", 64_000), ("100000", 100_000),
+                          ("999999", 128_000)):
+        assert limits(AGENT_MONITOR_API_MAX_TOKENS=value) == (tokens, 1800), value
+    # AGENT_MONITOR_CGM_API_TIMEOUT: never lower, only higher (to 3,600 s).
+    for value, seconds in (("300", 1800), ("60", 1800), ("2400", 2400), ("5000", 3600)):
+        assert limits(AGENT_MONITOR_CGM_API_TIMEOUT=value) == (64_000, seconds), value
+    # AGENT_MONITOR_READABILITY_REWRITE_MAX_TOKENS: exactly (1,024 to 128,000), over the general one.
+    for value, tokens in (("32000", 32_000), ("16384", 16_384), ("10", 1024), ("200000", 128_000)):
+        assert limits(AGENT_MONITOR_READABILITY_REWRITE_MAX_TOKENS=value) == (tokens, 1800), value
+    assert limits(AGENT_MONITOR_READABILITY_REWRITE_MAX_TOKENS="32000", AGENT_MONITOR_API_MAX_TOKENS="100000") == (
+        32_000, 1800)
+    # AGENT_MONITOR_READABILITY_API_TIMEOUT: exactly (60 to 3,600 s), over CGM's.
+    for value, seconds in (("600", 600), ("300", 300), ("10", 60), ("9000", 3600)):
+        assert limits(AGENT_MONITOR_READABILITY_API_TIMEOUT=value) == (64_000, seconds), value
+    assert limits(AGENT_MONITOR_READABILITY_API_TIMEOUT="600", AGENT_MONITOR_CGM_API_TIMEOUT="2400") == (64_000, 600)
+    # A value that is not a number is refused, as every such setting is.
+    for name in ("AGENT_MONITOR_READABILITY_REWRITE_MAX_TOKENS", "AGENT_MONITOR_API_MAX_TOKENS",
+                 "AGENT_MONITOR_READABILITY_API_TIMEOUT", "AGENT_MONITOR_CGM_API_TIMEOUT"):
+        with pytest.raises(harness.MathHarnessError, match=f"{name} must be an integer"):
+            limits(**{name: "lots"})
+
+
+def test_the_general_settings_at_their_documented_defaults_keep_the_long_rewrites(tmp_path, providers):
+    """An operator who writes down the documented defaults of the settings of
+    every call (AGENT_MONITOR_API_MAX_TOKENS=16384,
+    AGENT_MONITOR_CGM_API_TIMEOUT=300) still gets the long rewrites; the
+    other calls follow those settings as before."""
+    seams = providers()
+    env = own_key_env("gpt-6-astra", AGENT_MONITOR_API_MAX_TOKENS="16384", AGENT_MONITOR_CGM_API_TIMEOUT="300")
+    run(tmp_path, write_request(tmp_path, text=sections(1, 650), role="member", model="gpt-6-astra"), env)
+    assert [(item["kind"], item["payload"]["max_output_tokens"], item["timeout"]) for item in seams.requests] == [
+        ("guide", 16_384, 300), ("rewrite", 64_000, 1800), ("check", 16_384, 300)]
+    # Readability's own settings set them exactly.
+    seams.requests.clear()
+    env = own_key_env("gpt-6-astra", AGENT_MONITOR_READABILITY_REWRITE_MAX_TOKENS="32000",
+                      AGENT_MONITOR_READABILITY_API_TIMEOUT="600")
+    again = tmp_path / "again"
+    run(again, write_request(again, text=sections(1, 650), role="member", model="gpt-6-astra"), env)
+    assert [(item["kind"], item["payload"]["max_output_tokens"], item["timeout"]) for item in seams.requests] == [
+        ("guide", 16_384, 600), ("rewrite", 32_000, 600), ("check", 16_384, 600)]
 
 
 class Broker(BaseHTTPRequestHandler):
@@ -967,14 +1509,16 @@ def test_the_command_line_reports_a_missing_request_and_refuses_bad_routes(tmp_p
     monkeypatch.chdir(tmp_path)
     assert runner.main([]) == 2
     assert "readability/request.json is missing" in capsys.readouterr().out
-    write_request(tmp_path, model="deepseek-chat")
+    # A guest's run on another provider's model is refused before any call.
+    write_request(tmp_path, role="guest", model="deepseek-chat")
     env = {"PATH": os.environ.get("PATH", ""), "DEEPSEEK_API_KEY": "x", "AGENT_MONITOR_SELECTED_MODEL": "deepseek-chat",
            "PYTHONPATH": str(ROOT)}
     done = subprocess.run([sys.executable, "-u", str(ROOT / "agent_monitor" / "runners" / "readability_runner.py")],
                           cwd=tmp_path, env=env, capture_output=True, text=True, timeout=120)
     assert done.returncode == 2, done.stdout + done.stderr
     error = json.loads(done.stdout.splitlines()[-1])["item"]
-    assert error["type"] == "error" and error["terminal"] is True and "use Kimi K3" in error["message"]
+    assert error["type"] == "error" and error["terminal"] is True
+    assert "Guest readability runs use Kimi K3" in error["message"]
 
 
 def test_requests_validate_their_audience_caps_and_route():

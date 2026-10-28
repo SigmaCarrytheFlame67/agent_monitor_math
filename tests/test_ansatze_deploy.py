@@ -62,7 +62,7 @@ def _environment(text: str) -> dict[str, str]:
     return values
 
 
-def _render(tmp_path: Path, *extra: str) -> Path:
+def _render(tmp_path: Path, *extra: str, env: dict[str, str] | None = None) -> Path:
     out = tmp_path / "rendered"
     subprocess.run(
         ["bash", str(BUNDLE / "install.sh"), "--render-to", str(out), "--mount", MOUNT, *extra],
@@ -70,8 +70,28 @@ def _render(tmp_path: Path, *extra: str) -> Path:
         capture_output=True,
         text=True,
         timeout=60,
+        env=env,
     )
     return out
+
+
+def _fake_getent(tmp_path: Path) -> tuple[dict[str, str], Path]:
+    """An environment whose ``getent`` answers the installer's www check
+    (``--www auto``: does www.<domain> resolve like the apex?) without DNS,
+    and the file that logs each lookup it was asked for."""
+    bin_dir, log = tmp_path / "bin", tmp_path / "getent.log"
+    bin_dir.mkdir()
+    getent = bin_dir / "getent"
+    getent.write_text(
+        "#!/bin/sh\n"
+        "# Both names at one documentation address (RFC 5737): no DNS query is made.\n"
+        f"printf '%s\\n' \"$*\" >> '{log}'\n"
+        "[ \"$1\" = ahostsv4 ] || exit 2\n"
+        "printf '192.0.2.10      STREAM %s\\n192.0.2.10      DGRAM\\n' \"$2\"\n",
+        encoding="utf-8",
+    )
+    getent.chmod(0o755)
+    return {**os.environ, "PATH": f"{bin_dir}{os.pathsep}{os.environ.get('PATH', os.defpath)}"}, log
 
 
 # ── create-admin ───────────────────────────────────────────────────────────
@@ -462,7 +482,12 @@ def test_rendered_units_pass_systemd_analyze_verify(tmp_path):
     analyzer = shutil.which("systemd-analyze")
     if not analyzer:
         pytest.skip("systemd-analyze not available")
-    out = _render(tmp_path)
+    # The default --www auto looks both names up: here a fake getent answers (the
+    # suite never queries DNS), so www resolves like the apex and its redirect is kept.
+    env, lookups = _fake_getent(tmp_path)
+    out = _render(tmp_path, env=env)
+    assert lookups.read_text(encoding="utf-8").splitlines() == ["ahostsv4 ansatze.ai", "ahostsv4 www.ansatze.ai"]
+    assert "www.ansatze.ai {" in (out / "Caddyfile").read_text(encoding="utf-8")
     assert "@@" not in (out / "agent-monitor.service").read_text(encoding="utf-8")
     assert f"AGENT_MONITOR_BASE_PATH={MOUNT}" in (out / "agent-monitor.service").read_text(encoding="utf-8")
     broker = out / "ansatze-kimi.service"

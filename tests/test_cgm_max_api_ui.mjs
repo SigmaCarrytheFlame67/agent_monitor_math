@@ -92,6 +92,7 @@ const FUNCTIONS = [
   'runTuningCapabilities', 'runTuningStorage', 'runTuningStorageKey', 'currentRunTuning', 'renderRunTuning',
   'runRuntimeSummary', 'withMaxApiHint', 'runtimeUiSpec', 'runtimeCardState', 'updateLiveChips', 'isAnalysisRun', 'isReadabilityRun', 'escapeHtml',
   'syncApiProviderGroup', 'startRun', 'convoKind', 'convoModeButtons', 'renderConversation', 'engineView',
+  'manuscriptSponsoredOnly',
 ]
 // The page around them: elements made on first use (the model select keeps
 // only a value it has an option for, as a browser's does), the choice menu,

@@ -361,7 +361,8 @@ CLI_ENGINES: dict[str, dict[str, Any]] = {
     # verdict-annotated DAG.  It is the only engine of the Analyze mode
     # (``run_kind: "analyze"``), never serves a Prove request, and is
     # response-only and tool-free on every route (sponsored Kimi K3, an own
-    # API key, or an administrator's Codex / Claude Code account).  The runner
+    # API key, or the Codex / Claude Code account an administrator or an
+    # account given full access linked itself).  The runner
     # reads ``analysis/request.json`` from its workspace, so the command has no
     # ``{prompt}``.  It is listed only while AGENT_MONITOR_ANALYZE_ENABLED is on.
     "analyze": {
@@ -389,9 +390,10 @@ CLI_ENGINES: dict[str, dict[str, Any]] = {
     # reader (keeping every statement and argument), with an independent
     # model check of each part, a paper map and a notation table.  It is the
     # only engine of the Readability mode (``run_kind: "readability"``) and is
-    # response-only and tool-free on every route (sponsored Kimi K3, an own
-    # Kimi key, or an administrator's Codex / Claude Code account).  The
-    # runner reads ``readability/request.json``; it is listed only while
+    # response-only and tool-free on every route, as Analyze (sponsored Kimi
+    # K3, an own API key, or the Codex / Claude Code account an administrator
+    # or an account given full access linked itself).
+    # The runner reads ``readability/request.json``; it is listed only while
     # AGENT_MONITOR_READABILITY_ENABLED is on.
     "readability": {
         "id": "readability",
@@ -424,6 +426,23 @@ ANALYZE_ENGINE_ID = "analyze"
 READABILITY_ENGINE_ID = "readability"
 # Engines that read a manuscript with the Analyze parsers.
 MANUSCRIPT_ENGINE_IDS = frozenset({ANALYZE_ENGINE_ID, READABILITY_ENGINE_ID})
+# Engines whose only Kimi model is Kimi K3 (``kimi-k3``).  Plain, the two
+# Ansatz CGM engines, Meta-Harness, Analyze and Readability make their Kimi
+# calls through ``api_backend.api_chat``, which asks for Kimi K3 whatever
+# Kimi model is named (``kimi_k3.chat_payload``); DeepSeek Harness and
+# IMProof run Kimi K3 for ``kimi-k3`` alone, and for another Kimi name a
+# model that is no Kimi model at all (DeepSeek's, or IMProof's default
+# workflow).  A run of theirs on another Kimi model (``kimi-k2.5`` typed as
+# a custom model) would be recorded, shown and billed under a name it never
+# ran on, so ``jobs.start_job`` refuses one and the console's menus offer
+# none.  The coding-agent harnesses (Codex CLI, DeepAgents, OpenHands,
+# OpenClaw, OpenClaude, Hermes) send the model they are given to an
+# account's own Kimi endpoint, so they run any Kimi model it serves; only
+# the sponsored service asks for Kimi K3 whatever any engine names.
+KIMI_K3_ONLY_ENGINE_IDS = frozenset({
+    "plain", "kimi", "math_harness", "metaharness", "deepseek_harness", "improof",
+    ANALYZE_ENGINE_ID, READABILITY_ENGINE_ID,
+})
 # Parser packages the Analyze runner imports (pinned in pyproject.toml).
 ANALYZE_PACKAGES = ("pylatexenc", "pypdf")
 
@@ -572,6 +591,7 @@ def list_engines() -> list[dict[str, Any]]:
             "subscription_supported": engine["id"] in CODEX_SUBSCRIPTION_ENGINES,
             "claude_subscription_supported": engine["id"] in CLAUDE_SUBSCRIPTION_ENGINES,
             "formal_lean_supported": engine["id"] in FORMAL_LEAN_ENGINES,
+            "kimi_k3_only": engine["id"] in KIMI_K3_ONLY_ENGINE_IDS,
             "modes": list(DEFAULT_MODES),
         })
     for spec in CLI_ENGINES.values():
@@ -607,6 +627,7 @@ def list_engines() -> list[dict[str, Any]]:
             "subscription_supported": spec["id"] in CODEX_SUBSCRIPTION_ENGINES,
             "claude_subscription_supported": spec["id"] in CLAUDE_SUBSCRIPTION_ENGINES,
             "formal_lean_supported": spec["id"] in FORMAL_LEAN_ENGINES,
+            "kimi_k3_only": spec["id"] in KIMI_K3_ONLY_ENGINE_IDS,
             "risk_level": spec.get("risk_level"),
             "risk_note": spec.get("risk_note"),
             "supported_models": list(spec.get("supported_models") or []),

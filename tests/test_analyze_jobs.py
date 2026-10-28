@@ -361,6 +361,49 @@ def test_public_mode_refuses_a_members_own_key_recheck(monkeypatch, tmp_path, pr
     assert not jobs.run_is_active("analyze_public_recheck_1")
 
 
+def test_a_recheck_or_question_about_an_analysis_on_another_kimi_model_is_refused(gate, monkeypatch, provider):
+    """An analysis started on kimi-k2.5 on an own Kimi key, before Analyze
+    refused other Kimi models, ran as Kimi K3 under that name (a Kimi
+    endpoint is always asked for Kimi K3): a re-check of one of its results,
+    or a question about it, would too.  Both are refused before anything is
+    reserved, registered or launched."""
+    server = provider(default_script())
+    workspace = jobs.workspace_dir("analyze_other_kimi_1")
+    analysis_workspace(workspace, server)
+    write_record("analyze_other_kimi_1", workspace, owner_id=MEMBER["id"], model="kimi-k2.5")
+    monkeypatch.setattr(jobs, "_user_extra_env", lambda user, *models: {
+        "AGENT_MONITOR_PYTHON": "python", "KIMI_API_KEY": "sk-own-kimi-123456789"})
+    launched: list = []
+
+    def launch(**kwargs):
+        launched.append(kwargs)
+        jobs._update_job(kwargs["job_id"], status="finished")
+
+    monkeypatch.setattr(jobs, "_execute_recheck", launch)
+    monkeypatch.setattr(jobs, "_execute_ask", launch)
+    released: list = []
+    refusal = "Analyze runs Kimi K3 as its only Kimi model (kimi-k3); this analysis ran on kimi-k2.5"
+    with pytest.raises(analyze_runs.AnalyzeRequestError) as rechecked:
+        jobs.start_analysis_recheck("analyze_other_kimi_1", "lem:sum", user=MEMBER, on_exit=lambda: released.append(1))
+    with pytest.raises(analyze_runs.AnalyzeRequestError) as asked:
+        jobs.start_analysis_ask("analyze_other_kimi_1", {"question": "Why?"}, user=MEMBER,
+                                on_exit=lambda: released.append(2))
+    assert [(str(error.value), error.value.status) for error in (rechecked, asked)] == [(refusal, 400)] * 2
+    assert launched == [] and released == [1, 2] and gate.usage_today() == 0
+    assert not jobs.run_is_active("analyze_other_kimi_1")
+    block = jobs._load_run_record("analyze_other_kimi_1")["analyze"]
+    assert "recheck" not in block and "ask" not in block and not block.get("asks")
+    # An analysis recorded on Kimi K3 in another case ran on Kimi K3: its re-check asks for kimi-k3.
+    write_record("analyze_other_kimi_1", workspace, owner_id=MEMBER["id"], model=" Kimi-K3 ")
+    jobs.start_analysis_recheck("analyze_other_kimi_1", "lem:sum", user=MEMBER)
+    deadline = time.monotonic() + 30  # the re-check's worker thread
+    while (not launched or jobs.run_is_active("analyze_other_kimi_1")) and time.monotonic() < deadline:
+        time.sleep(0.02)
+    assert [(item["model"], item["env"]["AGENT_MONITOR_ANALYZE_MODEL"]) for item in launched] == [
+        ("kimi-k3", "kimi-k3")]
+    assert not jobs.run_is_active("analyze_other_kimi_1")
+
+
 def test_member_sponsored_analysis_is_bounded_by_the_broker_limits(gate, monkeypatch, captured_start):
     issued: list = []
     _broker(monkeypatch, issued)
