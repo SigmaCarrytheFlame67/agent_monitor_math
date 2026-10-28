@@ -712,7 +712,9 @@ test('notation: symbols are typeset by KaTeX without trust; meanings and places 
   const view = run(['analyzeEl', 'dagDetailText', 'readabilityNotation', 'katexReferenceText', 'withKatexFallbacks', 'countedAuthorMacros', 'readabilityTex', 'readabilityTable', 'readabilityWhereCell', 'renderReadabilityNotation'], ['KATEX_FALLBACK_MACROS'],
     miniDom + `
 const typeset=[]; const window={katex:{render(tex,el,options){ const R=options.macros['\\\\R']; typeset.push([tex,options,typeof R==='function'?R({}):'not counted']); el.textContent='KATEX:'+tex; }}};
-const readabilityMacros=()=>({'\\\\R':'\\\\mathbb{R}'}), renderMathIn=()=>{};`,
+const readabilityMacros=()=>({'\\\\R':'\\\\mathbb{R}'}), renderMathIn=()=>{};
+// The Sandbox's thread places the tab (test_sandbox_thread_ui.mjs): here it only draws.
+const threadRedraw=(how,draw)=>draw();`,
     `(run=>{ const view=make('div'); renderReadabilityNotation(run,view); return {doc:flat(view.kids[0]),typeset,texts:texts(view)}; })`)
   const out = view({ run_id: 'r1', status: 'finished', sandbox_preview: { notation: {
     rows: [{ symbol: '\\alpha_n<script>', meaning: '<img src=x onerror=alert(1)> a $\\mathbb{R}$-valued sequence', where: '§2 <b>bold</b>', id: 'def:alpha' }, 'junk', null],
@@ -986,14 +988,17 @@ const ANALYZE_ASK_NOTE='analyze note', READABILITY_ASK_NOTE='Questions are answe
   const analysis = view('analyze')
   assert.deepEqual(analysis.body, ['analysis-run'])
   assert.deepEqual(analysis.modes, ['analysis', 'informal', 'formal', 'compiler'])
-  // An analysis has the Ask panel too (no tabs), with its Progress notes kept above it as a named region.
+  // An analysis has the Ask panel too (no tabs). Its conversation is the same thread as any
+  // run's: no "Progress notes" region of its own (its runner's log is not shown).
   assert.equal(analysis.chat, 'Ask about this analysis')
   assert.deepEqual(analysis.shown, ['ask-list', 'ask-compose'])
   assert.equal(analysis.selPop, 'Ask about this')
-  assert.deepEqual(analysis.notes, { role: 'region', 'aria-label': 'Progress notes' })
+  assert.deepEqual(analysis.notes, {})
+  // A proof run's message box is named for screen readers; the visible side panel is gone.
+  assert.equal(proof.chat, 'Feedback to the prover')
+  assert.doesNotMatch(html.split('<div id="view-sandbox">')[1].split('<div id="view-monitor">')[0], /Human in the loop/)
   assert.equal(analysis.placeholder, 'Ask about a result, a verdict or a step…')
   assert.deepEqual(analysis.panel, {})
-  // Another kind of run gives the notes back their plain role.
   assert.deepEqual([readable.notes, view('prove').notes], [{}, {}])
   assert.equal(readable.placeholder, 'Ask about a step, a symbol or a result…')
   // What a readable version hides, and its tab strip and Ask panel, are in readability.css.
@@ -1330,17 +1335,20 @@ function readableVersionPage() {
   const { document } = miniDocument()
   return run([...SANITIZER, ...READABLE, ...READABLE_VIEW], ['SAFE_MARKDOWN_TAGS', 'READABLE_MARKER_LINE', 'READABLE_RESULT_LINK', 'READABLE_PART_LINE'],
     `const window=globalThis; let readableMarkdownParser=null; const typeset=[];
-const body={scrollTop:0}, $=id=>id==='proof-body'?body:null;
+// The Sandbox's thread scrolls the card (test_sandbox_thread_ui.mjs): here it only draws, and says how.
+const redraws=[], threadRedraw=(how,draw)=>{ redraws.push(how); draw(); };
 const readabilityLabels=()=>new Map([['thm:main','Theorem 1.1']]), readabilityMacros=()=>({}), renderMathIn=(el,macros)=>typeset.push(el);`,
-    `(run=>{ const view=document.createElement('div'); renderReadableVersion(run,view); return {view,typeset,again:()=>{ renderReadableVersion(run,view); return typeset.length; }}; })`,
+    `(run=>{ const view=document.createElement('div'); renderReadableVersion(run,view); return {view,typeset,redraws,again:()=>{ renderReadableVersion(run,view); return typeset.length; }}; })`,
     { marked: true, raw: true, context: { document, location: { href: 'https://ansatze.test/console' } } })
 }
 
 test('a part\'s minor check notes follow it, collapsed; its major problems stay the "⚠ Check" note in the text', () => {
   const render = readableVersionPage()
   const run_ = { run_id: 'r1', status: 'finished', sandbox_preview: { kind: 'readability', has_readable: true, text: CHECKED_READABLE, check: CHECKED_PARTS } }
-  const { view, typeset, again } = render(run_)
+  const { view, typeset, again, redraws } = render(run_)
   const doc = view.querySelector('.rd-doc')
+  // A readable version newly shown (just published, or its tab chosen) opens at the card's top in the Sandbox's thread.
+  assert.deepEqual(plain(redraws), ['top'])
   // The title and provenance, then each part in a section of its own.
   assert.deepEqual(doc.children.map(el => el.tagName + (el.className ? '.' + el.className : '') + (el.dataset.rdPart ? '#' + el.dataset.rdPart : '')),
     ['H1', 'BLOCKQUOTE.rd-provenance', 'SECTION.rd-part#1', 'SECTION.rd-part#2', 'SECTION.rd-part#3'])
@@ -1368,6 +1376,10 @@ test('a part\'s minor check notes follow it, collapsed; its major problems stay 
   assert.doesNotMatch(doc.textContent, /\[part:|\[result:|@@/)
   // Drawn once; the same record is not drawn again.
   assert.equal(again(), 1)
+  // Drawn again (its names arrived, a check note), it keeps the reader's place.
+  view._proofRenderKey = ''
+  assert.equal(again(), 2)
+  assert.deepEqual(plain(redraws), ['top', 'keep'])
 })
 
 test('readable.md splits at the runner\'s part marks only', () => {

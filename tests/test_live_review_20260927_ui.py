@@ -110,6 +110,11 @@ class ConsolePollingTests(unittest.TestCase):
   // A finished run stops polling after one final refresh.
   payload.status='finished'; payload.updated_at='t3'; await fire();
   out.finishedTimers=timers.map(t=>t.ms);
+  // What those timers do: the proof once more, then the chat twice (the
+  // lines written just after the record said finished); nothing polls again.
+  calls.splice(0);
+  while(timers.length) await fire();
+  out.afterFinish=calls.splice(0);
   console.log(JSON.stringify(out));
 })().catch(e=>{ console.error(e); process.exit(1); });
 """
@@ -126,8 +131,11 @@ class ConsolePollingTests(unittest.TestCase):
         self.assertEqual(out["hiddenTimers"], 0)
         self.assertEqual(out["resumed"], ["/api/run/r1"])
         self.assertEqual(out["resumedDelay"], 3200)
-        # Only the 900 ms final proof refresh remains; no further poll.
-        self.assertEqual(out["finishedTimers"], [900])
+        # Only the 900 ms final proof refresh and two later reads of the chat
+        # remain (a run's closing lines are written just after its record
+        # says it ended); no further poll.
+        self.assertEqual(out["finishedTimers"], [900, 1000, 4000])
+        self.assertEqual(out["afterFinish"], ["files", "chat", "chat"])
 
     def test_quiet_runs_still_get_a_periodic_side_refresh(self) -> None:
         program = POLL_STUBS + _polling_block() + r"""

@@ -343,11 +343,28 @@ html.read-only-run .run-access-note { display: flex; }
 
 .session-body { flex: 1; min-height: 0; overflow: hidden; display: flex; flex-direction: column; }
 
-/* Sandbox split: proof + chat */
-#view-sandbox { flex: 1; display: flex; min-height: 0; overflow: hidden; }
-.sandbox-split { flex: 1; display: grid; grid-template-columns: 1fr 360px; grid-template-rows: minmax(0, 1fr); min-height: 0; overflow: hidden; }
+/* Sandbox: one conversation. #sandbox-thread is the only vertical scroller
+   (the page never scrolls); the status line and the message box are a flex
+   child under it, never position:fixed (#view-session has will-change). The
+   JS keeps the reader's place by hand (threadRedraw), so the browser's own
+   scroll anchoring is off. */
+#view-sandbox { flex: 1; display: flex; flex-direction: column; min-height: 0; overflow: hidden; }
+.sandbox-thread {
+  flex: 1 1 auto; min-height: 0; overflow-x: hidden; overflow-y: auto; overscroll-behavior: contain;
+  overflow-anchor: none; scrollbar-gutter: stable; background: var(--bg);
+  display: flex; flex-direction: column; gap: 14px; padding: 0 24px;
+}
+/* The room above the first message and under the last: items, not padding,
+   which would also keep the card's sticky toolbar off the top edge. */
+.sandbox-thread::before, .sandbox-thread::after { content: ''; flex: none; height: 10px; }
+.sandbox-thread::after { height: 14px; }
+/* One centred column: the problem, the messages, the card, the answers (an
+   id, so that no later rule of theirs, readability.css's included, undoes it). */
+#sandbox-thread > * { flex: none; width: 100%; max-width: 900px; margin-inline: auto; min-width: 0; }
+.thread-problem, .chat-msgs { display: flex; flex-direction: column; gap: 14px; }
+.thread-problem:empty, .chat-msgs:empty { display: none; }
 
-.proof-panel { display: flex; flex-direction: column; min-width: 0; min-height: 0; border-right: 1px solid var(--border); }
+.proof-panel { display: flex; flex-direction: column; min-width: 0; flex: none; border: 1px solid var(--border); border-radius: 14px; overflow: clip; background: var(--bg); box-shadow: 0 1px 3px rgb(0 0 0 / .05); }
 .proof-toolbar {
   display: flex; align-items: center; gap: 10px; padding: 10px 16px;
   border-bottom: 1px solid var(--border); background: var(--bg2); flex-shrink: 0;
@@ -360,6 +377,22 @@ html.read-only-run .run-access-note { display: flex; }
 }
 .proof-toolbar button:disabled { opacity: .4; cursor: not-allowed; }
 .proof-toolbar button.primary { border-color: color-mix(in srgb, var(--accent) 50%, var(--border)); color: var(--accent); }
+/* The card's header: its toolbar, and a readable version's tabs under it. */
+.proof-head { flex: none; min-width: 0; }
+/* On a wide screen the card's header stays at the top of the thread while
+   its proof (or readable version) is read: opaque, above a PDF page's text
+   layer, and one piece, so that nothing of it slides over the rest. The
+   thread's scroll padding is the header's height as drawn (--proof-head,
+   measured: a toolbar of two rows, the tabs) and a little more, so that
+   what the browser scrolls into view (a link Tab reaches) is never left
+   under it. */
+@media (min-width: 761px) and (min-height: 560px) {
+  .sandbox-thread { scroll-padding-top: calc(var(--proof-head, 50px) + 14px); }
+  .sandbox-thread .proof-head { position: sticky; top: 0; z-index: 4; }
+  /* Its own controls are never hidden under it: focusing one (Tab, the
+     arrow keys) scrolls nothing (the padding above is for what it covers). */
+  .sandbox-thread .proof-head :is(button, a) { scroll-margin-top: calc(-14px - var(--proof-head, 50px)); }
+}
 /* The written proof of a CGM run: a two-way switch beside the file name and a
    status banner above the write-up. Colours follow the model verifier's
    verdicts (blue accepted, amber problems); green stays reserved for Lean. */
@@ -397,10 +430,12 @@ html.read-only-run .run-access-note { display: flex; }
 .pipeline-chip .chip-state { overflow: hidden; text-overflow: ellipsis; }
 .pipeline-chip.off, .pipeline-chip.stopped { opacity: .75; }
 .pipeline-chip.off::before, .pipeline-chip.stopped::before { background: transparent; box-shadow: inset 0 0 0 1px var(--dim); }
-.proof-body { flex: 1; min-height: 0; position: relative; overflow-y: auto; overflow-anchor: none; scrollbar-gutter: stable; background: color-mix(in srgb, var(--bg2) 30%, var(--bg)); }
-.notion-editor-wrap { min-height: 100%; padding: 32px 8% 80px; background: var(--bg); }
+/* The card's body grows with the proof: the thread scrolls it. Wide content
+   (a PDF page, a long formula) scrolls sideways inside it, never the page. */
+.proof-body { flex: none; min-width: 0; position: relative; overflow-x: auto; overflow-y: hidden; background: var(--bg); }
+.notion-editor-wrap { padding: 24px 28px 32px; background: var(--bg); }
 .notion-editor {
-  display: block; width: min(100%, 820px); min-height: calc(100vh - 310px); margin: 0 auto;
+  display: block; width: min(100%, 820px); min-height: 320px; margin: 0 auto;
   padding: 0; border: 0; outline: 0; resize: none; overflow: hidden; background: transparent;
   color: var(--fg); caret-color: var(--accent); font: 400 15px/1.78 var(--sans);
   tab-size: 2;
@@ -410,9 +445,12 @@ html.read-only-run .run-access-note { display: flex; }
 .editor-save-status.saving { color: var(--warn); }
 .editor-save-status.saved { color: var(--ok); }
 .editor-save-status.conflict, .editor-save-status.error { color: var(--err); }
-.pdf-pages { padding: 24px; display: none; flex-direction: column; align-items: center; gap: 18px; }
-.md-view { padding: 20px 8% 32px; display: none; background: var(--bg); }
-.md-view .md-doc { max-width: 760px; margin: 0 auto 28px; font-size: 14.5px; line-height: 1.75; color: var(--fg); }
+/* A page wider than the card starts at its left edge (auto margins, not
+   align-items:center, which would put its left part out of reach). */
+.pdf-pages { padding: 24px; display: none; flex-direction: column; align-items: flex-start; gap: 18px; overflow-x: auto; }
+.pdf-pages > .pdf-page, .pdf-pages > .pdf-status { margin-inline: auto; }
+.md-view { padding: 20px 28px 8px; display: none; background: var(--bg); }
+.md-view .md-doc { max-width: 760px; margin: 0 auto 28px; font-size: 14.5px; line-height: 1.75; color: var(--fg); overflow-wrap: break-word; }
 .formal-check {
   display: inline-flex; align-items: center; justify-content: center; width: 15px; height: 15px;
   margin-right: 6px; border-radius: 999px; vertical-align: .08em;
@@ -434,6 +472,19 @@ html.read-only-run .run-access-note { display: flex; }
 }
 .md-view .sandbox-turn { max-width: 760px; margin: 0 auto 8px; }
 .md-view .sandbox-turn .problem-message { width: 100%; margin: 0 0 10px auto; }
+/* The problem is the thread's first message: the card does not repeat it
+   (and with no proof yet, it shows its placeholder instead). */
+.sandbox-thread .md-view .problem-message { display: none; }
+/* Several problems in one session: each proof keeps a small "Problem N"
+   heading over it (the problems themselves are the first messages). */
+.sandbox-thread .md-view:has(> .sandbox-turn ~ .sandbox-turn > .problem-message) .problem-message {
+  display: block; width: auto; margin: 0 0 6px; padding: 0; border: 0; border-radius: 0; background: none; box-shadow: none;
+}
+.sandbox-thread .md-view:has(> .sandbox-turn ~ .sandbox-turn > .problem-message) .problem-message-hdr { margin: 0; color: var(--muted); font-size: 12px; }
+.sandbox-thread .md-view .problem-message-body { display: none; }
+/* (The problem's length goes with its text: beside a proof it would read as the proof's.) */
+.sandbox-thread .md-view .problem-message-hdr .n { display: none; }
+.sandbox-thread .md-view:has(> .sandbox-turn):not(:has(.md-doc)) { display: none !important; }
 .md-caret {
   display: inline-block; width: 7px; height: 1.05em; margin-left: 3px; vertical-align: -0.12em;
   background: var(--accent); border-radius: 1px; animation: pulse 1s ease-in-out infinite;
@@ -475,14 +526,28 @@ html.read-only-run .run-access-note { display: flex; }
 }
 .proof-empty.show { display: flex; }
 
-/* Chat panel */
-.chat-panel {
-  display: flex; flex-direction: column; min-height: 0; background: var(--bg2);
+/* Under the thread: the run's status line, what a message does, and the
+   message box (a proof run) or the question box (Analyze, Readability). */
+.sandbox-dock { flex: none; position: relative; z-index: 3; background: var(--bg); }
+.sandbox-dock::before {
+  content: ''; position: absolute; left: 0; right: 12px; bottom: 100%; height: 14px; pointer-events: none;
+  background: linear-gradient(to bottom, transparent, var(--bg));
 }
-.chat-hdr { padding: 12px 16px; border-bottom: 1px solid var(--border); font-size: 12px; font-weight: 700; flex-shrink: 0; }
-.chat-hdr span { display: block; font-size: 11px; color: var(--dim); font-weight: 500; margin-top: 2px; }
+/* Forced colours drop the fade above: a line keeps the dock apart. */
+@media (forced-colors: active) { .sandbox-dock { border-top: 1px solid CanvasText; } }
+.dock-col { width: 100%; max-width: 900px; margin: 0 auto; padding: 4px 24px 14px; display: flex; flex-direction: column; gap: 6px; min-width: 0; }
+.dock-status { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 12px; min-width: 0; padding: 0 4px; }
+.dock-status:not(:has(> .chat-status.on, > .chat-live.on, > .analysis-stages:not([hidden]))) { display: none; }
+.dock-status > .chat-status { flex: 0 1 auto; min-width: 0; max-width: 100%; }
+.dock-hint { margin: 0; padding: 0 4px; font-size: 11px; line-height: 1.45; color: var(--dim); }
+.dock-hint:empty { display: none; }
+/* Feedback continues a proof run: said only where the message box is offered
+   (and a guest's selection is not offered to a message box it does not have). */
+html.read-only-run body:not(.analysis-run):not(.readability-run) .dock-hint,
+html.guest-viewer body:not(.analysis-run):not(.readability-run) .dock-hint { display: none; }
+html.guest-viewer body:not(.analysis-run):not(.readability-run) #sel-pop { display: none !important; }
 .chat-status {
-  display: none; align-items: center; gap: 7px; margin-top: 8px;
+  display: none; align-items: center; gap: 7px;
   font-size: 11px; font-weight: 600; color: var(--muted);
 }
 .chat-status.on { display: flex; }
@@ -494,8 +559,16 @@ html.read-only-run .run-access-note { display: flex; }
 /* A failed run's reason is the line to read: it wraps instead of being cut off. */
 .chat-status.err { align-items: baseline; }
 .chat-status.err .detail { white-space: normal; overflow-wrap: anywhere; }
+/* The stage ("Re-checking…", "Drafting…") keeps to one line in the status
+   row: its detail gives way, cut short with an ellipsis. */
+.dock-status #chat-stage { flex: none; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* "more" / "less" for a failed run's reason kept to two lines (a short
+   window only: see the max-height: 520px rules). */
+.chat-status .detail-more { display: none; flex: none; align-self: flex-end; margin: 0; padding: 0 2px; border: 0; border-radius: 3px; background: none;
+  color: var(--accent); font: 600 10px/1.4 var(--sans); text-decoration: underline; text-underline-offset: 2px; cursor: pointer; }
+.chat-status .detail-more:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
 /* live telemetry: which model is answering and which tools it is touching */
-.chat-live { display: none; flex-wrap: wrap; gap: 5px; margin-top: 7px; }
+.chat-live { display: none; flex-wrap: wrap; gap: 5px; min-width: 0; }
 .chat-live.on { display: flex; }
 .lv { display: inline-flex; align-items: center; gap: 4px; font-size: 10px; font-family: var(--mono);
   padding: 2.5px 7px; border-radius: 999px; border: 1px solid var(--border); background: var(--panel); color: var(--muted); }
@@ -519,7 +592,6 @@ html.read-only-run .run-access-note { display: flex; }
 .dag-node .cites { margin-top: 6px; display: flex; flex-wrap: wrap; gap: 4px; }
 .dag-node .cites span { font-size: 9px; font-family: var(--mono); padding: 1px 5px; border-radius: 4px;
   background: color-mix(in srgb, var(--accent) 14%, var(--panel)); color: var(--accent); }
-.chat-msgs { flex: 1; min-height: 0; overflow-y: auto; padding: 14px 16px; display: flex; flex-direction: column; gap: 12px; }
 .chat-msg { max-width: 95%; font-size: 13px; line-height: 1.5; }
 .chat-msg.fresh { animation: msgIn .42s var(--ease) both; }
 .chat-msg.user { align-self: flex-end; background: color-mix(in srgb, var(--accent) 14%, var(--panel)); border: 1px solid color-mix(in srgb, var(--accent) 25%, var(--border)); padding: 10px 12px; border-radius: 14px 14px 4px 14px; }
@@ -528,6 +600,51 @@ html.read-only-run .run-access-note { display: flex; }
 .chat-msg .who { font-size: 10px; font-weight: 700; color: var(--dim); margin-bottom: 4px; text-transform: uppercase; letter-spacing: .04em; display: flex; gap: 8px; align-items: baseline; }
 .chat-msg .who .ts { font-weight: 400; text-transform: none; letter-spacing: 0; opacity: .7; }
 .chat-msg { white-space: pre-wrap; word-break: break-word; }
+/* The Sandbox's messages (the Lean chat keeps the rules above): what you sent
+   on the right in a bubble, the engine's reply as text on the left, and the
+   run's notices small and centred. Bubbles keep a border for forced colours. */
+.sandbox-thread .chat-msg { display: flex; flex-direction: column; gap: 4px; max-width: 100%; min-width: 0; padding: 0; border: 0; border-radius: 0; background: none; white-space: normal; font-size: 14px; line-height: 1.6; color: var(--fg); font-style: normal; }
+.sandbox-thread .chat-msg .who { margin: 0; padding: 0 4px; gap: 6px; font-size: 11px; font-weight: 600; text-transform: none; letter-spacing: 0; }
+.sandbox-thread .chat-msg .who .ts { opacity: 1; font-weight: 400; }
+.sandbox-thread .chat-msg .who .ts:not(:empty)::before { content: '·'; content: '·' / ''; margin-right: 6px; }
+.sandbox-thread .msg-text { white-space: pre-wrap; overflow-wrap: anywhere; }
+.sandbox-thread .chat-msg.user { align-self: flex-end; align-items: flex-end; max-width: min(84%, 680px); }
+.sandbox-thread .chat-msg.user .msg-bubble {
+  max-width: 100%; min-width: 0; padding: 10px 14px; border-radius: 18px 18px 4px 18px;
+  background: color-mix(in srgb, var(--accent) 12%, var(--panel)); border: 1px solid color-mix(in srgb, var(--accent) 24%, var(--border));
+}
+.sandbox-thread .chat-msg.user .msg-text.clamped { max-height: 11.2em; overflow: hidden; -webkit-mask-image: linear-gradient(to bottom, #000 72%, transparent); mask-image: linear-gradient(to bottom, #000 72%, transparent); }
+.sandbox-thread .chat-msg.user .katex-display { overflow-x: auto; overflow-y: hidden; padding: 4px 0; margin: .5em 0; }
+.sandbox-thread .msg-link { display: block; margin-top: 4px; color: var(--accent); overflow-wrap: anywhere; font-size: 13px; }
+.sandbox-thread .chat-msg .attachment-links { margin-top: 8px; }
+.sandbox-thread .chat-msg .attachment-links a { font-size: 12px; text-decoration: none; background: var(--panel); }
+.sandbox-thread .chat-msg.assistant { align-self: stretch; color: var(--fg); }
+.sandbox-thread .chat-msg.assistant .msg-text { padding: 0 4px; color: var(--muted); }
+.sandbox-thread .msg-more {
+  align-self: flex-start; margin: 0 0 0 4px; padding: 2px 0; border: 0; background: none; color: var(--accent);
+  font: inherit; font-size: 12px; font-weight: 600; cursor: pointer;
+}
+.sandbox-thread .chat-msg.user .msg-more { align-self: flex-end; margin: 0 4px 0 0; }
+.sandbox-thread .msg-more:hover { text-decoration: underline; }
+.sandbox-thread .chat-msg.notice {
+  align-self: center; flex-direction: row; flex-wrap: wrap; justify-content: center; align-items: baseline; gap: 2px 8px;
+  max-width: min(100%, 660px); padding: 6px 12px; border: 1px solid var(--border); border-radius: 12px;
+  background: var(--panel2); color: var(--muted); font-size: 12px; line-height: 1.5; text-align: center;
+}
+.sandbox-thread .chat-msg.notice .msg-text { white-space: pre-line; }
+.sandbox-thread .chat-msg.notice .ts { color: var(--dim); font-size: 11px; }
+.sandbox-thread .chat-msg.notice.error { border-color: color-mix(in srgb, var(--err) 45%, var(--border)); background: color-mix(in srgb, var(--err) 7%, var(--panel)); color: var(--err); }
+/* A reply that is a chunk of the engine's activity log: one line until it is
+   opened, then the log as written, in a box of its own that scrolls sideways. */
+.sandbox-thread .chat-msg.log .msg-log-row { display: flex; flex-wrap: wrap; align-items: baseline; gap: 2px 10px; padding: 0 4px; }
+.sandbox-thread .msg-log-label { color: var(--muted); font-size: 13px; }
+.sandbox-thread .msg-log-row .msg-more { margin: 0; }
+.sandbox-thread .msg-log {
+  margin: 2px 0 0; padding: 10px 12px; max-width: 100%; overflow-x: auto; overflow-y: hidden;
+  white-space: pre-wrap; overflow-wrap: normal; word-break: normal; tab-size: 4;
+  font: 11.5px/1.55 var(--mono); color: var(--muted); background: var(--panel2); border: 1px solid var(--border); border-radius: 10px;
+}
+.sandbox-thread .msg-log[hidden] { display: none; }
 /* Process log strip */
 .proc-log { border-top: 1px solid var(--border); flex-shrink: 0; background: var(--bg2); }
 .proc-hdr {
@@ -572,22 +689,46 @@ html.read-only-run .run-access-note { display: flex; }
 .problem-message-body { white-space: pre-wrap; word-break: break-word; font-size: 14px; line-height: 1.7; }
 .problem-message-body .katex-display { overflow-x: auto; padding: 6px 0; margin: .6em 0; }
 
+/* The message box: one rounded field, the text growing with what is written
+   (a few lines, then it scrolls), Attach files and Send under it, then what
+   the engine reads of a file, then the files staged. Its children are the
+   attachment composer's (the drop zone is this box), laid out in its grid. */
 .chat-compose {
-  padding: 12px; border-top: 1px solid var(--border); display: flex; flex-direction: column; gap: 8px; flex-shrink: 0;
+  display: grid; grid-template-columns: minmax(0, 1fr) auto; grid-template-areas: "input input" "files send" "help help" "list list" "error error";
+  align-items: center; gap: 2px 10px; padding: 6px 8px 8px 14px; border: 1px solid var(--border); border-radius: 18px;
+  background: var(--panel); box-shadow: 0 1px 4px rgb(0 0 0 / .06);
 }
+.chat-compose:focus-within { border-color: color-mix(in srgb, var(--accent) 60%, var(--border)); box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 16%, transparent); }
 .chat-compose textarea {
-  width: 100%; min-height: 72px; max-height: 140px; resize: vertical; border: 1px solid var(--border);
-  background: var(--panel); color: var(--fg); border-radius: 10px; padding: 10px 12px; font-size: 13px;
-  font-family: inherit; outline: none;
+  grid-area: input; display: block; width: 100%; min-height: calc(1.5em + 12px); max-height: calc(7.5em + 12px); resize: none; overflow-y: auto;
+  border: 0; background: transparent; color: var(--fg); padding: 6px 2px; font: inherit; font-size: 14px; line-height: 1.5;
+  outline: none; field-sizing: content;
 }
-.chat-compose textarea:focus { border-color: var(--accent); }
-.chat-compose .row { display: flex; justify-content: space-between; align-items: center; }
-.chat-compose button {
-  background: var(--accent); color:var(--on-accent); border: 0; border-radius: 8px; padding: 8px 16px;
+/* Empty, it is one line: a long example is cut with an ellipsis, never half a line. */
+.chat-compose textarea:placeholder-shown { field-sizing: fixed; height: calc(1.5em + 12px); overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+.chat-compose textarea::placeholder { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.chat-compose textarea:disabled { opacity: .6; }
+.chat-compose > #chat-attachments, .chat-compose .attachment-toolbar { display: contents; }
+.chat-compose > #chat-attachments.drag-over { outline: 0; background: none; }
+.chat-compose:has(> #chat-attachments.drag-over) { outline: 2px dashed var(--accent); outline-offset: 2px; }
+/* What the engine reads of a file has a row of its own across the box and
+   wraps in full (a tool-free engine says formulas may be garbled); on a
+   phone or in a short window its short form stands for it, beside Attach
+   files, until a file is staged. */
+.chat-compose .attach-button { grid-area: files; justify-self: start; }
+.chat-compose .attachment-help { grid-area: help; min-width: 0; white-space: normal; overflow-wrap: anywhere; line-height: 1.4; }
+.attachment-help-short { display: none; }
+/* The files staged: about two rows of cards, then the list scrolls (eight
+   files never push the box's text out of the window). */
+.chat-compose .attachment-list { grid-area: list; margin-top: 4px; max-height: 116px; overflow-y: auto; overscroll-behavior: contain; }
+.chat-compose .attachment-error { grid-area: error; margin-top: 2px; }
+.chat-compose .row { grid-area: send; display: flex; justify-content: flex-end; align-items: center; gap: 10px; }
+.chat-compose #chat-send {
+  background: var(--accent); color:var(--on-accent); border: 0; border-radius: 999px; padding: 7px 16px;
   font-size: 12px; font-weight: 700; cursor: pointer;
 }
-.chat-compose button:disabled { opacity: .4; }
-.chat-compose .hint { font-size: 10px; color: var(--dim); }
+.chat-compose #chat-send:disabled { opacity: .4; cursor: default; }
+.chat-compose .hint { font-size: 10px; color: var(--dim); white-space: nowrap; }
 
 /* Monitor view: the dashboard frame (sized to its content by the console) and
    the agent conversation below it scroll together as one page. */
@@ -1593,7 +1734,6 @@ button.start { grid-column: 3; grid-row: 1 / 3; align-self: end; }
 .guest-allowance strong { color: var(--fg); }
 button:focus-visible, a:focus-visible, select:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
 @media (max-width: 1100px) {
-  .sandbox-split { grid-template-columns: minmax(0,1fr) 300px; }
   .choice-dock { grid-template-columns: minmax(0,1fr) minmax(0,1fr); }
   .compact-controls { grid-column: 1; }
   button.start { grid-column: 2; grid-row: auto; }
@@ -1633,10 +1773,37 @@ button:focus-visible, a:focus-visible, select:focus-visible { outline: 2px solid
   .run-access-note { padding: 6px 12px; font-size: 11px; }
   .session-side { max-width: 100%; }
   .session-meta { max-width: 140px; }
-  .sandbox-split { display: flex; flex-direction: column; overflow-y: auto; }
-  .proof-panel { flex: 0 0 52dvh; min-height: 280px; }
-  .chat-panel { flex: 0 0 50dvh; min-height: 300px; border-left: 0; border-top: 1px solid var(--border); }
+  /* The thread takes the height; the dock stays a few lines. */
+  .sandbox-thread { padding: 0 12px; gap: 12px; }
+  .sandbox-thread::before { height: 2px; }
+  .sandbox-thread::after { height: 6px; }
+  .thread-problem, .chat-msgs { gap: 12px; }
+  .proof-panel { border-radius: 12px; }
+  .sandbox-thread .chat-msg.user { max-width: 92%; }
+  .sandbox-thread .chat-msg.notice { max-width: 100%; }
+  .dock-col { padding: 2px 10px 10px; gap: 4px; }
+  /* The status line and the live chips share a row (the chips scroll
+     sideways); the stages of an analysis or a readable version have a row of
+     their own, scrolled sideways to the running stage. */
+  .dock-status { flex-wrap: wrap; gap: 4px 8px; padding: 0 2px; }
+  .dock-status > .chat-status { flex: 0 1 auto; }
+  .dock-status:has(> .chat-live.on) > .chat-status { max-width: 72%; }
+  .dock-status > .chat-status.err, .dock-status:has(> .chat-live.on) > .chat-status.err { flex-basis: 100%; max-width: 100%; }
+  .dock-status > .chat-live { flex: 1 1 0; }
+  .dock-status > .analysis-stages { order: 1; flex: 1 1 100%; }
+  .dock-status > .chat-live, .dock-status > .analysis-stages { min-width: 0; flex-wrap: nowrap; overflow-x: auto; scrollbar-width: none; }
+  .dock-status > .chat-live::-webkit-scrollbar, .dock-status > .analysis-stages::-webkit-scrollbar { display: none; }
+  .dock-status > .chat-live .lv, .dock-status > .analysis-stages li { flex: none; white-space: nowrap; }
+  /* Up to three lines: an analysis's whole note, "not a certificate" with it, at 360px too. */
+  .dock-hint { padding: 0 2px; font-size: 10.5px; display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 3; line-clamp: 3; overflow: hidden; }
+  .chat-compose { grid-template-columns: auto minmax(0, 1fr) auto; grid-template-areas: "input input input" "files short send" "help help help" "list list list" "error error error";
+    gap: 2px 8px; padding: 4px 6px 6px 12px; border-radius: 16px; }
+  .chat-compose .hint, .chat-compose .attachment-help { display: none; }
+  .chat-compose .attachment-help-short:not(:empty) { display: block; grid-area: short; min-width: 0; color: var(--dim); font-size: 10.5px; line-height: 1.3; }
+  .chat-compose:has(.attachment-card) .attachment-help { display: block; }
+  .chat-compose:has(.attachment-card) .attachment-help-short { display: none; }
   .md-view { padding: 16px; }
+  .notion-editor-wrap { padding: 16px; }
   .proof-toolbar { flex-wrap: wrap; }
   .proof-toolbar .sub { flex-basis: 100%; }
   .lean-toolbar, .dag-toolbar { flex-wrap: wrap; gap: 8px; }
@@ -1645,6 +1812,55 @@ button:focus-visible, a:focus-visible, select:focus-visible { outline: 2px solid
   .chat-compose textarea, .lean-chat-compose textarea { font-size: 16px; }
   .guest-allowance { margin-top: 14px; font-size: 11px; }
 }
+/* A short window (a phone held sideways): the dock keeps to a few lines so
+   that the conversation keeps most of the height. One status row, its stages
+   and chips scrolling sideways; the note on one line (the whole of it in its
+   title); no Enter hint; the help's short form; tighter boxes. */
+@media (max-height: 520px) {
+  .sandbox-thread::before { height: 4px; }
+  .sandbox-thread::after { height: 6px; }
+  .dock-col { padding: 2px 16px 6px; gap: 3px; }
+  .dock-status { flex-wrap: nowrap; gap: 6px; }
+  .dock-status > .chat-status, .dock-status:has(> .chat-live.on) > .chat-status { flex: 0 1 auto; max-width: 50%; }
+  /* A failed run's reason is the line to read (a first run's failure line
+     is not repeated in the conversation): it takes the row, in two lines so
+     that the conversation keeps its room, with "more" for the rest when
+     they cut it short (syncChatReason; all of it in its tooltip too). */
+  .dock-status > .chat-status.err, .dock-status:has(> .chat-live.on) > .chat-status.err { flex: 1 1 auto; max-width: none; }
+  .dock-status > .chat-status.err > .detail:not(.open) { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; line-clamp: 2; overflow: hidden; }
+  .dock-status > .chat-status.err > .detail-more:not([hidden]) { display: inline-block; }
+  .dock-status > .chat-live, .dock-status > .analysis-stages { order: 0; flex: 0 1 auto; min-width: 0; flex-wrap: nowrap; overflow-x: auto; scrollbar-width: none; }
+  .dock-status > .chat-live::-webkit-scrollbar, .dock-status > .analysis-stages::-webkit-scrollbar { display: none; }
+  .dock-status > .chat-live .lv, .dock-status > .analysis-stages li { flex: none; white-space: nowrap; }
+  .dock-hint { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 1; line-clamp: 1; overflow: hidden; }
+  .chat-compose { grid-template-columns: auto minmax(0, 1fr) auto; grid-template-areas: "input input input" "files short send" "help help help" "list list list" "error error error";
+    gap: 0 8px; padding: 3px 6px 5px 12px; border-radius: 14px; }
+  .chat-compose textarea { padding: 4px 2px; min-height: calc(1.5em + 8px); max-height: calc(4.5em + 8px); }
+  .chat-compose textarea:placeholder-shown { height: calc(1.5em + 8px); }
+  .chat-compose .hint, .chat-compose .attachment-help { display: none; }
+  .chat-compose .attachment-help-short:not(:empty) { display: block; grid-area: short; min-width: 0; color: var(--dim); font-size: 10.5px; line-height: 1.3; }
+  .chat-compose:has(.attachment-card) .attachment-help { display: block; }
+  .chat-compose:has(.attachment-card) .attachment-help-short { display: none; }
+  /* A file staged: its card, compact, takes the short help's place beside
+     Attach files (the help in full under them), not a row of its own;
+     several stay on that one row, which scrolls sideways (a long name is cut
+     short, all of it in the card's tooltip). */
+  .chat-compose:has(.attachment-card) .attachment-list { grid-area: short; margin-top: 0; gap: 4px; min-width: 0; flex-wrap: nowrap; max-height: none; overflow-x: auto; overflow-y: hidden; scrollbar-width: thin; }
+  .chat-compose .attachment-card { flex: none; max-width: 220px; padding: 2px 4px 2px 8px; gap: 6px; font-size: 11.5px; }
+  .chat-compose .attachment-card .attachment-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .chat-compose .attachment-card small { display: inline; margin-left: 6px; }
+  .chat-compose .attachment-card img { width: 28px; height: 28px; }
+}
+/* A phone held sideways: 16px text in the boxes, so that iOS does not zoom in
+   on them; "more" / "less" takes a finger 6px around it (a target of 24px and
+   more; its look and the row unchanged). */
+@media (max-height: 520px) and (pointer: coarse) {
+  .chat-compose textarea { font-size: 16px; }
+  .chat-status .detail-more { position: relative; }
+  .chat-status .detail-more::after { content: ""; position: absolute; inset: -6px; }
+}
+/* Shorter still (a small phone held sideways): the box grows to two lines, then scrolls. */
+@media (max-height: 380px) { .chat-compose textarea { max-height: calc(3em + 8px); } }
 @media (max-width: 360px) {
   .choice-dock { grid-template-columns: 1fr; }
   .choice-field, .compact-controls, button.start { grid-column: 1; }
@@ -1902,12 +2118,11 @@ body { background:var(--bg); }
 /* An analysis in the session view */
 .analysis-run #proof-edit-btn, .analysis-run .chat-compose, .analysis-run #sess-cont,
 .analysis-run #lean-audit, .analysis-run #lean-harness, .analysis-run #lean-engine, .analysis-run .lean-chat-block, .analysis-run #prompt-strip { display: none !important; }
-/* Its Progress notes stay above the questions and answers (the Ask panel),
-   in a strip of their own that gives the conversation the room. */
-.analysis-run .chat-msgs { flex: 0 1 auto; max-height: min(22%, 150px); padding: 10px 16px; gap: 8px; border-bottom: 1px solid var(--border); }
+/* Its runner's log is not part of the conversation (the status line says
+   where the analysis stands); the run's notices, a re-check's result among
+   them, are, between the request and the report. */
 .analysis-run .chat-msgs:empty { display: none; }
-.chat-hdr .chat-title { display: inline; margin: 0; font-size: 12px; font-weight: 700; color: var(--fg); }
-.analysis-stages { display: flex; flex-wrap: wrap; gap: 4px; margin: 8px 0 0; padding: 0; list-style: none; counter-reset: stage; }
+.analysis-stages { display: flex; flex-wrap: wrap; gap: 4px; margin: 0; padding: 0; list-style: none; counter-reset: stage; }
 .analysis-stages[hidden] { display: none; }
 .analysis-stages li { counter-increment: stage; padding: 3px 8px; border-radius: 999px; border: 1px solid var(--border); color: var(--dim); font: 650 9.5px/1.3 var(--sans); }
 .analysis-stages li::before { content: counter(stage) ' '; opacity: .6; }
@@ -2011,9 +2226,6 @@ body { background:var(--bg); }
   .dag-filters { padding: 6px 12px; }
   .dag-filters .count { margin-left: 0; flex-basis: 100%; }
   .analysis-progress .ap-result .issue { padding-left: 0; }
-  /* The stacked panel is too short for both: the conversation keeps it (the
-     status line above still says where the analysis stands). */
-  .analysis-run .chat-msgs { display: none; }
 }
 @media (forced-colors: active) {
   .dag-node.analysis { border-left-color: CanvasText; }
@@ -2153,34 +2365,46 @@ body { background:var(--bg); }
       <div class="run-access-note" role="note"><span class="badge">Read only</span><span>You can follow this run; only the member who started it can change it.</span></div>
       <div class="session-body">
         <div id="view-sandbox">
-          <div class="sandbox-split">
+          <!-- One conversation, ChatGPT-style: the run's problem and each message
+               sent, the engine's replies, the latest proof (or report) as a card,
+               then any questions and answers. #sandbox-thread is the Sandbox's
+               only vertical scroller; the status line and the message box sit
+               under it in .sandbox-dock. -->
+          <div class="sandbox-thread" id="sandbox-thread" role="region" aria-label="Conversation">
+            <div class="thread-problem" id="thread-problem"></div>
+            <div class="chat-msgs" id="chat-msgs"></div>
             <div class="proof-panel">
-              <div class="proof-toolbar">
-                <span class="title" id="proof-title">Proof</span>
-                <span class="sub" id="proof-label">—</span>
-                <div class="auto-pipeline-status" id="auto-pipeline-status" hidden></div>
-                <span class="editor-save-status" id="editor-save-status"></span>
-                <a class="analysis-source-link" id="analysis-source-link" hidden target="_blank" rel="noopener noreferrer">Source ↗</a>
-                <button type="button" id="analysis-source-toggle" hidden aria-pressed="false" title="Show the stored copy of the manuscript (read-only)">Source</button>
-                <div class="proof-doc-switch" id="proof-doc-switch" role="radiogroup" aria-label="Proof document" hidden>
-                  <button type="button" role="radio" data-proof-doc="writeup" aria-checked="false" tabindex="-1">Written proof<span class="writeup-chip" id="writeup-chip"></span></button>
-                  <button type="button" role="radio" data-proof-doc="facts" aria-checked="true" title="proof.md: the verifier-accepted facts, which are the proof">Verified facts</button>
+              <!-- The card's header: its toolbar, and a readable version's tabs; on a
+                   wide screen it stays at the top of the thread as one piece while the
+                   card is read. -->
+              <div class="proof-head">
+                <div class="proof-toolbar">
+                  <span class="title" id="proof-title">Proof</span>
+                  <span class="sub" id="proof-label">—</span>
+                  <div class="auto-pipeline-status" id="auto-pipeline-status" hidden></div>
+                  <span class="editor-save-status" id="editor-save-status"></span>
+                  <a class="analysis-source-link" id="analysis-source-link" hidden target="_blank" rel="noopener noreferrer">Source ↗</a>
+                  <button type="button" id="analysis-source-toggle" hidden aria-pressed="false" title="Show the stored copy of the manuscript (read-only)">Source</button>
+                  <div class="proof-doc-switch" id="proof-doc-switch" role="radiogroup" aria-label="Proof document" hidden>
+                    <button type="button" role="radio" data-proof-doc="writeup" aria-checked="false" tabindex="-1">Written proof<span class="writeup-chip" id="writeup-chip"></span></button>
+                    <button type="button" role="radio" data-proof-doc="facts" aria-checked="true" title="proof.md: the verifier-accepted facts, which are the proof">Verified facts</button>
+                  </div>
+                  <span class="make-readable-note" id="make-readable-note" role="status" aria-live="polite"></span>
+                  <button type="button" id="make-readable-btn" hidden title="Paste the document shown here into Readability, which rewrites it to be easier to follow and checks each part against it">¶ Make readable</button>
+                  <button id="proof-edit-btn" class="primary" disabled>✎ Edit</button>
+                  <button id="proof-save-btn" class="primary" hidden>Save</button>
+                  <button id="proof-done-btn" hidden>Done</button>
+                  <button id="pdf-dl-btn" disabled>⬇ Download</button>
                 </div>
-                <span class="make-readable-note" id="make-readable-note" role="status" aria-live="polite"></span>
-                <button type="button" id="make-readable-btn" hidden title="Paste the document shown here into Readability, which rewrites it to be easier to follow and checks each part against it">¶ Make readable</button>
-                <button id="proof-edit-btn" class="primary" disabled>✎ Edit</button>
-                <button id="proof-save-btn" class="primary" hidden>Save</button>
-                <button id="proof-done-btn" hidden>Done</button>
-                <button id="pdf-dl-btn" disabled>⬇ Download</button>
-              </div>
-              <div class="readability-tabs" id="readability-tabs" hidden>
-                <div class="readability-tablist" role="tablist" aria-label="Readability views">
-                  <button type="button" role="tab" id="rd-tab-readable" data-rd-view="readable" aria-selected="true" aria-controls="md-view">Readable version</button>
-                  <button type="button" role="tab" id="rd-tab-original" data-rd-view="original" aria-selected="false" aria-controls="md-view" tabindex="-1">Original</button>
-                  <button type="button" role="tab" id="rd-tab-notation" data-rd-view="notation" aria-selected="false" aria-controls="md-view" tabindex="-1">Notation</button>
-                  <button type="button" role="tab" id="rd-tab-map" data-rd-view="map" aria-selected="false" aria-controls="md-view" tabindex="-1">Map</button>
+                <div class="readability-tabs" id="readability-tabs" hidden>
+                  <div class="readability-tablist" role="tablist" aria-label="Readability views">
+                    <button type="button" role="tab" id="rd-tab-readable" data-rd-view="readable" aria-selected="true" aria-controls="md-view">Readable version</button>
+                    <button type="button" role="tab" id="rd-tab-original" data-rd-view="original" aria-selected="false" aria-controls="md-view" tabindex="-1">Original</button>
+                    <button type="button" role="tab" id="rd-tab-notation" data-rd-view="notation" aria-selected="false" aria-controls="md-view" tabindex="-1">Notation</button>
+                    <button type="button" role="tab" id="rd-tab-map" data-rd-view="map" aria-selected="false" aria-controls="md-view" tabindex="-1">Map</button>
+                  </div>
+                  <span class="readability-tab-status" id="readability-tab-status" role="status" aria-live="polite"></span>
                 </div>
-                <span class="readability-tab-status" id="readability-tab-status" role="status" aria-live="polite"></span>
               </div>
               <div class="prompt-strip collapsed" id="prompt-strip" style="display:none">
                 <div class="proc-hdr" id="prompt-toggle" title="The full text sent to the engine, including the operator persona/system instructions">
@@ -2211,30 +2435,24 @@ body { background:var(--bg); }
                 <div class="cite-body" id="cite-body"></div>
               </div>
             </div>
-            <div class="chat-panel">
-              <div class="chat-hdr">
-                <span class="chat-title" id="chat-title">Human in the loop</span>
-                <span id="chat-subtitle">Guide the prover — feedback continues the run</span>
-                <ol class="analysis-stages" id="analysis-stages" hidden aria-label="Analyze stages"></ol>
+            <ol class="ask-list" id="ask-list" aria-label="Questions and answers" hidden></ol>
+          </div>
+          <div class="sandbox-dock" id="sandbox-dock" role="region" aria-labelledby="chat-title">
+            <div class="dock-col">
+              <h2 class="chat-title sr-only" id="chat-title">Feedback to the prover</h2>
+              <div class="dock-status">
                 <div class="chat-status" id="chat-status">
                   <span class="cdot"></span>
                   <span class="stage" id="chat-stage"></span>
                   <span class="detail" id="chat-detail"></span>
+                  <button type="button" class="detail-more" id="chat-detail-more" aria-controls="chat-detail" aria-expanded="false" aria-label="Show more of the reason" hidden>more</button>
                 </div>
+                <ol class="analysis-stages" id="analysis-stages" hidden aria-label="Analyze stages"></ol>
                 <div class="chat-live" id="chat-live"></div>
               </div>
-              <div class="chat-msgs" id="chat-msgs"></div>
-              <ol class="ask-list" id="ask-list" aria-label="Questions and answers" hidden></ol>
-              <div class="proc-log" id="proc-log">
-                <div class="proc-hdr" id="proc-toggle">
-                  <span class="t">Process log</span>
-                  <span class="n" id="proc-count"></span>
-                  <span class="chev" id="proc-chev">▾</span>
-                </div>
-                <pre class="proc-body" id="proc-body"></pre>
-              </div>
+              <p class="dock-hint" id="chat-subtitle">Guide the prover — feedback continues the run</p>
               <div class="chat-compose">
-                <textarea id="chat-input" placeholder="e.g. Make the base case more explicit, or try induction on n…"></textarea>
+                <textarea id="chat-input" rows="1" aria-label="Message to the prover" placeholder="e.g. Make the base case more explicit, or try induction on n…"></textarea>
                 <div id="chat-attachments" class="attachment-composer"></div>
                 <div class="row">
                   <span class="hint">Enter to send · Shift+Enter newline</span>
@@ -2244,15 +2462,25 @@ body { background:var(--bg); }
               <div class="ask-compose run-change" id="ask-compose" hidden>
                 <div class="ask-context" id="ask-context" hidden></div>
                 <label class="sr-only" for="ask-input">Your question</label>
-                <textarea id="ask-input" maxlength="2000" placeholder="Ask about a step, a symbol or a result…"></textarea>
+                <textarea id="ask-input" maxlength="2000" rows="1" placeholder="Ask about a step, a symbol or a result…"></textarea>
                 <div class="row">
                   <span class="hint" id="ask-hint">Enter to ask · Shift+Enter newline</span>
                   <button type="button" id="ask-send" disabled>Ask</button>
                 </div>
                 <p class="ask-status" id="ask-status" role="status" aria-live="polite"></p>
               </div>
+              <!-- The engine's raw process log is not part of the conversation. -->
+              <div class="proc-log" id="proc-log" hidden>
+                <div class="proc-hdr" id="proc-toggle">
+                  <span class="t">Process log</span>
+                  <span class="n" id="proc-count"></span>
+                  <span class="chev" id="proc-chev">▾</span>
+                </div>
+                <pre class="proc-body" id="proc-body"></pre>
+              </div>
             </div>
           </div>
+          <div class="sr-only" id="thread-announcer" role="status" aria-live="polite" aria-atomic="true"></div>
         </div>
         <div id="view-monitor">
           <iframe id="monitor-frame" src="" title="Harness Pipeline Monitor"></iframe>
@@ -5693,6 +5921,7 @@ function attachmentLimits(engineId){
   if(TOOL_FREE_ENGINES.has(String(engineId||'')))return {extensions:ATTACHMENT_EXTENSIONS.filter(x=>!ATTACHMENT_IMAGE_EXTENSIONS.includes(x)),
     maxFiles:8,maxFileBytes:10*1024*1024,maxTotalBytes:20*1024*1024,toolFree:true,
     help:'PDF and text files are read as extracted text (formulas may be garbled); long files are cut to fit, and the chat lists the pages read.',
+    short:'Text is extracted (formulas may be garbled)',
     title:'This engine opens no files and sees no images: its model reads the text extracted from PDF, TeX, Markdown, Lean and other text files · 8 files, 10 MB each, 20 MB total. For an image, paste the formula or statement as text; a run on Claude Code or Codex, where your account has them, can read images.'};
   return {extensions:ATTACHMENT_EXTENSIONS,maxFiles:8,maxFileBytes:10*1024*1024,maxTotalBytes:20*1024*1024,
     help:'Drop files or paste images · 8 files, 10 MB each, 20 MB total',
@@ -5715,14 +5944,16 @@ function chatRunEngine(){
 // run, the run's own in the chat.
 function attachmentComposer(id, inputId, engineOf){
   const root=$(id), input=$(inputId);
-  root.innerHTML=`<div class="attachment-toolbar"><button type="button" class="attach-button">+ Attach files</button><span class="attachment-help"></span></div><input type="file" class="attachment-picker" multiple hidden/><div class="attachment-list"></div><div class="attachment-error" role="status" aria-live="polite"></div>`;
+  root.innerHTML=`<div class="attachment-toolbar"><button type="button" class="attach-button">+ Attach files</button><span class="attachment-help"></span><span class="attachment-help-short"></span></div><input type="file" class="attachment-picker" multiple hidden/><div class="attachment-list"></div><div class="attachment-error" role="status" aria-live="polite"></div>`;
   const picker=root.querySelector('input'), button=root.querySelector('button'), list=root.querySelector('.attachment-list'), error=root.querySelector('.attachment-error');
-  const help=root.querySelector('.attachment-help');
+  // The help in full, and (where room is short: a phone, a short window) its short form until a file is staged.
+  const help=root.querySelector('.attachment-help'), short=root.querySelector('.attachment-help-short');
   const state={files:[],busy:false};
   const limitsNow=()=>{ let current=''; try{ current=engineOf?engineOf():''; }catch(e){ current=''; } return attachmentLimits(current); };
   state.refreshLimits=()=>{
     const limits=limitsNow();
-    help.textContent=limits.help; button.title=limits.title;
+    help.textContent=limits.help; help.title=limits.help; button.title=limits.title;
+    if(short){ short.textContent=limits.short||''; short.title=limits.short?limits.help:''; }
     picker.accept=limits.extensions.map(x=>'.'+x).join(',');
     // Files staged for another engine or mode that this one cannot read.
     const dropped=state.busy?[]:state.files.filter(x=>!limits.extensions.includes(attachmentExtension(x.file.name)));
@@ -5737,7 +5968,7 @@ function attachmentComposer(id, inputId, engineOf){
   function render(){
     list.replaceChildren();
     for(const entry of state.files){
-      const card=document.createElement('div'); card.className='attachment-card';
+      const card=document.createElement('div'); card.className='attachment-card'; card.title=entry.file.name+' · '+attachmentSize(entry.file.size);
       if(entry.preview){ const img=document.createElement('img'); img.src=entry.preview; img.alt='Preview of '+entry.file.name; card.append(img); }
       const name=document.createElement('span'); name.className='attachment-name'; name.textContent=entry.file.name;
       const size=document.createElement('small'); size.textContent=attachmentSize(entry.file.size); name.append(size); card.append(name);
@@ -5886,6 +6117,8 @@ async function loadRuns(){
   $('runs').querySelectorAll('.run-del').forEach(b=>b.onclick=e=>{e.stopPropagation();deleteRun(b.dataset.run);});
   $('runs').querySelectorAll('.run-act.stop').forEach(b=>b.onclick=e=>{e.stopPropagation();stopRun(b.dataset.run);});
   $('runs').querySelectorAll('.run-act.cont').forEach(b=>b.onclick=e=>{e.stopPropagation();continueRun(b.dataset.run);});
+  // The periodic read (the interval at the end of this script) follows with them a run shown that runs again, or ran.
+  return jobs;
 }
 
 function selectRun(rid,jid){
@@ -5893,6 +6126,8 @@ function selectRun(rid,jid){
     chatAttachments.clear();$('chat-input').value='';const monitorView=$('view-monitor');if(monitorView)monitorView.scrollTop=0;
     // Another run: the admin view's one-time passwords are not kept.
     if(typeof clearAdminAccountSecrets==='function')clearAdminAccountSecrets();
+    // Its conversation starts empty (never the last run's messages above its proof).
+    if(typeof resetSandboxThread==='function')resetSandboxThread();
     // The Ask panel (readability.js) starts empty for another run.
     if(typeof resetManuscriptAsk==='function')resetManuscriptAsk(rid);
   }
@@ -5922,7 +6157,7 @@ async function deleteRun(rid){
   if(!confirm('Delete this run?'))return;
   const r=await fetch('/api/runs/'+encodeURIComponent(rid),{method:'DELETE'});
   if(!r.ok){ const d=await r.json().catch(()=>({})); alert(d.error||'Could not delete this run.'); return; }
-  if(runId===rid){runId=null;stopPolling();resetProofView();$('chat-msgs').innerHTML='';goLanding();}
+  if(runId===rid){runId=null;stopPolling();resetProofView();resetSandboxThread();goLanding();}
   loadRuns(); syncRunToMonitor(null);
 }
 
@@ -5956,11 +6191,17 @@ async function continueRun(rid){
     const r=await fetch('/api/runs/'+encodeURIComponent(rid)+'/continue',{method:'POST',headers:{'Content-Type':'application/json'},body:'{}'});
     const d=await r.json();
     if(!r.ok){ alert(d.error||'continue failed'); return; }
-    // The server starts nothing for a run that is already running.
-    if(d.ok===false&&d.status==='already_running'){ alert('This run is already running.'); if(runId===rid)startPolling(); }
+    // The server starts nothing for a run that is already running (a turn
+    // starting: a queued message's, another tab's Continue). Either way the
+    // turn is awaited (awaitTurn: its record may still read as it was for a
+    // moment, while the turn is prepared), and the run's polling is taken up
+    // again (resume: a record still unchanged draws and queues nothing again).
+    if(d.ok===false&&d.status==='already_running'){ alert('This run is already running.'); if(runId===rid){ if(typeof awaitTurn==='function')awaitTurn(rid,''); startPolling(true); } }
     else{
       if(runId!==rid) selectRun(rid,d.job_id||null);
-      setPill('running','continuing…'); startPolling();
+      setPill('running','continuing…');
+      if(d.status==='continuing'&&typeof awaitTurn==='function')awaitTurn(rid,d.job_id);
+      startPolling(true);
     }
   }catch(e){ alert(String(e)); }
   finally{ CONTINUE_PENDING.delete(rid); if(button)button.disabled=false; }
@@ -5971,9 +6212,11 @@ async function continueRun(rid){
    One run record per tick, every 2 s at first and backing off to 10 s while
    nothing changes. The workspace file list, proof file and chat are fetched
    only when the run's signature changes (plus a periodic safety refresh), and
-   nothing is fetched while the tab is hidden. */
-const POLL_MIN_MS=2000, POLL_MAX_MS=10000, POLL_BACKOFF=1.6, POLL_SIDE_EVERY=6;
-let pollDelay=POLL_MIN_MS, pollSig='', pollQuiet=0, pollActive=false, pollInFlight=false, pollLoop=null, pollListedEnd=null;
+   nothing is fetched while the tab is hidden. The run list is read every
+   RUNS_LIST_MS (the interval at the end of this script). */
+const POLL_MIN_MS=2000, POLL_MAX_MS=10000, POLL_BACKOFF=1.6, POLL_SIDE_EVERY=6, RUNS_LIST_MS=5000;
+// pollEnded: the signature of the ended record whose closing reads were queued (once per end).
+let pollDelay=POLL_MIN_MS, pollSig='', pollQuiet=0, pollActive=false, pollInFlight=false, pollLoop=null, pollListedEnd=null, pollEnded='';
 function consoleRunSignature(run){
   if(!run||typeof run!=='object')return '';
   const agents=Array.isArray(run.agents)?run.agents:[];
@@ -5996,9 +6239,15 @@ function nextPollDelay(current,changed){
   const base=Math.max(POLL_MIN_MS,Number(current)||POLL_MIN_MS);
   return Math.min(POLL_MAX_MS,Math.round(base*POLL_BACKOFF));
 }
-function startPolling(){
+// `resume`: the polling of the run shown taken up again (followRunAgain,
+// Continue, a message that continues the run). What the last poll saw is
+// kept: a record still unchanged forces no refresh of the proof (a PDF is
+// not drawn again) and queues no closing reads again. Anything else (a run
+// chosen, Stop, a question or a re-check asked) starts afresh.
+function startPolling(resume=false){
   stopPolling();
-  pollActive=true; pollDelay=POLL_MIN_MS; pollSig=''; pollQuiet=0; pollInFlight=false;
+  pollActive=true; pollDelay=POLL_MIN_MS; pollQuiet=0; pollInFlight=false;
+  if(!resume){ pollSig=''; pollEnded=''; }
   const loop=async()=>{
     if(pollLoop!==loop)return;  // a newer startPolling() owns polling now
     pollTimer=null;
@@ -6016,6 +6265,78 @@ function startPolling(){
   loop();
 }
 function stopPolling(){ pollActive=false; if(pollTimer){ clearTimeout(pollTimer); pollTimer=null; } }
+/* The run shown runs again, or ran, while this page no longer polls it: the
+   server started its queued feedback once its turn ended (its record said
+   finished first), or a Continue came from another tab. Only the run list
+   read every RUNS_LIST_MS follows it (never the read a poll makes as its run
+   ends, which would start the poll again at once, over and over), by the
+   run's latest job it lists (pollListed: as the last read listed it):
+   - a job of the run that the last read did not list, or one it listed
+     running that has ended since: a turn ran meanwhile (a short one starts
+     and ends between two reads), and the record is read once more;
+   - its job still listed running: the record is read again once per read,
+     for up to a minute per job (the job is listed before its record says
+     running: a poll that still reads the record as it was stops again,
+     drawing and queuing nothing again: startPolling's resume).
+   The polling of that run is taken up a moment later, if the run is still
+   the one shown and still not polled by then. A turn this page awaits
+   (awaitTurn) whose job the list shows ended is awaited no more: its record
+   says the rest. */
+let pollAgainJob=null, pollAgainTimer=null, pollListed=null, pollAwait=null;
+function followRunAgain(jobs){
+  const rid=runId; if(!rid)return;
+  // loadRuns lists each run once, by its latest job.
+  const job=(Array.isArray(jobs)?jobs:[]).find(j=>String(j?.run_id||'')===String(rid))||null;
+  const id=String(job?.job_id||''), status=String(job?.status||''), running=status==='running';
+  const was=pollListed?.rid===String(rid)?pollListed:null;
+  pollListed={rid:String(rid),id,status};
+  if(pollAwait?.rid===String(rid)&&!running&&(!pollAwait.job||pollAwait.job===id))pollAwait=null;
+  if(pollActive||pollAgainTimer)return;
+  const turned=!!job&&!!was&&(was.id!==id||was.status!==status);
+  if(!running){ pollAgainJob=null; if(!turned)return; }
+  else{
+    const now=Date.now();
+    if(pollAgainJob?.id!==id)pollAgainJob={id,since:now,last:-Infinity};
+    // A read less than a second early (the interval's jitter) still counts as the next one.
+    else if(now-pollAgainJob.since>60000||now-pollAgainJob.last<RUNS_LIST_MS-1000)return;
+    pollAgainJob.last=now;
+  }
+  pollAgainTimer=setTimeout(()=>{ pollAgainTimer=null; if(runId===rid&&!pollActive)startPolling(true); },0);
+}
+/* A turn this page asked for (▶ Continue, a message that continues the run,
+   a Continue the server says runs already): the server registers its job
+   before it answers, and the turn's worker writes the record "running" only
+   once the turn is prepared, so the polls just after may still read the
+   record as it was. Until the record changes (or says running) the turn is
+   awaited: the record is read again every POLL_MIN_MS (the one on screen:
+   nothing is drawn or queued again), and the run shows as continuing
+   (■ Stop; ▶ Continue is not offered again meanwhile), for up to a minute,
+   until a Stop from this page, or until the run list shows its job ended.
+   pollAwait: {rid, sig: the record's signature before the turn ('' when
+   this page had not read it yet: the first record read since, unless it
+   says running, is then the one before), job: the turn's job ('' unknown),
+   since}. */
+const POLL_AWAIT_MS=60000;
+function awaitTurn(rid,job){
+  pollAwait={rid:String(rid),sig:pollSig,job:String(job||''),since:Date.now()};
+  showTurnAwaited();
+}
+// Whether the record read (its signature `sig`) is still the one from before the turn awaited.
+function turnAwaited(rid,run,sig){
+  const wait=pollAwait; if(!wait||wait.rid!==String(rid))return false;
+  const stop=STOPPING_RUNS.get(String(rid));
+  if(run?.status==='running'||(wait.sig&&sig!==wait.sig)||Date.now()-wait.since>=POLL_AWAIT_MS||(stop&&stop.since>=wait.since)){ pollAwait=null; return false; }
+  if(!wait.sig)wait.sig=sig;
+  return true;
+}
+// The run shown as continuing while its turn is awaited.
+function showTurnAwaited(){
+  setPill('running','continuing…');
+  const box=$('chat-status'); if(!box)return;
+  box.className='chat-status on'; $('chat-stage').textContent='Continuing…'; $('chat-detail').textContent=''; $('chat-detail').title='';
+  updateSessionButtons('running',false);
+  if(typeof syncChatReason==='function')syncChatReason();
+}
 document.addEventListener('visibilitychange',()=>{
   if(document.hidden||!pollActive||!runId||pollTimer||pollInFlight||!pollLoop)return;
   pollDelay=POLL_MIN_MS;
@@ -6059,12 +6380,15 @@ async function tick(){
       if(runId!==rid)return true;
       const t=run.totals||{};
       const sig=consoleRunSignature(run), changed=sig!==pollSig;
+      // A turn this page asked for that is still being prepared (awaitTurn): the record is the one from before it.
+      const awaited=typeof turnAwaited==='function'&&turnAwaited(rid,run,sig);
       pollSig=sig; pollQuiet=changed?0:pollQuiet+1;
       pollDelay=nextPollDelay(pollDelay,changed);
       const refreshSide=changed||pollQuiet%POLL_SIDE_EVERY===0;
-      $('run-meta').textContent=`${run.run_id} · ${run.status} · $${Number(t.cost_usd||0).toFixed(2)}`;
+      $('run-meta').textContent=`${run.run_id} · ${awaited?'continuing':run.status} · $${Number(t.cost_usd||0).toFixed(2)}`;
       setPill(run.status,(run.status||'')+' · '+(run.engine||''));
       updateChatStatus(run);
+      if(awaited)showTurnAwaited();
       updateProblemStrip(run);
       updatePromptStrip(run);
       if(workspaceView==='monitor')renderConversation(run);
@@ -6082,13 +6406,30 @@ async function tick(){
       if(!running){
         // A Stop still settling keeps the poll going, so ▶ Continue appears as soon as it has.
         if(stopSettling(rid,run.analyze?.recheck?.status==='running',!!run.stopping)){ pollDelay=POLL_MIN_MS; return true; }
+        // So does a turn awaited: the record is read again soon, and never drawn as ended meanwhile.
+        if(awaited){ pollDelay=POLL_MIN_MS; return true; }
         // The stop may have settled since updateChatStatus drew "Stopping…"
         // (during the proof's refresh): draw the bar again before polling ends.
         updateSessionButtons(run.analyze?.recheck?.status==='running'?'running':run.status,!!run.stopping);
+        // The lines a turn (or a re-check) writes as it ends come just after
+        // its record says so: the "✓ run finished" summary, the engine's
+        // reply, an analysis's or a readable version's summary, a re-check's
+        // result, queued feedback started. The chat is read again a second
+        // and four seconds later, while this run is still the one shown
+        // (loadChat draws only what is new, and says it once).
         // The run list learns at once that the run ended (an analysis takes its title).
-        if(pipelineRunning){ if(pollListedEnd!==run.run_id){ pollListedEnd=run.run_id; loadRuns(); } return true; }
-        loadRuns();
-        setTimeout(()=>{ if(runId===rid) refreshProofPreview(true, run); }, 900);
+        if(pipelineRunning){
+          if(pollListedEnd!==run.run_id){ pollListedEnd=run.run_id; loadRuns(); for(const ms of [1000,4000])setTimeout(()=>{ if(runId===rid)loadChat(); },ms); }
+          return true;
+        }
+        // Once per end: a poll taken up again (followRunAgain) that reads the
+        // same ended record queues none of this again.
+        if(pollEnded!==sig){
+          pollEnded=sig;
+          loadRuns();
+          setTimeout(()=>{ if(runId===rid) refreshProofPreview(true, run); }, 900);
+          for(const ms of [1000,4000])setTimeout(()=>{ if(runId===rid)loadChat(); },ms);
+        }
         return false;
       }
       return true;
@@ -6198,6 +6539,7 @@ function updateChatStatus(run){
     $('sess-stop').classList.remove('show'); $('sess-cont').classList.remove('show');
     lastProcText=''; $('proc-body').textContent=''; $('proc-count').textContent='';
     renderAnalysisStages(null);
+    if(typeof syncChatReason==='function')syncChatReason(true);
     return;
   }
   syncAnalyzeRunUi(run);
@@ -6235,6 +6577,37 @@ function updateChatStatus(run){
   updateLiveChips(run);
   updateSessionButtons(recheck?.status==='running'?'running':run.status,!!run.stopping);
   updateProcLog(run);
+  if(typeof syncChatReason==='function')syncChatReason();
+}
+/* A failed run's reason in a short window keeps to two lines (CSS, under
+   max-height: 520px), with "more" for the rest and "less" for two lines
+   again; all of it is in its tooltip either way. "more" is offered only
+   when the two lines cut the reason short (measured as drawn: a toggle on
+   screen is never taken away to measure, nor its focus); another reason,
+   another status or another run starts with two lines. */
+function syncChatReason(reset=false){
+  const box=$('chat-status'), detail=$('chat-detail'), more=$('chat-detail-more'); if(!box||!detail||!more)return;
+  const text=detail.textContent||'', err=box.classList.contains('err');
+  if(reset||!err||more.dataset.reason!==text){ more.dataset.reason=text; setChatReasonOpen(false); }
+  if(!err){ more.hidden=true; return; }
+  if(!detail.classList.contains('open'))more.hidden=!(detail.scrollHeight>detail.clientHeight+1);
+}
+function setChatReasonOpen(open){
+  const detail=$('chat-detail'), more=$('chat-detail-more'); if(!detail||!more)return;
+  open=!!open;
+  detail.classList.toggle('open',open);
+  if(more.getAttribute('aria-expanded')===String(open))return;  // already so (every poll asks)
+  more.textContent=open?'less':'more';
+  more.setAttribute('aria-expanded',String(open));
+  more.setAttribute('aria-label',open?'Show less of the reason':'Show more of the reason');
+}
+{
+  const more=$('chat-detail-more'), detail=$('chat-detail');
+  if(more)more.onclick=()=>{ setChatReasonOpen(!detail.classList.contains('open')); syncChatReason(); };
+  // The reason's lines change with the window (a phone turned, a late font): measured again a frame later.
+  let frame=0; const later=()=>{ if(!frame)frame=requestAnimationFrame(()=>{ frame=0; syncChatReason(); }); };
+  if(detail&&typeof ResizeObserver==='function')new ResizeObserver(later).observe(detail);
+  else window.addEventListener('resize',later);
 }
 
 /* ── live telemetry chips: model + tools in flight ── */
@@ -6417,6 +6790,8 @@ function updateProblemStrip(run){
   /* The Lean controls follow the run's pipeline state, and every change
      control who may change the run. */
   syncLeanControls(); syncRunAccess();
+  // The thread's first message is the run's problem (its record has it).
+  if(typeof renderThread==='function')renderThread();
 }
 /* Project members read each other's runs, but only a run's owner, or the
    operator, may change one: the server's _is_run_owner, where a legacy run
@@ -6459,7 +6834,7 @@ $('proof-save-btn').onclick=async()=>{
 };
 $('proof-done-btn').onclick=finishSandboxEdit;
 $('notion-editor').addEventListener('input',()=>{
-  sandboxDirty=true; resizeSandboxEditor(); editorStatus('Unsaved'); syncSandboxEditor();
+  sandboxDirty=true; resizeSandboxEditor({typing:true}); editorStatus('Unsaved'); syncSandboxEditor();
   if(sandboxSaveTimer)clearTimeout(sandboxSaveTimer);
   if(sandboxSaving)sandboxSaveAgain=true;
   else if(!sandboxConflict)sandboxSaveTimer=setTimeout(()=>saveSandboxProof(false),900);
@@ -6485,6 +6860,9 @@ function resetProofView(){
   $('proof-label').textContent='—'; $('pdf-dl-btn').disabled=true;
   const p=$('pdf-pages'); p.style.display='none'; p.innerHTML=''; p.dataset.cur='';
   const m=$('md-view'); m.style.display='none'; m.innerHTML=''; m._proofRenderKey='';
+  // An analysis's stored copy, emptied with it, stays chosen: the run opened
+  // again draws it again where the reader was (applyAnalysisPreview); another
+  // run opens on its own report (resetSandboxThread).
   setProofEmpty(true); lastPromptText=''; lastProblemText='';
   const ps=$('prompt-strip'); if(ps){ps.style.display='none';ps.classList.add('collapsed');}
   const pr=$('problem-message-row'); if(pr)pr.style.display='none';
@@ -6495,12 +6873,41 @@ function editorStatus(message, kind=''){
   const status=$('editor-save-status'); if(!status)return;
   status.textContent=message||''; status.className='editor-save-status'+(kind?' '+kind:'');
 }
-function resizeSandboxEditor(){
+// The editor as tall as its text, 8px under it (420px at least). typing:
+// the reader's own edit (the editor's input event); the editor opening, or
+// the engine's newer text put in it, is not: the thread keeps its place.
+function resizeSandboxEditor({typing=false}={}){
   const editor=$('notion-editor'); if(!editor)return;
-  const body=$('proof-body'), previousTop=body?.scrollTop||0;
-  const nextHeight=Math.max(420,editor.scrollHeight+8);
-  if(Math.abs((parseFloat(editor.style.height)||0)-nextHeight)>1)editor.style.height=nextHeight+'px';
-  if(body)body.scrollTop=previousTop;
+  // Measured inside a redraw that keeps the thread's place: an open editor is
+  // never scrolled away, not even to its new end for a reader at the bottom
+  // (the editor opened there, its caret at the end of the text).
+  if(!typing)threadPos.pinned=false;
+  threadRedraw('keep',()=>sizeSandboxEditor(editor));
+  // Typed at the end of the text, it grows at the caret (which the browser
+  // showed before it grew): its last line stays in view.
+  if(typing&&globalThis.document?.activeElement===editor&&editor.selectionEnd>=editor.value.length)threadShowEnd(editor,8);
+}
+// Measured with its height let go for a moment (its own height would be
+// measured otherwise, and it would grow by 8px at every call). An editor that
+// is not laid out (the Sandbox hidden behind another view, the engine's newer
+// text put in meanwhile) measures nothing: it keeps its height and is sized
+// when it is shown again (threadResized), before the thread's place is given
+// back. Returns whether it was sized.
+let sandboxEditorUnsized=false;
+function sizeSandboxEditor(editor){
+  if(typeof editor.getClientRects==='function'&&!editor.getClientRects().length){ sandboxEditorUnsized=true; return false; }
+  sandboxEditorUnsized=false;
+  editor.style.height='0px';
+  editor.style.height=Math.max(420,editor.scrollHeight+8)+'px';
+  return true;
+}
+// The editor sized now, if it was left unsized while it was not laid out
+// (resizeSandboxEditor unpinned the reader then: the place in it is kept).
+function sizeSandboxEditorLeftUnsized(){
+  if(!sandboxEditorUnsized)return;
+  const editor=$('notion-editor');
+  if(!editor||!sandboxEditing){ sandboxEditorUnsized=false; return; }
+  sizeSandboxEditor(editor);
 }
 function syncSandboxEditor(){
   const edit=$('proof-edit-btn'), save=$('proof-save-btn'), done=$('proof-done-btn');
@@ -6572,8 +6979,13 @@ async function saveSandboxProof(force=false){
 async function finishSandboxEdit(){
   if(sandboxConflict){editorStatus('Resolve the newer engine version first','conflict');return;}
   if(sandboxDirty&&!(await saveSandboxProof(false)))return;
-  sandboxEditing=false; $('notion-editor-wrap').hidden=true; syncSandboxEditor(); editorStatus('Saved','saved');
-  renderMarkdownIntoView(sandboxText,false,lastSandboxRun);
+  // The editor gives way to the proof drawn from the same text at the
+  // reader's place (never the thread's top, nor its end for being there).
+  threadPos.pinned=false;
+  threadRedraw('keep',()=>{
+    sandboxEditing=false; $('notion-editor-wrap').hidden=true; syncSandboxEditor(); editorStatus('Saved','saved');
+    renderMarkdownIntoView(sandboxText,false,lastSandboxRun);
+  });
   await refreshProofPreview(true,lastSandboxRun);
 }
 // Display environments written without $$ (manuscripts: \begin{align} ... \end{align}) render too.
@@ -6876,19 +7288,39 @@ function applySandboxPreview(run){
       editorStatus('New engine version — review or overwrite','conflict'); syncSandboxEditor();
     }else{
       sandboxRevision=incomingRevision; sandboxText=text;
-      $('notion-editor').value=text; resizeSandboxEditor(); editorStatus('Updated from engine','saved');
+      // The engine's newer text in the editor: the caret stays where the
+      // reader put it (a new value would move it to the end), and the thread
+      // where it was (only the reader's typing moves it).
+      const editor=$('notion-editor'), focused=globalThis.document?.activeElement===editor;
+      const caret=[editor.selectionStart,editor.selectionEnd].map(at=>Math.min(Number(at)||0,text.length)), direction=editor.selectionDirection||'none';
+      editor.value=text;
+      if(focused&&typeof editor.setSelectionRange==='function')editor.setSelectionRange(caret[0],caret[1],direction);
+      resizeSandboxEditor(); editorStatus('Updated from engine','saved');
     }
   }else if(!sandboxEditing){
     sandboxText=text; sandboxRevision=incomingRevision;
   }
+  // A proof that is proof.tex or proof.pdf (no proof.md): the PDF on screen
+  // stays, under its file's name, while the run is not running, whatever
+  // text the record carries (its agents' writes: a record with any agent
+  // output has some), and while a follow-up runs until its record's text is
+  // no longer the one it had when the PDF was drawn (showProofPdfDoc: the
+  // previous turn's writes, until the follow-up writes its own; its live
+  // text is shown then); a PDF not drawn yet (refreshProofPreview draws it
+  // once the run is not running: the run opened, or opened again) is not
+  // preceded by that text (and, with no text, the card's placeholder says
+  // the proof is on its way).
+  const pdfShown=!box.has_proof_md&&proofPdfShown()&&(!live||!text||text===$('pdf-pages')._recordText);
+  const pdfComing=!box.has_proof_md&&!!box.has_proof_tex&&!live&&!!text;
   // Named once the page's proof.md is current: the write-up's freshness follows it.
   if(box.has_proof_md) showProofDocFile(run,live);
-  else if(text) $('proof-label').textContent=live?'streaming…':'draft';
-  else $('proof-label').textContent=live?'writing…':'waiting for proof.md…';
+  else if(!pdfShown&&!pdfComing) $('proof-label').textContent=text?(live?'streaming…':'draft'):(live?'writing…':'waiting for proof.md…');
   syncSandboxEditor();
-  if(!sandboxEditing&&(text||problemItems(run).length))renderMarkdownIntoView(text,live&&!box.has_proof_md,run);
+  if(!sandboxEditing&&!pdfShown&&!pdfComing&&(text||problemItems(run).length))renderMarkdownIntoView(text,live&&!box.has_proof_md,run);
   return !!(text||problemItems(run).length);
 }
+// Whether the card shows a PDF of the run's proof (refreshProofPreview drew proof.tex or proof.pdf).
+function proofPdfShown(){ const pages=$('pdf-pages'); return !!pages?.dataset?.cur&&pages.style?.display==='flex'; }
 function problemCardHtml(text, n, total){
   const label=total>1?('Problem '+n):'Problem';
   return `<div class="problem-message"><div class="problem-message-hdr"><span>${label}</span><span class="n">${text.length.toLocaleString(UI_LOCALE)} chars</span></div><div class="problem-message-body">${escapeHtml(text)}</div></div>`;
@@ -7111,7 +7543,7 @@ document.querySelectorAll('#proof-doc-switch [role="radio"]').forEach(button=>{
     if(!['ArrowLeft','ArrowRight','ArrowUp','ArrowDown','Home','End'].includes(event.key))return;
     event.preventDefault();
     chooseProofDoc(event.key==='Home'?'writeup':event.key==='End'?'facts':button.dataset.proofDoc==='writeup'?'facts':'writeup');
-    document.querySelector('#proof-doc-switch [aria-checked="true"]')?.focus();
+    threadFocus(document.querySelector('#proof-doc-switch [aria-checked="true"]'));
   };
 });
 /* Make readable: the document a finished CGM run shows (the written proof
@@ -7186,41 +7618,58 @@ function renderMarkdownIntoView(text, live, run){
   const displayText=writeup?writeupBody(writeup.text):closureCitedLemmas(normalizeProofMarkdown(sandboxText));
   const proofs=writeup?[displayText]:splitProofs(displayText);
   if(!problems.length&&!proofs.length)return;
-  setProofEmpty(false); $('pdf-pages').style.display='none';
-  const view=$('md-view'); view.style.display='block';
+  // The problem is the thread's first message: with no proof yet, the card says one will come.
+  const view=$('md-view'), show=()=>{ setProofEmpty(!proofs.length); $('pdf-pages').style.display='none'; view.style.display='block'; };
   const coverageKey=String(run?.proof_coverage?.source_revision||'');
-  // Compare the complete source so equal-length edits in the middle redraw.
-  const key=JSON.stringify([!!live,problems,sandboxText,coverageKey,writeup]);
-  if(view._proofRenderKey===key)return;
+  // Compare the complete source so equal-length edits in the middle redraw;
+  // trimmed, as the record has it (proof.md read from its file may end in a
+  // newline): reading the file again draws nothing again.
+  const key=JSON.stringify([!!live,problems,sandboxText.trim(),coverageKey,writeup]);
+  if(view._proofRenderKey===key){ show(); return; }
   view._proofRenderKey=key;
-  const body=$('proof-body');
-  // A document newly on screen (the facts or the write-up) opens at its top.
-  const shown=writeup?'writeup':'facts', previousTop=view._proofDoc===shown?body.scrollTop:0;
-  view._proofDoc=shown;
-  const stick=live&&body.scrollHeight-body.scrollTop-body.clientHeight<80;
-  try{ renderCitations(displayText); }catch(e){}
-  const n=Math.max(problems.length, proofs.length, 1);
-  const parts=[];
-  for(let i=0;i<n;i++){
-    let block='<div class="sandbox-turn">';
-    if(problems[i]) block+=problemCardHtml(problems[i], i+1, problems.length);
-    if(writeup&&i===0) block+=writeupBannerHtml(writeup);
-    if(proofs[i]) block+=`<div class="md-doc${live&&i===n-1?' live':''}">`+mdToHtml(proofs[i])+(live&&i===n-1?'<span class="md-caret"></span>':'')+'</div>';
-    block+='</div>';
-    parts.push(block);
-  }
-  view.innerHTML=parts.join('');
-  renderMathIn(view);
-  // Lean marks match fact statements in proof.md, never the write-up's prose.
-  if(!writeup)applyFormalCoverage(view,run?.proof_coverage);
-  if(stick)body.scrollTop=body.scrollHeight;
-  else body.scrollTop=previousTop;
+  // A document newly on screen (the facts or the write-up) opens at the card's
+  // top; a redraw of the same one keeps the reader's place. While the run
+  // works on proof.md (live text before it exists, the file as it is
+  // written), its end is followed from within 80px of the bottom; `live`
+  // itself is the caret, shown only before proof.md exists. No proof yet
+  // (the card's placeholder) is no document: the one shown before (a PDF
+  // drawn again after a click on the open run) is still the one to come.
+  const shown=writeup?'writeup':'facts', newly=!!proofs.length&&view._proofDoc!==shown;
+  if(proofs.length)view._proofDoc=shown;
+  const working=live||!writeup&&run?.status==='running';
+  threadRedraw(newly?'top':working?'follow':'keep',()=>{
+    show();
+    try{ renderCitations(displayText); }catch(e){}
+    const n=Math.max(problems.length, proofs.length, 1);
+    const parts=[];
+    for(let i=0;i<n;i++){
+      let block='<div class="sandbox-turn">';
+      if(problems[i]) block+=problemCardHtml(problems[i], i+1, problems.length);
+      if(writeup&&i===0) block+=writeupBannerHtml(writeup);
+      if(proofs[i]) block+=`<div class="md-doc${live&&i===n-1?' live':''}">`+mdToHtml(proofs[i])+(live&&i===n-1?'<span class="md-caret"></span>':'')+'</div>';
+      block+='</div>';
+      parts.push(block);
+    }
+    view.innerHTML=parts.join('');
+    renderMathIn(view);
+    // Lean marks match fact statements in proof.md, never the write-up's prose.
+    if(!writeup)applyFormalCoverage(view,run?.proof_coverage);
+  });
 }
-async function showProofMd(url, live){
+// proof.md of the run `rid` (the one shown when it was asked for): nothing is
+// drawn when another run is shown by the time it arrives. A read that failed
+// leaves the proof on screen; an empty card says the preview failed (and is
+// drawn again by the next read).
+async function showProofMd(url, live, rid=runId){
   setProofEmpty(false); $('pdf-pages').style.display='none';
   const view=$('md-view'); view.style.display='block';
+  const failed=()=>{ if(runId===rid&&!view.querySelector('.md-doc, .pdf-status')){ view._proofRenderKey=''; view.innerHTML='<div class="pdf-status">Preview failed</div>'; } };
   try{
-    let text=await(await fetch(url)).text();
+    const response=await fetch(url);
+    if(runId!==rid)return;
+    if(response.ok===false)return failed();
+    let text=await response.text();
+    if(runId!==rid)return;
     try{
       const j=JSON.parse(text);
       if(j&&typeof j.content==='string'){
@@ -7228,7 +7677,7 @@ async function showProofMd(url, live){
       }
     }catch(e){}
     renderMarkdownIntoView(text, !!live, lastSandboxRun);
-  }catch(e){ view.innerHTML='<div class="pdf-status">Preview failed</div>'; }
+  }catch(e){ failed(); }
 }
 async function showProofPdf(url){
   setProofEmpty(false); $('md-view').style.display='none';
@@ -7283,14 +7732,18 @@ async function downloadWorkspaceFile(url,name,button){
   finally{ if(button)button.disabled=false; }
 }
 async function refreshProofPreview(force, run){
-  if(!runId)return false;
+  // The run this read is for: every file is asked for under its id, and
+  // nothing is drawn once another run is shown.
+  const rid=runId;
+  if(!rid)return false;
   if(sandboxEditing)return true;
   // An analysis has no proof files; its report arrives with the run record
   // (so does a readable version).
-  const current=run||(lastSandboxRun?.run_id===runId?lastSandboxRun:null);
+  const current=run||(lastSandboxRun?.run_id===rid?lastSandboxRun:null);
   if(isAnalysisRun(current)||isReadabilityRun(current))return true;
   let files=[];
-  try{ files=((await(await fetch('/api/workspace/'+encodeURIComponent(runId)+'/files')).json()).files||[]); }catch(e){ files=[]; }
+  try{ files=((await(await fetch('/api/workspace/'+encodeURIComponent(rid)+'/files')).json()).files||[]); }catch(e){ files=[]; }
+  if(runId!==rid)return true;
   const md=files.find(f=>f.path==='proof.md');
   const tex=files.find(f=>f.path==='proof.tex');
   const pdf=files.find(f=>f.path==='proof.pdf');
@@ -7299,24 +7752,40 @@ async function refreshProofPreview(force, run){
   const viewEmpty=!($('md-view')&&$('md-view').innerHTML);
   if(md){
     if(!force&&!viewEmpty&&stamp(md)===String(lastProofMtime))return true; lastProofMtime=stamp(md);
-    const u='/api/workspace/'+encodeURIComponent(runId)+'/file?path='+encodeURIComponent(md.path)+'&t='+Date.now();
+    const u='/api/workspace/'+encodeURIComponent(rid)+'/file?path='+encodeURIComponent(md.path)+'&t='+Date.now();
     // Named after the read: a proof.md newer than the run record leaves the write-up stale.
-    await showProofMd(u, live); showProofDocFile(current,live); return true;
+    // Live as the record's preview has it (applySandboxPreview): the caret only before proof.md exists.
+    await showProofMd(u, live&&!current?.sandbox_preview?.has_proof_md, rid);
+    if(runId!==rid)return true;
+    showProofDocFile(current,live); return true;
   }
   if(live) return false;
   if(tex){
     if(!force&&!viewEmpty&&stamp(tex)===String(lastProofMtime))return true; lastProofMtime=stamp(tex);
     $('proof-label').textContent=tex.path;
-    const base='/api/workspace/'+encodeURIComponent(runId)+'/pdf?path='+encodeURIComponent(tex.path);
-    showProofPdf(base+'&t='+Date.now()); setDownloadUrl(base+'&download=1&t='+Date.now(),'proof.pdf'); return true;
+    const base='/api/workspace/'+encodeURIComponent(rid)+'/pdf?path='+encodeURIComponent(tex.path);
+    showProofPdfDoc(base+'&t='+Date.now()); setDownloadUrl(base+'&download=1&t='+Date.now(),'proof.pdf'); return true;
   }
   if(pdf){
     if(!force&&!viewEmpty&&stamp(pdf)===String(lastProofMtime))return true; lastProofMtime=stamp(pdf);
     $('proof-label').textContent=pdf.path;
-    const u='/api/workspace/'+encodeURIComponent(runId)+'/file?path='+encodeURIComponent(pdf.path)+'&t='+Date.now();
-    showProofPdf(u); setDownloadUrl(u+'&download=1','proof.pdf'); return true;
+    const u='/api/workspace/'+encodeURIComponent(rid)+'/file?path='+encodeURIComponent(pdf.path)+'&t='+Date.now();
+    showProofPdfDoc(u); setDownloadUrl(u+'&download=1','proof.pdf'); return true;
   }
   return false;
+}
+// The run's proof as a PDF in the card: newly shown (the card showed another
+// document: the live text, proof.md, nothing yet) it opens at the card's top;
+// drawn again (the refresh after a run ends, a click on the open run) it
+// keeps the reader's place while its pages are drawn anew. A document shown
+// after it (Markdown again) is newly shown too.
+function showProofPdfDoc(url){
+  const view=$('md-view'), newly=view._proofDoc!=='pdf';
+  view._proofDoc='pdf';
+  // The record's text as this PDF is drawn (the record applySandboxPreview
+  // drew last): a follow-up keeps the PDF until its record's text changes.
+  $('pdf-pages')._recordText=sandboxText;
+  threadRedraw(newly?'top':'keep',()=>{ showProofPdf(url); });
 }
 
 /* ── conversation view: all agent turns as a pretty timeline ── */
@@ -9126,47 +9595,693 @@ $('lean-chat-input')?.addEventListener('keydown',e=>{
   if(e.key==='Enter'&&!e.shiftKey){ e.preventDefault(); sendLeanChat(); }
 });
 
+/* ── the Sandbox thread ──
+   One conversation in #sandbox-thread, the Sandbox's only vertical scroller:
+   the run's problem (#thread-problem), then its chat in order (#chat-msgs:
+   each message sent, the engine's replies, the run's notices), the latest
+   proof or report as a card (.proof-panel), then the questions and answers
+   (#ask-list). The lines the status line under the thread says already (a
+   turn starting, continuing or ending) are left out, and so is an analysis's
+   log; any other line stays, one this list does not know included.
+
+   Its place. Every redraw in the thread goes through threadRedraw, which
+   keeps the reading point: the first block in view and how far it is from
+   the top (threadPos). A reply or a notice drawn above that block moves
+   nothing being read (the browser's scroll anchoring is off: it would fight
+   these redraws), and a reader at the bottom stays at the bottom. A run opens
+   on its latest exchange (its last message or question at the top) until the
+   reader scrolls; live output is followed only from within 80px of the
+   bottom; the place is kept while the Sandbox is hidden (another view) and
+   given back when it is shown again. */
+const THREAD_FOLLOW_PX=80, THREAD_MARGIN=12;
+// The routine lines of a run's chat, in the server's words (jobs._append_chat):
+// a turn starting, continuing or ending (the status line says where the run
+// stands), its cost summary, and the operator's notes on what a harness was
+// given. A first run's failure ("✗ run failed: …") is the status line's only
+// while it is the run's own state (threadModel).
+const THREAD_ROUTINE_LINES=['▶ ','✓ ','✗ run failed · ','✗ run stopped · ','■ run stopped by user','Run stopped by user.','Continuing run…','Continuing proof with your feedback…',
+  'library injected: ','profile skills materialized: ','native SKILL.md profile injected into this harness'];
+// A follow-up's reply when its turn left no output ("Run finished." / "Run failed."): the status line says it.
+const THREAD_ROUTINE_REPLIES=['Run finished.','Run failed.','Run stopped.'];
+// A line of a run's activity log (agent_monitor/cli_events.py): the CLI and
+// CGM engines' replies are a chunk of it.
+const THREAD_LOG_LINE=/^(?:(?:thinking|assistant|stage|edit|exec|tool|error|mcp_tool_call|web_search|todo_list) · |[✓✗] (?:result|usage) · |· usage in |◦ |\$ )/m;
+let threadPos={el:null,offset:0,top:0,gap:0,client:0,open:true,pinned:false,held:false,heldGap:0,coming:false,hidden:false};
+// threadChatAsked numbers each read of the chat; threadChatShown is the newest one drawn (or the copy a message sent came back with).
+let threadMsgs=[], threadMsgsRun='', threadRenderKey='', threadChatAsked=0, threadChatShown=0, threadScrollFrame=0, threadIds=0, threadSayTimer=0;
+const threadExpanded=new Set();
+function threadRoutineLine(text){
+  const line=String(text||'').trim();
+  return THREAD_ROUTINE_LINES.some(start=>line.startsWith(start))||/^Re-check · .+ · started \(model verifier, one result\)$/.test(line);
+}
+// Whether a reply is a chunk of the run's activity log (its proof is the card).
+function threadIsLog(text){ return THREAD_LOG_LINE.test(String(text||'')); }
+// A line's fingerprint for its key: chat lines are only ever added, never changed.
+function threadHash(text){
+  const s=String(text||''); let h=5381;
+  for(let i=0;i<s.length;i++)h=((h<<5)+h+s.charCodeAt(i))|0;
+  return (h>>>0).toString(36)+'.'+s.length.toString(36);
+}
+// A manuscript run's request: its label and focus as its record has them,
+// and the link it was read from.
+function threadRequest(run){
+  const text=String(run?.problem_text||run?.problem_text_preview||'').trim(), url=String(run?.sandbox_preview?.source_url||'');
+  return {text,url:/^https:\/\/\S+$/.test(url)&&!text.includes(url)?url:''};
+}
+/* What the thread shows for a run (kind: 'prove', 'analyze' or
+   'readability'): its opening problem, then its chat lines in order.
+   - The problem is the run's first message when its chat has one: the line
+     jobs.start_job writes, with any files, before the run's worker starts
+     ("▶ run started"; in a chat without that line, the first message with
+     files before the engine's first reply). Otherwise the record's problems
+     (a manuscript run: its label, focus and link), each the line that says
+     it already when the run's opening or the session's recovered lines do
+     (an older chat), else written out. A later follow-up in the same words
+     is a follow-up: the problem stays the first message.
+   - Each line: a user's, a reply (never an analysis's log, which is its
+     runner's, nor a turn's "Run finished." without output), or a notice (any
+     system line but a routine one). A readable version shows no chat at all,
+     as before.
+   - Lines the server recovered from the session's problems come last in its
+     list: each goes back to its time.
+   Each entry has a key that stays the same while its line does (a recovered
+   line's, whatever time the record gives it). */
+function threadModel(msgs,run,kind){
+  const lines=(Array.isArray(msgs)?msgs:[]).filter(m=>m&&typeof m==='object');
+  const said=m=>[m.content,m.ledger_text].map(text=>String(text||'').trim()).filter(Boolean);
+  const withFiles=m=>Array.isArray(m.attachments)&&m.attachments.length>0;
+  const started=lines.findIndex(m=>m.role==='system'&&String(m.content||'').trim().startsWith('▶ run started'));
+  const replied=lines.findIndex(m=>m.role==='assistant');
+  const opening=lines.slice(0,started>=0?started:replied>=0?replied:lines.length).filter(m=>m.role==='user'&&!m.recovered_from_session);
+  const upload=started>=0?opening[0]||null:opening.find(withFiles)||null;
+  const seen=new Map(), keyOf=(...parts)=>{ const key=parts.join('|'), n=seen.get(key)||0; seen.set(key,n+1); return n?key+'#'+n:key; };
+  const fileIds=files=>(Array.isArray(files)?files:[]).map(file=>String(file?.id||file?.name||'')).join(',');
+  const problems=[], taken=new Set();
+  const fromLine=(m,label,url)=>{
+    taken.add(m);
+    problems.push({key:keyOf('problem',m.recovered_from_session?'recovered':m.ts||'',threadHash(String(m.content||'')+'\n'+fileIds(m.attachments))),kind:'problem',label,
+      text:String(m.content||''),url,attachments:withFiles(m)?m.attachments:[],ts:m.ts||''});
+  };
+  if(upload)fromLine(upload,'You','');
+  else{
+    const request=kind==='prove'?null:threadRequest(run);
+    const texts=(request?[request.text]:problemItems(run)).map(text=>String(text||'').trim()).filter(Boolean);
+    const recorded=Array.isArray(run?.problems)?run.problems:[];
+    const copies=[...opening,...lines.filter(m=>m.role==='user'&&m.recovered_from_session)];
+    texts.forEach((text,i)=>{
+      const label=texts.length>1?'Problem '+(i+1):'You', copy=copies.find(m=>!taken.has(m)&&said(m).includes(text));
+      if(copy)return fromLine(copy,label,request?.url||'');
+      const ts=recorded.find(item=>item&&typeof item==='object'&&String(item.text||'').trim()===text)?.ts||run?.created_at||'';
+      problems.push({key:keyOf('problem',threadHash(text+'\n'+(request?.url||''))),kind:'problem',label,text,url:request?.url||'',attachments:[],ts});
+    });
+  }
+  const rest=lines.filter(m=>!taken.has(m)), ordered=rest.filter(m=>!m.recovered_from_session);
+  for(const m of rest.filter(m=>m.recovered_from_session)){
+    const at=Date.parse(m.ts), next=Number.isFinite(at)?ordered.findIndex(o=>Date.parse(o.ts)>at):-1;
+    ordered.splice(next<0?ordered.length:next,0,m);
+  }
+  const items=[];
+  if(kind!=='readability')for(const m of ordered){
+    const text=String(m.content||''), line=text.trim(), files=withFiles(m)?m.attachments:[];
+    if(!line&&!files.length)continue;
+    let as=m.role==='user'?'user':m.role==='assistant'?(kind==='analyze'||THREAD_ROUTINE_REPLIES.includes(line)?'':'reply'):(threadRoutineLine(text)?'':'notice');
+    // A first run's failure is the status line's while the record says the
+    // run failed for that reason (or has not arrived yet); after a later turn
+    // the status line says that turn's state, and the thread keeps the failure.
+    if(as==='notice'&&line.startsWith('✗ run failed: ')&&(!run||run.status==='failed'&&line==='✗ run failed: '+String(run.error||'').trim()))as='';
+    const recovered=!!m.recovered_from_session;
+    if(as)items.push({key:keyOf(as,recovered?'recovered':m.ts||'',threadHash(text+'\n'+fileIds(files))),kind:as,label:'You',text,url:'',attachments:files,ts:m.ts||'',recovered});
+  }
+  return {problems,items};
+}
+// The run whose record the thread draws (the one shown), and its kind.
+function threadRun(){ return lastSandboxRun?.run_id===runId?lastSandboxRun:null; }
+function threadKind(run){
+  if(run)return isAnalysisRun(run)?'analyze':isReadabilityRun(run)?'readability':'prove';
+  return RUN_KIND_BY_ID.get(String(runId||''))||'prove';
+}
+/* Draw the thread from the chat last read (renderChat) and the run's record
+   (each poll), changing only what changed. fresh: lines new since the chat
+   was last drawn fade in and are said to a screen reader; sent: the message
+   the reader just sent (the server's copy of it, or true) is brought into
+   view, and the error of an earlier try goes. */
+function renderThread({fresh=false,sent=false}={}){
+  const problemBox=$('thread-problem'), box=$('chat-msgs'); if(!problemBox||!box)return;
+  const rid=String(runId||''), run=threadRun();
+  const model=threadModel(threadMsgsRun===rid?threadMsgs:[],run,threadKind(run));
+  const key=JSON.stringify([rid,model.problems.map(item=>item.key),model.items.map(item=>item.key)]);
+  const stale=sent?[...box.children].filter(el=>el.classList.contains('error')):[];
+  let added=[], note='';
+  if(key!==threadRenderKey||stale.length){
+    threadRenderKey=key;
+    threadRedraw('keep',()=>{
+      stale.forEach(el=>el.remove());
+      threadPatch(problemBox,model.problems,threadUserNode,false);
+      added=threadPatch(box,model.items,threadItemNode,fresh);
+    });
+  }
+  if(sent){
+    // The message just sent, by the server's copy of it (never a line the
+    // server recovered after it), else the last one sent from here.
+    const want=sent&&typeof sent==='object'?sent:null;
+    const mine=(want&&model.items.find(item=>item.kind==='user'&&!item.recovered&&item.ts===String(want.ts||'')&&item.text===String(want.content||'')))
+      ||[...model.items].reverse().find(item=>item.kind==='user'&&!item.recovered);
+    const node=mine?[...box.children].find(el=>el.dataset.key===mine.key):null;
+    // An open editor is never scrolled away: the message is brought into
+    // view only where that needs no scroll, and said otherwise.
+    if(node&&sandboxEditing){ if(!threadInView(node))note='Message sent.'; }
+    else if(node)threadReveal(node,'start');
+  }
+  if(fresh||note)threadAnnounce(fresh?added:[],note);
+}
+/* `box` made to hold one node per item, in order: a node whose key is still
+   listed is kept (with its Show more state and focus), a new one built, one
+   no longer listed removed. A send error (no key) stays until the
+   conversation changes. Returns the items drawn new, with their nodes. */
+function threadPatch(box,items,build,fresh){
+  const have=new Map([...box.children].filter(el=>el.dataset.key).map(el=>[el.dataset.key,el]));
+  const added=[];
+  let at=box.firstElementChild;
+  for(const item of items){
+    let node=have.get(item.key);
+    if(node)have.delete(item.key);
+    else{
+      node=build(item); node.dataset.key=item.key;
+      if(fresh){ node.classList.add('fresh'); node.addEventListener('animationend',()=>node.classList.remove('fresh'),{once:true}); }
+      added.push({item,node});
+    }
+    if(node===at)at=at.nextElementSibling;
+    else box.insertBefore(node,at);
+  }
+  for(const node of have.values())node.remove();
+  if(added.length||have.size)[...box.children].filter(node=>node.classList.contains('error')).forEach(node=>node.remove());
+  return added;
+}
+function threadMessageNode(cls,name,ts){
+  const node=analyzeEl('div','chat-msg '+cls), who=analyzeEl('div','who');
+  who.append(analyzeEl('span','who-name',name),analyzeEl('span','ts',ts?fmtTs(ts):''));
+  node.append(who);
+  return node;
+}
+// What was sent: its text (the opening problem's math typeset, as its card
+// had it), the link a manuscript was read from, the files it brought. A long
+// one shows its start until Show more.
+function threadUserNode(item){
+  const node=threadMessageNode(item.kind==='problem'?'user problem':'user',item.label||'You',item.ts);
+  const bubble=analyzeEl('div','msg-bubble'), text=analyzeEl('div','msg-text',item.text);
+  text.id='thread-msg-'+(++threadIds);
+  bubble.append(text);
+  if(item.url){ const link=analyzeEl('a','msg-link',item.url); link.href=item.url; link.target='_blank'; link.rel='noopener noreferrer'; bubble.append(link); }
+  if(item.attachments?.length)bubble.insertAdjacentHTML('beforeend',attachmentLinks(item.attachments,runId));
+  node.append(bubble);
+  if(item.kind==='problem')renderMathIn(text);
+  if(item.text.length>700||item.text.split('\n').length>10)threadMoreButton(node,text,item.key);
+  return node;
+}
+// The engine's reply: its first line, all of the stored text on Show more.
+// A reply that is a chunk of the run's activity log (what the CLI and CGM
+// engines store: a part of the log's tail, not their answer, which is the
+// card) is a collapsed "Engine log" instead.
+function threadReplyNode(item){
+  const node=threadMessageNode('assistant','Engine',item.ts);
+  const full=String(item.text||'').trim(), lines=full.split('\n').map(line=>line.trim()).filter(Boolean);
+  if(threadIsLog(full))return threadLogNode(node,item,full);
+  const first=lines[0]||'', summary=first.length>240?first.slice(0,239)+'…':first;
+  const text=analyzeEl('div','msg-text',threadExpanded.has(item.key)?full:summary);
+  text.id='thread-msg-'+(++threadIds);
+  node._threadText={full,summary};
+  node.append(text);
+  if(lines.length>1||summary!==first)threadMoreButton(node,text,item.key);
+  return node;
+}
+// "Engine log" with Show log / Hide log; open, the stored text as written
+// (text, never markup), monospace, in a box of its own that scrolls sideways.
+// No line of it is taken for a summary: the log says how the run went, not
+// what it found.
+function threadLogNode(node,item,full){
+  node.classList.add('log');
+  const open=threadExpanded.has(item.key), row=analyzeEl('div','msg-log-row');
+  const log=analyzeEl('pre','msg-log',full); log.id='thread-msg-'+(++threadIds); log.hidden=!open;
+  const button=analyzeEl('button','msg-more',open?'Hide log':'Show log');
+  button.type='button'; button.setAttribute('aria-expanded',String(open)); button.setAttribute('aria-controls',log.id);
+  row.append(analyzeEl('span','msg-log-label','Engine log'),button);
+  node.append(row,log);
+  return node;
+}
+function threadNoticeNode(item){
+  const node=analyzeEl('div','chat-msg system notice');
+  node.append(analyzeEl('span','msg-text',String(item.text||'').trim()));
+  if(item.ts)node.append(analyzeEl('span','ts',fmtTs(item.ts)));
+  return node;
+}
+function threadItemNode(item){ return item.kind==='user'?threadUserNode(item):item.kind==='reply'?threadReplyNode(item):threadNoticeNode(item); }
+function threadMoreButton(node,text,key){
+  const open=threadExpanded.has(key), button=analyzeEl('button','msg-more',open?'Show less':'Show more');
+  button.type='button'; button.setAttribute('aria-expanded',String(open)); button.setAttribute('aria-controls',text.id);
+  if(!open&&!node._threadText)text.classList.add('clamped');
+  node.append(button);
+}
+// Show more / Show less. Closed from below its top, the message comes back into view.
+function threadToggle(button){
+  const node=button.closest('.chat-msg'), key=node?.dataset.key, log=node?.querySelector('.msg-log')||null, text=log||node?.querySelector('.msg-text'); if(!key||!text)return;
+  const open=button.getAttribute('aria-expanded')!=='true', sc=sandboxThread();
+  const above=!open&&threadLaidOut(sc)&&threadOffset(sc,node)<0;
+  if(open)threadExpanded.add(key); else threadExpanded.delete(key);
+  // What the reader opened grows downwards from where it is (what is on
+  // screen now), even with the thread at its bottom.
+  threadPos.pinned=false; threadPos.held=false;
+  threadRedraw('keep',()=>{
+    if(log){ log.hidden=!open; button.textContent=open?'Hide log':'Show log'; }
+    else{
+      if(node._threadText)text.textContent=open?node._threadText.full:node._threadText.summary;
+      else text.classList.toggle('clamped',!open);
+      button.textContent=open?'Show less':'Show more';
+    }
+    button.setAttribute('aria-expanded',String(open));
+  });
+  if(above)threadReveal(node,'start');
+}
+// A message that could not be sent says why under the conversation (one
+// such notice at a time: a new try's replaces it), until the conversation
+// changes or a message is sent (the message stays in the box, to send again).
+// It is an alert (said at once); it is brought into view, except over an
+// open editor, which is never scrolled away for it.
+function threadError(message){
+  const box=$('chat-msgs'); if(!box)return;
+  const node=analyzeEl('div','chat-msg system notice error');
+  node.setAttribute('role','alert');
+  node.append(analyzeEl('span','msg-text',String(message||'').trim()||'The message could not be sent. Try again.'));
+  threadRedraw('keep',()=>{ [...box.children].filter(el=>el.classList.contains('error')).forEach(el=>el.remove()); box.append(node); });
+  if(!sandboxEditing)threadReveal(node,'nearest');
+}
+// New replies and notices are said once, politely (after `note`, when there
+// is one); the thread is never read out again.
+function threadAnnounce(added,note=''){
+  const words=[note,...added.map(({item})=>item.kind==='reply'?(threadIsLog(item.text)?'The engine\'s log was added.':'Reply: '+(String(item.text||'').trim().split('\n')[0]||'').slice(0,200))
+    :item.kind==='notice'?String(item.text||'').trim().slice(0,240):'')].filter(Boolean);
+  if(words.length)threadSay(words.join(' — '));
+}
+function threadSay(text){
+  const live=$('thread-announcer'); if(!live)return;
+  live.textContent=''; clearTimeout(threadSayTimer);
+  threadSayTimer=setTimeout(()=>{ live.textContent=String(text||'').slice(0,500); },60);
+}
+// Another run, or none: an empty thread at its top, which opens on that run's latest exchange.
+function resetSandboxThread(){
+  for(const id of ['thread-problem','chat-msgs']){ const box=$(id); if(box)box.replaceChildren(); }
+  threadMsgs=[]; threadMsgsRun=''; threadRenderKey=''; threadExpanded.clear();
+  // An analysis's stored copy is the run's it was chosen for: another opens on its report.
+  analysisSourceShown=false;
+  threadPos={el:null,offset:0,top:0,gap:0,client:0,open:true,pinned:false,held:false,heldGap:0,coming:false,hidden:threadPos.hidden};
+  const sc=sandboxThread(); if(sc)sc.scrollTop=0;
+  const live=$('thread-announcer'); if(live)live.textContent='';
+  fitComposer($('chat-input'));
+}
+
+/* ── the thread's place (its one scroller) ──
+   threadPos keeps it: el, the first block not wholly above the view, and
+   offset, how far that block's top is below the view's top (the reading
+   point); top and gap, the scroll offset last set or seen and the room left
+   under the view; client, the view's height then; open, the run still
+   opening on its latest exchange; pinned, the reader at the bottom by their
+   own scroll (of a thread that scrolls at all: one that does not is at its
+   bottom whatever is done); held, the reading point kept while the thread is
+   drawn shorter than it for a moment (a placeholder, a document redrawn: the
+   browser clamps the thread to its new bottom), for when it is long enough
+   again, and heldGap, the room under the view when it was held; coming, the
+   point held is the card's top, for a document newly shown that is still
+   to come (its placeholder drawn: threadCardTop); hidden, the Sandbox hidden
+   with another view. */
+function sandboxThread(){ return $('sandbox-thread'); }
+// Laid out: not hidden with its view (scroll offsets mean nothing then).
+function threadLaidOut(sc){ return !!sc&&sc.clientHeight>0; }
+function threadGap(sc){ return sc.scrollHeight-sc.scrollTop-sc.clientHeight; }
+// Whether the thread is longer than its view (its reader can scroll it at all).
+function threadScrolls(sc){ return sc.scrollHeight>sc.clientHeight+2; }
+// How far a block still fading in (its own transform: a message just drawn)
+// stands below the place it settles in.
+function threadShift(el){
+  try{ const t=getComputedStyle(el).transform; return t&&t!=='none'&&typeof DOMMatrixReadOnly==='function'?new DOMMatrixReadOnly(t).m42:0; }catch(e){ return 0; }
+}
+// How far `el`'s top (where it settles) is below the top of the thread's view.
+function threadOffset(sc,el){ return el.getBoundingClientRect().top-threadShift(el)-sc.getBoundingClientRect().top; }
+// Whether `el` is wholly in the thread's view (nothing to scroll for it).
+function threadInView(el){
+  const sc=sandboxThread(); if(!el||!threadLaidOut(sc))return false;
+  const top=threadOffset(sc,el); return top>=0&&top+el.getBoundingClientRect().height<=sc.clientHeight;
+}
+// The blocks a reading point is kept by, in order: the problem, each
+// message, the card, the questions and answers.
+function threadBlocks(sc){
+  const blocks=[];
+  for(const id of ['thread-problem','chat-msgs'])blocks.push(...($(id)?.children||[]));
+  const card=sc.querySelector('.proof-panel'); if(card)blocks.push(card);
+  const asks=$('ask-list'); if(asks)blocks.push(asks);
+  return blocks.filter(el=>el.getClientRects().length);
+}
+// Whether the reader moved the thread since its place was last taken. A
+// change the browser made itself is not one: a thread drawn shorter for a
+// moment is clamped to its new bottom.
+function threadMovedByReader(sc){
+  const top=sc.scrollTop;
+  if(Math.abs(top-threadPos.top)<=1)return false;
+  return !(top<threadPos.top&&top>=sc.scrollHeight-sc.clientHeight-1);
+}
+// The reading point now: the first block not wholly above the view. Taking
+// it never pins the thread to its bottom (only the reader's own scroll does,
+// threadNoteScroll), and a reading point held is kept as it was.
+function threadMark(){
+  const sc=sandboxThread(); if(!threadLaidOut(sc))return;
+  threadPos.top=sc.scrollTop; threadPos.gap=threadGap(sc); threadPos.client=sc.clientHeight;
+  if(threadPos.open||threadPos.held)return;
+  const top=sc.getBoundingClientRect().top;
+  let el=threadBlocks(sc).find(block=>block.getBoundingClientRect().bottom>top+1)||null;
+  // Read inside the card's document: kept by the document itself, so that
+  // its toolbar changing height above it (a status that wraps to another
+  // row, a chip) moves nothing being read.
+  const body=el?.classList.contains('proof-panel')?$('proof-body'):null;
+  if(body?.getClientRects().length&&body.getBoundingClientRect().top<=top)el=body;
+  threadPos.el=el; threadPos.offset=el?threadOffset(sc,el):0;
+}
+// The latest exchange a run opens on: its last question, else the last
+// message sent, else its top (null).
+function threadOpenAnchor(){
+  const asks=$('ask-list'), question=asks&&!asks.hidden?[...asks.children].filter(el=>el.classList.contains('ask-item')).pop():null;
+  if(question?.getClientRects().length)return question;
+  return [...($('chat-msgs')?.children||[])].filter(el=>el.classList.contains('user')&&el.getClientRects().length).pop()||null;
+}
+// The reading point put back: the latest exchange while the run opens, the
+// bottom for a reader pinned there, else the block where it was (or the
+// offset it had). A thread drawn too short for it holds it, at its bottom,
+// until it is long enough again.
+function threadRestore(){
+  const sc=sandboxThread(); if(!threadLaidOut(sc))return;
+  const bottom=sc.scrollHeight-sc.clientHeight;
+  let target=threadPos.top, held=false;
+  if(threadPos.open){ const el=threadOpenAnchor(); target=el?sc.scrollTop+threadOffset(sc,el)-THREAD_MARGIN:0; }
+  else if(threadPos.pinned)target=bottom;
+  else if(threadPos.el?.isConnected&&threadPos.el.getClientRects().length){
+    target=sc.scrollTop+threadOffset(sc,threadPos.el)-threadPos.offset;
+    held=target>bottom+1;
+  }
+  if(held)threadHold(); else threadPos.held=false;
+  if(Math.abs(target-sc.scrollTop)>=1)sc.scrollTop=target;
+  threadPos.top=sc.scrollTop;
+}
+// A document newly shown while the thread is hidden (another view): the
+// thread opens at the card's top when shown again, unless its reading point
+// is above the card.
+function threadTopWhileHidden(sc){
+  threadPos.pinned=false; threadPos.held=false;
+  if(threadPos.open)return;
+  const card=sc?.querySelector('.proof-panel'), el=threadPos.el; if(!card)return;
+  const after=!!el?.isConnected&&typeof card.compareDocumentPosition==='function'&&!!(card.compareDocumentPosition(el)&4);
+  if(!el?.isConnected||el===card||after){ threadPos.el=card; threadPos.offset=0; }
+}
+/* Redraw part of the thread with draw(), the thread where `how` says:
+     'keep'   the reading point stays (the default);
+     'follow' live output: the bottom when the reader was within 80px of it
+              (or pinned there), else kept;
+     'bottom' the bottom (a question this page just asked);
+     'top'    a document newly shown in the card: the card's top brought to
+              the view's top when the reader was below it (reading the card
+              or what follows it; never scrolled down to), else the thread
+              stays where it is; the reader no longer pinned (threadCardTop).
+   Following never goes past the top of `cap` (an element, or a function
+   giving one): an answer that came opens at its question. While the run
+   opens, its latest exchange stays at the top instead. A reading point held
+   (the thread drawn shorter than it for a moment: the browser clamped the
+   reader to its bottom) is no reader at the bottom unless it was within
+   80px of it: live output gives the place back once the thread is long
+   enough for it again (a click on the open run draws its proof again), and
+   lets it go when what is drawn is still too short for it (a document
+   started over), following from there. A redraw inside another one (Done
+   giving way to the proof it draws) is placed by that one. */
+let threadDrawing=0;
+function threadRedraw(how,draw,cap){
+  if(threadDrawing){ draw(); return; }
+  const sc=sandboxThread();
+  // Hidden: drawn now, its place given back when it is shown (threadResized).
+  if(!threadLaidOut(sc)){ draw(); if(how==='top')threadTopWhileHidden(sc); threadSelPopCheck(); return; }
+  if(threadPos.open&&(how==='bottom'||threadMovedByReader(sc)))threadPos.open=false;
+  threadNoteClamp(sc);
+  // Within 80px of the bottom: now, or (a reading point held) when it was taken.
+  const held=threadPos.held, near=(held?threadPos.heldGap:threadGap(sc))<THREAD_FOLLOW_PX;
+  const follow=how==='bottom'||how==='follow'&&(threadPos.pinned||near);
+  threadMark();
+  const before=sc.scrollTop;
+  threadDrawing++;
+  try{ draw(); }finally{ threadDrawing--; }
+  if(threadPos.open)threadRestore();
+  else if(how==='top')threadCardTop(sc,before);
+  else if(follow){
+    threadPos.held=false;
+    const until=typeof cap==='function'?cap():cap, bottom=sc.scrollHeight-sc.clientHeight;
+    let target=bottom;
+    if(until?.isConnected&&until.getClientRects().length)target=Math.min(target,sc.scrollTop+threadOffset(sc,until)-THREAD_MARGIN);
+    if(target>sc.scrollTop)sc.scrollTop=target;
+    // Stopped at the cap (an answer opens at its question): no longer at the bottom.
+    if(target<bottom-2)threadPos.pinned=false;
+  }else{
+    threadRestore();
+    // Live output still too short for the place held: the reader, at its
+    // bottom, follows it from there on (never the card's top held for a
+    // document still to come: other output, an answer, is not that one).
+    if(how==='follow'&&held&&threadPos.held&&!threadPos.coming)threadPos.held=false;
+  }
+  threadPos.top=sc.scrollTop;
+  threadMark();
+  threadSelPopCheck();
+}
+/* A document newly shown in the card ('top'), placed once it is drawn
+   (`before`: the thread's scroll offset before the draw). The reader was
+   below the card's top (reading the card's last document, or the questions
+   after it): the card's top is brought to the view's top (its sticky
+   toolbar then stands where it belongs, over nothing of the document). The
+   browser may have clamped the thread meanwhile (a placeholder, "Loading the
+   stored copy…", a PDF "Rendering…", is shorter than the view): that place
+   is held for the document that follows, which takes it as soon as it is
+   long enough. A reading point held before (the thread drawn short since it
+   was taken) says where the reader really was. A reader at or above the
+   card's top (its top in view, a message, the problem) is never moved down
+   to it: the reading point taken before the draw is given back, and held,
+   for the document still to come, while the placeholder leaves the thread
+   too short for it (the browser clamped it). */
+function threadCardTop(sc,before){
+  threadPos.pinned=false;
+  const card=sc.querySelector('.proof-panel');
+  if(!card?.getClientRects().length){ threadPos.held=false; return; }
+  const at=sc.scrollTop+threadOffset(sc,card), el=threadPos.el;
+  // Where the top of the reader's view was: the held point's, else the offset before this draw.
+  const heldAt=threadPos.held&&el?.isConnected&&el.getClientRects().length;
+  const view=heldAt?sc.scrollTop+threadOffset(sc,el)-threadPos.offset:before;
+  if(!(at<view-1)){
+    const was=threadPos.held;
+    threadRestore();
+    // Held by this draw: other output meanwhile (an answer) does not let it go.
+    if(threadPos.held&&!was)threadPos.coming=true;
+    return;
+  }
+  const bottom=sc.scrollHeight-sc.clientHeight;
+  if(Math.abs(at-sc.scrollTop)>=1)sc.scrollTop=at;
+  if(at>bottom+1){ threadPos.el=card; threadPos.offset=0; threadPos.held=true; threadPos.heldGap=Infinity; threadPos.coming=true; }
+  else threadPos.held=false;
+}
+// The reading point held, with the room the reader had under the view
+// then: a reader at the bottom, or within 80px of it, still follows.
+function threadHold(){
+  if(!threadPos.held){ threadPos.held=true; threadPos.heldGap=threadPos.gap; threadPos.coming=false; }
+}
+// The browser clamped the thread to its bottom since its place was last
+// taken (a block drawn shorter in this same task, before a scroll event
+// says so): the reading point is held, never taken from the clamp.
+function threadNoteClamp(sc){
+  if(!threadPos.open&&!threadPos.pinned&&!threadPos.held&&!threadMovedByReader(sc)&&sc.scrollTop<threadPos.top-1)threadHold();
+}
+// The end of `el` (less `slack`, room it keeps under its text) brought into
+// the thread's view when it is below it: the caret at the end of the editor.
+function threadShowEnd(el,slack=0){
+  const sc=sandboxThread(); if(!el||!threadLaidOut(sc))return;
+  const below=threadOffset(sc,el)+el.getBoundingClientRect().height-slack-(sc.clientHeight-THREAD_MARGIN);
+  if(below<1)return;
+  sc.scrollTop+=below; threadPos.top=sc.scrollTop; threadPos.held=false;
+  threadMark();
+}
+// A control of the card a key moved to (the document switch, a readability
+// tab): focused where the switch left the thread (the browser would centre
+// it, the card's top then far down the view), and brought into view only
+// when it is out of it.
+function threadFocus(el){
+  if(!el)return;
+  el.focus({preventScroll:true});
+  if(threadLaidOut(sandboxThread())&&!threadInView(el))threadReveal(el,'nearest');
+}
+// Bring `el` into view: its top under the thread's top ('start', a message
+// just sent) or as little as it takes ('nearest', a send error).
+function threadReveal(el,where='start'){
+  const sc=sandboxThread(); if(!el)return;
+  threadPos.open=false; threadPos.pinned=false; threadPos.held=false;
+  if(!threadLaidOut(sc)){ threadPos.el=el; threadPos.offset=THREAD_MARGIN; threadPos.gap=Infinity; return; }
+  const top=threadOffset(sc,el), bottom=top+el.getBoundingClientRect().height;
+  let move=0;
+  if(where==='start'||top<THREAD_MARGIN)move=top-THREAD_MARGIN;
+  else if(bottom>sc.clientHeight-THREAD_MARGIN)move=Math.min(top-THREAD_MARGIN,bottom-sc.clientHeight+THREAD_MARGIN);
+  if(Math.abs(move)>=1)sc.scrollTop+=move;
+  threadPos.top=sc.scrollTop;
+  threadMark();
+}
+// The thread scrolled: the selection pop-up goes when its reader scrolled
+// it; what the scroll means is worked out once the frame is drawn.
+function threadScrolled(){
+  const sc=sandboxThread();
+  if(sc&&threadMovedByReader(sc)){ const pop=$('sel-pop'); if(pop)pop.style.display='none'; }
+  if(threadScrollFrame)return;
+  threadScrollFrame=requestAnimationFrame(()=>{ threadScrollFrame=0; threadNoteScroll(); });
+}
+// What a scroll of the thread means. The reader's own (the wheel, a key, a
+// jump to an anchor or a field): the opening ends, the place is theirs, and
+// at the bottom of a thread that scrolls at all they are pinned there. The
+// browser's (a thread drawn shorter for a moment, clamped to its new bottom):
+// a reader pinned at the bottom stays there; anyone else's reading point is
+// held for when the thread is long enough again.
+function threadNoteScroll(){
+  const sc=sandboxThread(); if(!threadLaidOut(sc))return;
+  if(threadMovedByReader(sc)){
+    threadPos.open=false; threadPos.held=false;
+    threadPos.pinned=threadScrolls(sc)&&threadGap(sc)<=2;
+    threadMark();
+  }else if(threadPos.pinned)threadRestore();
+  else{
+    // (The room under the view stays as the last placement left it: a view
+    // drawn shorter in the same frame is threadResized's to answer.)
+    if(!threadPos.open&&sc.scrollTop<threadPos.top-1)threadHold();
+    threadPos.top=sc.scrollTop;
+  }
+  threadSelPopCheck();
+}
+// The thread's view or one of its blocks changed size: hidden with its view,
+// shown again (the place given back), the message box grown, the window
+// resized, a late font or PDF page. The reading point stays where it was,
+// and a thread at its bottom whose view grew shorter (the message box grown)
+// keeps its bottom in view.
+function threadResized(){
+  const sc=sandboxThread(); if(!sc)return;
+  if(!threadLaidOut(sc)){ threadPos.hidden=true; return; }
+  const shown=threadPos.hidden; threadPos.hidden=false;
+  // An open editor given the engine's newer text while hidden: as tall as that text before the place is given back.
+  if(typeof sizeSandboxEditorLeftUnsized==='function')sizeSandboxEditorLeftUnsized();
+  if(!shown&&threadPos.open&&threadMovedByReader(sc))threadPos.open=false;
+  const shorter=!shown&&threadPos.client>0?threadPos.client-sc.clientHeight:0, atBottom=threadPos.gap<=2&&!threadPos.held;
+  threadRestore();
+  if(shorter>0&&atBottom&&!threadPos.open&&!threadPos.pinned&&!threadPos.held){ sc.scrollTop+=shorter; threadPos.top=sc.scrollTop; }
+  threadMark();
+  threadSelPopCheck();
+}
+// The selection pop-up stays with its selection: placed again when the
+// thread moved under it, gone when the selection is (a redraw drew over it,
+// it is no longer in the proof, or it left the view).
+function threadSelPopCheck(){
+  const pop=$('sel-pop'); if(!pop||pop.style.display!=='flex')return;
+  let sel=null; try{ sel=window.getSelection(); }catch(e){ sel=null; }
+  const node=sel&&sel.rangeCount&&!sel.isCollapsed?sel.anchorNode:null;
+  const inside=!!node&&!!($('md-view')?.contains(node)||$('pdf-pages')?.contains(node));
+  if(!inside||!String(sel.toString()||'').trim()){ pop.style.display='none'; return; }
+  const rect=sel.getRangeAt(0).getBoundingClientRect(), view=sandboxThread()?.getBoundingClientRect();
+  if(view&&(rect.bottom<view.top||rect.top>view.bottom)){ pop.style.display='none'; return; }
+  placeSelPop(rect);
+}
+{
+  const sc=sandboxThread();
+  if(sc){
+    sc.addEventListener('scroll',threadScrolled,{passive:true});
+    // A hand on the thread (a click, a key, a touch) ends its opening: from
+    // then on the reader's own place is kept (Show more opens downwards). It
+    // never pins the thread to its bottom: only the reader's scroll does.
+    for(const type of ['pointerdown','keydown','touchstart'])sc.addEventListener(type,()=>{ if(threadPos.open){ threadPos.open=false; threadMark(); } },{passive:true});
+    sc.addEventListener('click',event=>{ const button=event.target.closest?.('.msg-more'); if(button)threadToggle(button); });
+    if(typeof ResizeObserver==='function'){
+      const observer=new ResizeObserver(threadResized);
+      for(const el of [sc,$('thread-problem'),$('chat-msgs'),sc.querySelector('.proof-panel'),$('ask-list')])if(el)observer.observe(el);
+      // The card's sticky header as tall as it is drawn (CSS: the thread's
+      // scroll padding, --proof-head); hidden with its view, it keeps the last.
+      const head=sc.querySelector('.proof-head');
+      if(head)new ResizeObserver(()=>{ const height=Math.ceil(head.getBoundingClientRect().height); if(height>0)sc.style.setProperty('--proof-head',height+'px'); }).observe(head);
+    }
+  }
+}
+// The message and question boxes grow with what is written, a few lines, then
+// scroll: CSS field-sizing where the browser has it, by hand elsewhere.
+function fitComposer(input){
+  if(!input?.style)return;
+  if(fitComposer.css===undefined)fitComposer.css=typeof CSS!=='undefined'&&typeof CSS.supports==='function'&&CSS.supports('field-sizing','content');
+  if(fitComposer.css)return;
+  // Empty, it is the one line its CSS gives it.
+  input.style.height='';
+  if(!input.value)return;
+  input.style.height='auto';
+  input.style.height=Math.min(input.scrollHeight+1,parseFloat(getComputedStyle(input).maxHeight)||160)+'px';
+}
+for(const id of ['chat-input','ask-input'])$(id)?.addEventListener('input',event=>fitComposer(event.currentTarget));
+
 /* ── chat ── */
 let lastChatKey='';
 function fmtTs(ts){ try{ const d=new Date(ts); return isNaN(d)?'':d.toLocaleTimeString([], {hour:'2-digit',minute:'2-digit',second:'2-digit'});}catch(e){return '';} }
-function renderChat(msgs){
-  // An analysis's Progress shows its progress lines, never raw model output.
-  if(selectedRunIsAnalysis())msgs=(msgs||[]).map(m=>m?.role==='assistant'?{...m,content:analysisLogLines(m.content).join('\n')}:m).filter(m=>String(m?.content||'').trim()||m?.attachments?.length);
-  $('chat-msgs').innerHTML=(msgs||[]).map((m,i,arr)=>{
-    const role=['user','assistant','system'].includes(m.role)?m.role:'system';
-    const ts=m.ts?`<span class="ts">${fmtTs(m.ts)}</span>`:'';
-    const fresh=i===arr.length-1?' fresh':'';
-    return `<div class="chat-msg ${role}${fresh}"><div class="who">${role==='user'?'you':role}${ts}</div>${escapeHtml(m.content||'')}${attachmentLinks(m.attachments,runId)}</div>`;
-  }).join('');
-  $('chat-msgs').scrollTop=$('chat-msgs').scrollHeight;
+// The run's chat into the thread. sent: the reply to a message just sent
+// (the server's copy of that message, or true): its message is brought into
+// view, and no read of the chat asked before it is drawn over it.
+function renderChat(msgs,{sent=false}={}){
+  const rid=String(runId||''), fresh=threadMsgsRun===rid;
+  threadMsgs=Array.isArray(msgs)?msgs:[]; threadMsgsRun=rid;
+  if(sent){ threadChatShown=++threadChatAsked; lastChatKey=rid+':'+threadMsgs.length; fitComposer($('chat-input')); }
+  renderThread({fresh,sent});
 }
 async function loadChat(){
-  if(!runId){$('chat-msgs').innerHTML='';lastChatKey='';return;}
+  const rid=runId;
+  if(!rid){ resetSandboxThread(); lastChatKey=''; return; }
+  // Each read is numbered: one that answers after a newer read (or after a
+  // message sent since) is not drawn, so the newest lines are never taken
+  // away (nor said again when they come back).
+  const asked=++threadChatAsked;
   try{
-    const d=await(await fetch('/api/runs/'+encodeURIComponent(runId)+'/chat')).json();
-    const key=runId+':'+(d.messages||[]).length;
+    const d=await(await fetch('/api/runs/'+encodeURIComponent(rid)+'/chat')).json();
+    // Not drawn: a reply about a run no longer shown, or an older one.
+    if(runId!==rid||asked<threadChatShown)return;
+    threadChatShown=asked;
+    const key=rid+':'+(d.messages||[]).length;
     if(key!==lastChatKey){ lastChatKey=key; renderChat(d.messages); }
   }catch(e){}
 }
 async function sendChat(){
   const text=$('chat-input').value.trim(); if((!text&&!chatAttachments.files.length)||!runId||chatAttachments.busy)return;
   const targetRun=runId;
+  // Locked while sending, the box loses focus: whoever was typing in it gets it back.
+  const typing=globalThis.document?.activeElement===$('chat-input');
   $('chat-send').disabled=true;
   chatAttachments.lock(true);
   try{
     const attachments=await chatAttachments.payload();
     // No model: a follow-up keeps the run's own; the launcher's is for new runs.
-    const r=await fetch('/api/runs/'+encodeURIComponent(targetRun)+'/chat',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({message:text,attachments})});
-    const d=await r.json(); if(!r.ok)throw new Error(d.error);
+    let r=null;
+    try{ r=await fetch('/api/runs/'+encodeURIComponent(targetRun)+'/chat',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({message:text,attachments})}); }
+    catch(e){ throw new Error('The message could not be sent: the server could not be reached. Try again.'); }
+    // The server's own words when it says why (a limit, a refusal); a reply
+    // that is no JSON (a proxy's error page) or says nothing, by its status.
+    let d=null; try{ d=await r.json(); }catch(e){ d=null; }
+    if(!r.ok){ const said=typeof d?.error==='string'?d.error.trim():''; throw new Error(said||`The message could not be sent (HTTP ${r.status}). Try again.`); }
     if(runId!==targetRun)return;
+    if(!d||typeof d!=='object'){ loadChat(); throw new Error('The reply to this message could not be read. Check the conversation before sending it again.'); }
     $('chat-input').value=''; chatAttachments.clear();
-    renderChat(d.messages);
-    if(d.status==='continuing'){ setPill('running','continuing…'); startPolling(); }
-  }catch(err){ if(runId===targetRun)$('chat-msgs').innerHTML+='<div class="chat-msg system">'+escapeHtml(String(err.message))+'</div>'; }
-  finally{ chatAttachments.lock(false);$('chat-send').disabled=!runId; }
+    if(Array.isArray(d.messages))renderChat(d.messages,{sent:d.user&&typeof d.user==='object'?d.user:true});
+    else loadChat();
+    // The message continues the run: its turn is awaited, its polling taken up again (as after Continue).
+    if(d.status==='continuing'){ setPill('running','continuing…'); if(typeof awaitTurn==='function')awaitTurn(targetRun,d.job_id); startPolling(true); }
+  }catch(err){ if(runId===targetRun)threadError(String(err.message||'')); }
+  finally{ chatAttachments.lock(false);$('chat-send').disabled=!runId; if(typing&&runId===targetRun)$('chat-input').focus({preventScroll:true}); }
 }
 $('chat-send').onclick=sendChat;
-$('chat-input').onkeydown=e=>{ if(e.key==='Enter'&&!e.shiftKey){e.preventDefault();sendChat();} };
+// Enter sends, Shift+Enter is a new line; Enter that confirms an input method's
+// composition (Chinese, Japanese, Korean…) sends nothing.
+$('chat-input').onkeydown=e=>{ if(e.key==='Enter'&&!e.shiftKey&&!e.isComposing&&e.keyCode!==229){e.preventDefault();sendChat();} };
 
 /* ── PDF selection → chat (Cursor-style) ──
    A readable version (its Readable and Original tabs) and an analysis (its
@@ -9186,16 +10301,20 @@ document.addEventListener('mouseup',e=>{
     if(text&&inPdf&&askable){
       // A rendered passage is sent as written; a PDF's text layer as the browser reads it.
       selText=asks&&$('md-view').contains(sel.anchorNode)?manuscriptSelectionText(sel)||text:text;
-      const rect=sel.getRangeAt(0).getBoundingClientRect();
-      selPop.style.display='flex';
-      const scale=parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--console-scale'))||1;
-      selPop.style.left=Math.max(8,Math.min(window.innerWidth/scale-160,(rect.left+rect.width/2)/scale-70))+'px';
-      selPop.style.top=Math.max(8,rect.top/scale-42)+'px';
+      placeSelPop(sel.getRangeAt(0).getBoundingClientRect());
     }else{
       selPop.style.display='none';
     }
   },10);
 });
+// Over the selection (`rect`, in the viewport), within the window.
+function placeSelPop(rect){
+  const pop=$('sel-pop'); if(!pop)return;
+  pop.style.display='flex';
+  const scale=parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--console-scale'))||1;
+  pop.style.left=Math.max(8,Math.min(window.innerWidth/scale-160,(rect.left+rect.width/2)/scale-70))+'px';
+  pop.style.top=Math.max(8,rect.top/scale-42)+'px';
+}
 document.addEventListener('mousedown',e=>{ if(!selPop.contains(e.target))selPop.style.display='none'; });
 $('pdf-pages')?.addEventListener('scroll',()=>{ selPop.style.display='none'; });
 $('md-view')?.addEventListener('scroll',()=>{ selPop.style.display='none'; });
@@ -9207,8 +10326,10 @@ selPop.onclick=()=>{
   input.value=(input.value?input.value+'\n\n':'')+quoted+'\n';
   selPop.style.display='none';
   window.getSelection()?.removeAllRanges();
+  fitComposer(input);
   input.focus();
   input.setSelectionRange(input.value.length,input.value.length);
+  input.scrollTop=input.scrollHeight;
 };
 
 function setPill(s,t){ const el=$('live-pill'); el.className='pill '+(s||''); el.textContent=t||s||'idle'; }
@@ -9951,19 +11072,18 @@ function applyRunKindView(kind,rid){
   const analysis=kind==='analyze', readability=kind==='readability';
   document.body.classList.toggle('analysis-run',analysis);
   document.body.classList.toggle('readability-run',readability);
-  $('chat-title').textContent=analysis?'Ask about this analysis':readability?'Ask about this paper':'Human in the loop';
-  $('chat-subtitle').textContent=analysis?ANALYZE_ASK_NOTE:readability?READABILITY_ASK_NOTE:'Guide the prover — feedback continues the run';
+  // The message box's heading (for screen readers) and the note above it.
+  $('chat-title').textContent=analysis?'Ask about this analysis':readability?'Ask about this paper':'Feedback to the prover';
+  const note=analysis?ANALYZE_ASK_NOTE:readability?READABILITY_ASK_NOTE:'Guide the prover — feedback continues the run';
+  $('chat-subtitle').textContent=note; $('chat-subtitle').title=note;
   $('proof-title').textContent=analysis?'Analysis':readability?'Readability':'Proof';
   const empty=$('proof-empty')?.lastElementChild;
   if(empty)empty.textContent=analysis?'The analysis report will appear here.':readability?'The readable version will appear here.':'Proof preview will appear here.';
   // A readable version has tabs of its own and no Lean; it and an analysis
-  // have the Ask panel instead of the chat (an analysis keeps its Progress
-  // notes above it).
+  // have questions and answers after the card, and the question box, instead
+  // of the message box (the conversation is the same thread for every run).
   const tabs=$('readability-tabs'); if(tabs)tabs.hidden=!readability;
   for(const id of ['ask-list','ask-compose']){ const el=$(id); if(el)el.hidden=!readability&&!analysis; }
-  const notes=$('chat-msgs');
-  if(notes&&analysis){ notes.setAttribute('role','region'); notes.setAttribute('aria-label','Progress notes'); }
-  else if(notes){ notes.removeAttribute('role'); notes.removeAttribute('aria-label'); }
   const question=$('ask-input'); if(question)question.placeholder=analysis?'Ask about a result, a verdict or a step…':'Ask about a step, a symbol or a result…';
   // The view is the tabs' panel while a readable version is shown.
   const panel=$('md-view');
@@ -10072,6 +11192,30 @@ function renderAnalysisStages(run,stages){
     return item;
   }));
   list.hidden=false;
+  if(typeof revealRunningStage==='function')revealRunningStage(list,String(run?.run_id||''));
+}
+// A strip that scrolls sideways (a phone, a short window) shows its running
+// stage by its own scroll, never the thread's: when the stage changes, and
+// again whenever the strip changes size (the status beside it, the live
+// chips, the window: its ResizeObserver), until the reader scrolls it.
+function revealRunningStage(list,rid){
+  const running=list.querySelector?.('li[aria-current="step"]'), key=rid+'|'+(running?.textContent||'');
+  // Another stage (or run): the strip is placed for it again.
+  if(list._revealed!==key){ list._revealed=key; list._rid=rid; list._left=null; }
+  // Not laid out (the Sandbox hidden): tried again when it is (its size changes).
+  if(!running||!(list.clientWidth>0))return;
+  const box=[list,list.parentElement].find(el=>el&&el.scrollWidth>el.clientWidth+1);
+  if(!box){ list._left=null; return; }
+  // Moved since it was placed, by the reader (not the browser keeping it in range): left as it is.
+  const left=list._left, max=box.scrollWidth-box.clientWidth;
+  if(left!==null&&list._box===box&&Math.abs(box.scrollLeft-left)>1&&!(box.scrollLeft<left&&box.scrollLeft>=max-1))return;
+  const at=running.getBoundingClientRect(), view=box.getBoundingClientRect();
+  if(at.left<view.left||at.right>view.right)box.scrollLeft=Math.max(0,box.scrollLeft+at.left-view.left-(view.width-at.width)/2);
+  list._box=box; list._left=box.scrollLeft;
+}
+{
+  const strip=$('analysis-stages');
+  if(strip&&typeof ResizeObserver==='function')new ResizeObserver(()=>{ if(!strip.hidden&&strip._revealed)revealRunningStage(strip,strip._rid||''); }).observe(strip);
 }
 /* Progress of a running (or unpublished) analysis: the runner's own notes
    ("Check · Lemma 3.7 · error — …"), never a verifier's raw JSON reply, a
@@ -10243,34 +11387,44 @@ function applyAnalysisPreview(run){
     if(readabilityUiReady()&&lastSandboxRun?.run_id===rid)renderManuscriptAsks(lastSandboxRun);
     if(!analysisSourceShown){ $('md-view')._proofRenderKey=''; renderAnalysisReport(text,false,lastSandboxRun); }
   });
+  // The run opened again (a click on the run shown emptied the card): its
+  // stored copy is drawn again, where the reader was.
+  if(analysisSourceShown&&analysisSourceRunId===rid&&!$('md-view').hasChildNodes()&&!$('pdf-pages').dataset.cur)showAnalysisSource(run,'keep');
   if(analysisSourceShown&&analysisSourceRunId===rid)return true;
   renderAnalysisReport(report?text:analysisProgressText(text)||(live?'1 Ingest':''),!report,run,
     live?'The report appears here when the analysis finishes. Progress so far:':'This analysis published no report. What it recorded:');
   return !!text;
 }
 function renderAnalysisReport(text,progress,run,note=''){
-  const view=$('md-view'), body=$('proof-body');
+  const view=$('md-view');
   $('pdf-pages').style.display='none';
   if(!text){ view.style.display='none'; view.innerHTML=''; view._proofRenderKey=''; setProofEmpty(true); return; }
-  setProofEmpty(false); view.style.display='block';
+  const show=()=>{ setProofEmpty(false); view.style.display='block'; };
   const graph=analysisGraphCache.get(String(run?.run_id||''))?.graph;
   const macros=analysisKatexMacros(graph), refs=analysisRefLabels(graph);
   const key=JSON.stringify(['analysis',!!progress,text,macros,note,refs.size]);
-  if(view._proofRenderKey===key)return;
+  if(view._proofRenderKey===key){ show(); return; }
   view._proofRenderKey=key;
-  const previousTop=body.scrollTop, stick=progress&&body.scrollHeight-body.scrollTop-body.clientHeight<80;
-  if(progress){
-    const doc=analyzeEl('div','md-doc analysis-doc live'), list=analysisProgressView(text.split('\n'),run,refs);
-    doc.append(analyzeEl('p','analysis-live-note',note||'Progress so far:'),list);
-    if(list.querySelector('.ap-result'))doc.append(analyzeEl('p','analysis-live-foot','Verdicts are '+ANALYZE_VERDICT_NOTE+'.'));
-    view.replaceChildren(doc);
-    renderMathIn(doc,macros);
-  }else{
-    view.innerHTML='<div class="md-doc analysis-doc">'+analysisMarkdownHtml(text,refs)+'</div>';
-    view.querySelectorAll('a[href]').forEach(link=>{ link.target='_blank'; link.rel='noopener noreferrer'; });
-    renderMathIn(view,macros);
-  }
-  if(stick)body.scrollTop=body.scrollHeight; else body.scrollTop=previousTop;
+  // The report, the progress before it and the stored copy are documents of
+  // their own: one newly shown (the report published, the copy left) opens
+  // at the card's top; a redraw of the same one keeps the reader's place,
+  // progress followed from within 80px of the bottom.
+  const doc=progress?'analysis-progress':'analysis-report', newly=view._proofDoc!==doc;
+  view._proofDoc=doc;
+  threadRedraw(newly?'top':progress?'follow':'keep',()=>{
+    show();
+    if(progress){
+      const doc=analyzeEl('div','md-doc analysis-doc live'), list=analysisProgressView(text.split('\n'),run,refs);
+      doc.append(analyzeEl('p','analysis-live-note',note||'Progress so far:'),list);
+      if(list.querySelector('.ap-result'))doc.append(analyzeEl('p','analysis-live-foot','Verdicts are '+ANALYZE_VERDICT_NOTE+'.'));
+      view.replaceChildren(doc);
+      renderMathIn(doc,macros);
+    }else{
+      view.innerHTML='<div class="md-doc analysis-doc">'+analysisMarkdownHtml(text,refs)+'</div>';
+      view.querySelectorAll('a[href]').forEach(link=>{ link.target='_blank'; link.rel='noopener noreferrer'; });
+      renderMathIn(view,macros);
+    }
+  });
 }
 function analysisSourceFile(run){
   const file=String(run?.sandbox_preview?.source_file||'');
@@ -10295,22 +11449,29 @@ async function toggleAnalysisSource(){
   if(!rid||rid!==runId)return;
   analysisSourceShown=!analysisSourceShown; analysisSourceRunId=rid;
   syncAnalysisSourceControls(run);
-  const view=$('md-view');
-  view._proofRenderKey='';
+  $('md-view')._proofRenderKey='';
   if(!analysisSourceShown){ applyAnalysisPreview(run); return; }
-  const file=analysisSourceFile(run);
-  setProofEmpty(false); view.style.display='block';
-  view.replaceChildren(analyzeEl('div','md-doc analysis-doc','Loading the stored copy…'));
-  const url='/api/workspace/'+encodeURIComponent(rid)+'/file?path='+encodeURIComponent(file);
-  if(/\.pdf$/i.test(file)){ view.style.display='none'; showProofPdf(url); return; }
+  // Newly shown, the stored copy opens at the card's top (its placeholder, then the copy).
+  return showAnalysisSource(run,'top');
+}
+// The stored copy of an analysis's manuscript in the card, read-only: `how`
+// places the thread ('top' newly shown; 'keep' drawn again after the run
+// was opened again, where the reader was).
+async function showAnalysisSource(run,how){
+  const rid=String(run?.run_id||''), view=$('md-view');
+  const file=analysisSourceFile(run), url='/api/workspace/'+encodeURIComponent(rid)+'/file?path='+encodeURIComponent(file);
+  view._proofDoc='analysis-source';
+  if(/\.pdf$/i.test(file)){ threadRedraw(how,()=>{ setProofEmpty(false); view.replaceChildren(); view.style.display='none'; showProofPdf(url); }); return; }
+  threadRedraw(how,()=>{ setProofEmpty(false); view.style.display='block'; view.replaceChildren(analyzeEl('div','md-doc analysis-doc','Loading the stored copy…')); });
   let content=null;
   try{ const response=await fetch(url,{cache:'no-store'}); const data=response.ok?await response.json():null; if(typeof data?.content==='string')content=data.content; }catch(e){ content=null; }
-  if(!analysisSourceShown||runId!==rid)return;
+  // Not drawn once the report is asked for again, or another run is shown.
+  if(!analysisSourceShown||analysisSourceRunId!==rid||runId!==rid)return;
   const doc=analyzeEl('div','md-doc analysis-doc analysis-source-view');
   doc.append(analyzeEl('p','analysis-live-note','Stored copy of the manuscript ('+file.replace(/^analysis\/source\//,'')+') · read-only · never compiled or run.'));
   if(content===null)doc.append(analyzeEl('p','','The stored copy could not be loaded.'));
   else doc.append(analysisNumberedLines(content,1,Infinity));
-  view.replaceChildren(doc);
+  threadRedraw(how,()=>view.replaceChildren(doc));
 }
 $('analysis-source-toggle').onclick=toggleAnalysisSource;
 // Source lines with their numbers, as text (never markup).
@@ -10873,6 +12034,8 @@ let CURRENT_USER=null;
 let GUEST_POLICY=null;
 function applyGuestUi(){
   if(!CURRENT_USER?.guest)return;
+  // A guest's proof run has no message box: what is said about one goes with it (CSS).
+  document.documentElement.classList.add('guest-viewer');
   initialAttachments.refreshLimits(); chatAttachments.refreshLimits();
   for(const id of ['pdf-dl-btn','sess-cont','proof-edit-btn','proof-save-btn','proof-done-btn','share-run-btn','projects-link']){
     const el=$(id); if(el)el.style.display='none';
@@ -11038,7 +12201,8 @@ function loadAnalyzeHandoff(item){
   return true;
 }
 (async()=>{await loadUser();await Promise.all([loadEngines(),loadSettings()]);loadRuns();goLanding();consumeCatalogueProblem();})();
-setInterval(()=>{ if(!document.hidden)loadRuns().catch(()=>{}); }, 5000);
+// The run list, read again every few seconds: only this read follows a run shown that runs again, or ran (followRunAgain).
+setInterval(()=>{ if(!document.hidden)loadRuns().then(followRunAgain).catch(()=>{}); }, RUNS_LIST_MS);
 </script>
 <script id="sharing-loader">{const s=document.createElement("script");s.src=(window.__PC_BASE__||"")+"/static/sharing.js";document.body.append(s);}</script>
 <script id="readability-loader">{const base=window.__PC_BASE__||"",css=document.createElement("link"),s=document.createElement("script");css.rel="stylesheet";css.href=base+"/static/readability.css";document.head.append(css);s.src=base+"/static/readability.js";s.onerror=()=>readabilityUiUnavailable();document.body.append(s);}</script>
