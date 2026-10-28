@@ -259,6 +259,179 @@ Admin view → **Accounts** (`GET /api/admin/accounts`, administrators only;
     running this release. Until the deploy has finished, a pause written
     from the command line is not enforced.
 
+## The Sandbox conversation
+
+The console's Sandbox view is one conversation, read top to bottom in a
+single scrolling column (`#sandbox-thread`); the Lean Verification, Monitor
+and DAG views are unchanged.
+
+- **Order.** The run's problem first, as the reader's own message: the
+  run's first message when the chat has one (the line, with its files, that
+  the server writes before `▶ run started`; an older chat's opening line; or
+  the session's recovered copy of it), otherwise the record's problems
+  (`problemItems`; for an analysis or a readable version its `problem_text`,
+  focus included, and its source link). A later follow-up in the same words
+  is shown as a follow-up; the problem stays first. Then every chat line in
+  order: each message sent (with its files), the engine's replies, the run's
+  notices. The latest proof, report or readable version follows as a card
+  with its full toolbar, and questions and answers about a manuscript come
+  after the card. The card no longer repeats the problem; with several
+  problems, each proof keeps a small "Problem N" heading (without the
+  problem's length, which would read as the proof's).
+- **The card's header.** On a screen at least 761px wide and 560px tall
+  the card's toolbar and, for a readable version, its tabs (Readable
+  version, Original, Notation, Map) stay at the top of the conversation as
+  one piece while the card is read, so the tabs are always in reach; when
+  the card's end goes by they leave together, and nothing of the header
+  slides over the rest. The conversation's scroll padding is the header's
+  height (measured as drawn: a toolbar of two rows, the tabs), so that a
+  link or field reached with Tab is never left under it, and focusing a
+  control in the header (Tab, the arrow keys) scrolls nothing. On phones
+  and in short windows the header scrolls with the card.
+- **What is left out.** Chat lines that the status line already says: a turn
+  starting, continuing or ending (`▶ run started`, `✓ run finished`,
+  `✗ run failed · …`, `✗ run stopped · …`, `■ run stopped by user`, `Run
+  stopped by user.`, `Continuing run…`, `Continuing proof with your
+  feedback…`), a re-check's `started` line, a follow-up's reply that is only
+  `Run finished.` / `Run failed.`, and the operator's notes on what a harness
+  was given (`library injected: …`, `profile skills materialized: …`,
+  `native SKILL.md profile injected into this harness`). A first run's
+  `✗ run failed: <reason>` is left out only while it is the run's own state
+  (the status line shows the reason); after a later turn it stays in the
+  thread. Every other system line, including one the console does not know,
+  is shown as a small notice: the `📎 Read for the model` pages, queued or
+  removed feedback, an interrupted run, a re-check's result, a summary, a
+  setup that failed. An analysis's runner log is never shown, and a readable
+  version shows only its request; the raw process log is no longer on the
+  page.
+- **Replies.** A reply in which any line starts with an activity-log tag
+  (`thinking · `, `assistant · `, `stage · `, `edit · `, `exec · `,
+  `tool · `, `error · `, `mcp_tool_call · `, `web_search · `,
+  `todo_list · `, `· usage in `, `✓ result · `, `✗ result · `,
+  `✓ usage · `, `◦ `, `$ `: every line `cli_events.py` writes) is what the
+  CLI and CGM engines store: a chunk of the run's log (the first 3,000
+  characters of its last 12,000, 2,000 for a follow-up), not its answer,
+  which is the card. It is shown collapsed as "Engine log" with Show log /
+  Hide log; opened, the stored text as written, in monospace, in a box that
+  scrolls sideways. No line of it is taken for a summary. A prose reply
+  (e.g. `I could not apply that feedback: …`) shows its first line, and Show
+  more opens the rest. Long messages show their start the same way.
+- **Errors.** A message that could not be sent is said under the
+  conversation, one notice at a time, in the server's words when it gives
+  them (a limit, a refusal), else by its status (`The message could not be
+  sent (HTTP 502). Try again.`); the message stays in the box, and the notice
+  goes once a message is sent.
+- **Under the conversation.** The status line (stage and detail, live chips,
+  the manuscript stages), the note on what a message does (a proof run:
+  feedback continues the run, which may start paid calls; an analysis or a
+  readable version: answers are a model's, not a certificate), then the
+  message box or the question box, which grows with its text. What the
+  engine reads of an attached file has a row of its own in the box, in full
+  (a tool-free engine's says formulas may be garbled); on a phone and in a
+  short window its short form (`Text is extracted (formulas may be
+  garbled)`) stands for it until a file is staged. The files staged keep to
+  about two rows of cards, then their list scrolls, so that eight files
+  never push the box's text out of the window. The status line's stage
+  (`Re-checking…`, `Drafting…`) stays on one line; its detail is cut short
+  instead. On a phone the stages of an analysis or a readable version have
+  a row of their own, and the note shows up to three lines; a failed run's
+  reason wraps in full there and on wider screens. In a window 520px tall
+  or less (a phone held sideways) the dock keeps to one status row (its
+  stages and chips scroll sideways; a failed run's reason keeps to two
+  lines, with `more` / `less` (`aria-expanded`) for the rest when the two
+  lines cut it short, and all of it in its tooltip), a one-line note
+  (all of it in its tooltip) and a tighter box that grows to three lines
+  (two in a window 380px tall or less) and then scrolls; the staged files
+  sit on one row beside Attach files that scrolls sideways (a long name is
+  cut short, all of it in the card's tooltip), the help in full under them,
+  and the passage a question is about shows two lines; so the conversation
+  keeps most of the height. Wherever the stages scroll sideways, the strip
+  shows the running stage by its own scroll (never the conversation's),
+  again whenever the strip changes size, until the reader scrolls it.
+  Read-only project members and guests see no message box (and no feedback
+  note) on a proof run, as before.
+- **Place.** A run opens on its latest exchange. A document newly shown in
+  the card (Written proof / Verified facts, by a click or the arrow keys, a
+  readable version's tabs, an analysis's stored copy, a report or readable
+  version just published, a PDF proof) opens at the card's top: brought to
+  the top of the view when the reader was below it (reading the card, or
+  the questions after it), never scrolled down to. A placeholder drawn
+  first (`Loading the stored copy…`, `Loading the original text…`, a PDF
+  being drawn) loses no place: the thread is too short for a moment (the
+  browser clamps it), the place is held, and the document that follows
+  takes it: the card's top for a reader who was below it, and for one at
+  or above it (the card's top in view, where its toolbar and tabs are
+  clicked) the very place they were, even when other output (an answer)
+  arrives meanwhile. A document that stays shorter than the window (the
+  Map's note, Notation with no table) cannot take that place: the thread
+  stays at its end, where the browser left it, the place still held; as the
+  thread grows again (an answer, a taller window) the reader is moved toward
+  it, never past it, and given it back once the thread is long enough.
+  Live output, and `proof.md` as a running run writes it, is followed only
+  from within 80px of the bottom; only the reader's own scroll keeps them
+  at the bottom. A
+  reply or notice drawn above the part being read never moves it, nor does
+  the card's toolbar growing a row above it; a question asked elsewhere
+  (the owner in another tab) never moves a reader who is reading above the
+  bottom (one at the bottom follows it). The place survives the other
+  views, a click on the open run (a running one too; an analysis keeps its
+  stored copy shown, a PDF proof is drawn again where it was) and Done
+  after editing. While `proof.md` is in the editor, neither a message sent,
+  nor one that could not be sent (its notice is an alert), nor the
+  engine's newer `proof.md` (which replaces the text when nothing was
+  typed) scrolls the editor away, and the caret stays where it was; only
+  typing at the end keeps the last line in view. An editor given newer
+  text while another view is shown is sized to it when the Sandbox is
+  shown again, before the place is given back.
+- **PDF proofs.** A proof that is only `proof.tex` or `proof.pdf` stays on
+  screen as a PDF, under its file's name, while the run is not running,
+  whatever text its record carries (the agents' writes: a record with any
+  agent output has some), and while a follow-up runs until the record's
+  text is no longer the text it had when the PDF was drawn (a follow-up's
+  record keeps the previous turn's writes until it writes its own); its
+  live text is shown then, and the PDF again once it ends. A run opened
+  again draws its PDF without showing that text first.
+- **Closing lines.** A run's record says it ended a moment before its
+  closing chat lines are written: the `✓ run finished` summary, the
+  engine's reply, an analysis's or a readable version's summary, a
+  re-check's result. The console reads the chat again one and four seconds
+  after it sees the run (or its re-check or question) end, while that run
+  is still shown, so these appear without a reload, said once. Feedback
+  queued while the run ran starts only after that (its job is listed
+  running before its record says so), and a Continue from another tab
+  starts a turn this page did not ask for: the run list, read every five
+  seconds, follows the run shown by its latest job. A job it did not list
+  before, or one it listed running that has ended since, means a turn ran
+  meanwhile (a short one, a fast failure, can start and end between two
+  reads): the record is read once more, so its end, its reply and its proof
+  are drawn. A job still listed running has the record read again once per
+  read, for up to a minute per job while its record catches up, so the
+  queued turn is followed to its reply. Only that periodic read takes the
+  polling up again, at most once per read and never in the same moment
+  (the read a poll makes as its run ends never restarts it, which would
+  poll back to back); a poll taken up again that reads the record
+  unchanged draws nothing again (a PDF proof is not drawn anew) and queues
+  no closing reads again. The closing reads and the proof's last refresh
+  are queued once per end.
+- **A turn this page started.** After ▶ Continue, a message that continues
+  the run, or a ▶ Continue the server answers with "already running" (a
+  turn starting: a queued message's, another tab's), the server has
+  registered the turn's job, but its worker writes the record "running"
+  only once the turn is prepared (the record, the proof and, for most
+  engines, the files' text read first), so the polls just after may still
+  read the record as it ended. Until the record changes the turn is
+  awaited: the run shows as continuing (`Continuing…`, the `continuing…`
+  pill and the session bar's line, ■ Stop, no ▶ Continue to press a second
+  time), and the record is read again every two seconds (nothing drawn or
+  queued again), so the turn is followed within two seconds of its record
+  saying running, or of its end if it ends first. It is awaited for up to
+  a minute, until a Stop sent from the page, or until the run list shows
+  the turn's job ended without the record changing; the record is then
+  drawn as it reads.
+- **Stale answers.** A reply about a run no longer shown, or an older read
+  that answers after a newer one, is never drawn: another run's `proof.md`
+  never lands in the card, and the newest chat lines are never taken away.
+
 ## Lean and DAG views after a follow-up
 
 A run's automatic Lean and DAG views (`auto_pipeline.json` in its workspace)
@@ -967,10 +1140,13 @@ when the server offers it.
   filters, reference / inferred / model-proposed edges, and per-result
   Re-check, Formalize statement and Open in source. A result whose verifier
   reply could not be read is "not checked (no usable verifier output)", as in
-  the report, never "unclear". Continue and chat are hidden for analyses;
-  their Progress pane and process log drop raw model JSON and token-usage
-  lines; the Lean tab is named "Lean statements" and never speaks of
-  verifying a proof; projects offer a Prove / Analyze kind.
+  the report, never "unclear". Continue and the message box are hidden for
+  analyses (questions go in the question box); the Sandbox's conversation
+  shows an analysis's request, its notices (a re-check's result among them)
+  and its report, never its runner's log, and the hidden process log drops
+  raw model JSON and token-usage lines; the Lean tab is named "Lean
+  statements" and never speaks of verifying a proof; projects offer a
+  Prove / Analyze kind.
 
 - **Who may analyze what.**
 

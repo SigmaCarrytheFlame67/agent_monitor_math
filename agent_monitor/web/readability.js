@@ -19,9 +19,10 @@ let readabilityTab='readable', readabilityTabRunId='';
 const readabilityMapCache=new Map(), readabilityMapLoads=new Map(), readabilityMapMisses=new Map();
 const readabilityOriginalCache=new Map(), readabilityOriginalLoads=new Map();
 // The question being written about (a selected passage or a result), the run
-// whose question is on its way ('' when none), the questions sent but not yet
-// in their run's record (by run), and the run the panel was last drawn for.
-let manuscriptAskContext=null, manuscriptAskSending='', manuscriptAskRunId='';
+// whose question is on its way ('' when none) and that question as sent, the
+// questions sent but not yet in their run's record (by run), and the run the
+// panel was last drawn for.
+let manuscriptAskContext=null, manuscriptAskSending='', manuscriptAskSendingQuestion='', manuscriptAskRunId='';
 const manuscriptAskSent=new Map();
 
 /* ── progress of a running readable version ──
@@ -122,13 +123,15 @@ function setReadabilityTab(view,{focus=false}={}){
   if(!READABILITY_TABS.includes(view))return;
   readabilityTab=view;
   syncReadabilityTabs();
-  if(focus)document.querySelector('#readability-tabs [aria-selected="true"]')?.focus();
   $('readability-tab-status').textContent='';
   $('md-view')._proofRenderKey='';
   // A failed load of the original text is tried again when its tab is chosen.
   if(view==='original'&&readabilityOriginalCache.get(runId)?.content===null)readabilityOriginalCache.delete(runId);
   const run=lastSandboxRun?.run_id===runId?lastSandboxRun:null;
   if(run&&isReadabilityRun(run))renderReadabilityTab(run);
+  // The tab a key chose takes the focus where its document left the thread
+  // (console.html's threadFocus: the browser would centre the tab instead).
+  if(focus)threadFocus(document.querySelector('#readability-tabs [aria-selected="true"]'));
 }
 function renderReadabilityTab(run){
   const view=$('md-view');
@@ -266,43 +269,48 @@ function readabilityProvenanceText(run){
 }
 function renderReadableVersion(run,view){
   const box=run?.sandbox_preview||{}, rid=String(run?.run_id||''), text=String(box.text||'');
-  const body=$('proof-body');
   if(!box.has_readable){
     const lines=readabilityRunProgress(run), live=run?.status==='running';
     const key=JSON.stringify(['rd-progress',rid,lines,String(run?.status||'')]);
     if(view._proofRenderKey===key)return;
     view._proofRenderKey=key;
-    const stick=body.scrollHeight-body.scrollTop-body.clientHeight<80;
-    const doc=analyzeEl('div','md-doc analysis-doc live');
-    doc.append(analyzeEl('p','analysis-live-note',live?'The readable version appears here when it is published. Progress so far:':'This run published no readable version. What it recorded:'));
-    if(lines.length)doc.append(readabilityProgressView(lines,run));
-    else doc.append(analyzeEl('p','analysis-live-foot',live?'Starting…':'No progress was recorded.'));
-    view.replaceChildren(doc);
-    renderMathIn(doc,readabilityMacros(run));
-    if(stick&&live)body.scrollTop=body.scrollHeight;
+    // The Sandbox's thread (console.html): progress newly shown opens at the
+    // card's top; live, it is followed from within 80px of the bottom.
+    const newly=view._proofDoc!=='rd-progress'; view._proofDoc='rd-progress';
+    threadRedraw(newly?'top':live?'follow':'keep',()=>{
+      const doc=analyzeEl('div','md-doc analysis-doc live');
+      doc.append(analyzeEl('p','analysis-live-note',live?'The readable version appears here when it is published. Progress so far:':'This run published no readable version. What it recorded:'));
+      if(lines.length)doc.append(readabilityProgressView(lines,run));
+      else doc.append(analyzeEl('p','analysis-live-foot',live?'Starting…':'No progress was recorded.'));
+      view.replaceChildren(doc);
+      renderMathIn(doc,readabilityMacros(run));
+    });
     return;
   }
   const labels=readabilityLabels(rid), macros=readabilityMacros(run), notes=readabilityCheckNotes(run);
   const key=JSON.stringify(['rd-readable',rid,text,macros,labels.size,readabilityCounts(run),[...notes]]);
   if(view._proofRenderKey===key)return;
   view._proofRenderKey=key;
-  const previousTop=body.scrollTop;
-  const doc=analyzeEl('div','md-doc analysis-doc rd-doc');
-  // Each part is drawn on its own, so that its check notes can follow it.
-  readableParts(text).forEach(part=>{
-    if(part.index===null){ if(part.text.trim())renderReadableMarkdown(doc,part.text,labels); return; }
-    const box=analyzeEl('section','rd-part'); box.dataset.rdPart=String(part.index);
-    if(part.text.trim())renderReadableMarkdown(box,part.text,labels);
-    if(notes.has(part.index))box.append(readabilityCheckNotesBox(notes.get(part.index)));
-    doc.append(box);
+  // Newly shown (just published, or its tab chosen) it opens at the card's
+  // top; drawn again (its names arrived, a check note) it keeps the reader's place.
+  const newly=view._proofDoc!=='rd-readable'; view._proofDoc='rd-readable';
+  threadRedraw(newly?'top':'keep',()=>{
+    const doc=analyzeEl('div','md-doc analysis-doc rd-doc');
+    // Each part is drawn on its own, so that its check notes can follow it.
+    readableParts(text).forEach(part=>{
+      if(part.index===null){ if(part.text.trim())renderReadableMarkdown(doc,part.text,labels); return; }
+      const box=analyzeEl('section','rd-part'); box.dataset.rdPart=String(part.index);
+      if(part.text.trim())renderReadableMarkdown(box,part.text,labels);
+      if(notes.has(part.index))box.append(readabilityCheckNotesBox(notes.get(part.index)));
+      doc.append(box);
+    });
+    markReadableBlocks(doc);
+    // The document's own provenance note is its banner; a document without one gets the console's.
+    if(!doc.querySelector('.rd-provenance'))doc.prepend(analyzeEl('p','rd-banner',readabilityProvenanceText(run)));
+    doc.querySelectorAll('a[href]').forEach(link=>{ link.target='_blank'; link.rel='noopener noreferrer'; });
+    view.replaceChildren(doc);
+    renderMathIn(doc,macros);
   });
-  markReadableBlocks(doc);
-  // The document's own provenance note is its banner; a document without one gets the console's.
-  if(!doc.querySelector('.rd-provenance'))doc.prepend(analyzeEl('p','rd-banner',readabilityProvenanceText(run)));
-  doc.querySelectorAll('a[href]').forEach(link=>{ link.target='_blank'; link.rel='noopener noreferrer'; });
-  view.replaceChildren(doc);
-  renderMathIn(doc,macros);
-  body.scrollTop=previousTop;
 }
 // The provenance note under the title, "⚠ Check" notes of parts with
 // unresolved issues, and the rewrite's "Reader's note" gaps.
@@ -375,13 +383,16 @@ function renderReadabilityOriginal(run,view){
   if(view._proofRenderKey===key)return;
   view._proofRenderKey=key;
   const doc=analyzeEl('div','md-doc analysis-doc rd-original');
+  // The tab's text (and before it its note, or its placeholder while it
+  // loads) newly shown opens at the card's top; drawn again, it keeps the place.
+  const show=state=>{ const newly=view._proofDoc!=='rd-original-'+state; view._proofDoc='rd-original-'+state; threadRedraw(newly?'top':'keep',()=>view.replaceChildren(doc)); };
   if(!box.original_available&&!cached){
     doc.append(analyzeEl('p','analysis-live-note',run?.status==='running'?'The original text appears here once the manuscript has been read.':'No original text was stored for this run.'));
-    return view.replaceChildren(doc);
+    return show('none');
   }
   if(!cached){
     doc.append(analyzeEl('p','analysis-live-note','Loading the original text…'));
-    view.replaceChildren(doc);
+    show('loading');
     return loadReadabilityOriginal(rid);
   }
   doc.append(analyzeEl('p','analysis-live-note','The original in reading order (readability/original.txt) · read-only · never compiled or run.'));
@@ -391,7 +402,7 @@ function renderReadabilityOriginal(run,view){
     if(cached.content.length>=400000)doc.append(analyzeEl('p','rd-pdf-note','Only the first 400,000 characters are shown.'));
     doc.append(readabilityNumberedLines(cached.content));
   }
-  view.replaceChildren(doc);
+  show('text');
 }
 function loadReadabilityOriginal(rid){
   if(!rid||readabilityOriginalLoads.has(rid))return;
@@ -442,9 +453,11 @@ function renderReadabilityNotation(run,view){
   if(view._proofRenderKey===key)return;
   view._proofRenderKey=key;
   const doc=analyzeEl('div','md-doc analysis-doc rd-notation');
+  // Newly shown (its tab chosen) it opens at the card's top; drawn again, it keeps the place.
+  const newly=view._proofDoc!=='rd-notation'; view._proofDoc='rd-notation';
   if(!rows.length&&!terms.length){
     doc.append(analyzeEl('p','analysis-live-note',run?.status==='running'?'The notation table appears when the readable version is published.':'No notation table was published for this run.'));
-    return view.replaceChildren(doc);
+    return threadRedraw(newly?'top':'keep',()=>view.replaceChildren(doc));
   }
   if(rows.length){
     const {table,body}=readabilityTable(['Symbol','Meaning','Where introduced']);
@@ -465,9 +478,11 @@ function renderReadabilityNotation(run,view){
     doc.append(analyzeEl('h2','','Terms'),table);
   }
   doc.append(analyzeEl('p','analysis-live-foot','Collected by a model from the manuscript — check a meaning against the original when it matters.'));
-  view.replaceChildren(doc);
-  // Meanings may use inline math; the symbols are typeset already.
-  doc.querySelectorAll('td:not(.rd-symbol)').forEach(cell=>renderMathIn(cell,macros));
+  threadRedraw(newly?'top':'keep',()=>{
+    view.replaceChildren(doc);
+    // Meanings may use inline math; the symbols are typeset already.
+    doc.querySelectorAll('td:not(.rd-symbol)').forEach(cell=>renderMathIn(cell,macros));
+  });
 }
 
 /* ── Map (a list) and the DAG's Paper map ── */
@@ -638,10 +653,13 @@ function renderReadabilityMap(run,view){
   if(view._proofRenderKey===key)return;
   view._proofRenderKey=key;
   const doc=analyzeEl('div','md-doc analysis-doc rd-map');
+  // The map (and before it its note, or its placeholder while it loads)
+  // newly shown opens at the card's top; drawn again, it keeps the place.
+  const show=(state,then)=>{ const newly=view._proofDoc!=='rd-map-'+state; view._proofDoc='rd-map-'+state; threadRedraw(newly?'top':'keep',()=>{ view.replaceChildren(doc); if(then)then(); }); };
   if(!graph){
     const published=!!run?.sandbox_preview?.has_readable;
     doc.append(analyzeEl('p','analysis-live-note',published?'Loading the paper map…':'The paper map appears when the readable version is published.'));
-    view.replaceChildren(doc);
+    show(published?'loading':'none');
     if(published)ensurePaperMap(rid).then(found=>{
       if(found&&runId===rid&&readabilityTab==='map'&&lastSandboxRun?.run_id===rid){ view._proofRenderKey=''; renderReadabilityTab(lastSandboxRun); }
       else if(!found&&runId===rid&&readabilityTab==='map'){ view._proofRenderKey=''; doc.replaceChildren(analyzeEl('p','analysis-live-note','The paper map could not be loaded.')); }
@@ -651,7 +669,7 @@ function renderReadabilityMap(run,view){
   const nodes=(Array.isArray(graph.nodes)?graph.nodes:[]).filter(node=>node&&typeof node==='object').slice(0,400);
   if(!nodes.length){
     doc.append(analyzeEl('p','analysis-live-note','This manuscript has no numbered definitions or results to map.'));
-    view.replaceChildren(doc);
+    show('empty');
     return;
   }
   const head=analyzeEl('div','rd-map-head');
@@ -667,8 +685,7 @@ function renderReadabilityMap(run,view){
     box.append(analyzeEl('h3','',analysisTextAccents(section)),list); doc.append(box);
   });
   doc.append(analyzeEl('p','analysis-live-foot','Importance and roles come from a reading guide written by a model; dependencies from the manuscript’s references and that guide — not a verification.'));
-  view.replaceChildren(doc);
-  renderMathIn(doc,readabilityMacros(run));
+  show('rows',()=>renderMathIn(doc,readabilityMacros(run)));
 }
 // Shows a result's anchor in the Readable version.
 function readabilityJumpTo(nodeId){
@@ -679,7 +696,9 @@ function readabilityJumpTo(nodeId){
   const status=$('readability-tab-status');
   if(!anchor){ if(status)status.textContent=(readabilityLabels(runId).get(id)||id)+' is not marked in the readable version.'; return; }
   if(status)status.textContent='';
-  anchor.scrollIntoView({block:'center',behavior:'smooth'});
+  // Centred in the Sandbox's thread; at once for a reader who asks for less motion.
+  const still=typeof matchMedia==='function'&&matchMedia('(prefers-reduced-motion: reduce)').matches;
+  anchor.scrollIntoView({block:'center',behavior:still?'auto':'smooth'});
   anchor.focus({preventScroll:true});
   anchor.classList.remove('flash'); void anchor.offsetWidth; anchor.classList.add('flash');
 }
@@ -825,10 +844,10 @@ function resetManuscriptAsk(rid){
   if(manuscriptAskRunId===rid)return;
   manuscriptAskRunId=rid; manuscriptAskContext=null; renderManuscriptAskContext();
   const status=$('ask-status'); if(status)status.textContent='';
-  const input=$('ask-input'); if(input){ input.value=''; input.disabled=false; }
+  const input=$('ask-input'); if(input){ input.value=''; input.disabled=false; if(typeof fitComposer==='function')fitComposer(input); }
   // Drawn again from scratch once the record arrives, even with the same questions.
   const list=$('ask-list');
-  if(list){ list.replaceChildren(); list._askKey=''; list._askRunId=''; list._askCount=0; }
+  if(list){ list.replaceChildren(); list._askKey=''; list._askRunId=''; list._askCount=0; list._askPending=[]; list._askIds=[]; list._askMine=new Set(); }
   const button=$('ask-send'); if(button){ button.disabled=true; button.title=''; }
   const hint=$('ask-hint'); if(hint)hint.textContent=rid?'Loading…':'';
 }
@@ -839,16 +858,37 @@ function renderManuscriptAsks(run){
   // takes the panel over.
   if(rid!==String(runId||''))return;
   resetManuscriptAsk(rid);
+  // The question this page sent, before the record lists it (manuscriptAsks drops it then).
+  const sent=manuscriptAskSent.get(rid);
   const asks=manuscriptAsks(run), labels=manuscriptAskLabels(run), macros=manuscriptAskMacros(run);
   const key=JSON.stringify([rid,asks.map(item=>[item.ask_id,item.status,String(item.answer||'').length,item.error]),labels.size,macros]);
   if(list._askKey!==key){
-    const grew=list._askRunId===rid&&asks.length>Number(list._askCount||0);
-    const stick=grew||list._askRunId!==rid||list.scrollHeight-list.scrollTop-list.clientHeight<80;
-    list._askKey=key; list._askRunId=rid; list._askCount=asks.length;
-    list.replaceChildren(...(asks.length?asks.map(item=>manuscriptAskItem(item,labels,spec.where)):[analyzeEl('li','ask-empty',spec.empty)]));
-    list.querySelectorAll('a[href]').forEach(link=>{ link.target='_blank'; link.rel='noopener noreferrer'; });
-    renderMathIn(list,macros);
-    if(stick)list.scrollTop=list.scrollHeight;
+    // The questions follow the card in the Sandbox's thread (console.html): a
+    // question this page just asked brings the thread to it; one asked
+    // elsewhere (the run's owner while a member reads, another tab) and an
+    // answer that came are followed only by a reader at the bottom, an
+    // answer from its question down.
+    const same=list._askRunId===rid, before=new Set(same?list._askIds||[]:[]);
+    if(!(list._askMine instanceof Set))list._askMine=new Set();
+    if(sent?.ask_id)list._askMine.add(String(sent.ask_id));
+    // A question this page is still sending that a poll lists before the
+    // server has answered the send (it records the question first): its own.
+    const sending=typeof manuscriptAskSendingQuestion==='string'&&manuscriptAskSending===rid?manuscriptAskSendingQuestion:'';
+    if(sending)asks.forEach(item=>{ if(!before.has(String(item.ask_id||''))&&String(item.question||'').trim()===sending&&item.ask_id)list._askMine.add(String(item.ask_id)); });
+    const mine=same&&asks.some(item=>!before.has(String(item.ask_id||''))&&(item===sent||list._askMine.has(String(item.ask_id||''))));
+    const answered=same?asks.filter(item=>!manuscriptAskRunning(item)&&(list._askPending||[]).includes(String(item.ask_id||''))):[];
+    list._askKey=key; list._askRunId=rid; list._askCount=asks.length; list._askIds=asks.map(item=>String(item.ask_id||''));
+    list._askPending=asks.filter(manuscriptAskRunning).map(item=>String(item.ask_id||''));
+    threadRedraw(mine?'bottom':'follow',()=>{
+      list.replaceChildren(...(asks.length?asks.map(item=>manuscriptAskItem(item,labels,spec.where)):[analyzeEl('li','ask-empty',spec.empty)]));
+      list.querySelectorAll('a[href]').forEach(link=>{ link.target='_blank'; link.rel='noopener noreferrer'; });
+      renderMathIn(list,macros);
+    },()=>list.lastElementChild);
+    // An answer that came is said once (the list itself is not read out again).
+    if(answered.length&&typeof threadSay==='function'){
+      const last=answered[answered.length-1], answer=String(last.answer||'').trim();
+      threadSay(answer?'Answer: '+answer.split('\n')[0].slice(0,200):'The question could not be answered.');
+    }
   }
   syncManuscriptAskCompose(run,asks);
   syncManuscriptAskButtons(run);
@@ -959,7 +999,7 @@ async function sendManuscriptAsk(){
   const context=manuscriptAskContext||{};
   const request={question,selection:manuscriptAskCut(context.selection,4000),view:spec.views.includes(context.view)?context.view:spec.views[0]};
   if(context.node_id)request.node_id=String(context.node_id);
-  manuscriptAskSending=rid; status.textContent='Sending…';
+  manuscriptAskSending=rid; manuscriptAskSendingQuestion=question; status.textContent='Sending…';
   syncManuscriptAskCompose(run,manuscriptAsks(run));
   try{
     const response=await fetch('/api/run/'+encodeURIComponent(rid)+'/'+spec.endpoint,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(request)});
@@ -968,11 +1008,12 @@ async function sendManuscriptAsk(){
     if(runId!==rid)return;
     manuscriptAskSent.set(rid,{...request,ask_id:String(body.ask_id||''),status:'running',label:context.label||'',sent_at:Date.now()});
     input.value=''; manuscriptAskContext=null; renderManuscriptAskContext(); status.textContent='';
+    if(typeof fitComposer==='function')fitComposer(input);
     startPolling();
   }catch(err){
     if(runId===rid)status.textContent='✗ '+String(err.message||err).slice(0,300);
   }finally{
-    if(manuscriptAskSending===rid)manuscriptAskSending='';
+    if(manuscriptAskSending===rid){ manuscriptAskSending=''; manuscriptAskSendingQuestion=''; }
     // The run shown now, which may be another one, is told where it stands.
     if(lastSandboxRun?.run_id===runId&&manuscriptAskKind(lastSandboxRun))renderManuscriptAsks(lastSandboxRun);
   }
@@ -992,7 +1033,8 @@ function initReadabilityUi(){
     };
   });
   $('ask-send').onclick=sendManuscriptAsk;
-  $('ask-input').addEventListener('keydown',event=>{ if(event.key==='Enter'&&!event.shiftKey){ event.preventDefault(); sendManuscriptAsk(); } });
+  // Enter asks, Shift+Enter is a new line; Enter that confirms an input method's composition asks nothing.
+  $('ask-input').addEventListener('keydown',event=>{ if(event.key==='Enter'&&!event.shiftKey&&!event.isComposing&&event.keyCode!==229){ event.preventDefault(); sendManuscriptAsk(); } });
   // A result named in an answer, or in the notation table, opens where the
   // run shows it (an anchor of the readable version, a card of the DAG).
   for(const id of ['ask-list','md-view'])$(id).addEventListener('click',event=>{

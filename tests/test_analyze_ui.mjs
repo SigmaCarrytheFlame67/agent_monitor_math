@@ -436,7 +436,7 @@ test('Manuscript DAG coverage and caveats wrap under the filters instead of bein
   assert.match(fn('renderAnalysisFilters'), /box\.append\(analyzeEl\('p','coverage',coverageText\)\)/)
 })
 
-test('an analysis\'s Progress pane and process log show progress, never raw verifier JSON or usage lines', () => {
+test('an analysis\'s process log shows progress, and its Sandbox conversation no log at all: never raw verifier JSON or usage lines', () => {
   const lines = run(['analysisLogLines'], [], '', 'analysisLogLines')
   const log = ['◦ session analyze…', 'assistant · Ansatz Analyze · kimi-k3 via sponsored_kimi · no tools', 'stage · 1 Ingest · pasted text',
     'thinking · Analyze · 1 Ingest · pasted text', 'assistant · {"summary": "The manuscript claims…", "main_results": ["thm:main"]}',
@@ -450,17 +450,20 @@ test('an analysis\'s Progress pane and process log show progress, never raw veri
   const pretty = ['assistant · {', '  "claim": "There exist constants",', '  "depends_on": [', '  ],', '  "verification_report": {', '    "gaps": []', '  },',
     '  "verdict": "checked"', '}', '```json', 'thinking · Analyze · Check · Lemma 3.2 · checked'].join('\n')
   assert.deepEqual(lines(pretty), ['thinking · Analyze · Check · Lemma 3.2 · checked'])
-  const chat = run(['analysisLogLines', 'selectedRunIsAnalysis', 'isAnalysisRun', 'renderChat'], [],
-    `const RUN_KIND_BY_ID=new Map([['a1','analyze']]); let runId='a1', lastSandboxRun=null; const box={innerHTML:'',scrollTop:0,scrollHeight:0};
-const $=()=>box; const escapeHtml=v=>String(v); const fmtTs=()=>''; const attachmentLinks=()=>'';`,
-    `(msgs=>{ renderChat(msgs); return box.innerHTML; })`)
-  const html = chat([{ role: 'system', content: 'Re-check · Lemma 3.2 · started (model verifier, one result)' },
+  // The Sandbox's conversation (the thread) never shows an analysis's log, which is its
+  // runner's: its request, then the run's notices (a re-check's result among them).
+  const thread = run(['threadModel', 'threadHash', 'threadRoutineLine', 'threadRequest', 'problemItems'], ['THREAD_ROUTINE_LINES'], '', 'threadModel')
+  const view = thread([{ role: 'system', content: '▶ run started · engine analyze · problem analysis_1a2b3c4d · model kimi-k3' },
+    { role: 'system', content: 'Re-check · Lemma 3.2 · started (model verifier, one result)' },
     { role: 'assistant', content: 'assistant · {"claim": "c"}\n· usage in 3000 / out 500' },
-    { role: 'assistant', content: 'stage · 5 Report\nassistant · {"verdict": "checked"}' }])
-  assert.doesNotMatch(html, /\{"|usage in/)
-  assert.match(html, /Re-check · Lemma 3\.2 · started/)
-  assert.match(html, /stage · 5 Report/)
-  assert.equal((html.match(/chat-msg assistant/g) || []).length, 1)
+    { role: 'assistant', content: 'stage · 5 Report\nassistant · {"verdict": "checked"}' },
+    { role: 'system', content: 'Re-check · Lemma 3.2 · gap — a model judgement, not a certificate' }],
+  { run_id: 'a1', run_kind: 'analyze', problem_text: 'Analyze · A Note on Parity\nFocus: Lemma 3.2', sandbox_preview: { source_url: 'https://arxiv.org/abs/2510.01234' } }, 'analyze')
+  assert.doesNotMatch(JSON.stringify(view), /\{\\"|usage in|stage · 5|run started/)
+  assert.deepEqual(view.items.map(item => [item.kind, item.text]), [['notice', 'Re-check · Lemma 3.2 · gap — a model judgement, not a certificate']])
+  assert.deepEqual(view.problems.map(item => [item.kind, item.text, item.url]), [['problem', 'Analyze · A Note on Parity\nFocus: Lemma 3.2', 'https://arxiv.org/abs/2510.01234']])
+  // The old Progress strip's renderChat transform is gone with it.
+  assert.doesNotMatch(fn('renderChat'), /analysisLogLines/)
 })
 
 test('the stage strip says each stage\'s state in words, and shows it without colour', () => {

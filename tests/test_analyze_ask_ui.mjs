@@ -102,6 +102,9 @@ function load(names, consts, prelude, context = {}) {
   return code => vm.runInContext(code, sandbox)
 }
 
+// The Sandbox's thread (console.html), which scrolls the questions and
+// answers: here it only draws (its place is tested in test_sandbox_thread_ui.mjs).
+const THREAD_STUB = 'const threadRedraw=(how,draw)=>draw();'
 // The Ask panel's record helpers, for either kind of run.
 const ASK_STATE = ['isAnalysisRun', 'isReadabilityRun', 'manuscriptAskKind', 'manuscriptAskPolicy', 'manuscriptAskWords', 'manuscriptAskOff', 'manuscriptAskRunOff',
   'manuscriptAskRunning', 'manuscriptAsks', 'manuscriptAskAllowance', 'manuscriptAskReason']
@@ -187,13 +190,14 @@ const viewerIsGuest=()=>guest, analyzePolicy=()=>policy, readabilityPolicy=()=>(
 test('asking about an analysis: the request names the question, a passage of the report or of the manuscript, and the result', async () => {
   const step = load([...ASK_STATE, 'shownAskKind', 'readabilitySelectionView', 'manuscriptSelectionView', 'renderManuscriptAskContext', 'manuscriptAskCut',
     'askAboutSelection', 'askAboutNode', 'sendManuscriptAsk', 'dagDetailText', 'analysisTextAccents', 'analysisResultName'], ['MANUSCRIPT_ASK', 'MANUSCRIPT_ASK_VIEW_WORDS', ...ACCENTS], `
-const calls=[], posts=[], els={};
+const calls=[], posts=[], els={}, sending=[];
 const $=id=>els[id]||(els[id]={id,value:'',textContent:'',disabled:false,hidden:false,kids:[],focus(){ calls.push('focus '+id); },replaceChildren(...kids){ this.kids=kids; }});
-let manuscriptAskContext=null, manuscriptAskSending='', readabilityTab='readable', runId='a1', workspaceView='dag', analysisSourceShown=false, analysisSourceRunId='';
+let manuscriptAskContext=null, manuscriptAskSending='', manuscriptAskSendingQuestion='', readabilityTab='readable', runId='a1', workspaceView='dag', analysisSourceShown=false, analysisSourceRunId='';
 const manuscriptAskSent=new Map();
 let lastSandboxRun={run_id:'a1',run_kind:'analyze',status:'finished',sandbox_preview:{kind:'analysis',has_report:true},analyze:{asks:[]}};
 let reply={ok:true,status:202,body:{ok:true,status:'asking',run_id:'a1',ask_id:'feedfeed0001',job_id:'j1'}}, policy={asks:{enabled:true}};
-const fetch=async(url,options)=>{ posts.push([url,options.method,JSON.parse(options.body)]); return {ok:reply.ok,status:reply.status,json:async()=>reply.body}; };
+// What the page holds as being sent while the POST is on its way (a poll that lists the question first knows it as its own).
+const fetch=async(url,options)=>{ sending.push([manuscriptAskSending,manuscriptAskSendingQuestion]); posts.push([url,options.method,JSON.parse(options.body)]); return {ok:reply.ok,status:reply.status,json:async()=>reply.body}; };
 const window={getSelection:()=>({removeAllRanges(){ calls.push('unselect'); }})};
 const startPolling=()=>calls.push('poll'), renderManuscriptAsks=()=>calls.push('drawn'), syncManuscriptAskCompose=()=>{}, limitMessage=message=>message+' (limit)';
 const setWorkspaceView=view=>{ workspaceView=view; calls.push('view '+view); };
@@ -211,6 +215,10 @@ const state=()=>({calls:calls.splice(0),posts:posts.splice(0),context:manuscript
   await step('sendManuscriptAsk()')
   let after = state()
   assert.deepEqual(after.posts, [['/api/run/a1/analysis/ask', 'POST', { question: 'Is it real?', selection: 'the gap is in Step 2 of $x<y$', view: 'report' }]])
+  // While it was sent the page held the run and the question (B: a poll listing it first is this page's own question);
+  // once sent, neither.
+  assert.deepEqual(plain(step('sending')), [['a1', 'Is it real?']])
+  assert.deepEqual(plain(step('[manuscriptAskSending,manuscriptAskSendingQuestion]')), ['', ''])
   // Sent: the box is cleared, the question shows in flight, and the run is polled for its answer.
   assert.deepEqual([after.context, after.shown, after.input, after.calls], [null, '', '', ['poll', 'drawn']])
   assert.deepEqual(plain(step("manuscriptAsks(lastSandboxRun).map(item=>[item.ask_id,item.status,item.view,item.selection])")),
@@ -240,6 +248,8 @@ const state=()=>({calls:calls.splice(0),posts:posts.splice(0),context:manuscript
   step("reply={ok:false,status:429,body:{error:'You can ask 30 questions per hour; please try again later'}}")
   await step('sendManuscriptAsk()')
   assert.equal(state().status, '✗ You can ask 30 questions per hour; please try again later (limit)')
+  // A refused question was held as being sent only while it was (none is in flight now).
+  assert.deepEqual(plain(step('[sending.at(-1),[manuscriptAskSending,manuscriptAskSendingQuestion]]')), [['a1', 'q'], ['', '']])
   // Nothing is sent while this run's question is on its way, while the button is off, or for a run that is no analysis.
   step("reply={ok:true,status:202,body:{ok:true,ask_id:'x'}}; manuscriptAskSending='a1'"); await step('sendManuscriptAsk()')
   step("manuscriptAskSending=''; $('ask-send').disabled=true"); await step('sendManuscriptAsk()')
@@ -403,7 +413,7 @@ test('the console polls an analysis while a question is answered, says so, and l
   assert.notEqual(sig(finished), sig({ ...finished, analyze: { asks: [DONE, DONE] } }))
   // Polling goes on after the analysis while its question runs, and stops once it is answered.
   const poll = load(['tick', 'nextPollDelay', 'stopSettling'], ['POLL_MIN_MS', 'STOP_SETTLE_MS', 'STOPPING_RUNS'], `
-let record=null, runId='a1', pollSig='', pollQuiet=0, pollDelay=2000, pollListedEnd=null, workspaceView='sandbox';
+let record=null, runId='a1', pollSig='', pollQuiet=0, pollDelay=2000, pollListedEnd=null, pollEnded='', workspaceView='sandbox';
 const calls=[]; const $=()=>({textContent:''}); const setTimeout=()=>0;
 const fetch=async()=>({ok:true,json:async()=>JSON.parse(JSON.stringify(record))});
 const consoleRunSignature=run=>JSON.stringify(run);
@@ -440,9 +450,12 @@ const syncIdlePill=()=>{}, runningRunCount=()=>0;`, { replies })
 })
 
 test('another run starts with an empty Ask panel; the same run keeps what is being written', () => {
-  const step = load(['isAnalysisRun', 'isReadabilityRun', 'manuscriptAskKind', 'resetManuscriptAsk', 'renderManuscriptAskContext', 'renderManuscriptAsks'], ['MANUSCRIPT_ASK', 'MANUSCRIPT_ASK_VIEW_WORDS'], `
+  const step = load(['isAnalysisRun', 'isReadabilityRun', 'manuscriptAskKind', 'manuscriptAskRunning', 'resetManuscriptAsk', 'renderManuscriptAskContext', 'renderManuscriptAsks'], ['MANUSCRIPT_ASK', 'MANUSCRIPT_ASK_VIEW_WORDS'], `
+${THREAD_STUB}
 const els={}; const $=id=>els[id]||(els[id]={id,value:'',textContent:'',hidden:true,kids:[],replaceChildren(...kids){ this.kids=kids; },querySelectorAll:()=>[],scrollHeight:0,scrollTop:0,clientHeight:0});
 let manuscriptAskContext=null, manuscriptAskRunId='', runId='a1';
+// renderManuscriptAsks reads the question this page sent (none here) before the record's list.
+const manuscriptAskSent=new Map();
 const manuscriptAsks=()=>[], manuscriptAskLabels=()=>new Map(), manuscriptAskMacros=()=>({}), manuscriptAskItem=()=>({}), syncManuscriptAskCompose=()=>{}, syncManuscriptAskButtons=()=>{}, renderMathIn=()=>{};
 const analyzeEl=(tag,cls,text)=>({tag,cls,text,setAttribute(){}});
 const write=()=>{ $('ask-input').value='A draft'; $('ask-status').textContent='✗ refused'; manuscriptAskContext={node_id:'lem:a',label:'Lemma 1',view:'report'}; renderManuscriptAskContext(); };
@@ -468,11 +481,17 @@ const state=()=>[$('ask-input').value,$('ask-status').textContent,manuscriptAskC
   assert.match(fn('manuscriptAskReason'), /manuscriptAskSending===String\(run\.run_id\|\|''\)/)
 })
 
-test('an analysis\'s right panel is the Ask panel, with its Progress notes kept above the conversation', () => {
+test('an analysis has its questions and answers after the report and the question box, and no strip of its runner\'s log', () => {
   const css = html.split('<style id="analyze-style">')[1].split('</style>')[0]
-  assert.match(css, /\.analysis-run \.chat-msgs \{ flex: 0 1 auto; max-height: min\(22%, 150px\);[^}]*border-bottom: 1px solid var\(--border\); \}/)
+  // The Sandbox is one conversation: the analysis's log has no strip of its own above
+  // the questions any more (on a phone neither), and an empty conversation takes no room.
+  assert.doesNotMatch(css, /\.analysis-run \.chat-msgs \{[^}]*(?:max-height|border-bottom|display: none)/)
   assert.match(css, /\.analysis-run \.chat-msgs:empty \{ display: none; \}/)
-  // The proof chat's compose box stays hidden; the Ask panel's is shown.
+  // The questions follow the card in the Sandbox's thread, which scrolls them: the list is no scroller.
+  const askList = read('../agent_monitor/web/readability.css').match(/\n\.ask-list \{([^}]*)\}/)[1]
+  assert.doesNotMatch(askList, /overflow|flex: 1|min-height/)
+  assert.match(html, /<div class="sandbox-thread" id="sandbox-thread"[\s\S]*<ol class="ask-list" id="ask-list"[\s\S]*<div class="sandbox-dock" id="sandbox-dock"[\s\S]*<div class="ask-compose run-change" id="ask-compose" hidden>/)
+  // The proof chat's compose box stays hidden; the question box is shown.
   assert.match(css, /\.analysis-run #proof-edit-btn, \.analysis-run \.chat-compose,/)
   assert.match(constant('ANALYZE_ASK_NOTE'), /not a certificate\. An analysis is never continued; re-check a result in the DAG\./)
   // The answer, once loaded, is drawn again with the graph's names (and whichever view the Sandbox shows).
@@ -485,6 +504,7 @@ test('choosing another run empties the conversation and holds the compose box un
   // The real selectRun and Ask panel; the rest of the console reduced to stubs.
   const step = load(['selectRun', ...ASK_STATE, 'resetManuscriptAsk', 'renderManuscriptAskContext', 'renderManuscriptAsks', 'syncManuscriptAskCompose'],
     ['MANUSCRIPT_ASK', 'MANUSCRIPT_ASK_VIEW_WORDS'], `
+${THREAD_STUB}
 const els={};
 const $=id=>els[id]||(els[id]={id,value:'',textContent:'',title:'',disabled:false,hidden:false,kids:[],scrollTop:0,scrollHeight:0,clientHeight:0,
   replaceChildren(...kids){ this.kids=kids; },querySelectorAll:()=>[]});
@@ -721,7 +741,7 @@ const buttons=()=>{ const node={id:'lem:a',label:'Lemma 1'};
 // A small element tree for the views these buttons live in (the DAG's details,
 // the Map tab, the Ask panel): classes, text, buttons, focus and scrolling.
 // `$` finds an element by id, making it the first time.
-const PANEL_DOM = `
+const PANEL_DOM = THREAD_STUB + `
 let focused=null;
 class El {
   constructor(tag){ this.tagName=String(tag).toUpperCase(); this.className=''; this.kids=[]; this.parent=null; this.attrs={}; this.dataset={}; this.style={setProperty(){}};
@@ -914,11 +934,12 @@ test('a late poll of the run left behind is not applied: the Ask panel, its draf
   // The real tick, selectRun and Ask panel; the rest of the console reduced to stubs.
   const step = load(['tick', 'nextPollDelay', 'stopSettling', 'selectRun', ...ASK_STATE, 'resetManuscriptAsk', 'renderManuscriptAskContext', 'renderManuscriptAsks', 'syncManuscriptAskCompose'],
     ['POLL_MIN_MS', 'STOP_SETTLE_MS', 'STOPPING_RUNS', 'MANUSCRIPT_ASK', 'MANUSCRIPT_ASK_VIEW_WORDS'], `
+${THREAD_STUB}
 const els={};
 const $=id=>els[id]||(els[id]={id,value:'',textContent:'',title:'',disabled:false,hidden:false,kids:[],scrollTop:0,scrollHeight:0,clientHeight:0,
   replaceChildren(...kids){ this.kids=kids; },querySelectorAll:()=>[]});
 let runId=null, jobId=null, lastProofMtime=0, lastChatKey='', convoKey='', dagRunKey='', leanRunKey='', leanDirty=false, autoPipelineKey='';
-let leanRefreshSeq=0, leanPollTimer=null, workspaceView='sandbox', lastSandboxRun=null, pollSig='', pollQuiet=0, pollDelay=2000, pollListedEnd=null;
+let leanRefreshSeq=0, leanPollTimer=null, workspaceView='sandbox', lastSandboxRun=null, pollSig='', pollQuiet=0, pollDelay=2000, pollListedEnd=null, pollEnded='';
 let manuscriptAskContext=null, manuscriptAskSending='', manuscriptAskRunId='';
 const manuscriptAskSent=new Map(), convoOpen=new Set(), RUN_KIND_BY_ID=new Map(), chatAttachments={clear(){}}, calls=[], requests=[];
 const syncLeanControls=()=>{}, syncRunAccess=()=>{}, resetProofView=()=>{}, syncRunToMonitor=()=>{}, refreshConversation=()=>{}, applyRunKindView=()=>{};

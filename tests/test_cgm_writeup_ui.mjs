@@ -122,8 +122,8 @@ class Elem {
     this['on' + type]?.(event)
     return event
   }
-  focus() { this.ownerDocument.activeElement = this }
-  setSelectionRange(start, end) { this.selection = [start, end] }
+  focus(options) { this.ownerDocument.activeElement = this; this.focusOptions = options }
+  setSelectionRange(start, end, direction) { this.selection = [start, end]; this.selectionDirection = direction }
   dispatchEvent(event) { (this.events ||= []).push(event.type + (event.bubbles ? ' (bubbles)' : '')); return true }
   querySelectorAll(selector) { return descendants(this).filter(el => matches(el, selector)) }
   querySelector(selector) { return this.querySelectorAll(selector)[0] || null }
@@ -215,9 +215,9 @@ const switchWiring = () => sourceFrom(script.indexOf(`document.querySelectorAll(
 const CONSOLE_FUNCTIONS = [
   'escapeHtml', 'stashMath', 'stashInlineMath', 'inlineMathEnd', 'mathNextIndex', 'mathBetween', 'mathSpans', 'holdMath', 'safeMarkdownHref', 'sanitizeRenderedHtml', 'mdToHtml', 'unwrapProofMarkdownFence',
   'normalizeProofMarkdown', 'splitProofs', 'problemItems', 'problemCardHtml', 'liveSandboxText', 'isAnalysisRun',
-  'isReadabilityRun', 'syncSandboxEditor', 'beginSandboxEdit', 'saveSandboxProof', 'finishSandboxEdit', 'applySandboxPreview', 'runWriteup',
+  'isReadabilityRun', 'syncSandboxEditor', 'beginSandboxEdit', 'saveSandboxProof', 'finishSandboxEdit', 'applySandboxPreview', 'proofPdfShown', 'runWriteup',
   'writeupBody', 'proofDocShown', 'showProofDocFile', 'syncProofDocSwitch', 'chooseProofDoc', 'writeupBannerHtml', 'closureCitedLemmas',
-  'renderMarkdownIntoView', 'showProofMd', 'refreshProofPreview',
+  'renderMarkdownIntoView', 'showProofMd', 'refreshProofPreview', 'showProofPdfDoc',
   // Make readable, and the Readability policy and model choice it follows.
   'makeReadableSource', 'syncMakeReadable', 'makeReadable', 'dagIsCgmEngine', 'readabilityEngineEntry', 'readabilityPolicy',
   'readabilityOffered', 'viewerIsAdmin', 'viewerIsGuest', 'readabilitySponsoredOnly', 'readabilityRouteSponsored', 'engineModelMode',
@@ -245,7 +245,17 @@ function consolePage() {
     'function setDownloadUrl(url,name){ calls.downloads.push([url,name]); }',
     'function applyAnalysisPreview(){ calls.analysis++; return true; }',
     'function editorStatus(message){ calls.status.push(message); }',
-    'function setProofEmpty(){} function renderCitations(){} function resizeSandboxEditor(){} function showProofPdf(){}',
+    "function setProofEmpty(){} function renderCitations(){} function resizeSandboxEditor(options){ (calls.resize||=[]).push(options?.typing?'typing':'quiet'); } function showProofPdf(){}",
+    // The key-switched radio takes the focus where its document left the thread (the real helper; no thread on this page).
+    "function sandboxThread(){ return $('sandbox-thread'); } function threadLaidOut(sc){ return !!sc&&sc.clientHeight>0; }",
+    fn('threadFocus'),
+    // The Sandbox's thread (its one scroller), reduced to the place a redraw of the card asks for:
+    // 'top' opens a document newly shown at the card's top (0 here); 'keep', and 'follow' for a
+    // reader away from the bottom, keep it (test_sandbox_thread_ui.mjs has the real one).
+    'const thread={scrollTop:0,modes:[]};',
+    "function threadRedraw(how,draw){ thread.modes.push(how); const kept=thread.scrollTop; draw(); thread.scrollTop=how==='top'?0:kept; }",
+    // Done clears the reader's pin to the bottom before its redraw (the real thread's state).
+    'let threadPos={pinned:false,held:false};',
     // No Readability on this page until a test lists it; leaving the run is recorded.
     "let ENGINES=[], SETTINGS=null, CURRENT_USER={id:1}, GUEST_POLICY=null, jobId='j1';",
     // The model the composer has chosen (Kimi K3 unless a test picks another).
@@ -540,22 +550,202 @@ test('a proof.md newer than the run record leaves the write-up stale until a rec
   assert.deepEqual([now.checked, now.label, now.banner, radio('writeup').title], [['writeup'], 'writeup.md', BANNER.accepted, BANNER.accepted])
 })
 
-test('a document newly on screen opens at its top, and a redraw of the same one keeps the place', () => {
-  const page = consolePage(), { context, state, $, radio } = page
-  const body = $('proof-body')
+test('a document newly on screen opens at the card\'s top, and a redraw of the same one keeps the place', () => {
+  const page = consolePage(), { context, state, radio } = page
+  // The card scrolls with the Sandbox's thread (#proof-body is no scroller of its own any more).
+  const thread = page.run('thread')
   const longer = { text: CLOSURE + '\nOne more line.\n', revision: 'rev-2', mtime: 2 }
   context.applySandboxPreview(cgmRun(undefined, { status: 'running' }))
-  body.scrollTop = 500
+  assert.equal(thread.modes.at(-1), 'top')
+  thread.scrollTop = 500
+  // proof.md as a running run writes it: its end is followed from within 80px of the bottom
+  // ('follow'; a reader away from the bottom, as here, keeps the place).
   context.applySandboxPreview(cgmRun(undefined, { status: 'running' }, longer))
-  assert.equal(body.scrollTop, 500)
-  // The accepted write-up lands and takes the facts' place: it opens under its banner.
+  assert.deepEqual([thread.scrollTop, thread.modes.at(-1)], [500, 'follow'])
+  assert.equal(page.$('md-view').querySelector('.md-caret'), null, 'no caret once proof.md exists')
+  // Text written before proof.md exists is live too, with the caret.
+  context.applySandboxPreview(cgmRun(undefined, { status: 'running' }, { ...longer, text: longer.text + 'Streaming…\n', has_proof_md: false, revision: 'live-3' }))
+  assert.deepEqual([thread.scrollTop, thread.modes.at(-1)], [500, 'follow'])
+  assert.ok(page.$('md-view').querySelector('.md-caret'))
+  // The accepted write-up lands and takes the facts' place: it opens at the card's top, under its banner.
   context.applySandboxPreview(cgmRun(writeupBlock('accepted'), { status: 'running' }, longer))
-  assert.deepEqual([state().checked, state().banner, body.scrollTop], [['writeup'], BANNER.accepted, 0])
-  body.scrollTop = 300
+  assert.deepEqual([state().checked, state().banner, thread.scrollTop, thread.modes.at(-1)], [['writeup'], BANNER.accepted, 0, 'top'])
+  thread.scrollTop = 300
+  const drawn = thread.modes.length
   radio('writeup').dispatch('click')
-  assert.equal(body.scrollTop, 300, 'choosing the document already shown moves nothing')
+  assert.deepEqual([thread.scrollTop, thread.modes.length], [300, drawn], 'choosing the document already shown moves nothing')
   radio('facts').dispatch('click')
-  assert.deepEqual([state().checked, body.scrollTop], [['facts'], 0])
+  assert.deepEqual([state().checked, thread.scrollTop, thread.modes.at(-1)], [['facts'], 0, 'top'])
+  // A finished run's proof.md drawn again (a newer copy): the reader's place is kept.
+  thread.scrollTop = 250
+  context.applySandboxPreview(cgmRun(undefined, {}, { text: CLOSURE + '\nAnother line.\n', revision: 'rev-4', mtime: 4 }))
+  assert.deepEqual([thread.scrollTop, thread.modes.at(-1)], [250, 'keep'])
+})
+
+test('proof.md read again from its file, which ends in a newline the record\'s copy has not, draws nothing again', async () => {
+  const page = consolePage(), { context, calls } = page, view = page.$('md-view')
+  context.applySandboxPreview(cgmRun(undefined))
+  const drawn = view.querySelector('.md-doc'), math = calls.math, modes = page.run('thread').modes.length
+  // The server sends proof.md as written; the record's copy is trimmed.
+  page.files.proof = CLOSURE.trim() + '\n\n'
+  await context.refreshProofPreview(true, cgmRun(undefined))
+  context.applySandboxPreview(cgmRun(undefined))
+  // The same nodes (a selection in them survives) and no second KaTeX run.
+  assert.ok(view.querySelector('.md-doc') === drawn, 'the card was drawn again')
+  assert.deepEqual([calls.math, page.run('thread').modes.length], [math, modes])
+})
+
+test('the proof of a run left before its files answer is never drawn over the run shown (refreshProofPreview, showProofMd)', async () => {
+  const page = consolePage(), { context, calls } = page, view = page.$('md-view')
+  context.applySandboxPreview(cgmRun(undefined))
+  // r1's file list is slow; the reader opens an analysis (a1) meanwhile, and its card shows its report.
+  page.run(`globalThis.gates={}; { const real=fetch; globalThis.fetch=async(url,init)=>{ const key=/\\/files$/.test(url)?'files':/path=proof\\.md/.test(url)?'file':''; if(gates[key])await gates[key].promise; return real(url,init); }; }
+    globalThis.gate=key=>{ let open; const promise=new Promise(resolve=>{ open=resolve; }); gates[key]={promise,open}; };`)
+  page.run("gate('files')")
+  const reading = context.refreshProofPreview(true, cgmRun(undefined))
+  page.run("runId='a1'; lastSandboxRun={run_id:'a1',run_kind:'analyze',status:'finished',sandbox_preview:{kind:'analysis',has_report:true,text:'# Report'}}")
+  view.innerHTML = '<div class="md-doc analysis-doc"><h1>Report</h1></div>'
+  const fetched = calls.fetches.length, downloads = calls.downloads.length, label = page.$('proof-label').textContent
+  page.run('gates.files.open()'); await reading
+  // No proof.md read for the run left (nor under the new run's id), and the card, its name and Download stay the analysis's.
+  assert.deepEqual(calls.fetches.slice(fetched).filter(url => /path=proof\.md/.test(url)), [])
+  assert.deepEqual([view.textContent, page.$('proof-label').textContent, calls.downloads.length], ['Report', label, downloads])
+  // proof.md itself answering after the switch draws nothing either.
+  page.run("runId='r1'; gate('file')")
+  const file = context.showProofMd('/api/workspace/r1/file?path=proof.md', false, 'r1')
+  page.run("runId='a1'"); page.run('gates.file.open()'); await file
+  assert.equal(view.textContent, 'Report')
+})
+
+test('a read of proof.md that fails leaves the proof on screen; an empty card says so, and the next read draws the proof', async () => {
+  const page = consolePage(), { context } = page, view = page.$('md-view')
+  context.applySandboxPreview(cgmRun(undefined))
+  const drawn = view.querySelector('.md-doc')
+  page.run(`{ const real=fetch; globalThis.failing=true; globalThis.fetch=async(url,init)=>/path=proof\\.md/.test(url)&&failing?{ok:false,status:500,text:async()=>'{"error":"read failed"}'}:real(url,init); }`)
+  await context.showProofMd('/api/workspace/r1/file?path=proof.md', false, 'r1')
+  assert.ok(view.querySelector('.md-doc') === drawn, 'the proof on screen stays')
+  assert.doesNotMatch(view.textContent, /read failed/)
+  // A read that throws (the network down) leaves it too.
+  page.run(`{ const real=fetch; globalThis.down=true; globalThis.fetch=async(url,init)=>{ if(/path=proof\\.md/.test(url)&&down)throw new TypeError('Failed to fetch'); return real(url,init); }; }`)
+  await context.showProofMd('/api/workspace/r1/file?path=proof.md', false, 'r1')
+  assert.ok(view.querySelector('.md-doc') === drawn, 'the proof on screen stays when the read throws')
+  assert.doesNotMatch(view.textContent, /Preview failed/)
+  page.run('down=false')
+  // An empty card (a run just opened) says the preview failed...
+  view.innerHTML = ''
+  await context.showProofMd('/api/workspace/r1/file?path=proof.md', false, 'r1')
+  assert.equal(view.textContent, 'Preview failed')
+  // ...and the next read that works draws the proof, though its text has not changed.
+  page.run('failing=false')
+  await context.showProofMd('/api/workspace/r1/file?path=proof.md', false, 'r1')
+  assert.ok(view.querySelector('.md-doc'))
+})
+
+test('a proof that is only a PDF stays on screen, under its file\'s name, through quiet polls and while a follow-up has written nothing; then its live text (D, Q3)', async () => {
+  const page = consolePage(), { context } = page, pages = page.$('pdf-pages'), view = page.$('md-view')
+  // As the real showProofPdf draws it (pdf.js is not loaded here): the pages shown, their URL kept; only proof.tex on the server.
+  page.run(`var pdfDrawn=[]; showProofPdf=url=>{ pdfDrawn.push(url); $('md-view').style.display='none'; const pages=$('pdf-pages'); pages.style.display='flex'; pages.dataset.cur=url; };
+fetch=async url=>{ calls.fetches.push(url); if(/\\/files$/.test(url))return {ok:true,json:async()=>({files:[{path:'proof.tex',mtime:5,size:900}]})}; throw new Error('unexpected fetch '+url); };`)
+  // A record with any agent output has text: its agents' writes (console_server._sandbox_preview, liveSandboxText).
+  const WRITES = '◦ session started · model kimi-k3\nassistant · Wrote proof.tex with the induction argument.\n· usage in 1200 / out 300'
+  const finished = cgmRun(undefined, {}, { text: WRITES, source: 'live', has_proof_md: false, has_proof_tex: true, revision: 'missing' })
+  // The run opened: its text is not drawn before its PDF, which refreshProofPreview draws.
+  context.applySandboxPreview(finished)
+  assert.deepEqual([view.textContent, page.$('proof-label').textContent], ['', '—'])
+  await context.refreshProofPreview(true, finished)
+  assert.deepEqual([pages.style.display, page.$('proof-label').textContent, page.run('pdfDrawn.length')], ['flex', 'proof.tex', 1])
+  const download = JSON.parse(JSON.stringify(page.calls.downloads.at(-1)))
+  assert.equal(download[1], 'proof.pdf')
+  // A quiet poll of the finished run leaves the PDF, its name and Download as they are, and draws no log over it.
+  context.applySandboxPreview(finished)
+  assert.deepEqual([pages.style.display, page.$('proof-label').textContent, view.textContent], ['flex', 'proof.tex', ''])
+  // A follow-up starts: its record says running, its text still the previous turn's writes: the PDF stays, under its name.
+  const following = { ...finished, status: 'running' }
+  context.applySandboxPreview(following)
+  context.applySandboxPreview(following)
+  assert.deepEqual([pages.style.display, page.$('proof-label').textContent, view.textContent, view.querySelector('.md-caret')], ['flex', 'proof.tex', '', null])
+  assert.deepEqual([JSON.parse(JSON.stringify(page.calls.downloads.at(-1))), page.run('pdfDrawn.length')], [download, 1])
+  // The follow-up writes: its live text is shown, streaming, with the caret.
+  context.applySandboxPreview({ ...following, sandbox_preview: { ...following.sandbox_preview, text: WRITES + '\nassistant · Revising the base case.' } })
+  assert.deepEqual([pages.style.display, page.$('proof-label').textContent, view.style.display, !!view.querySelector('.md-caret')], ['none', 'streaming…', 'block', true])
+  assert.match(view.textContent, /Revising the base case/)
+  // Without a PDF on screen, and no text, the card still says the proof is on its way.
+  pages.style.display = 'none'; pages.dataset.cur = ''
+  context.applySandboxPreview(cgmRun(undefined, {}, { text: '', has_proof_md: false, has_proof_tex: true, revision: 'missing' }))
+  assert.equal(page.$('proof-label').textContent, 'waiting for proof.md…')
+  // The run opened again (its PDF not drawn yet): the record's text is not drawn first.
+  view.innerHTML = ''; page.$('proof-label').textContent = '—'
+  context.applySandboxPreview(finished)
+  assert.deepEqual([view.textContent, page.$('proof-label').textContent], ['', '—'])
+})
+
+test('a proof that is proof.pdf (no proof.tex) opens at the card\'s top when newly shown; drawn again it keeps the place (A, Q4)', async () => {
+  const page = consolePage(), { context } = page, modes = () => JSON.parse(JSON.stringify(page.run('thread.modes')))
+  page.run(`var pdfDrawn=[]; showProofPdf=url=>{ pdfDrawn.push(url); };
+fetch=async url=>{ calls.fetches.push(url); if(/\\/files$/.test(url))return {ok:true,json:async()=>({files:[{path:'proof.pdf',mtime:5,size:900}]})}; throw new Error('unexpected fetch '+url); };`)
+  const live = cgmRun(undefined, { status: 'running' }, { text: '# Proof\n\nDrafting.', source: 'live', has_proof_md: false, has_proof_tex: false, revision: 'missing' })
+  context.applySandboxPreview(live)
+  const finished = cgmRun(undefined, {}, { text: '# Proof\n\nDrafting.', source: 'live', has_proof_md: false, has_proof_tex: true, revision: 'missing' })
+  page.run('thread.modes.length=0')
+  context.applySandboxPreview(finished)
+  await context.refreshProofPreview(true, finished)
+  assert.deepEqual([modes(), page.run('pdfDrawn.length'), page.$('proof-label').textContent, page.$('md-view')._proofDoc], [['top'], 1, 'proof.pdf', 'pdf'])
+  // The file itself (proof.pdf), never a compile of a proof.tex that is not there; Download is that file.
+  assert.match(page.run('pdfDrawn[0]'), /^\/api\/workspace\/r1\/file\?path=proof\.pdf&t=\d+$/)
+  assert.deepEqual(JSON.parse(JSON.stringify(page.calls.downloads.at(-1))), [page.run('pdfDrawn[0]') + '&download=1', 'proof.pdf'])
+  // The 900 ms refresh draws it again: the place is kept.
+  await context.refreshProofPreview(true, finished)
+  assert.deepEqual([modes(), page.run('pdfDrawn.length')], [['top', 'keep'], 2])
+})
+
+test('a finished run with live text and no proof file at all (no proof.md, proof.tex or proof.pdf) draws that text as its draft (Q4)', () => {
+  const page = consolePage(), { context } = page
+  context.applySandboxPreview(cgmRun(undefined, {}, { text: '# Proof\n\nThe draft the agents wrote.', source: 'live', has_proof_md: false, has_proof_tex: false, revision: 'missing' }))
+  assert.deepEqual([page.$('proof-label').textContent, /The draft the agents wrote/.test(page.$('md-view').textContent)], ['draft', true])
+})
+
+test('a proof that is proof.tex opens at the card\'s top when newly shown; drawn again (the refresh after a run ends, a click on the open run) it keeps the place; Markdown after it is newly shown (A)', async () => {
+  const page = consolePage(), { context } = page, modes = () => JSON.parse(JSON.stringify(page.run('thread.modes')))
+  page.run(`var pdfDrawn=[]; showProofPdf=url=>{ pdfDrawn.push(url); };
+fetch=async url=>{ calls.fetches.push(url); if(/\\/files$/.test(url))return {ok:true,json:async()=>({files:[{path:'proof.tex',mtime:5,size:900}]})}; throw new Error('unexpected fetch '+url); };`)
+  const live = cgmRun(undefined, { status: 'running' }, { text: '# Proof\n\nDrafting.', source: 'live', has_proof_md: false, has_proof_tex: false, revision: 'missing' })
+  context.applySandboxPreview(live)
+  const finished = cgmRun(undefined, {}, { text: '# Proof\n\nDrafting.', source: 'live', has_proof_md: false, has_proof_tex: true, revision: 'missing' })
+  page.run('thread.modes.length=0')
+  // The run ends with proof.tex: its record does not draw its text again; the PDF is newly shown.
+  context.applySandboxPreview(finished)
+  assert.deepEqual(modes(), [])
+  await context.refreshProofPreview(true, finished)
+  assert.deepEqual([modes(), page.run('pdfDrawn.length'), page.$('proof-label').textContent, page.$('md-view')._proofDoc], [['top'], 1, 'proof.tex', 'pdf'])
+  // The 900 ms refresh draws it again (a new URL): the place is kept.
+  await context.refreshProofPreview(true, finished)
+  assert.deepEqual([modes(), page.run('pdfDrawn.length')], [['top', 'keep'], 2])
+  // A click on the open run: the card emptied (resetProofView keeps the document it showed), the record has no text to draw, the PDF again: kept.
+  page.$('md-view').innerHTML = ''; page.$('md-view')._proofRenderKey = ''
+  context.applySandboxPreview(cgmRun(undefined, {}, { text: '', has_proof_md: false, has_proof_tex: true, revision: 'missing' }))
+  await context.refreshProofPreview(true, finished)
+  assert.deepEqual(modes().slice(2), ['keep', 'keep'])
+  // A follow-up writes Markdown again: a document newly shown.
+  context.applySandboxPreview(cgmRun(undefined, { status: 'running' }, { text: '# Proof\n\nA new draft.', source: 'live', has_proof_md: false, has_proof_tex: true, revision: 'missing' }))
+  assert.equal(modes().at(-1), 'top')
+})
+
+test('the engine\'s newer proof.md in an open editor keeps the reader\'s caret, and the thread\'s place (no typing, no scroll to its end)', () => {
+  const page = consolePage(), { context, calls, $ } = page
+  context.applySandboxPreview(cgmRun(undefined, { status: 'running' }))
+  context.beginSandboxEdit()
+  const editor = $('notion-editor')
+  // The reader clicked into the middle of the text (nothing typed: the editor is not dirty).
+  editor.selectionStart = 12; editor.selectionEnd = 20; editor.selectionDirection = 'forward'
+  calls.resize = []
+  context.applySandboxPreview(cgmRun(undefined, { status: 'running' }, { text: CLOSURE + '\n\n## Lemma 9\n\nMore.', revision: 'rev-2' }))
+  assert.equal(editor.value, CLOSURE + '\n\n## Lemma 9\n\nMore.')
+  assert.deepEqual([editor.selection, editor.selectionDirection, calls.resize], [[12, 20], 'forward', ['quiet']])
+  assert.equal(calls.status.at(-1), 'Updated from engine')
+  // A caret past the end of a shorter text ends at its end.
+  editor.selectionStart = editor.selectionEnd = editor.value.length
+  context.applySandboxPreview(cgmRun(undefined, { status: 'running' }, { text: '# Proof', revision: 'rev-3' }))
+  assert.deepEqual(editor.selection, [7, 7])
 })
 
 test('the radios work with a click, the arrow keys, Home and End', () => {
@@ -565,6 +755,8 @@ test('the radios work with a click, the arrow keys, Home and End', () => {
   assert.equal(key('writeup', 'ArrowRight').defaultPrevented, true)
   assert.deepEqual(state().checked, ['facts'])
   assert.equal(document.activeElement, radio('facts'))
+  // Focused where the document switch left the thread: the browser does not centre the radio (the card's top far down the view).
+  assert.deepEqual({ ...radio('facts').focusOptions }, { preventScroll: true })
   key('facts', 'ArrowLeft')
   assert.deepEqual(state().checked, ['writeup'])
   assert.equal(document.activeElement, radio('writeup'))
