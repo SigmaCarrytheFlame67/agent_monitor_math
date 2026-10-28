@@ -420,31 +420,39 @@ console.log(JSON.stringify(out));
         pending = SCRIPT[SCRIPT.index("const CONTINUE_PENDING=") :]
         program = f"""
 {pending[: pending.index(";") + 1]}
+{_js_function("turnSignature")}
 {_js_function("continueRun")}
 let runId='run-1';
 const els={{}}; const $=id=>els[id]||(els[id]={{id,disabled:false}});
 const alerts=[], pills=[]; let polls=0, loads=0;
 globalThis.alert=message=>alerts.push(String(message));
 const setPill=(_state,text)=>pills.push(text), startPolling=()=>{{polls++;}}, loadRuns=()=>{{loads++;}}, selectRun=()=>{{}};
-let resolveFetch=null, fetches=0;
-globalThis.fetch=()=>{{fetches++; return new Promise(resolve=>{{resolveFetch=resolve;}});}};
+// Each Continue first reads the run's record (the one before its turn), then sends its request.
+let resolveFetch=null, fetches=0, reads=0;
+globalThis.fetch=(url,opts)=>{{
+  if(!opts||opts.method!=='POST'){{ reads++; return Promise.resolve({{ok:true,status:200,json:async()=>({{run_id:'run-1',status:'stopped',updated_at:'t1'}})}}); }}
+  fetches++; return new Promise(resolve=>{{resolveFetch=resolve;}});
+}};
+const settle=()=>new Promise(resolve=>setTimeout(resolve,0));
 (async()=>{{
   const out={{}};
   // A double click sends one request; the button waits for the answer.
   const first=continueRun('run-1'), second=continueRun('run-1');
-  out.pending={{fetches,disabled:$('sess-cont').disabled}};
+  await settle();
+  out.pending={{fetches,reads,disabled:$('sess-cont').disabled}};
   resolveFetch({{ok:true,status:200,json:async()=>({{ok:false,status:'already_running',run_id:'run-1'}})}});
   await Promise.all([first,second]);
   out.running={{alerts:[...alerts],pills:[...pills],polls,loads,disabled:$('sess-cont').disabled,pending:CONTINUE_PENDING.size}};
   const third=continueRun('run-1');
+  await settle();
   resolveFetch({{ok:true,status:200,json:async()=>({{ok:true,status:'continuing',run_id:'run-1',job_id:'job-2'}})}});
   await third;
-  out.started={{fetches,pills:[...pills],alerts:alerts.length}};
+  out.started={{fetches,reads,pills:[...pills],alerts:alerts.length}};
   console.log(JSON.stringify(out));
 }})().catch(error=>{{console.error(error);process.exit(1);}});
 """
         out = _run(program)
-        self.assertEqual(out["pending"], {"fetches": 1, "disabled": True})
+        self.assertEqual(out["pending"], {"fetches": 1, "reads": 1, "disabled": True})
         self.assertEqual(
             out["running"],
             {
@@ -456,7 +464,7 @@ globalThis.fetch=()=>{{fetches++; return new Promise(resolve=>{{resolveFetch=res
                 "pending": 0,
             },
         )
-        self.assertEqual(out["started"], {"fetches": 2, "pills": ["continuing…"], "alerts": 1})
+        self.assertEqual(out["started"], {"fetches": 2, "reads": 2, "pills": ["continuing…"], "alerts": 1})
 
 
 if __name__ == "__main__":

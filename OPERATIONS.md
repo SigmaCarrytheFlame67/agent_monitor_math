@@ -429,7 +429,10 @@ and DAG views are unchanged.
   text is no longer the text it had when the PDF was drawn (a follow-up's
   record keeps the previous turn's writes until it writes its own); its
   live text is shown then, and the PDF again once it ends. A run opened
-  again draws its PDF without showing that text first.
+  again draws its PDF without showing that text first. The PDF on screen
+  is drawn anew (its pages under `Rendering…`, a `/pdf` request) only as
+  a turn ends or the run is opened, or for a new file: the derived views moving after
+  a turn (Lean, the DAG) and their end refresh it as its files say.
 - **Closing lines.** A run's record says it ended a moment before its
   closing chat lines are written: the `✓ run finished` summary, the
   engine's reply, an analysis's or a readable version's summary, a
@@ -439,13 +442,15 @@ and DAG views are unchanged.
   queued while the run ran starts only after that (its job is listed
   running before its record says so), and a Continue from another tab
   starts a turn this page did not ask for: the run list, read every five
-  seconds, follows the run shown by its latest job. A job it did not list
-  before, or one it listed running that has ended since, means a turn ran
-  meanwhile (a short one, a fast failure, can start and end between two
-  reads): the record is read once more, so its end, its reply and its proof
-  are drawn. A job still listed running has the record read again once per
-  read, for up to a minute per job while its record catches up, so the
-  queued turn is followed to its reply. Only that periodic read takes the
+  seconds, follows the run shown by its latest job, starting from the list
+  read when the run was opened. A job it did not list before, or one it
+  listed running that has ended since, means a turn ran meanwhile (a short
+  one, a fast failure, can start and end between two reads, or before the
+  first periodic read after the run is opened): the record is read once
+  more, so its end, its reply and its proof are drawn. A job still listed
+  running has the record read again once per read, for up to a minute per
+  job while its record catches up, so the queued turn is followed to its
+  reply. Only that periodic read takes the
   polling up again, at most once per read and never in the same moment
   (the read a poll makes as its run ends never restarts it, which would
   poll back to back); a poll taken up again that reads the record
@@ -463,12 +468,19 @@ and DAG views are unchanged.
   derived views moving meanwhile do not count) the turn is awaited: the
   run shows as continuing (`Continuing…`, the `continuing…`
   pill and the session bar's line, ■ Stop, no ▶ Continue to press a second
-  time), and the record is read again every two seconds (nothing drawn or
-  queued again), so the turn is followed within two seconds of its record
-  saying running, or of its end if it ends first. It is awaited for up to
-  a minute, until a Stop sent from the page, or until the run list shows
-  the turn's job ended without the record changing; the record is then
-  drawn as it reads.
+  time), and the record is read again two seconds later, then 3.2 seconds
+  later, then every five seconds, the run list's pace (about 13 reads a
+  minute; nothing drawn or queued again, no periodic refresh of the proof
+  or the chat, and none after a read that fails), so the turn is followed
+  within five seconds (two at first) of its record saying running, or of
+  its end if it ends first. ▶ in the run list for a run not shown reads
+  the run's record just before the Continue is sent, and that record is
+  the one before the turn: a turn that fails as the server takes it (a
+  failed run failing again included) is drawn at its first read, and a
+  turn of another tab that ended since the list's last read is never taken
+  for this one. It is awaited for up to a minute, until a Stop sent from
+  the page, or until the run list shows the turn's job ended without the
+  record changing; the record is then read at once and drawn as it reads.
 - **Stale answers.** A reply about a run no longer shown, or an older read
   that answers after a newer one, is never drawn: another run's `proof.md`
   never lands in the card, and the newest chat lines are never taken away.

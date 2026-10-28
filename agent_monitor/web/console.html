@@ -6174,7 +6174,8 @@ function selectRun(rid,jid){
   leanRefreshSeq++;
   if(typeof leanPollTimer!=='undefined'&&leanPollTimer){ clearTimeout(leanPollTimer); leanPollTimer=null; }
   syncLeanControls(); syncRunAccess();
-  resetProofView(); loadRuns();
+  // The run list read as the run opens is where the periodic read follows it from (noteRunListed).
+  resetProofView(); const listed=loadRuns(); if(typeof listed?.then==='function')listed.then(jobs=>noteRunListed(rid,jobs)).catch(()=>{});
   syncRunToMonitor(rid); loadChat(); $('chat-send').disabled=!rid;
   updateChatStatus(null);
   // The run list knows each run's kind: an analysis opens on its report and
@@ -6222,6 +6223,12 @@ async function continueRun(rid){
   CONTINUE_PENDING.add(rid);
   const button=rid===runId?$('sess-cont'):null; if(button)button.disabled=true;
   try{
+    // The run's record as it reads just before the Continue is the one before the turn (awaitTurn), for the run
+    // shown too: the record on screen may be older (another tab's turn may have ended since the last read, or
+    // while this tab was hidden), and a run not shown (its ▶ in the run list) was not read at all. A read that
+    // fails leaves the first record read after it for that.
+    let before='';
+    try{ const b=await fetch('/api/run/'+encodeURIComponent(rid)); if(b.ok)before=turnSignature(await b.json()); }catch(e){}
     const r=await fetch('/api/runs/'+encodeURIComponent(rid)+'/continue',{method:'POST',headers:{'Content-Type':'application/json'},body:'{}'});
     const d=await r.json();
     if(!r.ok){ alert(d.error||'continue failed'); return; }
@@ -6230,11 +6237,11 @@ async function continueRun(rid){
     // turn is awaited (awaitTurn: its record may still read as it was for a
     // moment, while the turn is prepared), and the run's polling is taken up
     // again (resume: a record still unchanged draws and queues nothing again).
-    if(d.ok===false&&d.status==='already_running'){ alert('This run is already running.'); if(runId===rid){ if(typeof awaitTurn==='function')awaitTurn(rid,''); startPolling(true); } }
+    if(d.ok===false&&d.status==='already_running'){ alert('This run is already running.'); if(runId===rid){ if(typeof awaitTurn==='function')awaitTurn(rid,'',before); startPolling(true); } }
     else{
       if(runId!==rid) selectRun(rid,d.job_id||null);
       setPill('running','continuing…');
-      if(d.status==='continuing'&&typeof awaitTurn==='function')awaitTurn(rid,d.job_id);
+      if(d.status==='continuing'&&typeof awaitTurn==='function')awaitTurn(rid,d.job_id,before);
       startPolling(true);
     }
   }catch(e){ alert(String(e)); }
@@ -6250,7 +6257,8 @@ async function continueRun(rid){
    RUNS_LIST_MS (the interval at the end of this script). */
 const POLL_MIN_MS=2000, POLL_MAX_MS=10000, POLL_BACKOFF=1.6, POLL_SIDE_EVERY=6, RUNS_LIST_MS=5000;
 // pollEnded: the signature of the ended record whose closing reads were queued (once per end).
-let pollDelay=POLL_MIN_MS, pollSig='', pollQuiet=0, pollActive=false, pollInFlight=false, pollLoop=null, pollListedEnd=null, pollEnded='';
+// pollTurn: the turn signature (turnSignature) of the record the last poll read.
+let pollDelay=POLL_MIN_MS, pollSig='', pollTurn='', pollQuiet=0, pollActive=false, pollInFlight=false, pollLoop=null, pollListedEnd=null, pollEnded='';
 function consoleRunSignature(run){
   if(!run||typeof run!=='object')return '';
   const agents=Array.isArray(run.agents)?run.agents:[];
@@ -6281,7 +6289,7 @@ function nextPollDelay(current,changed){
 function startPolling(resume=false){
   stopPolling();
   pollActive=true; pollDelay=POLL_MIN_MS; pollQuiet=0; pollInFlight=false;
-  if(!resume){ pollSig=''; pollEnded=''; }
+  if(!resume){ pollSig=''; pollTurn=''; pollEnded=''; }
   const loop=async()=>{
     if(pollLoop!==loop)return;  // a newer startPolling() owns polling now
     pollTimer=null;
@@ -6304,7 +6312,8 @@ function stopPolling(){ pollActive=false; if(pollTimer){ clearTimeout(pollTimer)
    finished first), or a Continue came from another tab. Only the run list
    read every RUNS_LIST_MS follows it (never the read a poll makes as its run
    ends, which would start the poll again at once, over and over), by the
-   run's latest job it lists (pollListed: as the last read listed it):
+   run's latest job it lists (pollListed: as the last read listed it, or the
+   read made as the run was opened: noteRunListed):
    - a job of the run that the last read did not list, or one it listed
      running that has ended since: a turn ran meanwhile (a short one starts
      and ends between two reads), and the record is read once more;
@@ -6315,7 +6324,8 @@ function stopPolling(){ pollActive=false; if(pollTimer){ clearTimeout(pollTimer)
    The polling of that run is taken up a moment later, if the run is still
    the one shown and still not polled by then. A turn this page awaits
    (awaitTurn) whose job the list shows ended is awaited no more: its record
-   says the rest. */
+   says the rest, read at once (the poll's next read, backed off while the
+   turn was awaited, is made now: no restart). */
 let pollAgainJob=null, pollAgainTimer=null, pollListed=null, pollAwait=null;
 function followRunAgain(jobs){
   const rid=runId; if(!rid)return;
@@ -6324,7 +6334,10 @@ function followRunAgain(jobs){
   const id=String(job?.job_id||''), status=String(job?.status||''), running=status==='running';
   const was=pollListed?.rid===String(rid)?pollListed:null;
   pollListed={rid:String(rid),id,status};
-  if(pollAwait?.rid===String(rid)&&!running&&(!pollAwait.job||pollAwait.job===id))pollAwait=null;
+  if(pollAwait?.rid===String(rid)&&!running&&(!pollAwait.job||pollAwait.job===id)){
+    pollAwait=null;
+    if(pollActive&&pollTimer&&pollLoop){ clearTimeout(pollTimer); pollTimer=setTimeout(pollLoop,0); }
+  }
   if(pollActive||pollAgainTimer)return;
   const turned=!!job&&!!was&&(was.id!==id||was.status!==status);
   if(!running){ pollAgainJob=null; if(!turned)return; }
@@ -6337,26 +6350,38 @@ function followRunAgain(jobs){
   }
   pollAgainTimer=setTimeout(()=>{ pollAgainTimer=null; if(runId===rid&&!pollActive)startPolling(true); },0);
 }
+// The run list read as a run is opened (selectRun's own read) notes the run's
+// latest job as the last read listed it, and follows nothing (the run's own
+// poll reads its record): the periodic read's first look at the run has that
+// to go by, so a turn that starts and ends before it is still read.
+function noteRunListed(rid,jobs){
+  if(!rid||runId!==rid||!Array.isArray(jobs))return;
+  const job=jobs.find(j=>String(j?.run_id||'')===String(rid))||null;
+  pollListed={rid:String(rid),id:String(job?.job_id||''),status:String(job?.status||'')};
+}
 /* A turn this page asked for (▶ Continue, a message that continues the run,
    a Continue the server says runs already): the server registers its job
    before it answers, and the turn's worker writes the record "running" only
    once the turn is prepared, so the polls just after may still read the
    record as it was. Until the record changes (or says running) the turn is
-   awaited: the record is read again every POLL_MIN_MS (the one on screen:
-   nothing is drawn or queued again), and the run shows as continuing
-   (■ Stop; ▶ Continue is not offered again meanwhile), for up to a minute,
-   until a Stop from this page, or until the run list shows its job ended.
-   pollAwait: {rid, sig: the record's turn signature before the turn ('' when
-   this page had not read it yet: the first record read since, unless it
-   says running, is then the one before), job: the turn's job ('' unknown),
-   since}. */
+   awaited: the record is read again POLL_MIN_MS later, then backing off to
+   RUNS_LIST_MS (about 13 reads a minute; the one on screen: nothing is drawn
+   or queued again, nor refreshed periodically), and the run shows as
+   continuing (■ Stop; ▶ Continue is not offered again meanwhile), for up to
+   a minute, until a Stop from this page, or until the run list shows its
+   job ended.
+   pollAwait: {rid, sig: the record's turn signature before the turn (the
+   one on screen, or for a run not shown the record read just before the
+   Continue: continueRun; '' when this page has neither: the first record
+   read since, unless it says running, is then the one before), job: the
+   turn's job ('' unknown), since}. */
 const POLL_AWAIT_MS=60000;
 // What a turn's start or end always changes in the record (its status and time, its error, its job).
 // An edit of proof.md, a Lean check or the derived views changing the record meanwhile are no turn.
 function turnSignature(run){ return run&&typeof run==='object'?JSON.stringify([run.run_id,run.status,run.updated_at,run.error,run.job_id]):''; }
-function awaitTurn(rid,job){
+function awaitTurn(rid,job,before=''){
   const shown=String(lastSandboxRun?.run_id||'')===String(rid)?lastSandboxRun:null;
-  pollAwait={rid:String(rid),sig:pollSig?turnSignature(shown):'',job:String(job||''),since:Date.now()};
+  pollAwait={rid:String(rid),sig:before||(pollSig?turnSignature(shown):''),job:String(job||''),since:Date.now()};
   showTurnAwaited();
 }
 // Whether the record read is still the one from before the turn awaited (by its turn signature).
@@ -6418,11 +6443,15 @@ async function tick(){
       if(runId!==rid)return true;
       const t=run.totals||{};
       const sig=consoleRunSignature(run), changed=sig!==pollSig;
+      // A turn's end (its turn signature changed while the run no longer runs) forces the proof drawn anew; another change (an edit, a Lean
+      // check, the derived views) refreshes it as its files say: a PDF still the same is not drawn anew.
+      const turn=typeof turnSignature==='function'?turnSignature(run):sig, turned=turn!==pollTurn;
       // A turn this page asked for that is still being prepared (awaitTurn): the record is the one from before it.
       const awaited=typeof turnAwaited==='function'&&turnAwaited(rid,run);
-      pollSig=sig; pollQuiet=changed?0:pollQuiet+1;
+      pollSig=sig; pollTurn=turn; pollQuiet=changed?0:pollQuiet+1;
       pollDelay=nextPollDelay(pollDelay,changed);
-      const refreshSide=changed||pollQuiet%POLL_SIDE_EVERY===0;
+      // No periodic refresh while a turn is awaited: its record is the one from before it (a PDF is not drawn anew).
+      const refreshSide=changed||(!awaited&&pollQuiet%POLL_SIDE_EVERY===0);
       $('run-meta').textContent=`${run.run_id} · ${awaited?'continuing':run.status} · $${Number(t.cost_usd||0).toFixed(2)}`;
       setPill(run.status,(run.status||'')+' · '+(run.engine||''));
       updateChatStatus(run);
@@ -6437,15 +6466,16 @@ async function tick(){
       renderAutoPipeline(run.auto_pipeline);
       applySandboxPreview(run);
       if(refreshSide){
-        await refreshProofPreview(!running&&changed, run);
+        await refreshProofPreview(!running&&changed&&turned, run);
         if(runId!==rid)return true;
         loadChat();
       }
       if(!running){
         // A Stop still settling keeps the poll going, so ▶ Continue appears as soon as it has.
         if(stopSettling(rid,run.analyze?.recheck?.status==='running',!!run.stopping)){ pollDelay=POLL_MIN_MS; return true; }
-        // So does a turn awaited: the record is read again soon, and never drawn as ended meanwhile.
-        if(awaited){ pollDelay=POLL_MIN_MS; return true; }
+        // So does a turn awaited, never drawn as ended meanwhile: its record is read again 2 s
+        // after the first quiet read, then backing off (×1.6) to the run list's RUNS_LIST_MS.
+        if(awaited){ pollDelay=Math.min(RUNS_LIST_MS,pollQuiet>1?pollDelay:POLL_MIN_MS); return true; }
         // The stop may have settled since updateChatStatus drew "Stopping…"
         // (during the proof's refresh): draw the bar again before polling ends.
         updateSessionButtons(run.analyze?.recheck?.status==='running'?'running':run.status,!!run.stopping);
@@ -6461,11 +6491,12 @@ async function tick(){
           return true;
         }
         // Once per end: a poll taken up again (followRunAgain) that reads the
-        // same ended record queues none of this again.
+        // same ended record queues none of this again. The proof is drawn anew
+        // then only at a turn's end (not at the derived views' end: as its files say).
         if(pollEnded!==sig){
           pollEnded=sig;
           loadRuns();
-          setTimeout(()=>{ if(runId===rid) refreshProofPreview(true, run); }, 900);
+          setTimeout(()=>{ if(runId===rid) refreshProofPreview(turned, run); }, 900);
           for(const ms of [1000,4000])setTimeout(()=>{ if(runId===rid)loadChat(); },ms);
         }
         return false;
@@ -6476,6 +6507,10 @@ async function tick(){
   if(runId!==rid)return true;
   pollDelay=nextPollDelay(pollDelay,false);
   if(run) applySandboxPreview(run);
+  // A record not read refreshes the proof and the chat, unless a turn is awaited while this poll has the record
+  // on screen (a deploy's restart: /api/run fails while the files answer): nothing is refreshed then, as above.
+  // A run opened again with an await left from before (pollSig '') still draws its proof and chat.
+  if(typeof turnAwaited==='function'&&pollAwait?.rid===String(rid)&&pollSig)return true;
   await refreshProofPreview(false, run);
   if(runId!==rid)return true;
   loadChat();
@@ -7787,7 +7822,11 @@ async function refreshProofPreview(force, run){
   const pdf=files.find(f=>f.path==='proof.pdf');
   const live=run?.status==='running';
   const stamp=f=>`${f.mtime}:${f.size||0}`;
-  const viewEmpty=!($('md-view')&&$('md-view').innerHTML);
+  // A PDF on screen is no empty view (its #md-view may be): a refresh not forced draws it anew only for a new file.
+  // A PDF on screen whose draw failed ('Preview failed') counts as empty (whatever the hidden text view still
+  // holds): the next refresh draws it again.
+  const pdfFailed=proofPdfShown()&&/^Preview failed$/.test($('pdf-pages')?.querySelector('.pdf-status')?.textContent||'');
+  const viewEmpty=pdfFailed||(!($('md-view')&&$('md-view').innerHTML)&&!proofPdfShown());
   if(md){
     if(!force&&!viewEmpty&&stamp(md)===String(lastProofMtime))return true; lastProofMtime=stamp(md);
     const u='/api/workspace/'+encodeURIComponent(rid)+'/file?path='+encodeURIComponent(md.path)+'&t='+Date.now();
@@ -10441,6 +10480,10 @@ async function sendChat(){
   try{
     const attachments=await chatAttachments.payload();
     // No model: a follow-up keeps the run's own; the launcher's is for new runs.
+    // A run not being polled (its record on screen may be older: another tab's turn may have ended since): its
+    // record as it reads just before the message is the one before a turn the message may start (awaitTurn).
+    let before='';
+    if(typeof pollActive==='boolean'&&!pollActive){ try{ const b=await fetch('/api/run/'+encodeURIComponent(targetRun)); if(b.ok)before=turnSignature(await b.json()); }catch(e){} }
     let r=null;
     try{ r=await fetch('/api/runs/'+encodeURIComponent(targetRun)+'/chat',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({message:text,attachments})}); }
     catch(e){ throw new Error('The message could not be sent: the server could not be reached. Try again.'); }
@@ -10454,7 +10497,7 @@ async function sendChat(){
     if(Array.isArray(d.messages))renderChat(d.messages,{sent:d.user&&typeof d.user==='object'?d.user:true});
     else loadChat();
     // The message continues the run: its turn is awaited, its polling taken up again (as after Continue).
-    if(d.status==='continuing'){ setPill('running','continuing…'); if(typeof awaitTurn==='function')awaitTurn(targetRun,d.job_id); startPolling(true); }
+    if(d.status==='continuing'){ setPill('running','continuing…'); if(typeof awaitTurn==='function')awaitTurn(targetRun,d.job_id,before); startPolling(true); }
   }catch(err){ if(runId===targetRun)threadError(String(err.message||'')); }
   finally{ chatAttachments.lock(false);$('chat-send').disabled=!runId; if(typing&&runId===targetRun)$('chat-input').focus({preventScroll:true}); }
 }
