@@ -12,6 +12,7 @@ MAX_FILES = 8
 MAX_FILE_BYTES = 10 * 1024 * 1024
 MAX_BATCH_BYTES = 20 * 1024 * 1024
 MAX_RUN_BYTES = 100 * 1024 * 1024
+MAX_RUN_FILES = 80
 MAX_REQUEST_BYTES = 29 * 1024 * 1024
 TEXT_TYPES = {
     ".txt": "text/plain", ".md": "text/markdown", ".tex": "text/plain",
@@ -180,7 +181,7 @@ def save(workspace: Path, batch: list[tuple[dict, bytes]]) -> list[dict]:
         existing = list_files(workspace)
         if sum(item["size"] for item in existing) + sum(len(data) for _, data in batch) > MAX_RUN_BYTES:
             raise ValueError("This run has reached its 100 MB attachment limit")
-        if len(existing) + len(batch) > 80:
+        if len(existing) + len(batch) > MAX_RUN_FILES:
             raise ValueError("This run has reached its 80-file attachment limit")
         folder = workspace / "attachments"
         folder.mkdir(mode=0o700, parents=True, exist_ok=True)
