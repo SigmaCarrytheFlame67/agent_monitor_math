@@ -793,6 +793,14 @@ ${NODES.map(fn).join('\n')}`, ctx)
   step(`threadMsgs=${JSON.stringify(more)}; renderThread({sent:${JSON.stringify(more[6])}})`)
   assert.equal(step("later.children.filter(n=>n.classList.contains('error')).length"), 0)
   assert.equal(step('later.children.length'), 4)
+  // With proof.md open in the editor, a thread pinned at its bottom stops following: a line drawn under the card never moves the editor.
+  const edited = [...more, sys(41, 'Feedback queued; it will run automatically as soon as the current harness finishes.')]
+  step(`sandboxEditing=true; threadPos.pinned=true; threadMsgs=${JSON.stringify(edited)}; renderThread()`)
+  assert.equal(step('threadPos.pinned'), false)
+  assert.equal(step('later.children.length'), 5)
+  // Without the editor, a redraw leaves the pin alone.
+  step(`sandboxEditing=false; threadPos.pinned=true; threadMsgs=${JSON.stringify([...edited, user(50, 'One more.')])}; renderThread()`)
+  assert.equal(step('threadPos.pinned'), true)
   // Without #chat-later (an older page), all of the chat stays in #chat-msgs, as before.
   assert.deepEqual(plain(step("threadSplit([{kind:'notice'},{kind:'user'},{kind:'reply'}]).map(part=>part.map(item=>item.kind))")), [['notice'], ['user', 'reply']])
   assert.deepEqual(plain(step("threadSplit([{kind:'notice'}]).map(part=>part.length)")), [1, 0])

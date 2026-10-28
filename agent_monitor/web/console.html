@@ -9748,6 +9748,9 @@ function renderThread({fresh=false,sent=false}={}){
   let added=[], note='';
   if(key!==threadRenderKey||stale.length){
     threadRenderKey=key;
+    // An open editor never moves for the chat: a thread at its bottom keeps
+    // the editor where it is instead of following a line drawn under the card.
+    if(sandboxEditing&&below!==box)threadPos.pinned=false;
     threadRedraw('keep',()=>{
       stale.forEach(el=>el.remove());
       threadPatch(problemBox,model.problems,threadUserNode,false);
