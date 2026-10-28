@@ -1155,8 +1155,16 @@ always gets it, without the judge.
   `/etc/ansatze/console.env` (the operator's OpenRouter key; empty = off).
   `AGENT_MONITOR_EASY_ROUTE_MODEL` is the judge, by default
   `typesafe/jev-1.13`. `AGENT_MONITOR_EASY_ROUTE=0` switches it off.
-  `AGENT_MONITOR_EASY_ROUTE_URL` points it at another OpenRouter-compatible
-  endpoint (https, or this machine for tests).
+  `AGENT_MONITOR_EASY_ROUTE_URL` points it at another endpoint of the same
+  shape (https, or this machine for tests).
+- **The judge is a decision model.** Jev is served on OpenRouter's Decisions
+  API (`POST https://openrouter.ai/api/alpha/decisions`), not on
+  chat/completions (which refuses it with a 400). The request is one `choice`
+  question, `difficulty`, with the options `easy` and `hard` described, and
+  `state` holding the request (and, for a follow-up, the session's first
+  problem). A turn is easy when the answer's `choice` is `easy` with
+  `probabilities.easy` of at least 0.6. A rating takes about 0.1 to 0.3 s and
+  costs about $0.00002.
 - **The key is the server's alone.** Only `easy_route.judge` reads it. It is
   not `OPENROUTER_API_KEY`, which other features would pick up as a provider
   key. `subprocess_env` strips it, and the other judge settings, from every
