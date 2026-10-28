@@ -733,7 +733,7 @@ const $=id=>({'thread-problem':problems,'chat-msgs':msgs}[id]||null);
 const threadRun=()=>null, threadKind=()=>'prove', problemItems=()=>[], threadInView=()=>inView, threadSay=text=>said.push(text);
 const threadAnnounce=(added,note)=>{ if(note)said.push(note); };
 ${['THREAD_ROUTINE_LINES', 'THREAD_ROUTINE_REPLIES'].map(constant).join('\n')}
-${['threadModel', 'threadHash', 'threadRoutineLine', 'threadRequest', 'renderThread', 'threadChatBoxes', 'threadSplit', 'threadChatNodes'].map(fn).join('\n')}
+${['threadModel', 'threadHash', 'threadRoutineLine', 'threadRequest', 'renderThread', 'threadLayout', 'threadChatBoxes', 'threadSplit', 'threadChatNodes'].map(fn).join('\n')}
 const threadFollowNear=()=>{};
 ${NODES.map(fn).join('\n')}`, ctx)
   const step = code => vm.runInContext(code, ctx)
@@ -762,7 +762,7 @@ const problems=document.createElement('div'), msgs=document.createElement('div')
 const $=id=>({'thread-problem':problems,'chat-msgs':msgs,'chat-later':later}[id]||null);
 const threadRun=()=>null, threadKind=()=>'prove', problemItems=()=>[], threadInView=()=>true, threadAnnounce=()=>{};
 ${['THREAD_ROUTINE_LINES', 'THREAD_ROUTINE_REPLIES'].map(constant).join('\n')}
-${['threadModel', 'threadHash', 'threadRoutineLine', 'threadRequest', 'renderThread', 'threadError', 'threadChatBoxes', 'threadSplit', 'threadChatNodes'].map(fn).join('\n')}
+${['threadModel', 'threadHash', 'threadRoutineLine', 'threadRequest', 'renderThread', 'threadLayout', 'threadError', 'threadChatBoxes', 'threadSplit', 'threadChatNodes'].map(fn).join('\n')}
 const followed=[], threadFollowNear=()=>followed.push(1);
 ${NODES.map(fn).join('\n')}`, ctx)
   const step = code => vm.runInContext(code, ctx)
@@ -804,6 +804,97 @@ ${NODES.map(fn).join('\n')}`, ctx)
   // Without #chat-later (an older page), all of the chat stays in #chat-msgs, as before.
   assert.deepEqual(plain(step("threadSplit([{kind:'notice'},{kind:'user'},{kind:'reply'}]).map(part=>part.map(item=>item.kind))")), [['notice'], ['user', 'reply']])
   assert.deepEqual(plain(step("threadSplit([{kind:'notice'}]).map(part=>part.length)")), [1, 0])
+})
+
+test('one proof per turn: each earlier turn\'s proof is a card before the message sent after it; the live card follows the message that started the latest turn', () => {
+  const ctx = vm.createContext({ console })
+  vm.runInContext(`${['threadLayout', 'threadSplit'].map(fn).join('\n')}`, ctx)
+  const layout = (items, run, kind = 'prove') => plain(vm.runInContext(`threadLayout(${JSON.stringify(items)},${JSON.stringify(run)},${JSON.stringify(kind)})`, ctx))
+  const kinds = part => part.map(item => item.kind === 'turn' ? 'proof' + item.n : item.kind + ':' + (item.text || ''))
+  const it = (kind, s, text) => ({ key: kind + s, kind, ts: at(s), text })
+  const turn = (n, s, f, extra = {}) => ({ n, started_at: at(s), finished_at: f === null ? null : at(f), status: f === null ? 'running' : 'finished', file: '.proof_turns/' + n + '.md', chars: 100, ...extra })
+  const opening = [it('notice', 1, 'Read for the model')]
+  // One turn, running or ended: everything above the live card, no earlier card.
+  let l = layout(opening, { proof_turns: [turn(1, 0, null)] })
+  assert.deepEqual([kinds(l.above), kinds(l.below)], [['notice:Read for the model'], []])
+  // "keep trying!" sent after turn 1 ended starts turn 2: proof 1, the message, then the live card (proof 2).
+  const chat = [...opening, it('reply', 50, 'Closure complete.'), it('user', 70, 'keep trying!'), it('notice', 71, 'Applying 1 queued human message')]
+  l = layout(chat, { proof_turns: [turn(1, 0, 60), turn(2, 72, null)] })
+  assert.deepEqual(kinds(l.above), ['notice:Read for the model', 'reply:Closure complete.', 'proof1', 'user:keep trying!', 'notice:Applying 1 queued human message'])
+  assert.deepEqual(l.below, [])
+  // Sent while turn 1 still ran (queued): under the live card until its turn starts.
+  l = layout([...opening, it('user', 30, 'keep trying!'), it('notice', 31, 'Feedback queued')], { proof_turns: [turn(1, 0, null)] })
+  assert.deepEqual([kinds(l.above), kinds(l.below)], [['notice:Read for the model'], ['user:keep trying!', 'notice:Feedback queued']])
+  // ...and once it has: proof 1 goes before that message (not after it), the live card after it.
+  l = layout([...opening, it('user', 30, 'keep trying!'), it('notice', 31, 'Feedback queued'), it('reply', 59, 'done')], { proof_turns: [turn(1, 0, 60), turn(2, 61, null)] })
+  assert.deepEqual(kinds(l.above), ['notice:Read for the model', 'proof1', 'user:keep trying!', 'notice:Feedback queued', 'reply:done'])
+  // Three turns: user → proof → user → proof → user → live proof.
+  const three = [it('user', 70, 'again'), it('user', 140, 'once more')]
+  l = layout(three, { proof_turns: [turn(1, 0, 60), turn(2, 71, 130), turn(3, 141, 200)] })
+  assert.deepEqual(kinds(l.above), ['proof1', 'user:again', 'proof2', 'user:once more'])
+  // A turn that kept no proof (failed before writing one) has no card.
+  l = layout(three, { proof_turns: [turn(1, 0, 60, { file: '', status: 'failed' }), turn(2, 71, 130), turn(3, 141, null)] })
+  assert.deepEqual(kinds(l.above), ['user:again', 'proof2', 'user:once more'])
+  // A card keeps its turn's status and time.
+  assert.deepEqual([l.above[1].status, l.above[1].ts, l.above[1].file], ['finished', at(130), '.proof_turns/2.md'])
+  // No turns (an older run), or not a proof run: the chat splits at its first message, as before.
+  l = layout(chat, {})
+  assert.deepEqual([kinds(l.above), kinds(l.below)], [['notice:Read for the model', 'reply:Closure complete.'], ['user:keep trying!', 'notice:Applying 1 queued human message']])
+  l = layout(chat, { proof_turns: [turn(1, 0, 60), turn(2, 72, null)] }, 'analyze')
+  assert.deepEqual(kinds(l.below), ['user:keep trying!', 'notice:Applying 1 queued human message'])
+})
+
+test('while a later turn has not rewritten the proof yet, the live card says whose proof it shows', () => {
+  const ctx = vm.createContext({ console })
+  vm.runInContext(`let sandboxEditing=false; const note={textContent:'',hidden:true}; const $=id=>id==='proof-turn-note'?note:null; const threadRedraw=(how,draw)=>draw();
+${fn('threadTurnNote')}`, ctx)
+  const step = code => vm.runInContext(code, ctx)
+  const turns = [{ n: 1, started_at: at(0), finished_at: at(60) }, { n: 2, started_at: at(100), finished_at: null }]
+  const show = (run, kind = 'prove') => { step(`threadTurnNote(${JSON.stringify(run)},${JSON.stringify(kind)})`); return plain(step('[note.textContent,note.hidden]')) }
+  const mtime = s => (Date.parse(at(s)) / 1000)
+  assert.deepEqual(show({ proof_turns: turns, sandbox_preview: { mtime: mtime(50) } }), ["Turn 2 is working · showing turn 1's proof until it is rewritten", false])
+  // Rewritten in this turn, the turn ended, a first turn, no turns, an analysis, or the editor open: no note.
+  assert.deepEqual(show({ proof_turns: turns, sandbox_preview: { mtime: mtime(120) } }), ['', true])
+  assert.deepEqual(show({ proof_turns: turns, sandbox_preview: { mtime: mtime(50) } }), ["Turn 2 is working · showing turn 1's proof until it is rewritten", false])
+  assert.deepEqual(show({ proof_turns: [turns[0], { ...turns[1], finished_at: at(200) }], sandbox_preview: { mtime: mtime(50) } }), ['', true])
+  assert.deepEqual(show({ proof_turns: [{ n: 1, started_at: at(0), finished_at: null }], sandbox_preview: { mtime: mtime(-10) } }), ['', true])
+  assert.deepEqual(show({ sandbox_preview: { mtime: mtime(50) } }), ['', true])
+  assert.deepEqual(show({ proof_turns: turns, sandbox_preview: { mtime: mtime(50) } }, 'analyze'), ['', true])
+  assert.deepEqual(show({ proof_turns: turns, sandbox_preview: {} }), ['', true])
+  step('sandboxEditing=true')
+  assert.deepEqual(show({ proof_turns: turns, sandbox_preview: { mtime: mtime(50) } }), ['', true])
+})
+
+test('an earlier turn\'s card loads its proof once, typeset, with Show more and its own Download; one that cannot be read says so', async () => {
+  const ctx = vm.createContext({ console })
+  vm.runInContext(DOM + `
+const fetched=[]; let fail=false;
+const fetch=async url=>{ fetched.push(url); if(fail)return {ok:false,status:404}; return {ok:true,json:async()=>({content:'# Claim\\n'+'Line of the proof.\\n'.repeat(30)})}; };
+const mdToHtml=text=>'<p>'+text.length+'</p>', closureCitedLemmas=t=>t, normalizeProofMarkdown=t=>t, escapeHtml=t=>t;
+const URL={createObjectURL:()=>'blob:x',revokeObjectURL:()=>{}};
+${['threadTurnNode', 'threadTurnLoad', 'threadMoreButton'].map(fn).join('\n')}
+const threadTurnTexts=new Map();`, ctx)
+  const step = code => vm.runInContext(code, ctx)
+  const flush = () => new Promise(resolve => setTimeout(resolve, 0))
+  const item = { key: 'turn|2|.proof_turns/2.md|100', kind: 'turn', n: 2, ts: at(130), file: '.proof_turns/2.md', status: 'finished' }
+  step(`var box=document.createElement('div'); var node=threadTurnNode(${JSON.stringify(item)}); node.dataset.key=${JSON.stringify(item.key)}; box.append(node); node.isConnected=true;`)
+  assert.match(step('node.textContent'), /Proof.*turn 2/)
+  assert.equal(step("node.querySelector('turn-dl').disabled"), true)
+  await flush(); await flush()
+  assert.deepEqual(plain(step('fetched')), ['/api/workspace/p1/file?path=.proof_turns%2F2.md'])
+  assert.equal(step("node.querySelector('turn-doc').innerHTML"), '<div class="md-doc"><p>' + ('# Claim\n' + 'Line of the proof.\n'.repeat(30)).length + '</p></div>')
+  assert.equal(step("node.querySelector('turn-dl').disabled"), false)
+  assert.equal(step("node.querySelector('msg-more')?.textContent"), 'Show more')
+  assert.equal(step("node.querySelector('turn-doc').classList.contains('clamped')"), true)
+  // Drawn again (another poll): read from memory, not fetched again.
+  step(`var again=threadTurnNode(${JSON.stringify(item)}); box.append(again); again.isConnected=true;`)
+  await flush(); await flush()
+  assert.equal(step('fetched.length'), 1)
+  // A proof that cannot be read says so.
+  step(`fail=true; var bad=threadTurnNode(${JSON.stringify({ ...item, key: 'turn|3|.proof_turns/3.md|9', n: 3, file: '.proof_turns/3.md' })}); box.append(bad); bad.isConnected=true;`)
+  await flush(); await flush()
+  assert.match(step('bad.textContent'), /could not be loaded/)
+  assert.equal(step("bad.querySelector('turn-dl').disabled"), true)
 })
 
 test('an engine reply that is a chunk of its activity log is a collapsed "Engine log"; prose keeps its first line (J)', () => {
@@ -1023,6 +1114,7 @@ const analysisStageStates=()=>[], syncSandboxEditor=()=>{}, syncAnalysisSourceCo
 const analysisGraphCache=new Map([['a1',{}]]), ensureAnalysisGraph=()=>Promise.resolve(null), analysisProgressText=text=>text;
 const renderAnalysisReport=()=>calls.push('report'), showAnalysisSource=(run,how)=>calls.push('source '+how);
 const record={run_id:'a1',run_kind:'analyze',status:'finished',sandbox_preview:{kind:'analysis',has_report:true,text:'# Report',source_file:'analysis/source/paper.tex'}};
+const threadTurnTexts=new Map();
 ${['resetProofView', 'resetSandboxThread', 'applyAnalysisPreview'].map(fn).join('\n')}`, ctx)
   const step = code => vm.runInContext(code, ctx)
   // A click on the run shown empties the card but keeps the stored copy chosen...
@@ -1426,7 +1518,7 @@ const problems=document.createElement('div'), msgs=document.createElement('div')
 const $=id=>({'thread-problem':problems,'chat-msgs':msgs}[id]||null);
 const threadRun=()=>null, threadKind=()=>'prove', problemItems=()=>[], threadInView=()=>true, threadAnnounce=()=>{};
 ${['THREAD_ROUTINE_LINES', 'THREAD_ROUTINE_REPLIES'].map(constant).join('\n')}
-${['threadModel', 'threadHash', 'threadRoutineLine', 'threadRequest', 'renderThread', 'threadError', 'threadChatBoxes', 'threadSplit', 'threadChatNodes'].map(fn).join('\n')}
+${['threadModel', 'threadHash', 'threadRoutineLine', 'threadRequest', 'renderThread', 'threadLayout', 'threadError', 'threadChatBoxes', 'threadSplit', 'threadChatNodes'].map(fn).join('\n')}
 const followed=[], threadFollowNear=()=>followed.push(1);
 ${NODES.map(fn).join('\n')}`, ctx)
   const step = code => vm.runInContext(code, ctx)

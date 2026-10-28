@@ -2959,6 +2959,8 @@ def _execute_job(
         run_kind = "analyze"
     elif run_kind == "readability" or engine == _READABILITY_ENGINE:
         run_kind = "readability"
+    # A proof run's first turn: its proof is kept when it ends (proof_turns).
+    turn = _proof_turn_begin(run_id, ws) if run_kind == "prove" else None
     try:
         _execute_job_body(
             job_id=job_id, run_id=run_id, engine=engine, problem_id=problem_id,
@@ -2967,9 +2969,11 @@ def _execute_job(
             use_subagents=use_subagents, subagent_model=subagent_model,
             reasoning_effort=reasoning_effort, speed_mode=speed_mode,
             owner_id=owner_id, guest=guest, run_kind=run_kind,
-            started=started, ws=ws,
+            started=started, ws=ws, turn=turn,
         )
     finally:
+        # Ended already unless the body failed before its own end.
+        _proof_turn_end(run_id, ws, turn)
         # Done already unless the body failed before its own end.
         _end_worker(job_id)
         if run_kind in {"analyze", "readability"}:
@@ -3001,6 +3005,7 @@ def _execute_job_body(
     run_kind: str,
     started: float,
     ws: Path,
+    turn: int | None = None,
 ) -> None:
     # A manuscript run (Analyze, Readability) reads someone's manuscript with
     # a fixed prompt pack: no library, no DAG memory, no persona, no
@@ -3431,6 +3436,8 @@ def _execute_job_body(
         _write_run(fail)
         _update_job(job_id, status="failed", error=str(exc))
     finally:
+        # The turn ends before the feedback queued for the next one starts.
+        _proof_turn_end(run_id, ws, turn)
         # This worker is done with the run (runner, record, chat, prompt
         # file): what it starts now, or a Continue, never runs beside it.
         _end_worker(job_id)
@@ -6361,6 +6368,32 @@ def _track_worker(job_id: str, run_id: str, thread: Any) -> None:
             _WORKERS[job_id] = (run_id, thread)
 
 
+def _proof_turn_begin(run_id: str, ws: Path) -> int | None:
+    """A proof turn starting (proof_turns): never for a deleted run, whose
+    workspace must not come back."""
+    if _run_deleted(run_id):
+        return None
+    from agent_monitor import proof_turns
+
+    return proof_turns.begin(ws, started_at=_now())
+
+
+def _proof_turn_end(run_id: str, ws: Path, turn: int | None) -> None:
+    """A proof turn ending: its proof kept, with the status its record says
+    (once: a turn already ended is left as it is)."""
+    if not turn or _run_deleted(run_id):
+        return
+    try:
+        status = str(_load_run_record(run_id).get("status") or "finished")
+    except (FileNotFoundError, OSError, ValueError):
+        status = "finished"
+    if status not in {"finished", "failed", "stopped"}:
+        status = "finished"
+    from agent_monitor import proof_turns
+
+    proof_turns.end(ws, turn, status=status, finished_at=_now())
+
+
 def _end_worker(job_id: str) -> None:
     """The worker of ``job_id`` is done with its run: a continuation may start."""
     with _LOCK:
@@ -7767,6 +7800,14 @@ def _execute_continue(
         if attachment_context:
             continuation += "\n\n" + attachment_context
 
+    # Only a proof run's follow-ups are turns (an analysis or a readable
+    # version has no proof to keep).
+    turn = (
+        _proof_turn_begin(run_id, ws)
+        if engine not in {_ANALYZE_ENGINE, _READABILITY_ENGINE}
+        and str(run_data.get("run_kind") or "") not in {"analyze", "readability"}
+        else None
+    )
     run_data["status"] = "running"
     run_data["updated_at"] = _now()
     with _RUN_WRITE_LOCK:
@@ -7934,6 +7975,8 @@ def _execute_continue(
         _update_job(job_id, status="failed", error=str(exc))
         _append_chat(run_id, "assistant", f"I could not apply that feedback: {exc}")
     finally:
+        # The turn ends before the feedback queued for the next one starts.
+        _proof_turn_end(run_id, ws, turn)
         # This worker is done with the run (runner, record, chat, prompt
         # file): what it starts now, or a Continue, never runs beside it.
         _end_worker(job_id)

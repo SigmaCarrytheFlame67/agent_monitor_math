@@ -5272,6 +5272,10 @@ class Handler(RunSharingMixin, ProjectsMixin, ResearchMixin, BaseHTTPRequestHand
                 _refresh_analyze_block(data, ws)
                 _refresh_readability_block(data, ws)
                 data["sandbox_preview"] = _sandbox_preview(run_id, data)
+                # Each turn's proof, for one proof card per turn (proof_turns).
+                from agent_monitor import proof_turns
+
+                data["proof_turns"] = proof_turns.summary(ws)
                 if ws:
                     from agent_monitor import auto_pipeline, lean_verify, proof_bridge
 
