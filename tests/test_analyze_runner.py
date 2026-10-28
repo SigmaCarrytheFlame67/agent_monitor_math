@@ -155,10 +155,11 @@ def sponsored_env(server, **extra) -> dict[str, str]:
 
 
 def write_request(workspace: Path, *, text=PAPER, role="member", route="api_key", model="deepseek-test",
-                  sponsored=False, caps=None, focus="", source=None) -> dict:
+                  sponsored=False, caps=None, focus="", source=None, own_subscriptions=False) -> dict:
     workspace.mkdir(parents=True, exist_ok=True)
     request.write(workspace, source=source or {"kind": "paste", "text": text}, caps=caps or {}, focus=focus,
-                  formalize=False, role=role, route=route, model=model, reasoning_effort="default", sponsored=sponsored)
+                  formalize=False, role=role, route=route, model=model, reasoning_effort="default", sponsored=sponsored,
+                  own_subscriptions=own_subscriptions)
     return request.load(workspace)
 
 
@@ -486,17 +487,29 @@ def test_sigterm_stops_the_runner_with_143_and_publishes_what_settled(tmp_path, 
     ("env_extra", "req_extra", "message"),
     [
         ({"AGENT_MONITOR_CGM_ROUTE_MODE": "max"}, {}, "Max is not available"),
-        ({"AGENT_MONITOR_CODEX_SUBSCRIPTION": "1"}, {}, "administrators only"),
+        # A restricted member's request (no own_subscriptions), and a guest's run whatever its request says.
+        ({"AGENT_MONITOR_CODEX_SUBSCRIPTION": "1"}, {}, "administrators and full-access accounts only"),
+        ({"AGENT_MONITOR_CLAUDE_SUBSCRIPTION": "1", "AGENT_MONITOR_GUEST": "1"}, {"own_subscriptions": True},
+         "administrators and full-access accounts only"),
         ({}, {"route": "sponsored_kimi", "model": "kimi-k3", "sponsored": True}, "not configured"),
         ({"AGENT_MONITOR_SPONSORED_KIMI": "1", "KIMI_API_KEY": TOKEN, "KIMI_API_BASE": "https://evil.example/internal/v1",
           "AGENT_MONITOR_SELECTED_MODEL": "kimi-k3"},
          {"route": "sponsored_kimi", "model": "kimi-k3", "sponsored": True}, "attestation failed"),
         ({"AGENT_MONITOR_GUEST": "1"}, {"role": "guest"}, "Guest analyses use Kimi K3"),
         ({"AGENT_MONITOR_SELECTED_MODEL": "kimi-k3"}, {"model": "kimi-k3"}, "Add a Kimi API key"),
+        # Kimi K3 is Analyze's only Kimi model, on the account's own Kimi key too (a run, a
+        # re-check or a question: each attests its route here).
+        ({"AGENT_MONITOR_SELECTED_MODEL": "kimi-k2.5", "KIMI_API_KEY": "sk-own-kimi-123456789"}, {"model": "kimi-k2.5"},
+         r"^Analyze runs Kimi K3 as its only Kimi model \(kimi-k3\)$"),
+        ({"AGENT_MONITOR_SELECTED_MODEL": "kimi:kimi-k2.5", "KIMI_API_KEY": "sk-own-kimi-123456789"},
+         {"model": "kimi:kimi-k2.5"}, r"^Analyze runs Kimi K3 as its only Kimi model \(kimi-k3\)$"),
     ],
 )
-def test_configuration_errors_exit_before_any_call(tmp_path, provider, env_extra, req_extra, message):
+def test_configuration_errors_exit_before_any_call(tmp_path, monkeypatch, provider, env_extra, req_extra, message):
     server = provider(default_script())
+    # The operator's Kimi endpoint (an own Kimi key's) is the loopback provider here: a refusal that
+    # regressed would make its calls there, where the assertion below sees them, never to the gateway.
+    monkeypatch.setattr(kimi_k3, "DEFAULT_BASE_URL", f"http://127.0.0.1:{server.server_address[1]}/v1")
     fields = {"role": "member", "route": "api_key", "model": "deepseek-test", "sponsored": False, **req_extra}
     req = write_request(tmp_path, **fields)
     env = own_key_env(server)
@@ -506,6 +519,28 @@ def test_configuration_errors_exit_before_any_call(tmp_path, provider, env_extra
     with pytest.raises(runner.ConfigError, match=message):
         run(tmp_path, req, env)
     assert server.seen == []
+
+
+@pytest.mark.parametrize("linked", ["codex", "claude"])
+def test_a_linked_accounts_route_is_an_administrators_or_a_full_access_accounts_own(tmp_path, linked):
+    """jobs writes ``own_subscriptions`` for an administrator or an account
+    given full access (from the stored account); the runner takes a linked
+    account's route for such a request, a re-check and a question included
+    (they read the same request), and refuses it otherwise."""
+    env = base_env(**{f"AGENT_MONITOR_{linked.upper()}_SUBSCRIPTION": "1"},
+                   **({"CODEX_HOME": str(tmp_path / "codex"), "AGENT_MONITOR_CODEX_MODEL": "gpt-5.6-sol"} if linked == "codex"
+                      else {"CLAUDE_CONFIG_DIR": str(tmp_path / "claude"), "AGENT_MONITOR_CLAUDE_MODEL": "opus"}))
+    route = f"{linked}_subscription"
+    full = write_request(tmp_path / "full", route=route, model="", own_subscriptions=True)
+    info = runner.configure_route(dict(env), full)
+    assert (info.name, info.route.transport) == (route, "codex_exec" if linked == "codex" else "claude_code")
+    assert runner.configure_route(dict(env), write_request(tmp_path / "admin", role="admin", route=route, model="")).name == route
+    with pytest.raises(runner.ConfigError, match=runner.SUBSCRIPTIONS_REFUSAL):
+        runner.configure_route(dict(env), write_request(tmp_path / "member", route=route, model=""))
+    with pytest.raises(request.RequestError, match="gives a guest account subscriptions"):
+        write_request(tmp_path / "guest", role="guest", route=route, model="", own_subscriptions=True)
+    # Only true itself counts.
+    assert request.validate({**full, "own_subscriptions": "yes"})["own_subscriptions"] is False
 
 
 def test_main_reports_a_missing_request_with_exit_2(tmp_path, monkeypatch, capsys):

@@ -33,10 +33,15 @@ Environment contract (set by ``jobs.py`` exactly as for the ``kimi`` and
   (attested here), ``AGENT_MONITOR_MAX_OUTPUT_TOKENS=8192``;
 * own key: the provider key (``KIMI_API_KEY``, ``OPENAI_API_KEY``, ...) and
   ``AGENT_MONITOR_SELECTED_MODEL``; own-key Kimi uses the operator endpoint
-  ``AGENT_MONITOR_KIMI_BASE_URL`` (a user-settable ``KIMI_API_BASE`` is ignored);
-* admin subscriptions: ``AGENT_MONITOR_CODEX_SUBSCRIPTION=1`` + ``CODEX_HOME``
-  or ``AGENT_MONITOR_CLAUDE_SUBSCRIPTION=1`` + ``CLAUDE_CONFIG_DIR`` (tool-free,
-  response-only, one call in flight); Max mode is refused;
+  ``AGENT_MONITOR_KIMI_BASE_URL`` (a user-settable ``KIMI_API_BASE`` is ignored)
+  and Kimi K3 only (``api_backend.api_chat`` asks that endpoint for Kimi K3
+  whatever Kimi model is named);
+* linked subscriptions (an administrator's, or an account's given full
+  access: role ``admin`` or ``own_subscriptions`` in the request):
+  ``AGENT_MONITOR_CODEX_SUBSCRIPTION=1`` + ``CODEX_HOME`` or
+  ``AGENT_MONITOR_CLAUDE_SUBSCRIPTION=1`` + ``CLAUDE_CONFIG_DIR``, that
+  account's own login (tool-free, response-only, one call in flight); Max
+  mode is refused;
 * guests: ``AGENT_MONITOR_GUEST=1``; optional ``AGENT_MONITOR_ANALYZE_GITHUB_TOKEN``
   (sent only with the GitHub connector's own api.github.com calls, never with
   a link someone pasted) and the ``AGENT_MONITOR_ANALYZE_*`` caps.
@@ -200,11 +205,10 @@ class RouteRules:
     run: str = "analysis"  # "No model was selected for this analysis"
     runs: str = "analyses"  # "Guest analyses use Kimi K3"
     model_env: str = "AGENT_MONITOR_ANALYZE_MODEL"
-    # Own API keys: Kimi K3 only (no other provider's model).
-    kimi_only: bool = False
 
 
 ANALYZE_ROUTES = RouteRules()
+SUBSCRIPTIONS_REFUSAL = "Account subscriptions are available to administrators and full-access accounts only"
 
 
 def configure_route(env: dict[str, str], req: Mapping[str, Any], rules: RouteRules = ANALYZE_ROUTES) -> RouteInfo:
@@ -223,8 +227,12 @@ def configure_route(env: dict[str, str], req: Mapping[str, Any], rules: RouteRul
     if use_codex or use_claude:
         if use_codex and use_claude:
             raise ConfigError("Codex and Claude account routes cannot both be active")
-        if req["role"] != "admin" or guest:
-            raise ConfigError("Account subscriptions are available to administrators only")
+        # An administrator's linked account, or that of an account given full
+        # access (``own_subscriptions``, which jobs writes from the stored
+        # account): jobs puts that account's own login in the environment
+        # (CODEX_HOME, CLAUDE_CONFIG_DIR).  Never a guest's.
+        if guest or not (req["role"] == "admin" or req.get("own_subscriptions") is True):
+            raise ConfigError(SUBSCRIPTIONS_REFUSAL)
         try:
             route = harness._codex_route(env) if use_codex else harness._claude_route(env)
         except harness.MathHarnessError as exc:
@@ -240,12 +248,14 @@ def configure_route(env: dict[str, str], req: Mapping[str, Any], rules: RouteRul
     ).strip()
     if not model:
         raise ConfigError(f"No model was selected for this {rules.run}")
+    if kimi_k3.names_kimi_k3(model):
+        # Kimi K3 named in another case ("Kimi-K3": an older run's record) or
+        # with its provider prefix ("kimi:kimi-k3").
+        model = kimi_k3.MODEL_ID
     sponsored = str(env.get("AGENT_MONITOR_SPONSORED_KIMI") or "").strip() == "1"
     if req.get("sponsored") and not sponsored:
         raise ConfigError("The sponsored Kimi route is not configured for this run")
     kimi = model.lower().startswith("kimi")
-    if rules.kimi_only and model != kimi_k3.MODEL_ID:
-        raise ConfigError(f"{rules.runs.capitalize()} on an API key use Kimi K3")
     if sponsored:
         if not kimi or model != kimi_k3.MODEL_ID:
             raise ConfigError(f"Sponsored {rules.runs} use Kimi K3")
@@ -255,6 +265,11 @@ def configure_route(env: dict[str, str], req: Mapping[str, Any], rules: RouteRul
         if not str(env.get("KIMI_API_KEY") or "").strip():
             raise ConfigError("The sponsored Kimi credential is missing")
     elif kimi:
+        if model != kimi_k3.MODEL_ID:
+            # This runner's Kimi calls always ask for Kimi K3 (api_chat's
+            # kimi_k3.chat_payload): another Kimi model would run as Kimi K3
+            # under its own name.
+            raise ConfigError(f"{rules.mode} runs Kimi K3 as its only Kimi model ({kimi_k3.MODEL_ID})")
         if not str(env.get("KIMI_API_KEY") or "").strip():
             raise ConfigError("Add a Kimi API key in Settings")
         base = operator_base(env.get(operator_var()))

@@ -56,6 +56,35 @@ _SPONSORED_ENV_FLAGS = (
 DROPPED_OPENAI_PARAMS = ("output_config", "context_management")
 
 
+def names_kimi_k3(model: object) -> bool:
+    """Whether ``model`` names Kimi K3: ``kimi-k3`` in any case or spacing,
+    alone or after the ``kimi:`` provider prefix of a custom model
+    (``kimi:kimi-k3``, which the API runners resolve to Kimi K3 too)."""
+    name = str(model or "").strip().lower()
+    provider, colon, rest = name.partition(":")
+    if colon and provider.strip() == "kimi":
+        name = rest.strip()
+    return name == MODEL_ID
+
+
+def is_other_kimi_model(model: object) -> bool:
+    """Whether ``model`` names a Kimi model other than Kimi K3 (``kimi-k2.5``
+    or ``kimi:kimi-k2.5`` typed as a custom model).  :func:`chat_payload`
+    (every Kimi call of ``api_backend.api_chat``) and the sponsored service
+    ask for Kimi K3 whatever Kimi model is named, so a run whose Kimi calls
+    go there would be recorded, shown and billed under a name it never ran
+    on: the engines of ``engines_registry.KIMI_K3_ONLY_ENGINE_IDS`` refuse
+    one.  A coding-agent harness sends the name it is given to an account's
+    own Kimi endpoint."""
+    name = str(model or "").strip().lower()
+    return name.startswith("kimi") and not names_kimi_k3(name)
+
+
+# ``api_backend.api_chat``'s refusal of a Kimi call named for another Kimi
+# model (``chat_payload`` would ask for Kimi K3 under that name).
+OTHER_KIMI_CALL_ERROR = f"Kimi calls here ask for Kimi K3 whatever Kimi model is named; choose {MODEL_ID}"
+
+
 def reasoning_effort(env: Mapping[str, str] | None = None, value: str | None = None) -> str:
     requested = str(value or (env or {}).get(REASONING_VAR) or DEFAULT_REASONING_EFFORT).strip().lower()
     return requested if requested in ALLOWED_REASONING_EFFORTS else DEFAULT_REASONING_EFFORT

@@ -92,7 +92,7 @@ def _composer_source() -> str:
         for name in (
             "selectedAccountRuntime", "runtimeDisplayName", "engineRuntimeIssue",
             "engineModelMode", "modelsForEngine", "currentModel", "dagIsCgmEngine",
-            "cgmEngineUsable", "cgmModels", "cgmEngineFor", "renderModels",
+            "cgmEngineUsable", "cgmModels", "cgmEngineFor", "manuscriptSponsoredOnly", "renderModels",
             "cgmMaxAvailable", "isCgmMax", "cgmMaxSummary", "runAuthRoute",
         )
     )

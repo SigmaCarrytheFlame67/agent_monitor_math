@@ -11,10 +11,14 @@ told:
   openai/math links, a paste of at most 20,000 characters or the text-only
   guest uploads; members and administrators also generic HTTPS PDF/TeX
   links, longer pastes and PDF or archive uploads.
-* Routes: guests run on sponsored Kimi K3 only; members on sponsored Kimi K3
-  or their own Kimi key (Kimi K3 only: :func:`model_error`); administrators
-  also on a Codex or Claude Code account (response-only, tool-free).  Max is
-  refused.
+* Routes and models, exactly as for Analyze: guests run on sponsored Kimi K3
+  only (and so do members in public mode, whose "own" keys would be the
+  server's); members on sponsored Kimi K3 or any model of their own API keys;
+  administrators, and members given full access (the default), also on the
+  Codex or Claude Code account they linked themselves (response-only,
+  tool-free; the request's ``own_subscriptions``).  Max and Max (API) are
+  refused (``jobs.start_job``, and the runner), and so is another Kimi model
+  than Kimi K3 on every route (``analyze_runs.kimi_model_error``).
 * Sponsored capacity is Analyze's pool (``analyze_runs.GATE``): one pool for
   manuscript work, with refusals worded for Readability
   (:data:`GATE_MESSAGES`); a run holds the key ``<run id>`` and counts as a
@@ -59,24 +63,24 @@ GUEST_DISABLED_MESSAGE = "Readability needs a signed-in account on this site."
 GUEST_LINK_REFUSAL = "Guests can use arXiv and GitHub links; this file needs a member account."
 SOURCE_MISSING = "Paste a link or a manuscript, or upload files to make readable"
 ONE_SOURCE = "Make one source readable at a time: a link, pasted text or uploaded files"
-KIMI_ONLY_MESSAGE = "Readability runs Kimi K3 on an API key; choose Kimi K3 or an account route"
 GUEST_ASK_LIMIT_MESSAGE = "Guests can ask {limit} questions about a run; sign in to ask more"
 EDIT_REFUSAL = "A readability run has no editable proof; its readable version is generated from the manuscript"
 COMPILE_REFUSAL = "Readability runs are never compiled: their TeX is a third-party manuscript"
 CHECK_NOTE = "checked against the original by a model — not a certificate"
+# As Analyze's: the way around a full sponsored pool is any model of the
+# account's own API keys.
 GATE_MESSAGES = GateMessages(
-    off="Sponsored Readability is turned off on this site — use your own Kimi API key",
-    guest_off="Sponsored Readability is turned off on this site — sign in and use your own Kimi API key",
+    off="Sponsored Readability is turned off on this site — use your own API key",
+    guest_off="Sponsored Readability is turned off on this site — sign in and use your own API key",
     busy=("Sponsored Readability is busy ({active} manuscript runs are using it) — try again in a few minutes "
-          "or use your own Kimi API key"),
+          "or use your own API key"),
     guest_busy="Sponsored Readability is busy ({active} manuscript runs are using it) — try again in a few minutes",
     guest_share_busy=("Sponsored Readability for guests is busy ({active} running) — try again in a few minutes, "
                       "or sign in"),
-    daily="Sponsored Readability is at today's limit — try tomorrow or use your own Kimi API key",
-    guest_daily=("Sponsored Readability is at today's limit — try tomorrow, or sign in and use your own Kimi "
-                 "API key"),
+    daily="Sponsored Readability is at today's limit — try tomorrow or use your own API key",
+    guest_daily="Sponsored Readability is at today's limit — try tomorrow, or sign in and use your own API key",
     guest_share_daily=("Sponsored Readability for guests is at today's limit — try tomorrow, or sign in and use "
-                       "your own Kimi API key"),
+                       "your own API key"),
     held="This run already holds a sponsored slot",
 )
 # A question holds a slot of the same pool while it is answered, but counts
@@ -138,16 +142,6 @@ def availability_error(user: Mapping[str, Any] | None) -> AnalyzeRequestError | 
         error = account_policy.member_engine_error(dict(user or {}), ENGINE_ID)
         if error:
             return AnalyzeRequestError(error, status=403)
-    return None
-
-
-def model_error(model: str | None, route: str | None) -> str | None:
-    """Why ``model`` may not run on ``route`` (an API key runs Kimi K3 only)."""
-    selected = str(model or "").strip()
-    if str(route or "api_key") in ("codex_subscription", "claude_subscription"):
-        return None
-    if selected and selected != KIMI_MODEL:
-        return KIMI_ONLY_MESSAGE
     return None
 
 
@@ -242,8 +236,13 @@ def viewer_policy(user: Mapping[str, Any] | None, *, guest_runs_per_hour: int = 
         "routes": (["sponsored_kimi"] if sponsored_only
                    else ["sponsored_kimi", "api_key"] if account_policy.is_restricted(dict(user or {}))
                    else ["sponsored_kimi", "api_key", "codex_subscription", "claude_subscription"]),
-        # On an API key (own or sponsored) Readability runs Kimi K3 only.
-        "api_models": [KIMI_MODEL],
+        # The API models this viewer may name, as for Analyze: Kimi K3 alone
+        # where the sponsored route is the only one (guests, members in public
+        # mode), and the console's menu then offers just that; otherwise
+        # ``None``, no list of its own: any model of the account's own API keys
+        # (Settings' ``api_models``, with Kimi K3 where it is sponsored).  A
+        # linked account runs its own models.
+        "api_models": [KIMI_MODEL] if sponsored_only else None,
         "sponsored": analyze_runs.GATE.snapshot(guest=role == "guest"),
         "caps": {
             "sponsored": _caps_view(sponsored_caps),

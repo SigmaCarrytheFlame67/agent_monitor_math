@@ -27,10 +27,17 @@ model's judgement, never a certificate.
 
 The calls reuse the CGM response-only turn machinery of
 ``math_harness_runner`` and the routes of ``analyze_runner`` (which also
-provides the ingest and the sandboxed segmentation), except that an API key
-runs Kimi K3 only: sponsored Kimi K3 through the loopback broker, an own Kimi
-key on the operator's endpoint, or an administrator's Codex or Claude Code
-account (response-only, tool-free, one call in flight); Max is refused.
+provides the ingest and the sandboxed segmentation), exactly as Analyze uses
+them: sponsored Kimi K3 through the loopback broker (guests: only that), any
+model of the account's own API keys (an own Kimi key on the operator's
+endpoint; an OpenAI or Anthropic model at the effort, output limit and call
+timeout ``api_backend`` gives it, except that a part's rewrite and its repair
+get the long output limit and call time of :data:`LONG_OUTPUT_TOKENS`), or
+the Codex or Claude Code account an administrator, or an account given full
+access, linked itself (response-only, tool-free, one call in flight); Max
+and Max (API) are refused.  Only a Kimi route sends a per-stage effort (and
+retries an empty reply at low effort); the bounded sizes and the short
+low-effort guide are for guest and sponsored routes, whatever the model.
 Nothing from the manuscript is compiled or executed.
 
 The plan keeps one check for every part it rewrites: parts beyond the run's
@@ -78,13 +85,14 @@ from agent_monitor.readability import paper_map, parse, prompts, references, rep
 from agent_monitor.readability import request as readability_request
 from agent_monitor.readability import structure as readability_structure
 from agent_monitor.runners import analyze_runner as runner
+from agent_monitor.runners import api_backend
 from agent_monitor.runners import math_harness_runner as harness
 from agent_monitor.runners.analyze_runner import AnalyzeError, ConfigError, Stopped
 
 STAGES = {"scaffold": "1 Ingest", "work": "2 Guide", "verify": "3 Rewrite", "curate": "4 Check", "finalize": "5 Publish"}
 LABEL = "Readability"
 ROUTES = runner.RouteRules(mode="Readability", run="readability run", runs="readability runs",
-                           model_env="AGENT_MONITOR_READABILITY_MODEL", kimi_only=True)
+                           model_env="AGENT_MONITOR_READABILITY_MODEL")
 RECEIPT_SCHEMA = "ansatze-readability-receipt-v1"
 CHECK_SCHEMA = "ansatze-readability-check-v1"
 GUIDE_SCHEMA = "ansatze-readability-guide-v1"
@@ -98,6 +106,25 @@ ASK_SECONDS = 900
 REWRITE_CLAUDE_TIMEOUT = "1200"
 _CLAUDE_TIMEOUT_ENV = ("AGENT_MONITOR_MATH_HARNESS_CLAUDE_REWRITE_TIMEOUT",
                        "AGENT_MONITOR_MATH_HARNESS_CLAUDE_TIMEOUT", "AGENT_MONITOR_CLAUDE_TIMEOUT")
+# A part's rewrite and its repair (and their format reminders) are the run's
+# long replies: up to prompts.PART_CHARS of source written out again for the
+# audience, with the model's reasoning or thinking counted against the
+# output limit.  On an own key an Anthropic model, or an OpenAI model of
+# GPT-5 or later that is not a chat model (each writes at least this many
+# tokens), gets the output limit Max (API) uses for those calls and the
+# time to write it (api_backend.HIGH_EFFORT_TIMEOUT, held to the run's
+# deadline).  Only Readability's own settings set these two limits exactly:
+# REWRITE_MAX_TOKENS_ENV and AGENT_MONITOR_READABILITY_API_TIMEOUT (which
+# also sets every other Readability call's timeout).  The settings of every
+# API call, AGENT_MONITOR_API_MAX_TOKENS and AGENT_MONITOR_CGM_API_TIMEOUT,
+# may only raise them: at their documented defaults (16,384 tokens, 300 s)
+# they would otherwise bring back the cut-off rewrites.  Every other call,
+# and guest, sponsored, Kimi and linked-account routes, keep their own
+# limits.
+LONG_OUTPUT_TOKENS = 64_000
+LONG_OUTPUT_STAGES = ("rewrite", "repair")
+REWRITE_MAX_TOKENS_ENV = "AGENT_MONITOR_READABILITY_REWRITE_MAX_TOKENS"
+_OPENAI_GENERATION_RE = re.compile(r"gpt-(\d+)")
 _LOCK_BUSY = "Another readability step is running for this run; try again when it finishes"
 # A retried call's stage ("rewrite-2-retry", "guide-low") and the stage it retries.
 _RETRY_SUFFIX_RE = re.compile(r"(?:-retry)?(?:-low)?$")
@@ -122,6 +149,51 @@ def _text_file(path: Path, limit: int = 8 * 1024 * 1024) -> str:
             return handle.read(limit).decode("utf-8", "replace")
     except OSError:
         return ""
+
+
+def _long_limit(env: Mapping[str, str], *, own: str, general: str, default: int, minimum: int,
+                maximum: int) -> int:
+    """One limit of a long call: Readability's own setting ``own`` exactly,
+    else the setting of every API call ``general`` only where it is higher
+    than ``default``, else ``default``; held to ``minimum``..``maximum``."""
+    if str(env.get(own) or "").strip():
+        return harness._bounded_int(env, (own,), default=default, minimum=minimum, maximum=maximum)
+    return max(default, harness._bounded_int(env, (general,), default=default, minimum=minimum, maximum=maximum))
+
+
+def long_call_limits(info: runner.RouteInfo, env: Mapping[str, str], *,
+                     timeout_env: str = "AGENT_MONITOR_READABILITY_API_TIMEOUT") -> tuple[int, int] | None:
+    """``(max_tokens, timeout)`` of a rewrite or repair call on the run's
+    route (see :data:`LONG_OUTPUT_TOKENS`), or ``None`` where those calls
+    keep the defaults: a guest or sponsored run, a Kimi or linked-account
+    route, or a model whose output limit may be smaller.  Set exactly by
+    :data:`REWRITE_MAX_TOKENS_ENV` and ``timeout_env``; only raised by
+    ``AGENT_MONITOR_API_MAX_TOKENS`` and ``AGENT_MONITOR_CGM_API_TIMEOUT``."""
+    route = info.route
+    if info.bounded or route.transport != "api_chat" or harness._is_kimi_route(route):
+        return None
+    from agent_monitor.proof_graph import _resolve_llm_provider
+
+    try:
+        provider, _base, _key, chosen = _resolve_llm_provider(dict(env), route.model)
+    except (TypeError, ValueError):
+        return None
+    name = str(chosen or "").lower()
+    if provider == "anthropic":
+        long_output = name.startswith("claude-")
+    elif provider == "openai":
+        # A chat model (chat-latest, gpt-5-chat-latest) writes at most 16,384 tokens.
+        generation = _OPENAI_GENERATION_RE.match(name)
+        long_output = generation is not None and int(generation.group(1)) >= 5 and "chat" not in name
+    else:
+        long_output = False
+    if not long_output:
+        return None
+    tokens = _long_limit(env, own=REWRITE_MAX_TOKENS_ENV, general="AGENT_MONITOR_API_MAX_TOKENS",
+                         default=LONG_OUTPUT_TOKENS, minimum=1024, maximum=128_000)
+    seconds = _long_limit(env, own=timeout_env, general="AGENT_MONITOR_CGM_API_TIMEOUT",
+                          default=api_backend.HIGH_EFFORT_TIMEOUT, minimum=60, maximum=3600)
+    return tokens, seconds
 
 
 @dataclass
@@ -214,6 +286,9 @@ class ReadabilityRun(runner.ManuscriptRun):
         if not any(str(env.get(name) or "").strip() for name in _CLAUDE_TIMEOUT_ENV):
             env[_CLAUDE_TIMEOUT_ENV[0]] = REWRITE_CLAUDE_TIMEOUT
         super().__init__(workspace, req, env=env, **kwargs)
+        long_limits = long_call_limits(self.info, self.env, timeout_env=self.API_TIMEOUT_ENV)
+        if long_limits is not None:
+            self.ctx.stage_call_limits = dict.fromkeys(LONG_OUTPUT_STAGES, long_limits)
         bounded = self.info.bounded
         self.part_chars = prompts.BOUNDED_PART_CHARS if bounded else prompts.PART_CHARS
         self.guide_bytes = prompts.BOUNDED_GUIDE_BYTES if bounded else prompts.GUIDE_BYTES
@@ -435,11 +510,21 @@ class ReadabilityRun(runner.ManuscriptRun):
             call.error = self._stop_reason()
             return
         call.failed = True
-        if isinstance(error, ParseError):
+        limit = harness.cut_off_limit(error)
+        if limit:
+            # The provider said the reply stopped at its output limit (a
+            # partial reply, or reasoning that used it all): say so.
+            call.error = f"the reply reached the model's output limit ({limit:,} tokens) before it finished"
+        elif isinstance(error, ParseError):
             call.error = f"the model's reply could not be read ({error})"[:400]
         elif isinstance(error, harness.PromptBoundError):
             call.error = "the part is too long for one model call"
+        elif isinstance(error, harness.EmptyReplyError) and harness._is_refusal(error):
+            # The model declined the call (an Anthropic refusal): say so, and why.
+            call.error = self._failure_reason(error)[0]
         elif isinstance(error, harness.EmptyReplyError):
+            # No text at all (Kimi's reasoning can use the whole output
+            # budget); only a Kimi route retries at low effort.
             low = ", even at low effort" if harness._is_kimi_route(self.info.route) else ""
             call.error = f"the model returned an empty answer{low}"
         elif isinstance(error, harness.ProviderCallError):
@@ -547,6 +632,10 @@ class ReadabilityRun(runner.ManuscriptRun):
         rechecks = []
         for call in repairs:
             if call.result is None:
+                if call.error:
+                    reason = f"the repair failed: {call.error}" if call.failed else call.error
+                    self.note(f"Repair · {_name(call.outcome.part)} · not repaired, the first rewrite is kept"
+                              f" — {reason}"[:600])
                 continue
             call.outcome.markdown, call.outcome.missing = call.result["markdown"], list(call.result["missing"])
             recheck = self.check_call(call.outcome, document=document, total=total, math_fidelity=math_fidelity,

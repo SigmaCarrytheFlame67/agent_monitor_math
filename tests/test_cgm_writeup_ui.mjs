@@ -218,10 +218,10 @@ const CONSOLE_FUNCTIONS = [
   'isReadabilityRun', 'syncSandboxEditor', 'beginSandboxEdit', 'saveSandboxProof', 'finishSandboxEdit', 'applySandboxPreview', 'runWriteup',
   'writeupBody', 'proofDocShown', 'showProofDocFile', 'syncProofDocSwitch', 'chooseProofDoc', 'writeupBannerHtml', 'closureCitedLemmas',
   'renderMarkdownIntoView', 'showProofMd', 'refreshProofPreview',
-  // Make readable, and the Readability policy it follows.
+  // Make readable, and the Readability policy and model choice it follows.
   'makeReadableSource', 'syncMakeReadable', 'makeReadable', 'dagIsCgmEngine', 'readabilityEngineEntry', 'readabilityPolicy',
   'readabilityOffered', 'viewerIsAdmin', 'viewerIsGuest', 'readabilitySponsoredOnly', 'readabilityRouteSponsored', 'engineModelMode',
-  'selectedAccountRuntime',
+  'selectedAccountRuntime', 'readabilityModelChoice', 'modelsForEngine',
 ]
 // The proof toolbar and the Sandbox body (with its proof.md editor) exactly as the page has them.
 const TOOLBAR = consoleHtml.slice(consoleHtml.indexOf('<div class="proof-toolbar">'), consoleHtml.indexOf('<div class="prompt-strip'))
@@ -248,6 +248,8 @@ function consolePage() {
     'function setProofEmpty(){} function renderCitations(){} function resizeSandboxEditor(){} function showProofPdf(){}',
     // No Readability on this page until a test lists it; leaving the run is recorded.
     "let ENGINES=[], SETTINGS=null, CURRENT_USER={id:1}, GUEST_POLICY=null, jobId='j1';",
+    // The model the composer has chosen (Kimi K3 unless a test picks another).
+    "let composerModel='kimi-k3'; function currentModel(){ return composerModel; }",
     // The composer's attached files (none until a test attaches some).
     "const initialAttachments={files:[],clear(){ calls.left.push('attachments cleared'); this.files=[]; }};",
     "function stopPolling(){ calls.left.push('stop polling'); } function goLanding(){ calls.left.push('composer'); } function chooseMode(mode){ calls.left.push('mode '+mode); }",
@@ -761,12 +763,16 @@ const readabilityEngine = ({ entry = {}, policy = {} } = {}) => ({
   id: 'readability', modes: ['readability'], available: true, auth_modes: ['api_key'], ...entry,
   readability: { enabled: true, routes: ['sponsored_kimi', 'api_key'], sources: { paste_chars: 400000 }, sponsored: { available: true, remaining_today: 12 }, ...policy },
 })
-// /api/settings of a member on the API route without a Kimi key of their own: their Kimi K3 runs are sponsored.
-const KEYLESS = { account_runtime: 'api', sponsored_kimi_available: true, kimi_user_key_set: false }
-function readablePage({ engine = readabilityEngine(), user = { id: 4 }, guestPolicy = null, settings = KEYLESS } = {}) {
+// /api/settings of a member on the API route without a Kimi key of their own: their Kimi K3 runs are
+// sponsored (the service reads manuscripts on it), and Kimi K3 is their only API model.
+const KEYLESS = { account_runtime: 'api', sponsored_kimi_available: true, kimi_user_key_set: false, api_models: ['kimi-k3'],
+  sponsored_kimi_engines: ['kimi', 'plain', 'math_harness'], default_model: 'kimi-k3', configured_providers: [] }
+// The same member with an OpenAI key of their own.
+const OWN_OPENAI = { ...KEYLESS, api_models: ['kimi-k3', 'gpt-6-astra'], configured_providers: ['openai'] }
+function readablePage({ engine = readabilityEngine(), user = { id: 4 }, guestPolicy = null, settings = KEYLESS, model = 'kimi-k3' } = {}) {
   const page = consolePage()
   page.context.ENGINE_FOR_TEST = [engine]
-  page.run(`ENGINES=ENGINE_FOR_TEST; SETTINGS=${JSON.stringify(settings)}; CURRENT_USER=${JSON.stringify(user)}; GUEST_POLICY=${JSON.stringify(guestPolicy)};`)
+  page.run(`ENGINES=ENGINE_FOR_TEST; SETTINGS=${JSON.stringify(settings)}; CURRENT_USER=${JSON.stringify(user)}; GUEST_POLICY=${JSON.stringify(guestPolicy)}; composerModel=${JSON.stringify(model)};`)
   page.button = () => page.$('make-readable-btn')
   page.note = () => page.$('make-readable-note').textContent
   return page
@@ -864,8 +870,13 @@ test('Make readable is offered only for a finished CGM run, as the Readability p
   // A member without a Kimi key of their own runs on sponsored Kimi K3 too (as the composer reckons it).
   assert.equal(shown({ engine: atLimit() }), false)
   assert.equal(shown({ engine: readabilityEngine({ policy: { sponsored: { available: false } } }) }), false)
-  // With their own key, or on an administrator's Codex account, the run is not a sponsored one.
+  // With their own key, another provider's model of their keys, or on an administrator's Codex
+  // account, the run is not a sponsored one.
   assert.equal(shown({ engine: atLimit(), settings: { ...KEYLESS, kimi_user_key_set: true } }), true)
+  assert.equal(shown({ engine: atLimit(), settings: OWN_OPENAI, model: 'gpt-6-astra' }), true)
+  // A guest (or a member on sponsored Kimi K3 only) reads on it whatever the composer shows.
+  assert.equal(shown({ ...guest, engine: atLimit(), model: 'gpt-6-astra' }), false)
+  assert.equal(shown({ engine: atLimit({ routes: ['sponsored_kimi'] }), model: 'gpt-6-astra' }), false)
   const routes = ['sponsored_kimi', 'api_key', 'codex_subscription', 'claude_subscription']
   assert.equal(shown({ engine: { ...atLimit({ routes }), auth_modes: ['codex_subscription', 'claude_subscription', 'api_key'] },
     user: { id: 1, is_admin: true }, settings: { account_runtime: 'codex', codex_connected: true } }), true)
@@ -877,4 +888,22 @@ test('Make readable is offered only for a finished CGM run, as the Readability p
   assert.equal(page.button().hidden, false)
   page.context.beginSandboxEdit()
   assert.equal(page.button().hidden, true)
+})
+
+test('at the sponsored limit Make readable follows the model Readability would select, not the Prove composer\'s', () => {
+  const shown = setup => {
+    const page = readablePage({ engine: readabilityEngine({ policy: { sponsored: { available: true, remaining_today: 0 } } }), ...setup })
+    page.context.applySandboxPreview(cgmRun(writeupBlock('accepted')))
+    return !page.button().hidden
+  }
+  // The Prove composer's model, where Readability offers it: a model of the member's own keys runs.
+  assert.equal(shown({ settings: OWN_OPENAI, model: 'gpt-6-astra' }), true)
+  assert.equal(shown({ settings: OWN_OPENAI, model: 'kimi-k3' }), false)
+  // A model Readability does not offer (Max, or one of keys the member lacks): Readability selects
+  // its default, Kimi K3 here, which runs on the sponsored pool, at today's limit.
+  assert.equal(shown({ model: 'max' }), false)
+  assert.equal(shown({ model: 'gpt-6-astra' }), false)
+  // And the other way: where Readability does not read on sponsored Kimi K3, it selects the
+  // member's own model, which does not need the pool.
+  assert.equal(shown({ settings: { ...OWN_OPENAI, sponsored_kimi_engines: ['kimi', 'plain'] }, model: 'kimi-k3' }), true)
 })

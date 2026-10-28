@@ -20,8 +20,8 @@ analysis then runs on sponsored Kimi K3 only (see
 
 Ansatz Readability (``readability``) follows the same rules with its own
 switch (``AGENT_MONITOR_READABILITY_ENABLED``) and command override
-(``READABILITY_CMD``), and runs Kimi K3 only: sponsored, or on the member's
-own Kimi key.
+(``READABILITY_CMD``): sponsored Kimi K3 or any model of the member's own
+keys, and in public mode sponsored Kimi K3 only.
 
 An administrator can give a member **full access** (Admin → Accounts; the
 ``full_access`` column).  Such an account is not *restricted*
@@ -242,11 +242,16 @@ def _engine_refusal(engine: str) -> tuple[str, str]:
 
 # In public mode a member's "own key" would be the server's (see above).
 ANALYZE_SPONSORED_ONLY_NOTE = "Members analyze on the included Kimi K3 on this site"
-READABILITY_KIMI_NOTE = "Readability runs on Kimi K3 for members: the included one or your own Kimi key"
+READABILITY_SPONSORED_ONLY_NOTE = "Members use Readability on the included Kimi K3 on this site"
+_SPONSORED_ONLY_NOTES = {
+    ANALYZE_ENGINE: ANALYZE_SPONSORED_ONLY_NOTE,
+    READABILITY_ENGINE: READABILITY_SPONSORED_ONLY_NOTE,
+}
 
 
 def member_analyze_sponsored_only(user: dict[str, Any] | None) -> bool:
-    """Whether ``user``'s analyses must use the sponsored Kimi K3 route.
+    """Whether ``user``'s analyses (and readability runs) must use the
+    sponsored Kimi K3 route.
 
     Public mode gives every account the server's provider keys
     (``settings.resolved_user_env``), so a member's own-key analysis would
@@ -275,31 +280,31 @@ def member_run_model(
 ) -> str | None:
     """The model a member's ``engine`` run uses when the request names none.
 
-    A blank Plain, Ansatz CGM or Analyze request (the Projects page's
-    "Default account model") means the default model the console offers: the
-    member's saved default, or, when the member's keys (or the sponsored Kimi
-    K3 service) cannot run that, the first model of the account's API keys
-    they can run.  Only a model the engine accepts, and never Max.  When
-    nothing else runs, a saved default the engine accepts stays, so the
-    refusal names the key it needs (a new account's default is Kimi K3).
+    A blank Plain, Ansatz CGM, Analyze or Readability request (the Projects
+    page's "Default account model") means the default model the console
+    offers: the member's saved default, or, when the member's keys (or the
+    sponsored Kimi K3 service) cannot run that, the first model of the
+    account's API keys they can run.  Only a model the engine accepts, and
+    never Max.  A saved Kimi model other than Kimi K3 stands for Kimi K3:
+    these engines run Kimi K3 alone, asking for it whatever Kimi model is
+    named (``kimi_k3.is_other_kimi_model``).  When nothing else runs, a
+    saved default the engine accepts stays, so the refusal names the key it
+    needs (a new account's default is Kimi K3).
     """
-    if engine == READABILITY_ENGINE and is_restricted(user) and not str(model or "").strip():
-        # Readability runs Kimi K3 only (the included one or the member's own key).
-        from agent_monitor.kimi_k3 import MODEL_ID
-
-        return MODEL_ID
     if (
         str(model or "").strip()
         or not is_restricted(user)
-        or engine not in {*dict(_OWN_KEY_CHOICES), ANALYZE_ENGINE}
+        or engine not in {*dict(_OWN_KEY_CHOICES), ANALYZE_ENGINE, READABILITY_ENGINE}
     ):
         return model
-    from agent_monitor import cgm_max
+    from agent_monitor import cgm_max, kimi_k3
     from agent_monitor.jobs import _api_keys_run, _sponsored_broker_serves
     from agent_monitor.settings import get_settings, resolved_user_env
 
     env = resolved_user_env(user)
     saved = str(env.get("AGENT_MONITOR_MODEL") or "").strip()
+    if kimi_k3.is_other_kimi_model(saved):
+        saved = kimi_k3.MODEL_ID
 
     def accepted(candidate: str) -> bool:
         return (
@@ -307,6 +312,7 @@ def member_run_model(
             and not cgm_max.is_max_model(candidate)
             and not cgm_max.is_max_api_model(candidate)
             and not member_model_error(user, engine, candidate)
+            and not kimi_k3.is_other_kimi_model(candidate)
         )
 
     for candidate in (saved, *get_settings(user)["api_models"]):
@@ -325,6 +331,10 @@ def member_model_error(
     The ``kimi`` engine runs only Kimi K3.  An own-key engine needs a model
     from the member's own API keys: not Kimi K3, which the sponsored ``kimi``
     engine serves, and not Max, which uses the administrator's subscriptions.
+    In public mode a member's Analyze and Readability run Kimi K3 alone,
+    however a request names it (``Kimi-K3``, ``kimi:kimi-k3``: the start
+    records it as ``kimi-k3``), so the console's check of a request's raw
+    model and ``jobs.start_job``'s agree.
     """
     if not is_member(user):
         return None
@@ -335,17 +345,11 @@ def member_model_error(
         if selected and selected != MODEL_ID:
             return f"Ansatz CGM · Kimi K3 runs only {MODEL_ID}"
         return None
-    if engine == ANALYZE_ENGINE and member_analyze_sponsored_only(user):
-        from agent_monitor.kimi_k3 import MODEL_ID
+    if engine in _SPONSORED_ONLY_NOTES and member_analyze_sponsored_only(user):
+        from agent_monitor.kimi_k3 import names_kimi_k3
 
-        if selected and selected != MODEL_ID:
-            return ANALYZE_SPONSORED_ONLY_NOTE
-        return None
-    if engine == READABILITY_ENGINE and is_restricted(user):
-        from agent_monitor.kimi_k3 import MODEL_ID
-
-        if selected and selected != MODEL_ID:
-            return READABILITY_KIMI_NOTE
+        if selected and not names_kimi_k3(selected):
+            return _SPONSORED_ONLY_NOTES[engine]
         return None
     if engine not in OWN_KEY_ENGINES:
         return None

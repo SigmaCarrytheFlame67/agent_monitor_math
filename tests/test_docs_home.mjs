@@ -346,6 +346,36 @@ test('guide video: the real recording, 16:10 with a square mobile cut, chapters 
     'guide-still.png', 'guide-still.webp', 'guide.json', 'guide.mp4', 'guide.webm'])
 })
 
+test('Quickstart says who may link Claude Code and Codex: accounts with full access, each its own', () => {
+  // Full access is the default: such an account links its own Claude Code and Codex in Settings and uses them
+  // for runs, Analyze and Readability; the administrator's own accounts are never shared.
+  const accounts = quickstart.slice(quickstart.indexOf('{#guests-and-accounts}'), quickstart.indexOf('{#proving-engines}'))
+  assert.match(accounts, /Accounts with full access \(the default[^)]*\) can link their own Claude Code and Codex accounts in \*\*Settings\*\* and use them for runs, Analyze and Readability/)
+  assert.match(accounts, /Accounts without full access use their own API keys/)
+  assert.match(accounts, /The site administrator’s own Claude Code and Codex accounts are never shared/)
+  // Full access never includes Hermes (account_policy.OPERATOR_ONLY_ENGINES), which runs inside the console.
+  assert.match(accounts, /Hermes, which runs inside the console with the server’s own keys, stays the site administrator’s\./)
+  assert.match(quickstart, /\| \*\*Hermes\*\* \| [^|\n]*for the site administrator only: it runs inside the console with the server’s own keys\. \|/)
+  for (const page of [quickstart, home]) {
+    assert.doesNotMatch(page, /subscription[^.]*(?:is )?only for the site administrator|only the site administrator can use them/)
+    assert.doesNotMatch(page, /the site administrator can also (?:run it on|use) a linked/i)
+  }
+})
+
+test('the sign-in page tells guests what the Quickstart does about Claude Code and Codex', () => {
+  // The guest note under "Continue as guest": a signed-in account with full access links its own
+  // Claude Code and Codex (as the Quickstart says), and Hermes stays the administrator's.
+  const login = readFileSync(new URL('../agent_monitor/web/login.html', import.meta.url), 'utf8')
+  const note = login.match(/<p class="guest-note" id="guest-note">([^<]*)<\/p>/)
+  assert.ok(note, 'the guest note')
+  assert.match(note[1], / Signed-in accounts with full access can link their own Claude Code and Codex; Hermes stays the site administrator&#39;s\. /)
+  assert.doesNotMatch(note[1], /Claude Code and Codex are (?:only )?for the site administrator/)
+  // So does the operators' guide, where it describes guest access.
+  const operations = readFileSync(new URL('../OPERATIONS.md', import.meta.url), 'utf8').replace(/\s+/g, ' ')
+  assert.match(operations, /A sign-up is a member account: one with full access \(the default; the administrator can turn it off for an account\) can link its own Claude Code and Codex, one without it cannot, and the administrator's own accounts are never shared\./)
+  assert.doesNotMatch(operations, /Claude Code and Codex are for the administrator only/)
+})
+
 test('Quickstart merges the guide and the worked example', () => {
   for (const anchor of ['{#example}', '{#example-proof}', '{#example-facts}', '{#example-explore}', '{#example-lean}', '{#how-a-cgm-run-works}', '{#proving-engines}'])
     assert.ok(quickstart.includes(anchor), anchor)

@@ -44,7 +44,7 @@ import HomeProblemCollections from './.vitepress/theme/HomeProblemCollections.vu
     <article><span>02</span><div><h3>Two graphs for each CGM run</h3><p><strong>Facts</strong> shows the lemmas the verifier accepted and what each one depends on. <strong>Explore</strong> shows the search itself: plans, attempts, verdicts, obstacles, and dead ends.</p></div></article>
     <article><span>03</span><div><h3>A formal Lean stage</h3><p>Formalize the result in Lean 4, then compile, check, and audit the statement. A model verifier’s acceptance is never presented as a Lean certificate.</p></div></article>
     <article><span>04</span><div><h3>Continue, don’t restart</h3><p>Signed-in accounts can add feedback to an existing run and continue from its workspace instead of rebuilding context.</p></div></article>
-    <article><span>05</span><div><h3>Compare approaches</h3><p>Run the same CGM pipeline on your own API key (the site administrator can also use a linked Codex or Claude Code subscription), or try other proving engines with a common view of progress and cost.</p></div></article>
+    <article><span>05</span><div><h3>Compare approaches</h3><p>Run the same CGM pipeline on your own API key (accounts with full access can also use the Codex or Claude Code subscription they linked), or try other proving engines with a common view of progress and cost.</p></div></article>
     <article><span>06</span><div><h3>Preserve useful work</h3><p>Keep proofs, graphs, Lean sources, and research memory attached to the run that produced them.</p></div></article>
   </div>
 </section>

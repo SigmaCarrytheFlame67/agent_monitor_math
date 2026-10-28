@@ -2948,14 +2948,22 @@ function modelsForEngine(selected=ENGINES.find(x=>x.id===engine)){
   let models=mode==='codex_subscription'?[...(SETTINGS?.codex_models||[])]:mode==='claude_subscription'?[...(SETTINGS?.claude_models||[])]:mode==='api_key'?[...(SETTINGS?.api_models||[])]:[];
   if(CURRENT_USER?.guest&&mode==='api_key'&&!models.length)models=[...(SETTINGS?.model_presets||[]),SETTINGS?.default_model].filter(Boolean);
   if(selected?.id==='kimi')return mode==='api_key'?[GUEST_POLICY?.default_model||'kimi-k3']:[];
-  // Guests analyze on sponsored Kimi K3 only.
-  if(selected?.id==='analyze'&&CURRENT_USER?.guest)return mode==='api_key'?[GUEST_POLICY?.default_model||'kimi-k3']:[];
-  // Readability on an API route runs Kimi K3 only (sponsored, or the account's own Kimi key).
-  if(selected?.id==='readability'&&mode==='api_key')return [GUEST_POLICY?.default_model||'kimi-k3'];
+  // Guests analyze, and make readable, on sponsored Kimi K3 only. Otherwise
+  // Readability offers the models Analyze does, unless the mode's policy names
+  // the only ones the server runs for this viewer (Kimi K3 in public mode,
+  // whatever the account runtime: the start goes on the API route).
+  const manuscript=selected?.id==='analyze'||selected?.id==='readability';
+  if(manuscript&&CURRENT_USER?.guest)return mode==='api_key'?[GUEST_POLICY?.default_model||'kimi-k3']:[];
+  const policyModels=manuscript?selected[selected.id]?.api_models:null;
+  if(Array.isArray(policyModels))return policyModels.filter(Boolean).map(String);
+  // Kimi K3 is the only Kimi model (kimi-k3, or kimi:kimi-k3) of Analyze, Readability and the engines
+  // that ask for Kimi K3 whatever Kimi model is named (the listing's kimi_k3_only); a coding-agent
+  // harness sends the model as named to the account's own Kimi key.
+  if(manuscript||selected?.kimi_k3_only)models=models.filter(model=>{const name=String(model).trim().toLowerCase();return !name.startsWith('kimi')||name.replace(/^kimi\s*:\s*/,'')==='kimi-k3';});
   if(mode==='codex_subscription')models=models.filter(model=>!/(?:^|[:/])chat-latest$/i.test(model));
   const sponsoredEngines=SETTINGS?.sponsored_kimi_engines||['kimi','plain'];
   // Ansatz Analyze reaches sponsored Kimi K3 through the CGM transport.
-  const sponsoredId=selected?.id==='analyze'||selected?.id==='readability'?'math_harness':selected?.id;
+  const sponsoredId=manuscript?'math_harness':selected?.id;
   if(mode==='api_key'&&!sponsoredEngines.includes(sponsoredId)&&SETTINGS?.sponsored_kimi_available&&!SETTINGS?.kimi_user_key_set)models=models.filter(model=>!String(model).toLowerCase().includes('kimi'));
   // A member's CGM harness bills only its own keys; Kimi K3 runs on `kimi`.
   if(selected?.own_key_only)models=models.filter(model=>!/^kimi-/i.test(String(model)));
@@ -2963,14 +2971,19 @@ function modelsForEngine(selected=ENGINES.find(x=>x.id===engine)){
   if((mode==='codex_subscription'||mode==='claude_subscription')&&supported.length)models=models.filter(model=>supported.includes(model));
   return [...new Set(models.filter(Boolean))];
 }
+// Guests, and members of a site in public mode, read manuscripts on sponsored
+// Kimi K3 only: their Analyze and Readability starts name no model (the server
+// runs Kimi K3), so the launcher offers them no custom model either.
+function manuscriptSponsoredOnly(id){ return id==='analyze'?analyzeSponsoredOnly():id==='readability'?readabilitySponsoredOnly():false; }
 function renderModels(){
-  const sel=$('model-select'), selected=ENGINES.find(x=>x.id===engine), mode=engineModelMode(selected);
+  // A viewer on sponsored Kimi K3 only reads manuscripts on the API route, whatever the account runtime.
+  const sel=$('model-select'), selected=ENGINES.find(x=>x.id===engine), mode=manuscriptSponsoredOnly(selected?.id)?'api_key':engineModelMode(selected);
   // Only an account that may link a subscription chooses Codex here.
   const choiceLabel=$('model-choice-label'); if(SETTINGS&&choiceLabel)choiceLabel.textContent=SETTINGS.subscription_policy?.codex==='available'?'Model / Codex':'Model';
   const supported=selected?.supported_models||[], restricted=(mode==='codex_subscription'||mode==='claude_subscription')&&supported.length>0;
   // Ansatz CGM offers the models of both of its engines (see cgmEngineFor).
   const cgm=dagIsCgmEngine(engine), harness=cgm&&cgmEngineUsable('math_harness');
-  const models=cgm?cgmModels():modelsForEngine(), allowCustom=(cgm?harness&&engineModelMode(ENGINES.find(x=>x.id==='math_harness'))==='api_key':selected?.id!=='kimi'&&selected?.id!=='readability'&&mode==='api_key')&&(SETTINGS?.configured_providers||[]).length>0;
+  const models=cgm?cgmModels():modelsForEngine(), allowCustom=(cgm?harness&&engineModelMode(ENGINES.find(x=>x.id==='math_harness'))==='api_key':selected?.id!=='kimi'&&mode==='api_key'&&!manuscriptSponsoredOnly(selected?.id))&&(SETTINGS?.configured_providers||[]).length>0;
   // Where Ansatz CGM can only use Kimi K3, models from the account's own keys
   // appear under another harness; say so instead of silently hiding them.
   const otherApiModels=selected?.id==='kimi'&&mode==='api_key'&&!harness?(SETTINGS?.api_models||[]).filter(model=>!String(model).toLowerCase().includes('kimi')):[];
@@ -3001,7 +3014,7 @@ function renderModels(){
     ?`<div class="model-custom-row"><span>${LIB_ESC(selected.model_note||'This Codex adapter has a restricted model list.')}</span></div>`
     :allowCustom
       ?`<div class="model-custom-row"><input id="model-custom-entry" value="${sel.value==='__custom__'?LIB_ESC($('model-custom').value):''}" placeholder="provider:model · or OpenRouter vendor/model"/><button type="button" id="model-custom-use">Use</button></div>`
-      :`<div class="model-custom-row"><span>${mode==='unavailable'&&cgm&&models.includes(CGM_MAX_API_MODEL)?`Only ${CGM_MAX_API_LABEL} runs while the selected runtime is unavailable: it uses the Anthropic and OpenAI API keys.`:mode==='unavailable'?'This engine needs a compatible account connection.':otherApiModels.length?`On this account Ansatz CGM runs on Kimi K3 only. To use ${LIB_ESC(otherApiModels[0])} or another model from your API keys, switch the harness (for example to Plain).`:selected?.id==='readability'&&mode==='api_key'?'On API routes Readability runs on Kimi K3: sponsored, or your own Kimi key.':models.length?'Your selection applies to new runs.':'Configure an API provider in Settings to see its models.'}</span></div>`;
+      :`<div class="model-custom-row"><span>${mode==='unavailable'&&cgm&&models.includes(CGM_MAX_API_MODEL)?`Only ${CGM_MAX_API_LABEL} runs while the selected runtime is unavailable: it uses the Anthropic and OpenAI API keys.`:mode==='unavailable'?'This engine needs a compatible account connection.':otherApiModels.length?`On this account Ansatz CGM runs on Kimi K3 only. To use ${LIB_ESC(otherApiModels[0])} or another model from your API keys, switch the harness (for example to Plain).`:models.length?'Your selection applies to new runs.':'Configure an API provider in Settings to see its models.'}</span></div>`;
   renderChoiceMenu('model-menu','Choose model',models.map(model=>{
     const v=modelVisual(model);
     const max=model===CGM_MAX_MODEL&&cgm, maxApi=model===CGM_MAX_API_MODEL&&cgm;
@@ -3042,6 +3055,8 @@ function runRuntimeSummary(){
   const account=runtime==='claude'?'your Claude Code subscription':runtime==='codex'?'your Codex (ChatGPT) subscription':'';
   const spare=[['codex','Codex'],['claude','Claude Code']].filter(([id])=>id!==runtime&&SETTINGS[id+'_connected']).map(([,label])=>label);
   const spareText=spare.length?` ${spare.join(' and ')} ${spare.length===1?'is':'are'} connected but not in use.`:'';
+  // A viewer on sponsored Kimi K3 only (a member in public mode) reads manuscripts on it, whatever the account runtime.
+  if((engine==='analyze'||engine==='readability')&&manuscriptSponsoredOnly(engine))return {warn:false,lead:'Runs on',strong:'Kimi K3 (included)',spare:spareText};
   if(issue)return {warn:true,text:withMaxApiHint(issue),spare:spareText};
   if(runtime==='api'){
     const model=currentModel(), included=String(model).toLowerCase().includes('kimi')&&(SETTINGS.sponsored_kimi_available||GUEST_POLICY?.hosted_guest_available)&&!SETTINGS.kimi_user_key_set;
@@ -7104,14 +7119,15 @@ document.querySelectorAll('#proof-doc-switch [role="radio"]').forEach(button=>{
    readable version in the composer; nothing runs until that is started. It is
    offered as the server's Readability policy allows this viewer, while the
    viewer's guest runs and, for a run that would go to sponsored Kimi K3 (as
-   the composer reckons it: a guest's, or a member's without a Kimi key of
-   their own), today's sponsored runs leave room for one. */
+   the composer reckons it for the model Readability would select: always a
+   guest's, else Kimi K3 without a Kimi key of the account's own), today's
+   sponsored runs leave room for one. */
 function makeReadableSource(run){
   if(!run||run.run_id!==runId||!dagIsCgmEngine(run.engine)||run.status!=='finished'||!run.sandbox_preview?.has_proof_md||sandboxEditing)return null;
   const entry=readabilityEngineEntry(), daily=readabilityPolicy()?.sponsored;
   if(!readabilityOffered()||!entry.available||entry.requires_login||readabilityPolicy().enabled===false)return null;
   if(viewerIsGuest()&&Number(GUEST_POLICY?.runs_remaining)<=0)return null;
-  if(readabilityRouteSponsored()&&daily&&(daily.available===false||Number(daily.remaining_today)<=0))return null;
+  if(readabilityRouteSponsored(readabilityModelChoice())&&daily&&(daily.available===false||Number(daily.remaining_today)<=0))return null;
   const writeup=proofDocShown(run)==='writeup'?runWriteup(run):null, text=writeup?writeup.text:sandboxText;
   return text.trim()?{text,name:writeup?'written proof':'proof.md'}:null;
 }
@@ -9740,7 +9756,7 @@ async function startAnalyzeRun(){
   }
   const sponsoredOnly=analyzeSponsoredOnly();
   if(!sponsoredOnly){ const issue=engineRuntimeIssue(entry); if(issue)return fail(issue); }
-  // Sponsored-only viewers name no model: the server runs Kimi K3.
+  // Sponsored-only viewers name no model, and no linked account's route: the server runs Kimi K3.
   const model=sponsoredOnly?'':currentModel();
   if(!model&&!sponsoredOnly)return fail(selectedAccountRuntime()==='api'?'Configure and verify an API provider in Settings, then choose a model.':runtimeDisplayName()+' has no available model for Analyze.');
   // A refused start (limits, validation) starts nothing: the pill goes back.
@@ -9749,7 +9765,7 @@ async function startAnalyzeRun(){
   initialAttachments.lock(true);
   try{
     const tuning=currentRunTuning(), focus=$('analyze-focus').value.trim();
-    const request={run_kind:'analyze',engine:'analyze',model:model||null,auth_route:runAuthRoute(),
+    const request={run_kind:'analyze',engine:'analyze',model:model||null,auth_route:sponsoredOnly?'api_key':runAuthRoute(),
       reasoning_effort:tuning.reasoning_effort,speed_mode:tuning.speed_mode,formalize:$('analyze-formalize').checked===true};
     if(focus)request.analyze={focus};
     if(source.kind==='url')request.source={url:source.url};
@@ -9777,24 +9793,37 @@ async function startAnalyzeRun(){
 
 /* ── Readability: composer ──
    A readable version reads its manuscript through the Analyze source box and
-   runs on Kimi K3 (sponsored or the account's own key) or, for the operator,
-   on a connected Codex or Claude Code account. */
+   runs on the models Analyze does: sponsored Kimi K3, a model of the account's
+   own API keys, or a connected Codex or Claude Code account. */
 function readabilitySponsoredOnly(){
   const routes=readabilityPolicy()?.routes;
   return viewerIsGuest()||(Array.isArray(routes)&&routes.length===1&&routes[0]==='sponsored_kimi');
 }
 // Where the manuscript goes: the routes the server lists for this viewer
-// (guests reach sponsored Kimi K3 only; subscriptions are the operator's).
+// (guests reach sponsored Kimi K3 only; a linked account is an
+// administrator's, or one given full access, its own).
 function readabilityProviderText(){
   const routes=readabilityPolicy()?.routes, listed=Array.isArray(routes)?routes:[];
   const accounts=[['codex_subscription','Codex'],['claude_subscription','Claude Code']].filter(([route])=>listed.includes(route)).map(([,name])=>name);
-  const places=[listed.includes('sponsored_kimi')?'sponsored Kimi K3':'',listed.includes('api_key')?'your own Kimi key':'',accounts.length?'a connected '+accounts.join(' or ')+' account':''].filter(Boolean);
+  const places=[listed.includes('sponsored_kimi')?'sponsored Kimi K3':'',listed.includes('api_key')?'your own API key':'',accounts.length?'a connected '+accounts.join(' or ')+' account':''].filter(Boolean);
   const where=places.length>2?places.slice(0,-1).join(', ')+', or '+places.at(-1):places.join(' or ');
   return 'Readability sends the manuscript text to the selected model provider'+(where?' — '+where:'')+". Don't submit work you aren't allowed to share.";
 }
-function readabilityRouteSponsored(){
+// As for an analysis: Kimi K3 on the API route without a Kimi key of the
+// account's own (for the composer's model, or the one given).
+function readabilityRouteSponsored(model=currentModel()){
   if(readabilitySponsoredOnly())return true;
-  return engineModelMode(readabilityEngineEntry())==='api_key'&&!!SETTINGS?.sponsored_kimi_available&&!SETTINGS?.kimi_user_key_set;
+  return engineModelMode(readabilityEngineEntry())==='api_key'&&String(model||'').toLowerCase().includes('kimi')&&!!SETTINGS?.sponsored_kimi_available&&!SETTINGS?.kimi_user_key_set;
+}
+// The model a readable version would run on if the composer switched to
+// Readability now (Make readable, from a Prove run's Sandbox), as renderModels
+// picks it: the current choice where Readability offers it (a custom one
+// where Readability takes one), else the default model, else its first.
+function readabilityModelChoice(){
+  const entry=readabilityEngineEntry(), models=modelsForEngine(entry), current=currentModel();
+  const custom=$('model-select')?.value==='__custom__'&&engineModelMode(entry)==='api_key'&&!readabilitySponsoredOnly()&&(SETTINGS?.configured_providers||[]).length>0;
+  if(current&&(models.includes(current)||custom))return current;
+  return models.includes(SETTINGS?.default_model)?SETTINGS.default_model:(models[0]||'');
 }
 function readabilityAudience(){
   const value=$('readability-audience')?.value;
@@ -9827,8 +9856,8 @@ function renderReadabilityCaps(){
   // Analyze and Readability share the site's daily sponsored manuscript runs.
   const daily=policy.sponsored;
   if(sponsored&&daily){
-    if(daily.available===false)lines.push(guest?'Sponsored Readability is turned off on this site — sign in and use your own Kimi key.':'Sponsored Readability is turned off on this site — use your own Kimi key.');
-    else if(Number(daily.remaining_today)<=0)lines.push(guest?"Sponsored manuscript runs are at today's limit — try tomorrow, or sign in and use your own Kimi key.":"Sponsored manuscript runs are at today's limit — try tomorrow or use your own Kimi key.");
+    if(daily.available===false)lines.push(guest?'Sponsored Readability is turned off on this site — sign in and use your own API key.':'Sponsored Readability is turned off on this site — use your own API key.');
+    else if(Number(daily.remaining_today)<=0)lines.push(guest?"Sponsored manuscript runs are at today's limit — try tomorrow, or sign in and use your own API key.":"Sponsored manuscript runs are at today's limit — try tomorrow or use your own API key.");
     else if(Number(daily.remaining_today)<=5)lines.push(`${Number(daily.remaining_today)} sponsored manuscript ${Number(daily.remaining_today)===1?'run':'runs'} left today on this site.`);
   }
   lines.forEach(line=>box.append(analyzeEl('span','',line)));
@@ -9855,7 +9884,7 @@ async function startReadabilityRun(){
   }
   const sponsoredOnly=readabilitySponsoredOnly();
   if(!sponsoredOnly){ const issue=engineRuntimeIssue(entry); if(issue)return fail(issue); }
-  // Sponsored-only viewers name no model: the server runs Kimi K3.
+  // Sponsored-only viewers name no model, and no linked account's route: the server runs Kimi K3.
   const model=sponsoredOnly?'':currentModel();
   if(!model&&!sponsoredOnly)return fail(selectedAccountRuntime()==='api'?'Configure and verify an API provider in Settings, then choose a model.':runtimeDisplayName()+' has no available model for Readability.');
   const pill=$('live-pill'), pillBefore={cls:pill.className,text:pill.textContent};
@@ -9863,7 +9892,7 @@ async function startReadabilityRun(){
   initialAttachments.lock(true);
   try{
     const tuning=currentRunTuning(), focus=$('readability-focus').value.trim();
-    const request={run_kind:'readability',engine:'readability',model:model||null,auth_route:runAuthRoute(),
+    const request={run_kind:'readability',engine:'readability',model:model||null,auth_route:sponsoredOnly?'api_key':runAuthRoute(),
       reasoning_effort:tuning.reasoning_effort,speed_mode:tuning.speed_mode,readability:{audience:readabilityAudience()}};
     if(focus)request.readability.focus=focus;
     if(source.kind==='url')request.source={url:source.url};

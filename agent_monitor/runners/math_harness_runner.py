@@ -344,7 +344,11 @@ class ProviderCallError(MathHarnessError):
 
 
 class EmptyReplyError(ProviderCallError):
-    """The provider returned no visible text, even after the allowed retry."""
+    """The provider returned no visible text, even after the allowed retry.
+    ``cut_off_at``: the output limit (tokens) the last reply reached, when its
+    provider said it stopped there (its reasoning used it all), else None."""
+
+    cut_off_at: int | None = None
 
 
 class PromptBoundError(MathHarnessError):
@@ -381,6 +385,9 @@ class Reply:
     provider: str
     model: str
     observed_model: str | None = None
+    # The output limit (tokens) the reply reached before it finished, as an
+    # API provider said it (``api_backend.APIResult.cut_off_at``); else None.
+    cut_off_at: int | None = None
 
 
 @dataclass(frozen=True)
@@ -1070,6 +1077,12 @@ class _Ctx:
     # call grammar, such as the write-up's writer) also use ``worker_route``.
     worker_stage_families: frozenset[str] = frozenset()
     api_timeout: int = 300
+    # API calls of these stage families (``_stage_base``: "rewrite" covers
+    # "rewrite-3-retry") get ``(max_tokens, timeout)`` of their own instead
+    # of the call's default output limit and ``api_timeout``; a route's own
+    # output ceiling (Max (API)) still wins.  Empty for CGM runs; Readability
+    # sets it for its long rewrites on an own key.
+    stage_call_limits: Mapping[str, tuple[int, int]] = field(default_factory=dict)
     concurrency: int = 1
     cancel: Any = field(default_factory=_StopRequest)  # never a threading.Event (see _StopRequest)
     emitter: _RunEmitter = field(default_factory=_RunEmitter)
@@ -1463,12 +1476,17 @@ def _api_call(
     refused unprocessed is sent again after a deterministic pause (see
     ``_next_strategist_wait``); it stays one call record, since nothing was
     processed or billed.  A route's own output ceiling (Max (API)) is sent
-    explicitly."""
+    explicitly, and so is a stage's own (``_Ctx.stage_call_limits``), which
+    also brings its own timeout, still held to the run's deadline."""
     extra: dict[str, Any] = (
         {"retry_allowance": ctx.kimi_retries} if ctx.kimi_retries is not None else {}
     )
+    stage_limits = ctx.stage_call_limits.get(_stage_base(stage))
     if route.max_tokens is not None:
         extra["max_tokens"] = route.max_tokens
+    elif stage_limits is not None:
+        extra["max_tokens"] = stage_limits[0]
+    seconds = stage_limits[1] if stage_limits is not None else ctx.api_timeout
     while True:
         try:
             return api_chat(
@@ -1476,7 +1494,7 @@ def _api_call(
                 user,
                 model=route.model,
                 # Rounded up: a call's own limit never ends before the deadline.
-                timeout=math.ceil(_deadline_timeout(ctx, ctx.api_timeout)),
+                timeout=math.ceil(_deadline_timeout(ctx, seconds)),
                 effort=effort,
                 env=env,
                 **extra,
@@ -1774,6 +1792,7 @@ def _provider_call(
         provider=provider,
         model=model,
         observed_model=observed_model,
+        cut_off_at=_limit_reached(result) if route.transport == "api_chat" else None,
     )
     if not ctx.finish_call(
         turn,
@@ -1910,15 +1929,19 @@ def _invoke(
     # A declined call's error stays the cause of the EmptyReplyError, so
     # callers can say the model declined (and why).
     refusal: BaseException | None = None
+    # The output limit the last empty reply reached, as its provider said.
+    cut_off_at: int | None = None
     try:
         reply = _provider_call(ctx, turn, stage=stage, system=system, user=user, effort=effort)
         if reply.text:
             return reply
+        cut_off_at = reply.cut_off_at
     except ProviderCallError as exc:
         if not _is_empty_reply_error(exc):
             raise
         empty_detail = str(exc)
         refusal = exc.__cause__ if _is_refusal(exc) else None
+        cut_off_at = _limit_reached(exc.__cause__)
     # Kimi's reasoning tokens count against max_tokens and can starve the
     # visible answer; retry exactly once at low effort when budget allows.
     if kimi and effort != "low" and ctx.turn_can_call(turn):
@@ -1931,12 +1954,34 @@ def _invoke(
                 return reply
             empty_detail = f"{retry_stage} returned an empty response"
             refusal = None
+            cut_off_at = reply.cut_off_at
         except ProviderCallError as exc:
             if not _is_empty_reply_error(exc):
                 raise
             empty_detail = str(exc)
             refusal = exc.__cause__ if _is_refusal(exc) else None
-    raise EmptyReplyError(empty_detail) from refusal
+            cut_off_at = _limit_reached(exc.__cause__)
+    error = EmptyReplyError(empty_detail)
+    error.cut_off_at = cut_off_at
+    raise error from refusal
+
+
+def _limit_reached(source: object) -> int | None:
+    """The output limit a reply (``APIResult``) or a failed call's error
+    (``APIBackendError``) says the reply reached before it finished, else
+    None."""
+    value = getattr(source, "cut_off_at", None)
+    return value if isinstance(value, int) and not isinstance(value, bool) and value > 0 else None
+
+
+def cut_off_limit(error: BaseException) -> int | None:
+    """The output limit, in tokens, that the reply behind a failed stage
+    reached before it finished, as its provider said (a ``ParseError`` of
+    :func:`_call_and_parse` for a reply that stopped there, or an
+    :class:`EmptyReplyError` whose last reply did), else None."""
+    if isinstance(error, (ParseError, EmptyReplyError)):
+        return _limit_reached(error)
+    return None
 
 
 def _is_refusal(exc: BaseException) -> bool:
@@ -2040,12 +2085,12 @@ def _call_and_parse(
     except ParseError as exc:
         first_error = str(exc)
     if not ctx.turn_can_call(turn):
-        raise ParseError(first_error)
+        raise _unread(ParseError(first_error), reply)
     reminder = cgm_prompts.FORMAT_REMINDER.format(reason=first_error[:300])
     retry_user = f"{user}\n\n<FORMAT_REMINDER>\n{reminder}\n</FORMAT_REMINDER>"
     if _utf8_size(retry_user) > MAX_MODEL_PROMPT_BYTES:
         # The reminder would push the prompt past its bound; no retry.
-        raise ParseError(first_error)
+        raise _unread(ParseError(first_error), reply)
     if resend_reply and reply.text:
         excerpt = _clip_utf8(reply.text, _PREVIOUS_REPLY_BYTES)
         candidate_user = (
@@ -2060,7 +2105,20 @@ def _call_and_parse(
     retry = _invoke(
         ctx, turn, stage=f"{stage}-retry", system=system, user=retry_user, effort=effort
     )
-    return _parse_reply(retry, limit=limit, parse=parse), retry
+    try:
+        return _parse_reply(retry, limit=limit, parse=parse), retry
+    except ParseError as exc:
+        _unread(exc, retry)
+        raise
+
+
+def _unread(error: ParseError, reply: Reply) -> ParseError:
+    """``error``, for a reply a stage could not read, keeping as its
+    ``cut_off_at`` the output limit the reply's provider said it stopped at
+    (``Reply.cut_off_at``; see :func:`cut_off_limit`)."""
+    if reply.cut_off_at:
+        error.cut_off_at = reply.cut_off_at  # type: ignore[attr-defined]
+    return error
 
 
 # ---------------------------------------------------------------------------

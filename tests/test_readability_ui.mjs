@@ -292,7 +292,7 @@ const runKindChanged=()=>{ syncEngineForRunKind(); applyRunKindComposer(); };`,
     sub: 'Paste or link a paper or proof — get a readable version that keeps every statement, a paper map, a notation table, and answers to your questions.',
     placeholder: 'Paste a proof or paper, or a link (arXiv, GitHub, openai/math, PDF/TeX)…', label: 'Paper or proof, link or text', start: 'Make readable',
     composer: true, analyzeOptions: false, analyzeProvider: false, readabilityOptions: true, readabilityProvider: true,
-    provider: "Readability sends the manuscript text to the selected model provider — sponsored Kimi K3 or your own Kimi key. Don't submit work you aren't allowed to share.",
+    provider: "Readability sends the manuscript text to the selected model provider — sponsored Kimi K3 or your own API key. Don't submit work you aren't allowed to share.",
     body: ['readability-mode'], calls: ['limits', 'readability caps', 'source'],
   })
   // From Readability to Analyze the engine chosen for proofs is kept (never "readability").
@@ -305,23 +305,205 @@ const runKindChanged=()=>{ syncEngineForRunKind(); applyRunKindComposer(); };`,
   assert.deepEqual([out.prove.engine, out.prove.kind, out.prove.start, out.prove.composer, out.prove.verb, out.prove.body], ['kimi', 'prove', 'Prove', false, 'prove', []])
 })
 
-test('models: Readability offers Kimi K3 on an API route and the subscription\'s own models otherwise; no custom model', () => {
+test('models: Readability offers exactly the models Analyze offers, for each viewer and route', () => {
   const models = run(['modelsForEngine', 'engineModelMode', 'selectedAccountRuntime'], [],
     `let ENGINES=[], engine='readability', SETTINGS=null, CURRENT_USER={id:4}, GUEST_POLICY=null;`,
-    `(runtime,settings,guest)=>{ SETTINGS={account_runtime:runtime,codex_connected:true,claude_connected:true,api_models:['kimi-k3','gpt-5','deepseek-v4'],
-      codex_models:['gpt-5.6-sol','chat-latest'],claude_models:['sonnet','opus'],...settings};
+    `(id,runtime,settings,guest,policy,listing)=>{ SETTINGS={account_runtime:runtime,codex_connected:true,claude_connected:true,
+      api_models:['kimi-k3','gpt-6-astra','claude-opus-5-5','deepseek-v4'],codex_models:['gpt-5.6-sol','chat-latest'],claude_models:['sonnet','opus'],...settings};
       CURRENT_USER=guest?{guest:true}:{id:4}; GUEST_POLICY=guest?{default_model:'kimi-k3'}:null;
-      return modelsForEngine({id:'readability',modes:['readability'],auth_modes:['codex_subscription','claude_subscription','api_key']}); }`)
-  assert.deepEqual(models('api', {}), ['kimi-k3'])
-  assert.deepEqual(models('api', {}, true), ['kimi-k3'])
-  assert.deepEqual(models('codex', {}), ['gpt-5.6-sol'])
-  assert.deepEqual(models('claude', {}), ['sonnet', 'opus'])
+      return modelsForEngine({id,modes:[id],auth_modes:['codex_subscription','claude_subscription','api_key'],...(policy?{[id]:policy}:{}),...listing}); }`)
+  // Each list is Analyze's for the same viewer and route.
+  const offered = (...args) => {
+    const readable = models('readability', ...args)
+    assert.deepEqual(readable, models('analyze', ...args))
+    return readable
+  }
+  // An account on its API keys: every model of them (OpenAI, Anthropic, ...), Kimi K3 included.
+  assert.deepEqual(offered('api', {}), ['kimi-k3', 'gpt-6-astra', 'claude-opus-5-5', 'deepseek-v4'])
+  // Kimi K3 without a key of the account's own: only where the sponsored service reads manuscripts.
+  assert.deepEqual(offered('api', { sponsored_kimi_available: true, sponsored_kimi_engines: ['kimi', 'plain'] }),
+    ['gpt-6-astra', 'claude-opus-5-5', 'deepseek-v4'])
+  assert.deepEqual(offered('api', { sponsored_kimi_available: true, sponsored_kimi_engines: ['kimi', 'plain', 'math_harness'] }),
+    ['kimi-k3', 'gpt-6-astra', 'claude-opus-5-5', 'deepseek-v4'])
+  // A guest: sponsored Kimi K3 only.
+  assert.deepEqual(offered('api', {}, true), ['kimi-k3'])
+  assert.deepEqual(offered('api', {}, true, { routes: ['sponsored_kimi'], api_models: ['kimi-k3'] }), ['kimi-k3'])
+  // A linked account: its own models.
+  assert.deepEqual(offered('codex', {}), ['gpt-5.6-sol'])
+  assert.deepEqual(offered('claude', {}), ['sonnet', 'opus'])
+  // The policy of a viewer who may choose (api_models null) leaves the account's models, as for Analyze.
+  assert.deepEqual(offered('api', {}, false, { routes: ['sponsored_kimi', 'api_key'], api_models: null }),
+    ['kimi-k3', 'gpt-6-astra', 'claude-opus-5-5', 'deepseek-v4'])
+  // A member in public mode runs on sponsored Kimi K3 only: each mode's policy says so (an Analyze
+  // start then names no model) and both menus offer just that, whatever the account runtime (the
+  // start goes on the API route, never the linked account's).
+  const publicMode = { routes: ['sponsored_kimi'], api_models: ['kimi-k3'] }
+  for (const runtime of ['api', 'codex', 'claude'])
+    assert.deepEqual(offered(runtime, {}, false, publicMode), ['kimi-k3'], runtime)
+  // Kimi K3 is the only Kimi model of Analyze, Readability and the engines whose Kimi calls ask for Kimi K3
+  // whatever Kimi model is named (the listing's kimi_k3_only): another Kimi model of the account's list is
+  // never offered there; Kimi K3 with its provider prefix is Kimi K3.  A coding-agent harness sends the
+  // model as named to the account's own Kimi key, so it offers every model of the list, as before.
+  const otherKimi = { api_models: ['kimi-k3', 'kimi-k2.5', 'Kimi-K2-Thinking', 'kimi:kimi-k2.5', 'KIMI : Kimi-K3', 'gpt-6-astra',
+    'moonshotai/kimi-k2'] }
+  const ownModels = ['kimi-k3', 'KIMI : Kimi-K3', 'gpt-6-astra', 'moonshotai/kimi-k2']
+  assert.deepEqual(offered('api', otherKimi), ownModels)
+  for (const id of ['plain', 'math_harness', 'deepseek_harness'])
+    assert.deepEqual(models(id, 'api', otherKimi, false, null, { kimi_k3_only: true }), ownModels, id)
+  for (const id of ['deepagents', 'openhands', 'codex'])
+    assert.deepEqual(models(id, 'api', otherKimi, false, null, { kimi_k3_only: false }), otherKimi.api_models, id)
   // A member's listing (api_key only) never offers a subscription.
   assert.deepEqual(run(['modelsForEngine', 'engineModelMode', 'selectedAccountRuntime'], [],
     `let ENGINES=[], SETTINGS={account_runtime:'codex',codex_connected:true,codex_models:['gpt-5.6-sol']}, CURRENT_USER={id:4}, GUEST_POLICY=null;`,
     `modelsForEngine({id:'readability',auth_modes:['api_key']})`), [])
-  assert.match(fn('renderModels'), /selected\?\.id!=='kimi'&&selected\?\.id!=='readability'&&mode==='api_key'/)
+  // A custom provider:model id on an API route, as for Analyze (never on the Kimi K3 engine, nor for a
+  // viewer on sponsored Kimi K3 only: see below), and no note of Readability's own under the menu.
+  assert.match(fn('renderModels'), /:selected\?\.id!=='kimi'&&mode==='api_key'&&!manuscriptSponsoredOnly\(selected\?\.id\)\)&&\(SETTINGS\?\.configured_providers/)
+  assert.doesNotMatch(fn('renderModels'), /readability/i)
   assert.match(fn('runTuningCapabilities'), /engine==='analyze'\|\|engine==='readability'\?'math_harness':engine/)
+})
+
+// The model picker as renderModels draws it: its options and whether it has the custom-model row.
+const PICKER = [
+  'renderModels', 'manuscriptSponsoredOnly', 'analyzeSponsoredOnly', 'readabilitySponsoredOnly', 'analyzeEngineEntry', 'analyzePolicy',
+  'readabilityEngineEntry', 'readabilityPolicy', 'viewerIsGuest', 'viewerIsAdmin', 'viewerHasFullAccess', 'modelsForEngine',
+  'engineModelMode', 'selectedAccountRuntime', 'dagIsCgmEngine', 'currentModel', 'modelVisual', 'isCgmMax', 'cgmMaxAvailable',
+  'cgmMaxSummary', 'cgmMaxApiSummary', 'cgmMaxApiNames',
+]
+const PICKER_PAGE = `
+const els={}, menus={};
+function selectElement(){
+  let options=[], current='';
+  return {id:'model-select',disabled:false,_html:'',
+    set innerHTML(markup){ this._html=markup; options=[...markup.matchAll(/<option value="([^"]*)"/g)].map(m=>m[1]); current=options[0]??''; },
+    get innerHTML(){ return this._html; },
+    set value(next){ current=options.includes(String(next))?String(next):''; },
+    get value(){ return current; }};
+}
+const $=id=>els[id]||(els[id]=id==='model-select'?selectElement():{id,value:'',textContent:'',style:{setProperty(){}},querySelectorAll:()=>[]});
+const renderChoiceMenu=(id,title,options,footer='')=>{ menus[id]={options,footer}; };
+const closeChoiceMenus=()=>{}, renderRunTuning=()=>{}, renderRunRuntime=()=>{}, renderEngines=()=>{}, cgmEngineUsable=()=>false, cgmModels=()=>[];
+let ENGINES=[], engine='readability', SETTINGS=null, CURRENT_USER={id:4}, GUEST_POLICY=null;`
+// /api/settings of an account on its API keys (an OpenAI one) where sponsored Kimi K3 reads manuscripts.
+const API_SETTINGS = { account_runtime: 'api', api_models: ['kimi-k3', 'gpt-6-astra'], configured_providers: ['openai'], default_model: 'kimi-k3',
+  sponsored_kimi_available: true, sponsored_kimi_engines: ['kimi', 'plain', 'math_harness'], kimi_user_key_set: false }
+
+test('a viewer on sponsored Kimi K3 only gets no custom model in Readability or Analyze, which would drop it', () => {
+  const picker = run(PICKER, ['CGM_MAX_MODEL', 'LIB_ESC'], PICKER_PAGE,
+    `(id,user,routes)=>{ CURRENT_USER=user; engine=id; GUEST_POLICY=user.guest?{default_model:'kimi-k3'}:null; SETTINGS=${JSON.stringify(API_SETTINGS)};
+      // The engine listing's policies, as readability_runs and analyze_runs send them.
+      ENGINES=['analyze','readability'].map(e=>({id:e,modes:[e],available:true,auth_modes:['api_key'],
+        [e]:{routes,api_models:routes.length===1?['kimi-k3']:null}}));
+      for(const key of Object.keys(els))delete els[key];
+      renderModels();
+      return {options:[...$('model-select').innerHTML.matchAll(/<option value="([^"]*)"/g)].map(m=>m[1]),custom:/model-custom-entry/.test(menus['model-menu'].footer)}; }`)
+  const guest = { id: 9, guest: true }, member = { id: 4 }
+  for (const id of ['readability', 'analyze']) {
+    // A guest, and a member of a site in public mode: their starts name no model (the server runs Kimi K3),
+    // so each mode offers Kimi K3 alone.
+    assert.deepEqual(picker(id, guest, ['sponsored_kimi']), { options: ['kimi-k3'], custom: false }, id)
+    assert.deepEqual(picker(id, member, ['sponsored_kimi']), { options: ['kimi-k3'], custom: false }, id)
+    // A member who may choose names any model of its keys, or a custom one.
+    assert.deepEqual(picker(id, member, ['sponsored_kimi', 'api_key']), { options: ['kimi-k3', 'gpt-6-astra', '__custom__'], custom: true }, id)
+  }
+})
+
+test('a member of a site in public mode reads on sponsored Kimi K3 whatever its account runtime', async () => {
+  // The picker: Kimi K3 alone, labelled as the included model, never a linked account's model or route.
+  const picker = run(PICKER, ['CGM_MAX_MODEL', 'LIB_ESC'], PICKER_PAGE,
+    `(id,runtime)=>{ CURRENT_USER={id:4,full_access:true}; engine=id; GUEST_POLICY=null;
+      SETTINGS={...${JSON.stringify(API_SETTINGS)},account_runtime:runtime,codex_connected:true,claude_connected:true,
+        codex_models:['gpt-5.6-sol'],claude_models:['sonnet']};
+      ENGINES=['analyze','readability'].map(e=>({id:e,modes:[e],available:true,auth_modes:['codex_subscription','claude_subscription','api_key'],
+        [e]:{routes:['sponsored_kimi'],api_models:['kimi-k3']}}));
+      for(const key of Object.keys(els))delete els[key];
+      renderModels();
+      return {options:[...$('model-select').innerHTML.matchAll(/<option value="([^"]*)"/g)].map(m=>m[1]),
+        meta:$('model-current-meta').textContent,menu:menus['model-menu'].options,custom:/model-custom-entry/.test(menus['model-menu'].footer)}; }`)
+  for (const id of ['readability', 'analyze']) {
+    for (const runtime of ['codex', 'claude']) {
+      const out = picker(id, runtime)
+      assert.deepEqual([out.options, out.meta, out.custom], [['kimi-k3'], 'Kimi K3 · included', false], `${id} ${runtime}`)
+      assert.doesNotMatch(out.menu, /subscription/)
+    }
+  }
+  // The runtime line says so too.
+  const line = run(['runRuntimeSummary', 'manuscriptSponsoredOnly', 'analyzeSponsoredOnly', 'readabilitySponsoredOnly',
+    'analyzeEngineEntry', 'analyzePolicy', 'readabilityEngineEntry', 'readabilityPolicy', 'viewerIsGuest', 'engineRuntimeIssue',
+    'selectedAccountRuntime', 'runtimeDisplayName'], [],
+    `let ENGINES=[], SETTINGS=null, CURRENT_USER={id:4,full_access:true}, GUEST_POLICY=null, engine='';
+     const isCgmMax=()=>false, isCgmMaxApi=()=>false, withMaxApiHint=issue=>issue, currentModel=()=>'';`,
+    `(id,routes)=>{ engine=id; SETTINGS={account_runtime:'codex',codex_connected:true};
+      ENGINES=['analyze','readability'].map(e=>({id:e,label:e,modes:[e],available:true,auth_modes:['codex_subscription','api_key'],[e]:{routes}}));
+      return runRuntimeSummary(); }`)
+  for (const id of ['readability', 'analyze']) {
+    assert.deepEqual(line(id, ['sponsored_kimi']), { warn: false, lead: 'Runs on', strong: 'Kimi K3 (included)', spare: '' }, id)
+    // A member who may choose runs on the runtime it selected.
+    assert.equal(line(id, ['sponsored_kimi', 'api_key', 'codex_subscription']).strong, 'your Codex (ChatGPT) subscription', id)
+  }
+  // The starts name no model and the API route, whatever the account runtime's route.
+  const posts = []
+  const context = vm.createContext({
+    console, setTimeout,
+    $: id => ({ id, style: {}, disabled: false, textContent: '', className: '', value: '', checked: false }),
+    initialAttachments: { busy: false, files: [], lock() {}, clear() {}, payload: async () => [] },
+    analyzeEngineEntry: () => ({ available: true, label: 'Ansatz Analyze' }), analyzePolicy: () => ({ enabled: true }),
+    readabilityEngineEntry: () => ({ available: true, label: 'Ansatz Readability' }), readabilityPolicy: () => ({ enabled: true }),
+    analyzeSourceFromComposer: () => ({ kind: 'paste', text: 'x' }), analyzeResolveCache: new Map(), analyzeResolveTimer: 0, clearTimeout() {},
+    analyzeSponsoredOnly: () => true, readabilitySponsoredOnly: () => true, engineRuntimeIssue: () => 'Codex is not connected',
+    currentModel: () => 'gpt-5.6-sol', selectedAccountRuntime: () => 'codex', runtimeDisplayName: () => '', setPill() {}, showEngineSignIn() {},
+    currentRunTuning: () => ({ reasoning_effort: 'default', speed_mode: 'standard' }), runAuthRoute: () => 'codex_subscription',
+    RUN_KIND_BY_ID: new Map(), selectRun() {}, goSession() {}, loadEngines: async () => {}, limitMessage: m => m,
+    GUEST_POLICY: null, applyGuestUi() {}, readabilityAudience: () => 'graduate',
+  })
+  context.fetch = async (url, options) => { posts.push(JSON.parse(options.body)); return { ok: true, status: 200, json: async () => ({ run_id: 'r1', job_id: 'j1' }) } }
+  vm.runInContext('let analyzeLinkLookupPending=false;\n' + fn('startAnalyzeRun') + '\n' + fn('startReadabilityRun'), context)
+  await context.startAnalyzeRun()
+  await context.startReadabilityRun()
+  assert.deepEqual(posts.map(body => [body.run_kind, body.model, body.auth_route]), [['analyze', null, 'api_key'], ['readability', null, 'api_key']])
+})
+
+test('the model a readable version would run on is the one the Readability composer would select', () => {
+  const choice = run(['readabilityModelChoice', 'modelsForEngine', 'engineModelMode', 'selectedAccountRuntime', 'readabilityEngineEntry',
+    'readabilityPolicy', 'readabilitySponsoredOnly', 'viewerIsGuest'], [],
+    `let ENGINES=[], SETTINGS=null, CURRENT_USER={id:4}, GUEST_POLICY=null, selected='', custom='';
+     const $=id=>id==='model-select'?{value:selected}:null;
+     function currentModel(){ return selected==='__custom__'?custom:selected; }`,
+    `(picked,settings,routes=['sponsored_kimi','api_key'],typed='')=>{ selected=picked; custom=typed; SETTINGS={...${JSON.stringify(API_SETTINGS)},...settings};
+      ENGINES=[{id:'readability',modes:['readability'],available:true,auth_modes:['api_key'],readability:{routes}}];
+      return readabilityModelChoice(); }`)
+  // The composer's model where Readability offers it ...
+  assert.equal(choice('gpt-6-astra', {}), 'gpt-6-astra')
+  assert.equal(choice('kimi-k3', {}), 'kimi-k3')
+  // ... else the default model, else Readability's first: never Max, or a model of keys the account lacks.
+  assert.equal(choice('max', {}), 'kimi-k3')
+  assert.equal(choice('claude-opus-5-5', { default_model: 'gpt-6-astra' }), 'gpt-6-astra')
+  assert.equal(choice('kimi-k3', { sponsored_kimi_engines: ['kimi', 'plain'] }), 'gpt-6-astra')
+  // A custom provider:model stays where Readability takes one (an API route with a provider) ...
+  assert.equal(choice('__custom__', {}, undefined, 'openai:gpt-6.1-sol'), 'openai:gpt-6.1-sol')
+  // ... but not for a viewer on sponsored Kimi K3 only.
+  assert.equal(choice('__custom__', {}, ['sponsored_kimi'], 'openai:gpt-6.1-sol'), 'kimi-k3')
+  assert.equal(choice('__custom__', { configured_providers: [] }, undefined, 'openai:gpt-6.1-sol'), 'kimi-k3')
+})
+
+test('the caps and the sponsored pool follow the model, as for an analysis', () => {
+  const sponsored = run(['readabilityEngineEntry', 'readabilityPolicy', 'readabilitySponsoredOnly', 'readabilityRouteSponsored',
+    'analyzeEngineEntry', 'analyzePolicy', 'analyzeSponsoredOnly', 'analyzeRouteSponsored', 'engineModelMode', 'selectedAccountRuntime',
+    'viewerIsGuest'], [],
+    `let ENGINES=[], SETTINGS=null, CURRENT_USER={id:4}, chosen=''; function currentModel(){ return chosen; }`,
+    `(model,settings,routes,guest)=>{ chosen=model; CURRENT_USER=guest?{guest:true}:{id:4};
+      SETTINGS={account_runtime:'api',sponsored_kimi_available:true,kimi_user_key_set:false,...settings};
+      ENGINES=['analyze','readability'].map(id=>({id,modes:[id],auth_modes:['api_key'],[id]:{routes}}));
+      return [readabilityRouteSponsored(),analyzeRouteSponsored()]; }`)
+  const member = ['sponsored_kimi', 'api_key']
+  // Kimi K3 without a key of the account's own runs on the sponsored pool; another model on the account's key.
+  assert.deepEqual(sponsored('kimi-k3', {}, member), [true, true])
+  assert.deepEqual(sponsored('gpt-6-astra', {}, member), [false, false])
+  assert.deepEqual(sponsored('claude-opus-5-5', {}, member), [false, false])
+  assert.deepEqual(sponsored('kimi-k3', { kimi_user_key_set: true }, member), [false, false])
+  // Sponsored-only viewers run on it whatever the menu shows.
+  assert.deepEqual(sponsored('gpt-6-astra', {}, ['sponsored_kimi']), [true, true])
+  assert.deepEqual(sponsored('gpt-6-astra', {}, ['sponsored_kimi'], true), [true, true])
 })
 
 test('the provider note names only the routes the server lists for this viewer', () => {
@@ -330,9 +512,9 @@ test('the provider note names only the routes the server lists for this viewer',
   const where = routes => note(routes).replace(/^Readability sends the manuscript text to the selected model provider/, '').replace(/\. Don't submit work you aren't allowed to share\.$/, '')
   // A guest (or a member on sponsored Kimi only), a member, the operator.
   assert.equal(where(['sponsored_kimi']), ' — sponsored Kimi K3')
-  assert.equal(where(['sponsored_kimi', 'api_key']), ' — sponsored Kimi K3 or your own Kimi key')
-  assert.equal(where(['sponsored_kimi', 'api_key', 'codex_subscription', 'claude_subscription']), ' — sponsored Kimi K3, your own Kimi key, or a connected Codex or Claude Code account')
-  assert.equal(where(['api_key', 'claude_subscription']), ' — your own Kimi key or a connected Claude Code account')
+  assert.equal(where(['sponsored_kimi', 'api_key']), ' — sponsored Kimi K3 or your own API key')
+  assert.equal(where(['sponsored_kimi', 'api_key', 'codex_subscription', 'claude_subscription']), ' — sponsored Kimi K3, your own API key, or a connected Codex or Claude Code account')
+  assert.equal(where(['api_key', 'claude_subscription']), ' — your own API key or a connected Claude Code account')
   assert.equal(where(null), '')
   // The page's own copy (before the listing arrives) names no account.
   const copy = html.split('id="readability-provider" hidden>')[1].split('</p>')[0]
@@ -344,13 +526,14 @@ test('the start request: run_kind, engine, audience, focus and exactly one sourc
   const posts = [], selected = []
   const els = {}
   let source = { kind: 'paste', text: '\\begin{theorem}x\\end{theorem}', format: 'tex' }, sponsoredOnly = true, reply = { ok: true, status: 200, body: { run_id: 'r1', job_id: 'j1' } }
+  let chosen = 'kimi-k3'
   const context = vm.createContext({
     console, setTimeout,
     $: id => (els[id] ||= { id, style: {}, disabled: false, textContent: '', className: '', value: '', checked: false }),
     initialAttachments: { busy: false, files: [], lock(busy) { this.busy = busy }, clear() {}, payload: async () => [{ name: 'paper.tex', data: 'eA==' }] },
     readabilityEngineEntry: () => ({ available: true, label: 'Ansatz Readability' }), readabilityPolicy: () => ({ enabled: true }),
     analyzeSourceFromComposer: () => source, analyzeResolveCache: new Map(), analyzeResolveTimer: 0, clearTimeout() {},
-    readabilitySponsoredOnly: () => sponsoredOnly, engineRuntimeIssue: () => '', currentModel: () => 'kimi-k3',
+    readabilitySponsoredOnly: () => sponsoredOnly, engineRuntimeIssue: () => '', currentModel: () => chosen,
     selectedAccountRuntime: () => 'api', runtimeDisplayName: () => '', setPill() {}, showEngineSignIn() {},
     currentRunTuning: () => ({ reasoning_effort: 'high', speed_mode: 'standard' }), runAuthRoute: () => 'api_key',
     RUN_KIND_BY_ID: new Map(), selectRun: rid => selected.push(rid), goSession() {}, loadEngines: async () => {}, limitMessage: m => m + ' (limit)',
@@ -373,6 +556,12 @@ test('the start request: run_kind, engine, audience, focus and exactly one sourc
   assert.equal(posts.length, 2)
   assert.deepEqual(posts.at(-1)[1], { run_kind: 'readability', engine: 'readability', model: 'kimi-k3', auth_route: 'api_key', reasoning_effort: 'high', speed_mode: 'standard',
     readability: { audience: 'graduate' }, source: { url: 'https://arxiv.org/abs/2401.00001' } })
+  // Any other model of the member's keys goes as chosen.
+  chosen = 'gpt-6-astra'
+  await context.startReadabilityRun()
+  assert.equal(posts.length, 3)
+  assert.equal(posts.at(-1)[1].model, 'gpt-6-astra')
+  chosen = 'kimi-k3'
   // Uploaded files are the manuscript.
   source = { kind: 'upload' }
   await context.startReadabilityRun()
@@ -382,12 +571,12 @@ test('the start request: run_kind, engine, audience, focus and exactly one sourc
   reply = { ok: false, status: 429, body: { error: 'Guests can make 1 readable version per hour' } }
   await context.startReadabilityRun()
   assert.equal(context.$('form-error').textContent, 'Guests can make 1 readable version per hour (limit)')
-  assert.deepEqual(selected, ['r1', 'r1', 'r1'])
+  assert.deepEqual(selected, ['r1', 'r1', 'r1', 'r1'])
   // Refused before any request: an engine that needs setup.
   context.readabilityEngineEntry = () => ({ available: false, label: 'Ansatz Readability', health_detail: 'pypdf is missing' })
   await context.startReadabilityRun()
   assert.equal(context.$('form-error').textContent, 'Ansatz Readability needs setup — pypdf is missing')
-  assert.equal(posts.length, 4)
+  assert.equal(posts.length, 5)
 })
 
 // Readable Markdown as the console renders it: marked, the console's own

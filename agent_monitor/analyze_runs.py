@@ -259,6 +259,43 @@ def run_kind_of(body: Mapping[str, Any]) -> str:
     return kind
 
 
+# ---------------------------------------------------------------------------
+# a manuscript run's model
+# ---------------------------------------------------------------------------
+
+_MODE_NAMES = {RUN_KIND: ("Analyze", "analysis"), READABILITY: ("Readability", "readability run")}
+
+
+def manuscript_model(model: object) -> str:
+    """A model an Analyze or Readability run is asked for, as the run records
+    it: trimmed, and Kimi K3 named in any case ("Kimi-K3", " KIMI-K3 ") or
+    with its provider prefix ("kimi:kimi-k3", which the API runners resolve
+    to Kimi K3) as ``kimi_k3.MODEL_ID``, the one id its routes and runner
+    accept."""
+    from agent_monitor.kimi_k3 import MODEL_ID, names_kimi_k3
+
+    name = str(model or "").strip()
+    return MODEL_ID if names_kimi_k3(name) else name
+
+
+def kimi_model_error(mode: str, model: object, *, ran: bool = False) -> str | None:
+    """Why an Analyze or Readability run (``mode``) may not use ``model``, or
+    None: Kimi K3 is their only Kimi model, on every route, with or without a
+    Kimi key of the account's own.  A Kimi endpoint is always asked for Kimi
+    K3 (``kimi_k3.chat_payload``), so a run on another Kimi model (kimi-k2.5
+    typed as a custom model) would be recorded, shown and billed under a name
+    it never ran on.  ``ran``: the model of an existing run (a re-check or a
+    question about it), which the refusal names."""
+    from agent_monitor.kimi_k3 import MODEL_ID, is_other_kimi_model
+
+    name = manuscript_model(model)
+    if not is_other_kimi_model(name):
+        return None
+    label, noun = _MODE_NAMES.get(mode, _MODE_NAMES[RUN_KIND])
+    refusal = f"{label} runs Kimi K3 as its only Kimi model ({MODEL_ID})"
+    return f"{refusal}; this {noun} ran on {name}" if ran else refusal
+
+
 def _limits():
     from agent_monitor.analyze import limits
 
@@ -1193,6 +1230,7 @@ def viewer_policy(user: Mapping[str, Any] | None, *, guest_runs_per_hour: int = 
     sponsored_caps = effective_caps(role, sponsored=True,
                                     requested={"max_calls": SPONSORED_MAX_CALLS, "max_seconds": SPONSORED_MAX_SECONDS})
     from agent_monitor import account_policy
+    from agent_monitor.kimi_k3 import MODEL_ID
 
     sponsored_only = role == "guest" or account_policy.member_analyze_sponsored_only(dict(user or {}))
     policy: dict[str, Any] = {
@@ -1203,6 +1241,12 @@ def viewer_policy(user: Mapping[str, Any] | None, *, guest_runs_per_hour: int = 
         "routes": (["sponsored_kimi"] if sponsored_only
                    else ["sponsored_kimi", "api_key"] if account_policy.is_restricted(dict(user or {}))
                    else ["sponsored_kimi", "api_key", "codex_subscription", "claude_subscription"]),
+        # The API models this viewer may name: Kimi K3 alone where the
+        # sponsored route is the only one (guests, members in public mode,
+        # whose start names no model), and the console's menu then offers
+        # just that; otherwise ``None``, any model of the account's own API
+        # keys (as for Readability: readability_runs.viewer_policy).
+        "api_models": [MODEL_ID] if sponsored_only else None,
         "sponsored": GATE.snapshot(guest=role == "guest"),
         "caps": {
             "sponsored": _caps_view(sponsored_caps),

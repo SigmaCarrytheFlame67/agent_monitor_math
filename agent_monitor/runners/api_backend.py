@@ -67,7 +67,8 @@ class APIBackendError(RuntimeError):
     (the key cannot use the model); ``None`` otherwise, and always for
     sponsored Kimi.  ``refusal`` marks a reply the model declined
     (Anthropic's stop reason ``refusal``): its partial text is never used,
-    so a caller can treat it as it treats an empty reply.
+    so a caller can treat it as it treats an empty reply.  ``cut_off_at`` is
+    the output limit (tokens) an empty reply reached, as ``APIResult``'s.
     """
 
     def __init__(
@@ -79,6 +80,7 @@ class APIBackendError(RuntimeError):
         kind: str | None = None,
         usage_by_model: tuple[tuple[str, dict[str, int]], ...] = (),
         refusal: bool = False,
+        cut_off_at: int | None = None,
     ) -> None:
         super().__init__(message)
         self.failure = failure
@@ -86,6 +88,7 @@ class APIBackendError(RuntimeError):
         self.kind = kind
         self.usage_by_model = tuple(usage_by_model)
         self.refusal = refusal
+        self.cut_off_at = cut_off_at
 
 
 @dataclass(frozen=True)
@@ -100,6 +103,12 @@ class APIResult:
     # each model's share of ``usage``, in the order they answered, so each
     # is priced at its own rates.  Empty when one model billed the call.
     usage_by_model: tuple[tuple[str, dict[str, int]], ...] = ()
+    # The output limit (tokens) the reply reached before it finished, when
+    # the provider says it stopped there (OpenAI ``incomplete_details.reason``
+    # ``max_output_tokens``, Anthropic's stop reason ``max_tokens``, a Chat
+    # Completions ``finish_reason`` ``length``, Gemini's ``finishReason``
+    # ``MAX_TOKENS``); None otherwise.
+    cut_off_at: int | None = None
 
 
 def _openai_effort(source: Mapping[str, str], model: str, effort: str | None) -> str | None:
@@ -193,6 +202,28 @@ def _total_usage(parts: list[dict[str, int]]) -> dict[str, int]:
         for name, value in usage.items():
             total[name] = total.get(name, 0) + int(value)
     return total
+
+
+def _stopped_at_output_limit(provider: str, body: Mapping[str, Any]) -> bool:
+    """Whether the provider says a reply stopped at its output limit before
+    it finished: OpenAI's Responses API with ``incomplete_details.reason``
+    ``max_output_tokens`` (status ``incomplete``), a Chat Completions reply
+    (Kimi, OpenRouter, DeepSeek, Groq, Together, xAI) whose first choice has
+    ``finish_reason`` ``length``, a Gemini ``generateContent`` reply whose
+    first candidate has ``finishReason`` ``MAX_TOKENS``.  Content-free; False
+    for any other shape."""
+    if provider == "openai":
+        incomplete = body.get("incomplete_details")
+        return isinstance(incomplete, Mapping) and incomplete.get("reason") == "max_output_tokens"
+    if provider == "kimi" or provider in _OPENAI_COMPATIBLE_PROVIDERS:
+        choices = body.get("choices")
+        choice = choices[0] if isinstance(choices, list) and choices else None
+        return isinstance(choice, Mapping) and choice.get("finish_reason") == "length"
+    if provider == "google":
+        candidates = body.get("candidates")
+        candidate = candidates[0] if isinstance(candidates, list) and candidates else None
+        return isinstance(candidate, Mapping) and candidate.get("finishReason") == "MAX_TOKENS"
+    return False
 
 
 def _chat_response_text(body: dict[str, object]) -> str:
@@ -579,12 +610,14 @@ def _anthropic_chat(
             f"Anthropic returned an unexpected response shape for {model}"
         ) from exc
     text = _LONE_SURROGATES.sub("\ufffd", text)  # e.g. half of a split emoji
+    cut_off_at = max_tokens if stop_reason == "max_tokens" else None
     if not text.strip():
         raise APIBackendError(
             f"Anthropic returned an empty response for {model} "
             f"(stop_reason={stop_reason}, output_tokens={usage['output_tokens']})",
             usage=usage,
             usage_by_model=by_model,
+            cut_off_at=cut_off_at,
         )
     # observed_model is the model that answered, which a fallback changes.
     return APIResult(
@@ -594,6 +627,7 @@ def _anthropic_chat(
         provider="anthropic",
         observed_model=observed or None,
         usage_by_model=by_model,
+        cut_off_at=cut_off_at,
     )
 
 
@@ -656,6 +690,20 @@ def api_chat(
         provider, base, key, chosen = _resolve_llm_provider(dict(source), model)
     except (TypeError, ValueError) as exc:
         raise APIBackendError(str(exc)) from exc
+    if provider == "kimi":
+        from agent_monitor import kimi_k3
+
+        if not kimi_k3.names_kimi_k3(chosen):
+            # This Kimi call asks for Kimi K3 whatever it names (chat_payload):
+            # one named for another Kimi model (kimi-k2.5) would run as Kimi
+            # K3 under that name.  Never sent; every call would repeat it.
+            # Only the engines that run Kimi K3 alone call Kimi here (Plain,
+            # the CGM engines, Meta-Harness, Analyze, Readability, IMProof's
+            # audit); a coding-agent harness's audit names its model with an
+            # OpenAI-compatible prefix (``openai:kimi-k2.5``) and is sent as
+            # named.
+            raise APIBackendError(f"{kimi_k3.OTHER_KIMI_CALL_ERROR}, not {chosen}",
+                                  kind=None if kimi_k3.is_sponsored(source) else "model")
     if key_defect(key):
         # An HTTP library would refuse the header (or URL) and quote it in its
         # error; every call with this key fails the same way.
@@ -897,6 +945,7 @@ def api_chat(
             f"{provider_label(provider)} returned an unexpected response shape for {chosen}"
         ) from exc
     text = _LONE_SURROGATES.sub("\ufffd", text)  # e.g. half of a split emoji
+    cut_off_at = max_output if _stopped_at_output_limit(provider, body) else None
     if not text.strip():
         detail = ""
         if provider == "kimi":
@@ -919,8 +968,10 @@ def api_chat(
         raise APIBackendError(
             f"{provider_label(provider)} returned an empty response for {chosen}{detail}",
             usage=usage,
+            cut_off_at=cut_off_at,
         )
     return APIResult(
         text=text.strip(), usage=usage, model=chosen, provider=provider,
-        observed_model=(body["model"].strip() or None) if isinstance(body.get("model"), str) else None
+        observed_model=(body["model"].strip() or None) if isinstance(body.get("model"), str) else None,
+        cut_off_at=cut_off_at,
     )
