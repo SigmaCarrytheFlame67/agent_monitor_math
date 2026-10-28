@@ -895,33 +895,36 @@ const isCgmMax=()=>maxOn, isCgmMaxApi=()=>maxApiOn;`, ctx)
   }
 })
 
-test('while a later turn has not rewritten the proof yet, the live card says whose proof it shows', () => {
+test('while a later turn has not rewritten the proof yet, the live card shows no proof, only that a new one is coming', () => {
   const ctx = vm.createContext({ console })
-  vm.runInContext(`let sandboxEditing=false; const note={textContent:'',hidden:true}; const $=id=>id==='proof-turn-note'?note:null; const threadRedraw=(how,draw)=>draw();
+  vm.runInContext(`let sandboxEditing=false; const note={textContent:'',hidden:true};
+const cls=new Set(); const panel={classList:{contains:c=>cls.has(c),toggle:(c,on)=>{ if(on)cls.add(c); else cls.delete(c); }}};
+const $=id=>id==='proof-pending'?note:null; const sandboxThread=()=>({querySelector:sel=>sel==='.proof-panel'?panel:null}); const threadRedraw=(how,draw)=>draw();
 ${fn('threadTurnNote')}`, ctx)
   const step = code => vm.runInContext(code, ctx)
   const turns = [{ n: 1, started_at: at(0), finished_at: at(60), file: '.proof_turns/1.md' }, { n: 2, started_at: at(100), finished_at: null }]
-  const show = (run, kind = 'prove') => { step(`threadTurnNote(${JSON.stringify(run)},${JSON.stringify(kind)})`); return plain(step('[note.textContent,note.hidden]')) }
+  const show = (run, kind = 'prove') => { step(`threadTurnNote(${JSON.stringify({ status: 'running', ...run })},${JSON.stringify(kind)})`); return plain(step("[note.textContent,note.hidden,panel.classList.contains('turn-pending')]")) }
   const mtime = s => (Date.parse(at(s)) / 1000)
-  assert.deepEqual(show({ proof_turns: turns, sandbox_preview: { mtime: mtime(50) } }), ["Turn 2 is working · showing turn 1's proof until it is rewritten", false])
-  // Rewritten in this turn, the turn ended, a first turn, no turns, an analysis, or the editor open: no note.
-  assert.deepEqual(show({ proof_turns: turns, sandbox_preview: { mtime: mtime(120) } }), ['', true])
-  assert.deepEqual(show({ proof_turns: turns, sandbox_preview: { mtime: mtime(50) } }), ["Turn 2 is working · showing turn 1's proof until it is rewritten", false])
-  assert.deepEqual(show({ proof_turns: [turns[0], { ...turns[1], finished_at: at(200) }], sandbox_preview: { mtime: mtime(50) } }), ['', true])
-  assert.deepEqual(show({ proof_turns: [{ n: 1, started_at: at(0), finished_at: null }], sandbox_preview: { mtime: mtime(-10) } }), ['', true])
-  assert.deepEqual(show({ sandbox_preview: { mtime: mtime(50) } }), ['', true])
-  assert.deepEqual(show({ proof_turns: turns, sandbox_preview: { mtime: mtime(50) } }, 'analyze'), ['', true])
-  assert.deepEqual(show({ proof_turns: turns, sandbox_preview: {} }), ['', true])
-  // It names the last turn that kept a proof (turn 2 failed before writing one), or an earlier one when none did.
-  const three = [turns[0], { n: 2, started_at: at(70), finished_at: at(90), file: '' }, { n: 3, started_at: at(100), finished_at: null }]
-  assert.deepEqual(show({ proof_turns: three, sandbox_preview: { mtime: mtime(50) } }), ["Turn 3 is working · showing turn 1's proof until it is rewritten", false])
-  assert.deepEqual(show({ proof_turns: [{ ...turns[0], file: '' }, turns[1]], sandbox_preview: { mtime: mtime(50) } }), ['Turn 2 is working · showing an earlier proof until it is rewritten', false])
-  // An answer-only turn never rewrites the proof: no note while it runs, and it is never the proof named.
-  assert.deepEqual(show({ proof_turns: [turns[0], { ...turns[1], answer_only: true }], sandbox_preview: { mtime: mtime(50) } }), ['', true])
-  assert.deepEqual(show({ proof_turns: [turns[0], { n: 2, started_at: at(70), finished_at: at(90), file: '.proof_turns/2.md', answer_only: true }, { n: 3, started_at: at(100), finished_at: null }], sandbox_preview: { mtime: mtime(50) } }),
-    ["Turn 3 is working · showing turn 1's proof until it is rewritten", false])
+  const pending = ['Turn 2 is working on a new proof…', false, true], none = ['', true, false]
+  assert.deepEqual(show({ proof_turns: turns, sandbox_preview: { mtime: mtime(50) } }), pending)
+  // Rewritten in this turn: the new proof is shown (and live from then on).
+  assert.deepEqual(show({ proof_turns: turns, sandbox_preview: { mtime: mtime(120) } }), none)
+  assert.deepEqual(show({ proof_turns: turns, sandbox_preview: { mtime: mtime(50) } }), pending)
+  // The turn ended, the run is no longer working (a turn a restart left unfinished), a first turn, no turns, an analysis, no time: the proof shows.
+  assert.deepEqual(show({ proof_turns: [turns[0], { ...turns[1], finished_at: at(200) }], sandbox_preview: { mtime: mtime(50) } }), none)
+  for (const status of ['finished', 'failed', 'stopped', 'interrupted'])
+    assert.deepEqual(show({ status, proof_turns: turns, sandbox_preview: { mtime: mtime(50) } }), none, status)
+  assert.deepEqual(show({ proof_turns: [{ n: 1, started_at: at(0), finished_at: null }], sandbox_preview: { mtime: mtime(-10) } }), none)
+  assert.deepEqual(show({ sandbox_preview: { mtime: mtime(50) } }), none)
+  assert.deepEqual(show({ proof_turns: turns, sandbox_preview: { mtime: mtime(50) } }, 'analyze'), none)
+  assert.deepEqual(show({ proof_turns: turns, sandbox_preview: {} }), none)
+  // An answer-only turn never rewrites the proof: the proof stays while it runs.
+  assert.deepEqual(show({ proof_turns: [turns[0], { ...turns[1], answer_only: true }], sandbox_preview: { mtime: mtime(50) } }), none)
+  // A queued or continuing run counts as working.
+  assert.deepEqual(show({ status: 'continuing', proof_turns: turns, sandbox_preview: { mtime: mtime(50) } }), pending)
+  // The proof's editor open: the proof is never hidden from it.
   step('sandboxEditing=true')
-  assert.deepEqual(show({ proof_turns: turns, sandbox_preview: { mtime: mtime(50) } }), ['', true])
+  assert.deepEqual(show({ proof_turns: turns, sandbox_preview: { mtime: mtime(50) } }), none)
 })
 
 test('an earlier turn\'s card loads its proof once, typeset, with Show more and its own Download; one that cannot be read says so', async () => {

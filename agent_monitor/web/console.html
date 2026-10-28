@@ -372,8 +372,15 @@ html.read-only-run .run-access-note { display: flex; }
 .proof-toolbar .title { font-size: 12px; font-weight: 700; }
 .proof-toolbar .sub { font-size: 11px; color: var(--dim); font-family: var(--mono); flex: 1; }
 /* A turn still working on a proof it has not rewritten yet: the card says whose proof it shows. */
-.proof-toolbar .proof-turn-note { font-size: 11.5px; color: var(--warn, var(--muted)); font-weight: 600; }
-.proof-toolbar .proof-turn-note[hidden] { display: none; }
+/* A turn still working on a proof it has not rewritten yet: the live card
+   shows no proof (the turn before's is in its own card above), only that the
+   new one is coming. */
+.proof-panel.turn-pending #md-view, .proof-panel.turn-pending #pdf-pages, .proof-panel.turn-pending #proof-empty,
+.proof-panel.turn-pending .cite-strip, .proof-panel.turn-pending #readability-tabs, .proof-panel.turn-pending #proof-doc-switch,
+.proof-panel.turn-pending #proof-edit-btn, .proof-panel.turn-pending #pdf-dl-btn, .proof-panel.turn-pending #make-readable-btn { display: none !important; }
+.proof-pending { display: flex; align-items: center; gap: 10px; padding: 18px 28px 20px; color: var(--dim); font-size: 13.5px; }
+.proof-pending[hidden] { display: none; }
+.proof-pending::before { content: ''; flex: none; width: 8px; height: 8px; border-radius: 50%; background: var(--warn, var(--accent)); animation: pulse 1.2s infinite; }
 .proof-toolbar button {
   border: 1px solid var(--border); background: var(--panel); color: var(--fg);
   border-radius: 8px; padding: 6px 12px; font-size: 12px; font-weight: 600; cursor: pointer;
@@ -2397,7 +2404,6 @@ body { background:var(--bg); }
                 <div class="proof-toolbar">
                   <span class="title" id="proof-title">Proof</span>
                   <span class="sub" id="proof-label">—</span>
-                  <span class="proof-turn-note" id="proof-turn-note" role="status" hidden></span>
                   <div class="auto-pipeline-status" id="auto-pipeline-status" hidden></div>
                   <span class="editor-save-status" id="editor-save-status"></span>
                   <a class="analysis-source-link" id="analysis-source-link" hidden target="_blank" rel="noopener noreferrer">Source ↗</a>
@@ -2432,6 +2438,7 @@ body { background:var(--bg); }
                 <pre class="proc-body" id="prompt-body"></pre>
               </div>
               <div class="proof-body" id="proof-body">
+                <div class="proof-pending" id="proof-pending" role="status" hidden></div>
                 <div class="problem-message-row" id="problem-message-row" style="display:none"></div>
                 <div class="notion-editor-wrap" id="notion-editor-wrap" hidden>
                   <textarea id="notion-editor" class="notion-editor" spellcheck="true" placeholder="Start writing the proof…"></textarea>
@@ -9802,18 +9809,21 @@ function threadLayout(items,run,kind){
    the reader just sent (the server's copy of it, or true) is brought into
    view, and the error of an earlier try goes. */
 // While a later turn works and has not rewritten proof.md yet, the live card
-// still shows the turn before's proof (an earlier card above shows the same):
-// its toolbar says so, until the proof is rewritten or the turn ends.
+// would show the turn before's proof again (its own card above shows it): it
+// shows none, only that the new one is coming, until the proof is rewritten
+// or the turn ends.
 function threadTurnNote(run,kind){
-  const note=$('proof-turn-note'); if(!note)return;
+  const note=$('proof-pending'), panel=sandboxThread()?.querySelector('.proof-panel'); if(!note)return;
   // Answer-only turns never rewrite the proof: only a turn that works on it counts.
   const turns=(kind==='prove'&&Array.isArray(run?.proof_turns)?run.proof_turns:[]).filter(t=>t&&!t.answer_only), live=turns[turns.length-1];
   const started=Date.parse(live?.started_at||''), written=Number(run?.sandbox_preview?.mtime||0)*1000;
-  const stale=turns.length>1&&!live.finished_at&&Number.isFinite(started)&&written>0&&written<started&&!sandboxEditing;
-  // The proof shown is the last one an earlier turn kept (or, none kept, an earlier one).
-  const shown=turns.slice(0,-1).filter(t=>t&&t.file).pop();
-  const text=stale?'Turn '+live.n+' is working · showing '+(shown?'turn '+shown.n+'\'s':'an earlier')+' proof until it is rewritten':'';
-  if(note.textContent!==text){ threadRedraw('keep',()=>{ note.textContent=text; note.hidden=!text; }); }
+  // Only while the run works (a turn a restart left unfinished never hides the proof).
+  const working=['running','queued','starting','continuing'].includes(String(run?.status||''));
+  const stale=working&&turns.length>1&&!live.finished_at&&Number.isFinite(started)&&written>0&&written<started&&!sandboxEditing;
+  const text=stale?'Turn '+live.n+' is working on a new proof…':'';
+  if(note.textContent!==text||!!panel?.classList.contains('turn-pending')!==!!text){
+    threadRedraw('keep',()=>{ note.textContent=text; note.hidden=!text; panel?.classList.toggle('turn-pending',!!text); });
+  }
 }
 function renderThread({fresh=false,sent=false}={}){
   const problemBox=$('thread-problem'), {above:box,below}=threadChatBoxes(); if(!problemBox||!box)return;
