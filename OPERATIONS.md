@@ -306,10 +306,11 @@ and DAG views are unchanged.
     read once through the workspace file endpoint. A turn that kept no proof
     (it failed before writing one) has no card.
   - While a later turn works and has not rewritten `proof.md` yet (some
-    engines write it only at the end), the live card still shows the turn
-    before's proof. Its toolbar then says so ("Turn N is working · showing
-    turn N−1's proof until it is rewritten"), until the proof is rewritten
-    or the turn ends.
+    engines write it only at the end), the live card shows no proof: the
+    turn before's is already in its own card above. It shows "Turn N is
+    working on a new proof…" (no Edit, Download or readable tabs) until the
+    proof is rewritten, the turn ends or the run stops working, or the
+    editor is open. An answer-only turn never hides the proof.
   - A turn ends (its proof kept) before any feedback queued for the next
     turn starts. A turn left running by a restart is marked `interrupted`
     when the next one starts. A deleted run records nothing. A symlinked
