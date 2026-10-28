@@ -16,8 +16,21 @@ from agent_monitor import easy_route, jobs, subprocess_env
 KEY = "sk-or-v1-" + "0" * 64  # a placeholder, never a real key
 
 
-def _reply(content: str):
-    body = json.dumps({"choices": [{"message": {"content": content}}]}).encode()
+def _decision(choice: str, easy: float | None = None, confidence: float = 1.0) -> dict:
+    """The Decisions API's answer to the judge's "difficulty" question."""
+    easy = (1.0 if choice == "easy" else 0.0) if easy is None else easy
+    return {"model": "typesafe/jev-1.13-20260917", "id": "gen-dec-1",
+            "answers": {"difficulty": {"type": "choice", "choice": choice,
+                                       "probabilities": {"easy": easy, "hard": round(1 - easy, 6)}, "confidence": confidence}},
+            "usage": {"input_tokens": 401, "output_tokens": 31, "cost": 0.000017}}
+
+
+def _reply(content):
+    """A response whose body is ``content``: a decision (a choice word, or a
+    dict) or raw bytes."""
+    if isinstance(content, str) and content in {"easy", "hard"}:
+        content = _decision(content)
+    body = content if isinstance(content, bytes) else json.dumps(content).encode()
 
     class Resp(io.BytesIO):
         def __enter__(self):
@@ -63,34 +76,39 @@ class JudgeTest(unittest.TestCase):
             self.assertEqual(easy_route.model(), "vendor/other")
 
     def test_an_easy_verdict_and_the_request_sent(self) -> None:
-        verdict, opener = self.judge(_reply('{"difficulty": "easy", "reason": "A one-line computation."}'))
+        verdict, opener = self.judge(_reply(_decision("easy", 0.97, 0.94)))
         self.assertEqual((verdict["verdict"], verdict["reason"], verdict["model"], verdict["error"]),
-                         ("easy", "A one-line computation.", "typesafe/jev-1.13", ""))
+                         ("easy", "easy with probability 0.97, confidence 0.94", "typesafe/jev-1.13", ""))
         req, timeout = opener.requests[0]
-        self.assertEqual(req.full_url, "https://openrouter.ai/api/v1/chat/completions")
+        self.assertEqual(req.full_url, "https://openrouter.ai/api/alpha/decisions")
         self.assertEqual(req.get_header("Authorization"), f"Bearer {KEY}")
         sent = json.loads(req.data)
         self.assertEqual(sent["model"], "typesafe/jev-1.13")
-        self.assertEqual(sent["temperature"], 0)
-        self.assertIn("Prove that 2 + 2 = 4.", sent["messages"][1]["content"])
+        self.assertEqual(sent["state"], ["REQUEST:\nProve that 2 + 2 = 4."])
+        question = sent["questions"]["difficulty"]
+        self.assertEqual((question["type"], sorted(question["criteria"])), ("choice", ["easy", "hard"]))
+        self.assertNotIn("messages", sent)
         self.assertLessEqual(timeout, 15)
 
     def test_a_follow_up_is_rated_with_its_problem(self) -> None:
-        _, opener = self.judge(_reply('{"difficulty":"hard"}'), text="keep trying!", problem="Prove the Riemann hypothesis.")
-        content = json.loads(opener.requests[0][0].data)["messages"][1]["content"]
-        self.assertIn("ORIGINAL PROBLEM OF THE SESSION:\nProve the Riemann hypothesis.", content)
-        self.assertIn("REQUEST (this turn):\nkeep trying!", content)
+        _, opener = self.judge(_reply("hard"), text="keep trying!", problem="Prove the Riemann hypothesis.")
+        self.assertEqual(json.loads(opener.requests[0][0].data)["state"],
+                         ["ORIGINAL PROBLEM OF THE SESSION:\nProve the Riemann hypothesis.", "REQUEST (this turn):\nkeep trying!"])
 
     def test_anything_but_a_clear_easy_is_hard(self) -> None:
         for content, want in [
-            ('{"difficulty": "hard", "reason": "Research level."}', "hard"),
-            ('```json\n{"difficulty": "EASY", "reason": "x"}\n```', "easy"),
-            ("easy", "easy"),
-            ("Easy.", "easy"),
-            ("I think it is easy but maybe hard", "hard"),
-            ('{"difficulty": "medium"}', "hard"),
-            ("", "hard"),
-            ("{not json", "hard"),
+            (_decision("hard"), "hard"),
+            (_decision("easy", 0.68, 0.36), "easy"),
+            (_decision("easy", 0.6), "easy"),
+            (_decision("easy", 0.55, 0.1), "hard"),  # chosen, but not clearly
+            (_decision("EASY"), "hard"),  # only the option named "easy"
+            ({"answers": {"difficulty": {"type": "choice", "choice": "easy"}}}, "easy"),  # no probabilities given
+            ({"answers": {"difficulty": {"type": "choice", "choice": "easy", "probabilities": {"easy": "x"}}}}, "hard"),
+            ({"answers": {"difficulty": {"type": "choice", "choice": "medium"}}}, "hard"),
+            ({"answers": {"other": {"choice": "easy"}}}, "hard"),
+            ({"answers": []}, "hard"),
+            ({}, "hard"),
+            ([], "hard"),
         ]:
             verdict, _ = self.judge(_reply(content))
             self.assertEqual(verdict["verdict"], want, content)
@@ -118,16 +136,16 @@ class JudgeTest(unittest.TestCase):
 
     def test_no_key_never_calls_out(self) -> None:
         with patch.dict(os.environ, {easy_route.KEY_ENV: ""}):
-            verdict, opener = self.judge(_reply('{"difficulty":"easy"}'))
+            verdict, opener = self.judge(_reply("easy"))
         self.assertEqual((verdict["verdict"], verdict["error"], opener.requests), ("hard", "no judge key", []))
 
     def test_long_text_is_cut(self) -> None:
-        _, opener = self.judge(_reply('{"difficulty":"hard"}'), text="x" * 50_000)
-        self.assertLess(len(json.loads(opener.requests[0][0].data)["messages"][1]["content"]), 9_000)
+        _, opener = self.judge(_reply("hard"), text="x" * 50_000)
+        self.assertLess(len(json.loads(opener.requests[0][0].data)["state"][0]), 9_000)
 
     def test_the_judges_address(self) -> None:
         self.assertEqual(easy_route.url(), easy_route.URL)
-        for value, want in [("https://proxy.example/v1/chat/completions", "https://proxy.example/v1/chat/completions"),
+        for value, want in [("https://proxy.example/api/alpha/decisions", "https://proxy.example/api/alpha/decisions"),
                             ("http://127.0.0.1:8123/judge", "http://127.0.0.1:8123/judge"),
                             ("http://evil.example/judge", easy_route.URL), ("file:///etc/passwd", easy_route.URL)]:
             with patch.dict(os.environ, {easy_route.URL_ENV: value}):
@@ -622,7 +640,7 @@ class BudgetAndSettingsTest(unittest.TestCase):
         class Slow:
             def open(self, req, timeout=None):
                 release.wait(5)
-                return _reply('{"difficulty":"easy"}')
+                return _reply("easy")
 
         self.addCleanup(release.set)
         with patch.dict(os.environ, {easy_route.KEY_ENV: KEY}), patch.object(easy_route, "TIMEOUT_S", 0.2), \
