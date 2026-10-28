@@ -2854,6 +2854,26 @@ def _easy_route_follow_up(
         return run_data
 
 
+def _easy_answer_only(ws: Path, run_data: dict[str, Any]) -> bool:
+    """Whether this Plain turn of easy_route answers without touching the
+    proof: an earlier turn of the run ran on Ansatz CGM, so the proof is
+    Ansatz CGM's (a run that has only ever been on Plain lets Plain write it)."""
+    try:
+        from agent_monitor import easy_route
+
+        if str(run_data.get("engine") or "") != easy_route.EASY_ENGINE:
+            return False
+        state = easy_route.load(ws)
+        if state.get("home") != easy_route.HOME:
+            return False
+        earlier = (state.get("turns") or [])[:-1]
+        return any(isinstance(t, dict) and t.get("engine") == easy_route.HOME for t in earlier) and (
+            (ws / "proof.md").is_file() and (ws / "proof.md").stat().st_size > 0
+        )
+    except Exception:  # noqa: BLE001
+        return False
+
+
 def _easy_plain_follow_up_ok(
     run_id: str, run_data: dict[str, Any], user: dict[str, Any] | None, model: str | None
 ) -> bool:
@@ -3753,6 +3773,9 @@ def _promote_proof_artifact(workspace: Path | None) -> Path | None:
             if not any(word in lowered for word in ("proof", "solution", "answer")):
                 continue
             if "_library" in candidate.parts:
+                continue
+            # A turn's own reply or kept copy (proof_turns) is never the proof.
+            if candidate.name == ".turn_reply.md" or ".proof_turns" in candidate.parts:
                 continue
             if candidate.stat().st_size >= 40:
                 candidates.append(candidate)
@@ -6535,7 +6558,7 @@ def _track_worker(job_id: str, run_id: str, thread: Any) -> None:
             _WORKERS[job_id] = (run_id, thread)
 
 
-def _proof_turn_begin(run_id: str, ws: Path) -> int | None:
+def _proof_turn_begin(run_id: str, ws: Path, *, answer_only: bool = False) -> int | None:
     """A proof turn starting (proof_turns): never for a deleted run, whose
     workspace must not come back.  Best-effort: it never raises, so keeping
     a turn's copy can never fail the turn."""
@@ -6544,7 +6567,7 @@ def _proof_turn_begin(run_id: str, ws: Path) -> int | None:
             return None
         from agent_monitor import proof_turns
 
-        return proof_turns.begin(ws, started_at=_now())
+        return proof_turns.begin(ws, started_at=_now(), answer_only=answer_only)
     except Exception as exc:  # noqa: BLE001 - a turn's copy is best-effort
         print(f"[proof_turns] a turn start was not recorded: {type(exc).__name__}", file=sys.stderr, flush=True)
         return None
@@ -7552,6 +7575,7 @@ def _continue_with_message(
             "extra_env": continue_env,
             "owner_id": continue_owner_id,
             "new_problems": list(new_problems),
+            "answer_only": _easy_answer_only(ws, run_data),
         },
         daemon=True,
         name=f"continue-{run_id}-{job_id}",
@@ -7884,8 +7908,13 @@ def _execute_continue(
     owner_id: int | None = None,
     problems_recorded: bool = False,
     new_problems: Sequence[str] | None = None,
+    answer_only: bool = False,
 ) -> None:
     """Run one follow-up turn of ``run_id`` with ``message`` as its feedback.
+
+    ``answer_only`` (a Plain turn of easy_route on a run whose proof Ansatz
+    CGM wrote): the turn answers the message and leaves proof.md unchanged;
+    its answer is the turn's own (proof_turns).
 
     ``new_problems`` are the texts this turn's message added to the session
     problems (``send_human_message`` and ``_launch_pending_feedback`` record
@@ -7967,6 +7996,18 @@ def _execute_continue(
     if proof_excerpt:
         continuation += f"CURRENT {proof_name} (preserve this content, then extend it):\n{proof_excerpt}\n\n"
     continuation += f"HUMAN FEEDBACK — address this now:\n{message}\n"
+    answer_only = bool(answer_only) and engine == "plain"
+    if answer_only:
+        continuation = (
+            "You are answering a question in an informal mathematics session about a proof "
+            "that has already been written and checked. Answer the HUMAN's question directly "
+            "and completely, in Markdown with $...$ math. Do NOT rewrite, repeat or replace "
+            "the proof: it stays as it is. Your answer is shown to the human as your reply.\n\n"
+            f"SESSION PROBLEMS:\n{problems_block}\n\n"
+            + (f"CURRENT {proof_name} (for reference only; do not reproduce it):\n{proof_excerpt}\n\n" if proof_excerpt else "")
+            + f"HUMAN FEEDBACK — address this now:\n{message}\n"
+        )
+        extra_env["AGENT_MONITOR_PLAIN_ANSWER_ONLY"] = "1"
     if engine in _CGM_ENGINES:
         # Each CGM turn is a fresh tool-free pipeline: its own task, and the
         # files' text as SOURCE MATERIAL (_prepare_cgm_sources, below).
@@ -7986,7 +8027,7 @@ def _execute_continue(
     # Only a proof run's follow-ups are turns (an analysis or a readable
     # version has no proof to keep).
     turn = (
-        _proof_turn_begin(run_id, ws)
+        _proof_turn_begin(run_id, ws, answer_only=answer_only)
         if engine not in {_ANALYZE_ENGINE, _READABILITY_ENGINE}
         and str(run_data.get("run_kind") or "") not in {"analyze", "readability"}
         else None
@@ -8111,7 +8152,8 @@ def _execute_continue(
             "assistant",
             (result_run.get("agents") or [{}])[-1].get("output", "")[:2000] or f"Run {status}.",
         )
-        if _root_proof_artifact(ws):
+        # An answer-only turn left the proof as it was: nothing to derive again.
+        if _root_proof_artifact(ws) and not answer_only:
             try:
                 from agent_monitor import auto_pipeline
 
@@ -9560,6 +9602,7 @@ def _continue_claimed_run(
             "owner_id": continue_owner_id,
             "problems_recorded": problems_recorded,
             "new_problems": None if new_problems is None else list(new_problems),
+            "answer_only": _easy_answer_only(ws, run_data),
         },
         daemon=True,
         name=f"continue-{run_id}-{job_id}",

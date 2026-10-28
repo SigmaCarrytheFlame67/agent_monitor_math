@@ -691,6 +691,13 @@ def account_api_models(user: dict[str, Any] | None, *, env: dict[str, str] | Non
     return _api_model_list(user, providers, sponsored_kimi=sponsored_kimi)
 
 
+def _easy_route_setting(user: dict[str, Any] | None) -> dict[str, Any]:
+    from agent_monitor import easy_route
+
+    enabled = bool(user) and not (user or {}).get("guest") and easy_route.enabled()
+    return {"enabled": enabled, "model": easy_route.model() if enabled else ""}
+
+
 def get_settings(user: dict[str, Any] | None = None) -> dict[str, Any]:
     env = _settings_env(user)
     providers, sponsored_kimi, hosted_guest_available = _api_provider_states(user, env)
@@ -892,6 +899,9 @@ def get_settings(user: dict[str, Any] | None = None) -> dict[str, Any]:
         "claude_reauth_required": claude_reauth_required,
         "cgm_max": cgm_max_plan,
         "cgm_max_api": cgm_max_api_plan,
+        # Whether an Ansatz CGM run's turns are rated by the external judge
+        # (easy_route), so the launcher can say so; never its key.
+        "easy_route": _easy_route_setting(user),
         "subscription_policy": account_policy.subscription_policy(user),
         "subscription_notes": account_policy.subscription_notes() if restricted else {},
         "subscription_stored": stored_logins,

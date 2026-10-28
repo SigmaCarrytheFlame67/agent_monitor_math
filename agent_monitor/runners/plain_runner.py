@@ -170,7 +170,20 @@ def _ensure_outcome_contract(text: str) -> str:
     return canonicalize_outcome_text(text, allow_legacy_marker=True)
 
 
+ANSWER_ONLY_ENV = "AGENT_MONITOR_PLAIN_ANSWER_ONLY"
+ANSWER_FILE = ".turn_reply.md"  # proof_turns.ANSWER_FILE
+
+
 def _save_result(prompt: str, text: str) -> bool:
+    if os.environ.get(ANSWER_ONLY_ENV) == "1":
+        # An easy question about a proof Ansatz CGM wrote (easy_route): the
+        # answer is kept as the turn's own, and proof.md stays as it is.
+        answer = normalize_proof_markdown(text)
+        if not answer.strip():
+            raise ValueError("Model returned an empty answer")
+        Path(ANSWER_FILE).write_text(answer, encoding="utf-8")
+        emit_item({"type": "agent_message", "text": "Answer written; proof.md left unchanged."})
+        return False
     proof = Path("proof.md")
     if _preserve_existing_proof(prompt, text, proof):
         emit_item(

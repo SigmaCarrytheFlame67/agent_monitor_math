@@ -65,8 +65,17 @@ def _save(ws: Path, turns: list[dict[str, Any]]) -> None:
     os.replace(tmp, folder / INDEX)
 
 
-def begin(ws: Path | str, *, started_at: str) -> int | None:
-    """Record a turn starting; returns its number (1 for the first run)."""
+# Not named like a proof ("proof", "solution", "answer"): jobs._promote_proof_artifact
+# would copy such a file over proof.md.
+ANSWER_FILE = ".turn_reply.md"
+
+
+def begin(ws: Path | str, *, started_at: str, answer_only: bool = False) -> int | None:
+    """Record a turn starting; returns its number (1 for the first run).
+
+    An ``answer_only`` turn (an easy question about a proof Ansatz CGM wrote:
+    easy_route) answers without touching proof.md: what it keeps is its
+    answer (``ANSWER_FILE``), not the proof."""
     ws = Path(ws)
     try:
         if not ws.is_dir():
@@ -80,7 +89,12 @@ def begin(ws: Path | str, *, started_at: str) -> int | None:
                     turn["finished_at"] = started_at
             n = int(turns[-1].get("n") or len(turns)) + 1 if turns else 1
             turns.append({"n": n, "started_at": started_at, "finished_at": None,
-                          "status": "running", "file": "", "chars": 0})
+                          "status": "running", "file": "", "chars": 0,
+                          **({"answer_only": True} if answer_only else {})})
+            if answer_only:
+                stale = ws / ANSWER_FILE
+                if stale.is_file() and not stale.is_symlink():
+                    stale.unlink()
             _save(ws, turns)
             return n
     except (OSError, ValueError, TypeError):
@@ -101,7 +115,8 @@ def end(ws: Path | str, n: int | None, *, status: str, finished_at: str) -> None
             if turn is None or turn.get("finished_at") is not None:
                 return  # unknown, or ended already (a turn ends once)
             name, text = "", ""
-            for source, suffix in (("proof.md", ".md"), ("proof.tex", ".tex")):
+            sources = ((ANSWER_FILE, ".md"),) if turn.get("answer_only") else (("proof.md", ".md"), ("proof.tex", ".tex"))
+            for source, suffix in sources:
                 path = ws / source
                 if path.is_file() and not path.is_symlink():
                     # Only the part kept is read: a runaway proof.md is never
@@ -115,6 +130,10 @@ def end(ws: Path | str, n: int | None, *, status: str, finished_at: str) -> None
                     text = ""
             if name:
                 (_folder(ws) / name).write_text(text, encoding="utf-8")
+            if turn.get("answer_only"):
+                answer = ws / ANSWER_FILE
+                if answer.is_file() and not answer.is_symlink():
+                    answer.unlink()
             turn.update({"finished_at": finished_at, "status": str(status or "finished"),
                          "file": f"{DIR}/{name}" if name else "", "chars": len(text)})
             _save(ws, turns)
@@ -139,5 +158,6 @@ def summary(ws: Path | str | None) -> list[dict[str, Any]]:
             "status": str(turn.get("status") or ""),
             "file": str(turn.get("file") or ""),
             "chars": int(turn.get("chars") or 0),
+            "answer_only": bool(turn.get("answer_only")),
         })
     return out

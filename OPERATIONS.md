@@ -295,6 +295,9 @@ and DAG views are unchanged.
     follows the message that started that turn. A message sent after that
     turn started, and what follows it, goes under the card (`#chat-later`)
     until its own turn starts.
+  - An answer-only turn (easy_route) keeps its answer, not the proof: it is an
+    "Answer" card after its message, and the live card stays with the turn
+    that last worked on the proof.
   - Each earlier turn with a proof kept is a read-only card ("Proof · turn
     N", with its status if it did not finish, and its end time). It sits
     before the first message sent after that turn started, or else before
@@ -1166,9 +1169,23 @@ always gets it, without the judge.
   model or on another route (a start that Plain would put on the sponsored
   Kimi service is refused and starts Ansatz CGM), a bare Continue, and a
   message with files (each keeps the run's current engine).
-- **Failures.** No key, the judge's error or timeout (12 s), or an answer
+- **Failures.** No key, the judge's error or timeout (6 s in all), or an answer
   that is not clearly "easy": the turn runs on Ansatz CGM. Routing never stops
   a run or a follow-up.
+- **A proof Ansatz CGM wrote stays.** Once a turn of the run has run on
+  Ansatz CGM, a later turn rated easy (say "explain step 3") is
+  **answer-only**. Plain answers the message with the proof as reference,
+  writes its answer to the hidden `.turn_reply.md` (never `proof.md`; that
+  name is also never promoted to the proof), and the Lean/DAG views are not
+  derived again. The turn keeps the answer as its own (`proof_turns`, with
+  `answer_only`). The Sandbox shows it as an **Answer** card after the
+  message, and the live card keeps the proof Ansatz CGM wrote. A run that has
+  only ever been on Plain lets Plain write the proof.
+- **Said where a run is chosen.** With the judge on, the launcher's "Runs on
+  …" line for Ansatz CGM (not Max) adds: "Easy requests may be rated by an
+  external model (OpenRouter · <judge>) and answered with Plain on the same
+  model." (`/api/settings` → `easy_route`: on or off and the judge's name,
+  never its key.)
 - **Record.** The run's hidden `.easy_route.json` keeps the engine it started
   on (`home`) and each turn's engine, verdict, reason and judge. The run
   record's `engine` is the current turn's.

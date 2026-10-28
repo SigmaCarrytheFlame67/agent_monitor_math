@@ -42,7 +42,8 @@ SWITCH_ENV = "AGENT_MONITOR_EASY_ROUTE"
 URL_ENV = "AGENT_MONITOR_EASY_ROUTE_URL"
 DEFAULT_MODEL = "typesafe/jev-1.13"
 URL = "https://openrouter.ai/api/v1/chat/completions"
-TIMEOUT_S = 12.0
+# The rating sits before a Start or a Send answers: a slow judge is skipped soon.
+TIMEOUT_S = 6.0
 HOME = "math_harness"
 EASY_ENGINE = "plain"
 STATE_FILE = ".easy_route.json"
@@ -137,11 +138,30 @@ def judge(request: str, *, problem: str = "") -> dict[str, Any]:
     referer = str(os.environ.get("AGENT_MONITOR_APP_URL", "")).strip()
     if referer.startswith("https://"):
         headers["HTTP-Referer"] = referer
+    req = urllib.request.Request(url(), data=body, headers=headers, method="POST")
+    box: dict[str, Any] = {}
+
+    def call() -> None:
+        try:
+            opener = urllib.request.build_opener()
+            with opener.open(req, timeout=TIMEOUT_S) as resp:
+                box["data"] = json.loads(resp.read(200_000).decode("utf-8", errors="replace"))
+        except BaseException as exc:  # noqa: BLE001 - reported by the caller
+            box["error"] = exc
+
+    # One budget for the whole call (urllib's timeout is per socket wait):
+    # past it the turn goes on as Ansatz CGM and the call is left to end.
+    worker = threading.Thread(target=call, daemon=True, name="easy-route-judge")
+    worker.start()
+    worker.join(TIMEOUT_S + 0.5)
     try:
-        req = urllib.request.Request(url(), data=body, headers=headers, method="POST")
-        opener = urllib.request.build_opener()
-        with opener.open(req, timeout=TIMEOUT_S) as resp:
-            data = json.loads(resp.read(200_000).decode("utf-8", errors="replace"))
+        if worker.is_alive():
+            raise TimeoutError("judge took too long")
+        if "error" in box:
+            raise box["error"]
+        data = box.get("data")
+        if not isinstance(data, dict):
+            raise ValueError("judge reply is not an object")
         content = (((data.get("choices") or [{}])[0] or {}).get("message") or {}).get("content")
         if isinstance(content, list):  # content parts
             content = "".join(str(part.get("text") or "") for part in content if isinstance(part, dict))

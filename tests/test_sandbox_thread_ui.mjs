@@ -844,6 +844,57 @@ test('one proof per turn: each earlier turn\'s proof is a card before the messag
   assert.deepEqual(kinds(l.below), ['user:keep trying!', 'notice:Applying 1 queued human message'])
 })
 
+test('an answer-only turn (easy_route) is an Answer card after its question; the live card stays with the proof it kept', () => {
+  const ctx = vm.createContext({ console })
+  vm.runInContext(`${['threadLayout', 'threadSplit'].map(fn).join('\n')}`, ctx)
+  const layout = (items, run) => plain(vm.runInContext(`threadLayout(${JSON.stringify(items)},${JSON.stringify(run)},'prove')`, ctx))
+  const kinds = part => part.map(item => item.kind === 'turn' ? (item.answer ? 'answer' : 'proof') + item.n : item.kind + ':' + (item.text || ''))
+  const it = (kind, s, text) => ({ key: kind + s, kind, ts: at(s), text })
+  const turn = (n, s, f, extra = {}) => ({ n, started_at: at(s), finished_at: f === null ? null : at(f), status: f === null ? 'running' : 'finished', file: '.proof_turns/' + n + '.md', chars: 9, ...extra })
+  const chat = [it('reply', 50, 'CGM done.'), it('user', 70, 'Explain step 3.'), it('reply', 90, 'answered'), it('user', 100, 'And step 4?')]
+  // Turn 1 (CGM) wrote the proof; turns 2 and 3 answered questions: the live card stays after turn 1's start, each answer after its question.
+  let l = layout(chat, { proof_turns: [turn(1, 0, 60), turn(2, 71, 95, { answer_only: true }), turn(3, 101, 120, { answer_only: true })] })
+  assert.deepEqual([kinds(l.above), kinds(l.below)], [['reply:CGM done.'], ['user:Explain step 3.', 'reply:answered', 'answer2', 'user:And step 4?', 'answer3']])
+  // An answer still running has no card yet; one that wrote nothing has none.
+  l = layout(chat, { proof_turns: [turn(1, 0, 60), turn(2, 71, 95, { answer_only: true, file: '' }), turn(3, 101, null, { answer_only: true, file: '' })] })
+  assert.deepEqual([kinds(l.above), kinds(l.below)], [['reply:CGM done.'], ['user:Explain step 3.', 'reply:answered', 'user:And step 4?']])
+  // A later turn that works on the proof again takes the live card: the earlier proof and the answer are cards above it.
+  const more = [...chat, it('user', 130, 'Now prove the general case.')]
+  l = layout(more, { proof_turns: [turn(1, 0, 60), turn(2, 71, 95, { answer_only: true }), turn(3, 101, 120, { answer_only: true }), turn(4, 131, null)] })
+  assert.deepEqual([kinds(l.above), kinds(l.below)], [['reply:CGM done.', 'proof1', 'user:Explain step 3.', 'reply:answered', 'answer2', 'user:And step 4?', 'answer3', 'user:Now prove the general case.'], []])
+  // The card item says it is an answer.
+  assert.deepEqual([l.above[1].answer, l.above[4].answer, l.above[4].label], [false, true, 'Answer'])
+})
+
+test('an Answer card is titled and downloaded as an answer; the launcher says when an external model rates CGM turns', async () => {
+  const ctx = vm.createContext({ console, setTimeout, Blob })
+  vm.runInContext(DOM + `
+const fetch=async()=>({ok:true,json:async()=>({content:'Step 3 holds.'})});
+const mdToHtml=text=>'<p>'+text+'</p>', closureCitedLemmas=t=>t, normalizeProofMarkdown=t=>t, escapeHtml=t=>t;
+let made=null; const URL={createObjectURL:()=>'blob:x',revokeObjectURL:()=>{}};
+document.body={append:a=>{ made=a; }}; const realCreate=document.createElement; document.createElement=tag=>{ const n=realCreate(tag); if(tag==='a'){ n.click=()=>{}; } return n; };
+${['threadTurnNode', 'threadTurnLoad', 'threadMoreButton', 'threadTurnDownload', 'easyRouteNotice'].map(fn).join('\n')}
+const threadTurnTexts=new Map(), THREAD_TURN_RETRIES=0, THREAD_TURN_RETRY_MS=1;
+let SETTINGS={easy_route:{enabled:true,model:'typesafe/jev-1.13'}}, CURRENT_USER={id:1}, engine='math_harness', maxOn=false, maxApiOn=false;
+const isCgmMax=()=>maxOn, isCgmMaxApi=()=>maxApiOn;`, ctx)
+  const step = code => vm.runInContext(code, ctx)
+  const item = { key: 'turn|2|.proof_turns/2.md|9', kind: 'turn', n: 2, ts: at(90), file: '.proof_turns/2.md', status: 'finished', answer: true, label: 'Answer' }
+  step(`var box=document.createElement('div'); var node=threadTurnNode(${JSON.stringify(item)}); node.dataset.key=${JSON.stringify(item.key)}; box.append(node); node.isConnected=true;`)
+  assert.match(step('node.textContent'), /^Answer/)
+  assert.equal(step("node.getAttribute('aria-label')"), 'Answer, turn 2')
+  assert.equal(step("node.querySelector('turn-dl').getAttribute('aria-label')"), 'Download the answer of turn 2')
+  await new Promise(resolve => setTimeout(resolve, 20))
+  // (The test DOM's closest() matches one class: the button's card is given.)
+  step("var dl=node.querySelector('turn-dl'); dl.closest=()=>node; threadTurnDownload(dl)")
+  assert.equal(step('made.download'), 'answer-turn-2.md')
+  // The launcher's notice: only for Ansatz CGM (not Max), signed in, with the judge on.
+  assert.equal(step('easyRouteNotice()'), 'Easy requests may be rated by an external model (OpenRouter · typesafe/jev-1.13) and answered with Plain on the same model.')
+  for (const change of ["engine='plain'", 'maxOn=true', 'maxApiOn=true', 'CURRENT_USER={guest:true}', 'SETTINGS={easy_route:{enabled:false}}', 'SETTINGS={}']) {
+    step("SETTINGS={easy_route:{enabled:true,model:'typesafe/jev-1.13'}}; CURRENT_USER={id:1}; engine='math_harness'; maxOn=false; maxApiOn=false;" + change)
+    assert.equal(step('easyRouteNotice()'), '', change)
+  }
+})
+
 test('while a later turn has not rewritten the proof yet, the live card says whose proof it shows', () => {
   const ctx = vm.createContext({ console })
   vm.runInContext(`let sandboxEditing=false; const note={textContent:'',hidden:true}; const $=id=>id==='proof-turn-note'?note:null; const threadRedraw=(how,draw)=>draw();
@@ -865,6 +916,10 @@ ${fn('threadTurnNote')}`, ctx)
   const three = [turns[0], { n: 2, started_at: at(70), finished_at: at(90), file: '' }, { n: 3, started_at: at(100), finished_at: null }]
   assert.deepEqual(show({ proof_turns: three, sandbox_preview: { mtime: mtime(50) } }), ["Turn 3 is working · showing turn 1's proof until it is rewritten", false])
   assert.deepEqual(show({ proof_turns: [{ ...turns[0], file: '' }, turns[1]], sandbox_preview: { mtime: mtime(50) } }), ['Turn 2 is working · showing an earlier proof until it is rewritten', false])
+  // An answer-only turn never rewrites the proof: no note while it runs, and it is never the proof named.
+  assert.deepEqual(show({ proof_turns: [turns[0], { ...turns[1], answer_only: true }], sandbox_preview: { mtime: mtime(50) } }), ['', true])
+  assert.deepEqual(show({ proof_turns: [turns[0], { n: 2, started_at: at(70), finished_at: at(90), file: '.proof_turns/2.md', answer_only: true }, { n: 3, started_at: at(100), finished_at: null }], sandbox_preview: { mtime: mtime(50) } }),
+    ["Turn 3 is working · showing turn 1's proof until it is rewritten", false])
   step('sandboxEditing=true')
   assert.deepEqual(show({ proof_turns: turns, sandbox_preview: { mtime: mtime(50) } }), ['', true])
 })
