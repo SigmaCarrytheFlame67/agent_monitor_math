@@ -1871,7 +1871,7 @@ Object.defineProperty(card,'height',{get(){ return 100+(parseFloat(editor.style.
 test('the lines a run writes as it ends, after its record says it ended, are drawn without the reader doing anything (C1)', async () => {
   const ctx = vm.createContext({ console, Date })
   vm.runInContext(`
-let runId='p1', workspaceView='sandbox', pollSig='', pollQuiet=0, pollDelay=2000, pollListedEnd=null, pollEnded='', lastChatKey='', threadMsgs=[], threadMsgsRun='', threadChatAsked=0, threadChatShown=0;
+let runId='p1', workspaceView='sandbox', pollSig='', pollTurn='', pollQuiet=0, pollDelay=2000, pollListedEnd=null, pollEnded='', lastChatKey='', threadMsgs=[], threadMsgsRun='', threadChatAsked=0, threadChatShown=0;
 const POLL_MIN_MS=2000, POLL_MAX_MS=10000, POLL_BACKOFF=1.6, POLL_SIDE_EVERY=6;
 const timers=[], drawn=[], fetched=[];
 const setTimeout=(fn,ms)=>{ timers.push({fn,ms}); return timers.length; };
@@ -2087,9 +2087,13 @@ ${fn('followRunAgain')}`, ctx)
   assert.deepEqual(plain(step('started')), [true, true, true, true])
   read(80000, ['p1', 'j3', 'failed'])
   assert.equal(step('timers.length'), 0)
+  // One that ends as the last one listed did (failed again: another tab's short turn): its job is new, so its record
+  // is read once too.
+  read(82000, ['p1', 'j3b', 'failed']); step('fire()')
+  assert.deepEqual(plain(step('started')), [true, true, true, true, true])
   // Another job of the run (a Continue from another tab) listed running: followed again.
   read(85000, ['p1', 'j4', 'running']); step('fire()')
-  assert.deepEqual(plain(step('started')), [true, true, true, true, true])
+  assert.deepEqual(plain(step('started')), [true, true, true, true, true, true])
   // Polled already: the list is noted (its next change is judged from it), nothing else is touched.
   step(`pollActive=true; now=90000; followRunAgain(${jobs(['p1', 'j4', 'running'])}); followRunAgain(${jobs(['p1', 'j5', 'finished'])})`)
   assert.deepEqual([step('timers.length'), step('pollAgainJob.id'), step('pollAgainJob.last'), step('pollListed.id')], [0, 'j4', 85000, 'j5'])
@@ -2125,32 +2129,41 @@ const setTimeout=(fn,ms)=>{ delays.push(ms); const id=++ids; timers.push({id,fn,
 const setInterval=(fn,ms)=>{ const id=++ids; timers.push({id,fn,at:now+ms,every:ms}); return id; };
 const clearTimeout=id=>{ timers=timers.filter(t=>t.id!==id); };
 const document={hidden:false,addEventListener(){}};
-let record={run_id:'p1',status:'finished',updated_at:'t1',agents:[],totals:{}}, job={run_id:'p1',job_id:'j2',status:'running',engine:'kimi'};
+let record={run_id:'p1',status:'finished',updated_at:'t1',agents:[],totals:{}}, job={run_id:'p1',job_id:'j2',status:'running',engine:'kimi'}, manifest=[];
 let continueReply={ok:true,status:'continuing',run_id:'p1',job_id:'j3'};
-const reads=[], readTimes=[], forced=[], chats=[], pills=[], drawn=[], alerts=[], samples=[];
+const reads=[], readTimes=[], forced=[], proofs=[], chats=[], pills=[], drawn=[], alerts=[], samples=[];
 const els={}, $=id=>els[id]||(els[id]={id,innerHTML:'',textContent:'',title:'',className:'',disabled:false,querySelectorAll:()=>[]}), RUN_KIND_BY_ID=new Map();
-// The session bar as updateSessionButtons draws it; updateChatStatus draws the status line and the bar from the record.
+// The session bar as updateSessionButtons draws it; updateChatStatus draws the status line (its stage, its detail: a
+// failed run's reason, and its class) and the bar from the record, as the real one does (none: another run opened).
 let bar='none';
 const updateSessionButtons=status=>{ bar=status==='running'?'stop':['finished','failed','stopped','interrupted'].includes(status)?'continue':'none'; };
-const updateChatStatus=run=>{ drawn.push(run.status); $('chat-stage').textContent={finished:'Finished',failed:'Failed',stopped:'Stopped',interrupted:'Interrupted'}[run.status]||'Working…'; updateSessionButtons(run.status,!!run.stopping); };
+const updateChatStatus=run=>{
+  if(!run){ $('chat-status').className='chat-status'; bar='none'; return; }
+  drawn.push(run.status); $('chat-stage').textContent={finished:'Finished',failed:'Failed',stopped:'Stopped',interrupted:'Interrupted'}[run.status]||'Working…';
+  $('chat-detail').textContent=run.status==='failed'?String(run.error||''):''; $('chat-status').className='chat-status on'+({finished:' done',failed:' err',interrupted:' interrupted'}[run.status]||'');
+  updateSessionButtons(run.status,!!run.stopping); };
 // What a person sees now: ▶ (Continue offered and enabled), ■ (Stop) or · (neither), the stage and the pill.
 const sample=()=>{ const shown=(bar==='continue'?($('sess-cont').disabled?'·':'▶'):bar==='stop'?'■':'·')+' '+$('chat-stage').textContent+' | '+(pills.at(-1)||''); if(samples.at(-1)?.shown!==shown)samples.push({at:now,shown}); };
 const fetch=async url=>{
   // A page that polls back to back is stopped here (the network no longer answers), so that the test fails, never hangs.
   if(reads.length>=1000)return new Promise(()=>{});
   reads.push(url); readTimes.push(now); await new Promise(resolve=>netTick(()=>{ sample(); resolve(); }));
-  const body=url==='/api/jobs'?{jobs:[job]}:url==='/api/runs'?{runs:[]}:/^\\/api\\/run\\//.test(url)?record
+  const body=url==='/api/jobs'?{jobs:[job]}:url==='/api/runs'?{runs:manifest}:/^\\/api\\/run\\//.test(url)?record
     :url==='/api/runs/p1/continue'?continueReply:null;
   if(!body)throw new Error('unexpected fetch '+url);
   const copy=JSON.parse(JSON.stringify(body)); return {ok:true,json:async()=>copy};
 };
 const setPill=(state,text)=>pills.push(text), updateProblemStrip=run=>{ lastSandboxRun=run; }, updatePromptStrip=()=>{}, renderConversation=()=>{}, renderAutoPipeline=()=>{}, applySandboxPreview=()=>{};
-const refreshProofPreview=async force=>{ if(force)forced.push(now); }, loadChat=()=>chats.push(now), syncIdlePill=()=>{}, escapeHtml=s=>String(s);
+const refreshProofPreview=async force=>{ proofs.push(now); if(force)forced.push(now); }, loadChat=()=>chats.push(now), syncIdlePill=()=>{}, escapeHtml=s=>String(s);
 const alert=message=>alerts.push(message);
-// A test that continues a run not shown says what selectRun does to polling.
+// A test that continues a run not shown says what selectRun does to polling, or takes the real one (realSelectRun,
+// over these stubs of what it resets and draws).
 let selectRun=()=>{ throw new Error('selectRun'); };
+const chatAttachments={clear(){},refreshLimits(){}}, convoOpen=new Set(); let leanRefreshSeq=0;
+const syncLeanControls=()=>{}, syncRunAccess=()=>{}, resetProofView=()=>{}, syncRunToMonitor=()=>{}, applyRunKindView=()=>{}, refreshConversation=()=>{}, syncDagRebuild=()=>{}, refreshDagView=()=>{}, refreshLeanView=()=>{};
+const realSelectRun=${fn('selectRun').replace(/^function selectRun\(/, 'function(')};
 ${constant('CONTINUE_PENDING')}
-${['nextPollDelay', 'consoleRunSignature', 'startPolling', 'stopPolling', 'followRunAgain', 'turnSignature', 'awaitTurn', 'turnAwaited', 'showTurnAwaited', 'stopSettling', 'tick', 'loadRuns', 'runningRunCount', 'continueRun'].map(fn).join('\n')}
+${['nextPollDelay', 'consoleRunSignature', 'startPolling', 'stopPolling', 'followRunAgain', 'noteRunListed', 'turnSignature', 'awaitTurn', 'turnAwaited', 'showTurnAwaited', 'stopSettling', 'tick', 'loadRuns', 'runningRunCount', 'continueRun'].map(fn).join('\n')}
 ${script.match(/^setInterval\(\(\)=>\{ if\(!document\.hidden\)loadRuns\(\)[^\n]*$/m)[0]}`, ctx)
   const step = code => vm.runInContext(code, ctx)
   const flush = async (n = 40) => { for (let i = 0; i < n; i++) await new Promise(resolve => setImmediate(resolve)); step('sample()') }
@@ -2232,30 +2245,33 @@ test('the queued turn is still followed: once its record says running, the run l
   assert.deepEqual(['900', '1000', '4000'].map(ms => step(`delays.filter(d=>d===${ms}).length`)), [2, 2, 2])
 })
 
-test('a turn that starts and ends between two reads of the run list (its job listed running for 1.5 s, then failed) is still read: its failure is drawn within 5 s (Q1)', async () => {
-  const { step, flush, advance, recordTimes } = pollingLoop()
-  step("job={...job,status:'finished'}")
-  step('startPolling()')
-  await flush(400)
-  await advance(10000)
-  assert.equal(step('pollActive'), false)
-  // Just after the list's read at 10 s, a turn starts (a queued message's, another tab's Continue); 1.5 s later it fails.
-  await advance(10100)
-  step("job={run_id:'p1',job_id:'j3',status:'running',engine:'kimi'}")
-  await advance(11600)
-  step("job={...job,status:'failed'}; record={...record,status:'failed',error:'Kimi provider rejected the request: HTTP 401.',updated_at:'t2'}")
-  // The next read of the list (15 s) lists a job it had not listed, already ended: the record is read, the failure drawn.
-  await advance(15100)
-  assert.ok(recordTimes(11600).length >= 1, 'the record is read again: ' + JSON.stringify(recordTimes()))
-  assert.equal(step('drawn.at(-1)'), 'failed')
-  assert.ok(recordTimes(11600)[0] - 10100 <= 5000)
-  // Its end is the record's: its closing reads are queued (once), and polling stops.
-  assert.deepEqual([step('pollActive'), step('delays.filter(d=>d===900).length')], [false, 2])
-  await advance(40000)
-  assert.equal(step('delays.filter(d=>d===900).length'), 2)
+test('a turn that starts and ends between two reads of the run list (its job listed running for 1.5 s, then failed, or finished as the last one did) is still read: its end is drawn within 5 s (Q1)', async () => {
+  // Finished as the last listed job did (another tab's short turn): only its job is new.
+  for (const end of ['failed', 'finished']) {
+    const { step, flush, advance, recordTimes } = pollingLoop()
+    step("job={...job,status:'finished'}")
+    step('startPolling()')
+    await flush(400)
+    await advance(10000)
+    assert.equal(step('pollActive'), false)
+    // Just after the list's read at 10 s, a turn starts (a queued message's, another tab's Continue); 1.5 s later it ends.
+    await advance(10100)
+    step("job={run_id:'p1',job_id:'j3',status:'running',engine:'kimi'}")
+    await advance(11600)
+    step(`job={...job,status:'${end}'}; record={...record,status:'${end}',error:${end === 'failed' ? "'Kimi provider rejected the request: HTTP 401.'" : 'null'},updated_at:'t2'}`)
+    // The next read of the list (15 s) lists a job it had not listed, already ended: the record is read, its end drawn.
+    await advance(15100)
+    assert.ok(recordTimes(11600).length >= 1, end + ': the record is read again: ' + JSON.stringify(recordTimes()))
+    assert.equal(step('drawn.at(-1)'), end)
+    assert.ok(recordTimes(11600)[0] - 10100 <= 5000)
+    // Its end is the record's: its closing reads are queued (once), and polling stops.
+    assert.deepEqual([step('pollActive'), step('delays.filter(d=>d===900).length')], [false, 2], end)
+    await advance(40000)
+    assert.equal(step('delays.filter(d=>d===900).length'), 2)
+  }
 })
 
-test('▶ Continue while the record still reads as it ended (the turn being prepared): the turn is awaited, its record read every 2 s and the run shown as continuing (▶ never offered again meanwhile), and it is followed within 2 s of its record saying running (Q1)', async () => {
+test('▶ Continue while the record still reads as it ended (the turn being prepared): the turn is awaited, its record read again 2 s later (then backing off) and the run shown as continuing (▶ never offered again meanwhile), and it is followed at the next read once its record says running (Q1)', async () => {
   for (const prep of [300, 2000, 4500]) {
     const { step, flush, advance, records, recordTimes, shownFrom } = pollingLoop()
     step("record={...record,status:'stopped'}; job={...job,status:'stopped'}")
@@ -2278,12 +2294,14 @@ test('▶ Continue while the record still reads as it ended (the turn being prep
     step("record={...record,status:'running',updated_at:'t2'}")
     await advance(8000 + prep + 2000)
     // While it read as stopped: at most one read per 2 s (no loop), never ▶ Continue nor "Stopped" on screen.
-    const stale = recordTimes(8000).filter(at => at < 8000 + prep)
+    // One read is the Continue's own, just before its request (the record as it was before the turn).
+    const reads = recordTimes(8000); reads.splice(reads.indexOf(8000), 1)
+    const stale = reads.filter(at => at < 8000 + prep)
     assert.ok(stale.length <= 1 + Math.floor(prep / 2000), 'reads while stale: ' + JSON.stringify(stale))
     assert.ok(stale.every((at, i) => !i || at - stale[i - 1] >= 2000), JSON.stringify(stale))
     const shown = shownFrom(/Continuing…/, 8000 + prep)
     assert.ok(shown.every(s => !/^▶|Stopped/.test(s)), 'shown while the turn was prepared: ' + JSON.stringify(shown))
-    // Followed within 2 s of its record saying running.
+    // Followed at the next read (2 s after the click, then 3.2 s later): here within 2 s of its record saying running.
     const running = recordTimes(8000 + prep)
     assert.ok(running.length && running[0] - (8000 + prep) <= 2000, 'read after it ran: ' + JSON.stringify(running))
     assert.deepEqual([step('drawn.at(-1)'), step('bar'), step('pollActive')], ['running', 'stop', true])
@@ -2294,7 +2312,7 @@ test('▶ Continue while the record still reads as it ended (the turn being prep
     assert.deepEqual([step('drawn.at(-1)'), step('bar'), step('pollActive'), step('delays.filter(d=>d===900).length')], ['finished', 'continue', false, 2])
   }
   // A message that continues the run awaits its turn the same way.
-  assert.match(fn('sendChat'), /if\(d\.status==='continuing'\)\{ setPill\('running','continuing…'\); if\(typeof awaitTurn==='function'\)awaitTurn\(targetRun,d\.job_id\); startPolling\(true\); \}/)
+  assert.match(fn('sendChat'), /if\(d\.status==='continuing'\)\{ setPill\('running','continuing…'\); if\(typeof awaitTurn==='function'\)awaitTurn\(targetRun,d\.job_id,before\); startPolling\(true\); \}/)
 })
 
 test('▶ Continue on a run that runs already (its turn starting, its record still ended): said once, the turn awaited without drawing the proof again, and followed once it runs (Q1)', async () => {
@@ -2318,8 +2336,8 @@ test('▶ Continue on a run that runs already (its turn starting, its record sti
 })
 
 test('a turn awaited is no longer awaited once its record changes (it may end before it ever says running), once the run list shows its job ended, after a minute, or after a Stop from this page: the record is drawn as it reads (Q1)', async () => {
-  // A turn that fails before its record ever says running (in preparation): its end is drawn within 2 s, between
-  // two reads of the run list, its closing reads queued once.
+  // A turn that fails before its record ever says running (in preparation): its end is drawn at the await's next
+  // read (2 s after the click, then 3.2 s later), between two reads of the run list, its closing reads queued once.
   {
     const { step, flush, advance, recordTimes } = pollingLoop()
     step("record={...record,status:'stopped'}; job={...job,status:'stopped'}")
@@ -2331,9 +2349,9 @@ test('a turn awaited is no longer awaited once its record changes (it may end be
     await flush(400)
     await advance(10500)
     step("record={...record,status:'failed',error:'Kimi provider rejected the request: HTTP 401.',updated_at:'t2'}; job={...job,status:'failed'}")
-    await advance(12100)
+    await advance(13300)
     assert.deepEqual([step('drawn.at(-1)'), step('bar'), step("$('chat-stage').textContent"), step('pollActive'), step('delays.filter(d=>d===900).length')], ['failed', 'continue', 'Failed', false, 2])
-    assert.ok(recordTimes(10500)[0] - 10500 <= 2000)
+    assert.deepEqual(recordTimes(10500).slice(0, 1), [13200])
   }
   // The run list shows the turn's job ended while the record never changed (a turn that never wrote it).
   {
@@ -2367,7 +2385,7 @@ test('a turn awaited is no longer awaited once its record changes (it may end be
     const before = records()
     await advance(8000 + 59000)
     assert.deepEqual([step('pollActive'), step('bar')], [true, 'stop'])
-    assert.ok(records() - before <= 30, 'reads while awaited: ' + (records() - before))
+    assert.ok(records() - before <= 13, 'reads while awaited: ' + (records() - before))
     await advance(8000 + 63000)
     assert.deepEqual([step('bar'), step("$('chat-stage').textContent")], ['continue', 'Stopped'])
   }
@@ -2400,6 +2418,19 @@ test('a turn awaited is no longer awaited once its record changes (it may end be
     step("pollAwait={rid:'p1',sig:'',job:'j3',since:now}")
     assert.deepEqual([step("turnAwaited('p1',{...record,updated_at:'t9'})"), step("pollAwait.sig===turnSignature({...record,updated_at:'t9'})"), step("turnAwaited('p1',{...record,updated_at:'t9'})")], [true, true, true])
     assert.deepEqual([step("turnAwaited('p1',{...record,status:'failed',updated_at:'t10'})"), step('pollAwait')], [false, null])
+    // The record read just before the Continue (continueRun, for a run not shown) is the one before, over the record
+    // on screen: the first record read since is judged by it, never taken for it, whatever its status.
+    step("lastSandboxRun={...record}; pollSig='x'")
+    const before = "turnSignature({...record,status:'failed',error:'another tab',updated_at:'t11'})"
+    step(`awaitTurn('p1','j3',${before})`)
+    assert.equal(step(`pollAwait.sig===${before}`), true)
+    assert.deepEqual([step("turnAwaited('p1',{...record,status:'failed',error:'another tab',updated_at:'t11'})"), step('!!pollAwait')], [true, true])
+    assert.deepEqual([step("turnAwaited('p1',{...record,status:'failed',error:'Kimi provider rejected the request: HTTP 401.',updated_at:'t12'})"), step('pollAwait')], [false, null])
+    // Without it, the record on screen as the last poll read it; with neither, none ('' above).
+    step("awaitTurn('p1','j3')")
+    assert.equal(step('pollAwait.sig===turnSignature(record)'), true)
+    step("pollSig=''; awaitTurn('p1','j3')")
+    assert.equal(step('pollAwait.sig'), '')
   }
 })
 
@@ -2417,8 +2448,13 @@ test('a turn awaited after ▶ Continue is not ended by a change that is no turn
     step("record={...record,sandbox_preview:{revision:'r2'}}")
     // ▶ Continue: the job is registered running; the worker writes the record running later.
     step("job={run_id:'p1',job_id:'j3',status:'running',engine:'kimi'}; samples.length=0")
+    const side = () => [step('proofs.length'), step('chats.length'), plain(step('forced'))]
+    const [proofs, chats, forced] = side()
     await step("continueRun('p1')")
     await flush(400)
+    // The edit is refreshed once at the first read (the proof as its files say, never forced: a PDF still the same is
+    // not drawn anew; the chat), though the turn is awaited.
+    assert.deepEqual(side(), [proofs + 1, chats + 1, forced])
     await advance(9500)
     step("record={...record,status:'running',updated_at:'t2'}")
     await advance(16000)
@@ -2438,7 +2474,14 @@ test('a turn awaited after ▶ Continue is not ended by a change that is no turn
     step("job={run_id:'p1',job_id:'j3',status:'running',engine:'kimi'}; samples.length=0")
     await step("continueRun('p1')")
     await flush(400)
+    // (The closing reads of the turn that ended, the chat 1 s and 4 s after it, are done by 4.5 s.)
+    await advance(4500)
+    const side = () => [step('proofs.length'), step('chats.length'), plain(step('forced'))]
+    const [proofs, chats, forced] = side()
     step("record={...record,auto_pipeline:{status:'running',updated_at:'a2'},lean_verification:{status:'running',attempt_count:2}}")
+    await advance(7900)
+    // That change is refreshed once (unforced, the chat read), and nothing more while the turn is awaited.
+    assert.deepEqual(side(), [proofs + 1, chats + 1, forced])
     await advance(8000)
     step("record={...record,status:'running',updated_at:'t2'}")
     await advance(12000)
@@ -2500,7 +2543,7 @@ test('a document newly shown at the card\'s top that stays short (Notation with 
   }
 })
 
-test('▶ in the run list for a run not shown: the run is opened and its turn awaited, the first record read standing for the one before it; a turn that then fails before it runs is drawn within 2 s (Q1)', async () => {
+test('▶ in the run list for a run not shown: the run is opened and its turn awaited, its record read just before the Continue standing for the one before it; a turn that then fails before it runs is drawn within 2 s (Q1)', async () => {
   const { step, flush, advance, recordTimes, shownFrom } = pollingLoop()
   // Another run is shown; selectRun (here: what it does to polling) opens p1 and polls it afresh.
   step("runId='p0'; record={...record,status:'stopped'}; job={run_id:'p1',job_id:'j3',status:'running',engine:'kimi'}")
@@ -2508,7 +2551,8 @@ test('▶ in the run list for a run not shown: the run is opened and its turn aw
   await advance(6000)
   await step("continueRun('p1')")
   await flush(400)
-  assert.deepEqual([step('runId'), step('pollActive'), step("$('chat-stage').textContent"), step('bar'), step('pollAwait.sig.length>0')], ['p1', true, 'Continuing…', 'stop', true])
+  assert.deepEqual([step('runId'), step('pollActive'), step("$('chat-stage').textContent"), step('bar'), step('pollAwait.sig===turnSignature(record)')], ['p1', true, 'Continuing…', 'stop', true])
+  assert.deepEqual(plain(step("reads.filter(url=>/^\\/api\\/run\\/p1$|\\/continue$/.test(url))")).slice(0, 2), ['/api/run/p1', '/api/runs/p1/continue'])
   // The turn fails while it is prepared (its record never said running), between two reads of the run list.
   await advance(6500)
   step("record={...record,status:'failed',error:'Kimi provider rejected the request: HTTP 401.',updated_at:'t2'}; job={...job,status:'failed'}")
@@ -2516,4 +2560,331 @@ test('▶ in the run list for a run not shown: the run is opened and its turn aw
   assert.deepEqual([step('drawn.at(-1)'), step("$('chat-stage').textContent"), step('bar'), step('pollActive')], ['failed', 'Failed', 'continue', false])
   assert.ok(recordTimes(6500)[0] - 6500 <= 2000, JSON.stringify(recordTimes(6000)))
   assert.ok(shownFrom(/Continuing…/, 6500).every(s => !/^▶|Stopped/.test(s)), JSON.stringify(shownFrom(/Continuing…/, 6500)))
+})
+
+// ── the wait for a turn, follow-ups (A1–A5) ──
+
+test('while a turn is awaited nothing is refreshed periodically (a PDF proof is never drawn anew, nor the chat read): only its record is read until it changes; its proof and chat are read once it runs (A1)', async () => {
+  // ▶ Continue, or a message that continues the run (sendChat awaits its turn the same way, as pinned above).
+  for (const how of ["continueRun('p1')", "awaitTurn('p1','j3'); startPolling(true)"]) {
+    const { step, flush, advance, recordTimes } = pollingLoop()
+    step("record={...record,status:'stopped'}; job={...job,status:'stopped'}")
+    step('startPolling()')
+    await flush(400)
+    await advance(8000)
+    // The turn stays in preparation for 40 s: its job listed running, its record unchanged.
+    step("job={run_id:'p1',job_id:'j3',status:'running',engine:'kimi'}; proofs.length=0; chats.length=0")
+    await step(how)
+    await flush(400)
+    await advance(48000)
+    assert.ok(recordTimes(8000).length >= 9, how + ': read while awaited: ' + JSON.stringify(recordTimes(8000)))
+    assert.deepEqual([plain(step('proofs')), plain(step('chats')), step("$('chat-stage').textContent")], [[], [], 'Continuing…'], how)
+    // It runs: followed, and its proof and chat are read then.
+    step("record={...record,status:'running',updated_at:'t2'}")
+    await advance(54000)
+    assert.equal(step('drawn.at(-1)'), 'running', how)
+    assert.ok(step('proofs.length') >= 1 && step('chats.length') >= 1, how + ': ' + JSON.stringify([plain(step('proofs')), plain(step('chats'))]))
+  }
+})
+
+test('a run opened: the run list read as it opens is where the periodic read follows it from, so a turn that starts and ends before that read is still read, its failure drawn then (A2)', async () => {
+  // Opened as the page loads (no periodic read yet), or after another run was shown (the list's last read was its).
+  for (const [shownBefore, openAt, startAt, endAt, listAt] of [[null, 1000, 2500, 4000, 5000], ['p0', 5600, 6500, 8000, 10000]]) {
+    const { step, flush, advance, records, recordTimes } = pollingLoop()
+    step(`selectRun=realSelectRun; runId=${JSON.stringify(shownBefore)}; job={...job,status:'finished'}`)
+    await advance(openAt)
+    step("selectRun('p1',null)")
+    await flush(400)
+    // Its record read finished (polling stops), and the list read as it opened noted its latest job.
+    assert.deepEqual([step('runId'), step('pollActive'), step('drawn.at(-1)'), step('pollListed?.id')], ['p1', false, 'finished', 'j2'], String(shownBefore))
+    // Its queued turn runs and fails before the run list's next read.
+    await advance(startAt)
+    step("job={run_id:'p1',job_id:'j3',status:'running',engine:'kimi'}")
+    await advance(startAt + 300)
+    step("record={...record,status:'running',updated_at:'t2'}")
+    await advance(endAt)
+    step("job={...job,status:'failed'}; record={...record,status:'failed',error:'Kimi provider rejected the request: HTTP 401.',updated_at:'t3'}")
+    await advance(listAt + 100)
+    assert.deepEqual(recordTimes(endAt).slice(0, 1), [listAt], 'opened after ' + shownBefore + ': ' + JSON.stringify(recordTimes()))
+    assert.deepEqual([step('drawn.at(-1)'), step("$('chat-stage').textContent"), step('bar'), step('pollActive')], ['failed', 'Failed', 'continue', false])
+    // Read once: nothing more after it.
+    const read = records()
+    await advance(listAt + 30000)
+    assert.ok(records() - read <= 1, 'reads after: ' + (records() - read))
+  }
+  // selectRun notes the list it reads, and follows nothing from it.
+  assert.match(fn('selectRun'), /const listed=loadRuns\(\); if\(typeof listed\?\.then==='function'\)listed\.then\(jobs=>noteRunListed\(rid,jobs\)\)\.catch\(\(\)=>\{\}\);/)
+  assert.doesNotMatch(fn('noteRunListed'), /startPolling|setTimeout|pollAwait/)
+})
+
+test('▶ in the run list for a run not shown: its record read just before the Continue is the one before the turn, so a turn that fails as the server takes it is drawn at once (from any status, failed again included), and another tab\'s turn that ended after the list\'s last read is never taken for it (A3)', async () => {
+  const FAIL = 'Kimi provider rejected the request: HTTP 401.'
+  // The run list's ▶ hands on the run alone (the list's view of it may be older than its record).
+  assert.match(fn('loadRuns'), /\.run-act\.cont'\)\.forEach\(b=>b\.onclick=e=>\{e\.stopPropagation\(\);continueRun\(b\.dataset\.run\);\}\);/)
+  assert.doesNotMatch(fn('loadRuns'), /data-status/)
+  // The turn fails as the server takes the Continue (the reply's job is read as it is answered), its job listed ended
+  // a moment later: stopped before, or failed before (a retry of a run whose key was never fixed: same status).
+  for (const old of [{ status: 'stopped' }, { status: 'failed', error: 'Kimi provider rejected the request: HTTP 401 (first try).', updated_at: 't0' }]) {
+    const { step, flush, advance, shownFrom } = pollingLoop()
+    step(`selectRun=realSelectRun; runId='p0'; record={...record,...${JSON.stringify(old)}}; job={run_id:'p1',job_id:'j2',status:'${old.status}',engine:'kimi'}`)
+    await advance(6000)
+    assert.match(step("$('runs').innerHTML"), /<button class="run-act cont" data-run="p1" title="Continue">▶<\/button>/)
+    step(`job={run_id:'p1',job_id:'j3',status:'running',engine:'kimi'}; samples.length=0; reads.length=0; readTimes.length=0;
+continueReply={ok:true,status:'continuing',run_id:'p1',get job_id(){ record={...record,status:'failed',error:${JSON.stringify(FAIL)},updated_at:'t2'}; return 'j3'; }}`)
+    await step("continueRun('p1')")
+    await flush(400)
+    // Its record was read before the Continue was sent; the first one read after it is the turn's end, drawn at once.
+    assert.deepEqual(plain(step('reads')).slice(0, 2), ['/api/run/p1', '/api/runs/p1/continue'], old.status)
+    assert.deepEqual([step('runId'), step('drawn.at(-1)'), step("$('chat-stage').textContent"), step("$('chat-detail').textContent"), step('bar'), step('pollAwait'), step('pollActive')],
+      ['p1', 'failed', 'Failed', FAIL, 'continue', null, false], old.status)
+    step("job={...job,status:'failed'}")
+    await advance(20000)
+    // From then on its failure, never "Continuing…" again (that showed only while its first record was on its way).
+    assert.ok(shownFrom(/Failed/).every(s => /^▶ Failed/.test(s)), old.status + ': ' + JSON.stringify(plain(step('samples'))))
+  }
+  // The list read at 5 s shows p1 finished; another tab's short turn on p1 fails after it. ▶ as the list drew it:
+  // the record read before the Continue is that failure, so the first records read after it (our turn prepared
+  // until 14 s) are the one before: "Continuing…" + ■ Stop all along, no ▶ to press again.
+  {
+    const { step, flush, advance, shownFrom, recordTimes } = pollingLoop()
+    step("selectRun=realSelectRun; runId='p0'; record={...record,status:'finished'}; job={run_id:'p1',job_id:'j2',status:'finished',engine:'kimi'}")
+    await advance(5100)
+    step(`job={run_id:'p1',job_id:'j2b',status:'failed',engine:'kimi'}; record={...record,status:'failed',error:${JSON.stringify('Another tab: ' + FAIL)},updated_at:'t2',job_id:'j2b'}`)
+    await advance(6000)
+    assert.match(step("$('runs').innerHTML"), /<span class="sdot finished"><\/span>[\s\S]*<button class="run-act cont" data-run="p1" title="Continue">▶<\/button>/)
+    step("job={run_id:'p1',job_id:'j3',status:'running',engine:'kimi'}; samples.length=0")
+    await step("continueRun('p1')")
+    await flush(400)
+    assert.deepEqual([step('runId'), step('bar'), step("$('chat-stage').textContent"), step("$('chat-detail').textContent"), step('pollAwait?.job')], ['p1', 'stop', 'Continuing…', '', 'j3'])
+    await advance(13900)
+    const shown = shownFrom(/Continuing…/, 13900)
+    assert.ok(shown.every(s => /^■ Continuing…/.test(s)), JSON.stringify(shown))
+    assert.deepEqual(plain(step('alerts')), [])
+    // Its record says running at 14 s: followed at the await's next read.
+    step("record={...record,status:'running',error:null,updated_at:'t3',job_id:'j3'}")
+    await advance(19100)
+    assert.deepEqual([step('drawn.at(-1)'), step('bar'), step("$('chat-stage').textContent")], ['running', 'stop', 'Working…'])
+    assert.ok(recordTimes(14000)[0] - 14000 <= 5000, JSON.stringify(recordTimes(6000)))
+  }
+  // That read failing (the network), the first record read after the Continue stands for the one before (unless it
+  // says running), as for any turn whose record this page had not read.
+  {
+    const { step, flush, advance } = pollingLoop()
+    step("selectRun=realSelectRun; runId='p0'; record={...record,status:'stopped'}; job={run_id:'p1',job_id:'j2',status:'stopped',engine:'kimi'}")
+    await advance(6000)
+    step(`globalThis.kept=record; record=null; job={run_id:'p1',job_id:'j3',status:'running',engine:'kimi'};
+continueReply={ok:true,status:'continuing',run_id:'p1',get job_id(){ record=globalThis.kept; return 'j3'; }}`)
+    await step("continueRun('p1')")
+    await flush(400)
+    assert.deepEqual([step('bar'), step("$('chat-stage').textContent"), step('pollAwait?.sig===turnSignature(record)')], ['stop', 'Continuing…', true])
+    await advance(9000)
+    step("record={...record,status:'failed',error:" + JSON.stringify(FAIL) + ",updated_at:'t2'}")
+    await advance(14000)
+    assert.deepEqual([step('drawn.at(-1)'), step('bar'), step("$('chat-stage').textContent")], ['failed', 'continue', 'Failed'])
+  }
+})
+
+test('▶ Continue on the run shown judges its turn by its record read just before the request, not the one on screen: another tab\'s turn that ended since the last read is never shown as this click\'s', async () => {
+  const { step, flush, advance, recordTimes, shownFrom } = pollingLoop()
+  step("record={...record,status:'stopped'}; job={...job,status:'stopped'}")
+  step('startPolling()')
+  await flush(400)
+  await advance(8000)
+  assert.equal(step('pollActive'), false)
+  // Another tab's turn ran and failed after this page's last read: the record on screen still says stopped.
+  step("record={...record,status:'failed',error:'another tab',updated_at:'t-other',job_id:'j2'}; job={run_id:'p1',job_id:'j3',status:'running',engine:'kimi'}; samples.length=0")
+  await step("continueRun('p1')")
+  await flush(400)
+  // The record read just before the request (failed, by the other tab) is the one before this turn: awaited.
+  assert.ok(recordTimes(8000).length >= 1)
+  assert.deepEqual([step('bar'), step("$('chat-stage').textContent")], ['stop', 'Continuing…'])
+  // This click's turn writes the record running 4 s later and is followed; ▶ and the other tab's failure never show.
+  await advance(12000 - 1)
+  step("record={...record,status:'running',error:null,updated_at:'t3',job_id:'j3'}")
+  await advance(18000)
+  const shown = shownFrom(/Continuing…/, 12000)
+  assert.ok(shown.length > 0 && shown.every(s => !/^▶|Failed|Stopped/.test(s)), 'shown while the turn was prepared: ' + JSON.stringify(shown))
+  assert.deepEqual([step('drawn.at(-1)'), step('bar'), plain(step('alerts'))], ['running', 'stop', []])
+})
+
+test('a turn awaited has its record read again 2 s after the first quiet read, 3.2 s later, then every 5 s (the run list\'s pace): about 13 reads in its minute, however long it is prepared (A4)', async () => {
+  const { step, flush, advance, records, recordTimes, shownFrom } = pollingLoop()
+  step("record={...record,status:'stopped'}; job={...job,status:'stopped'}")
+  step('startPolling()')
+  await flush(400)
+  await advance(8000)
+  // A stuck continuation: its job listed running for good, its record never changing.
+  step("job={run_id:'p1',job_id:'j3',status:'running',engine:'kimi'}")
+  const before = records()
+  await step("continueRun('p1')")
+  await flush(400)
+  await advance(8000 + 60000)
+  // One read is the Continue's own, just before its request; the poll's reads follow.
+  const times = recordTimes(8000); times.splice(times.indexOf(8000), 1)
+  const gaps = times.slice(1).map((at, i) => at - times[i])
+  assert.deepEqual(gaps.slice(0, 3), [2000, 3200, 5000], JSON.stringify(times))
+  assert.ok(gaps.every(gap => gap <= 5000), JSON.stringify(gaps))
+  assert.ok(records() - before <= 14, 'reads in the minute after the click: ' + (records() - before))
+  // Awaited all along: never ▶ nor "Stopped" on screen.
+  assert.ok(shownFrom(/Continuing…/, 8000 + 59000).every(s => !/^▶|Stopped/.test(s)), JSON.stringify(shownFrom(/Continuing…/, 8000 + 59000)))
+})
+
+test('a failed run continued shows "Continuing…" alone while its turn is awaited: its old reason and its error look are gone, at every read (A5)', async () => {
+  const { step, flush, advance } = pollingLoop()
+  const reason = 'Kimi provider returned HTTP 502 after 91 s while streaming; the reasoning budget was used up.'
+  step(`record={...record,status:'failed',error:${JSON.stringify(reason)}}; job={...job,status:'failed'}`)
+  step('startPolling()')
+  await flush(400)
+  await advance(8000)
+  const status = () => [step("$('chat-stage').textContent"), step("$('chat-detail').textContent"), step("$('chat-status').className")]
+  assert.deepEqual(status(), ['Failed', reason, 'chat-status on err'])
+  step("job={run_id:'p1',job_id:'j3',status:'running',engine:'kimi'}")
+  await step("continueRun('p1')")
+  await flush(400)
+  assert.deepEqual(status(), ['Continuing…', '', 'chat-status on'])
+  // Each read while it is awaited (the record still failed, drawn as such by updateChatStatus first) keeps it so.
+  for (const at of [10100, 13300, 18300]) {
+    await advance(at)
+    assert.deepEqual(status(), ['Continuing…', '', 'chat-status on'], 'at ' + at)
+  }
+  // It runs: its stage, no reason.
+  step("record={...record,status:'running',error:null,updated_at:'t2'}")
+  await advance(24000)
+  assert.deepEqual(status(), ['Working…', '', 'chat-status on'])
+})
+
+test('the run list ends a turn awaited only by that turn\'s job: a list still showing the previous job ended keeps it awaited; a turn the server said runs already ends with the run\'s job (A5)', async () => {
+  // ▶ Continue answered with its job (j3) while the list, read before that job was registered, still shows j2 ended.
+  {
+    const { step, flush, advance, shownFrom } = pollingLoop()
+    step("record={...record,status:'stopped'}; job={...job,status:'stopped'}")
+    step('startPolling()')
+    await flush(400)
+    await advance(8000)
+    step('samples.length=0')
+    await step("continueRun('p1')")
+    await flush(400)
+    await advance(16000)
+    assert.deepEqual([step('bar'), step("$('chat-stage').textContent"), step('pollAwait?.job')], ['stop', 'Continuing…', 'j3'])
+    assert.ok(shownFrom(/Continuing…/).every(s => !/^▶|Stopped/.test(s)), JSON.stringify(shownFrom(/Continuing…/)))
+    // The list then shows j3 ended (its record never written): awaited no more, drawn as it reads.
+    step("job={run_id:'p1',job_id:'j3',status:'failed',engine:'kimi'}")
+    await advance(26000)
+    assert.deepEqual([step('pollAwait'), step('bar'), step("$('chat-stage').textContent")], [null, 'continue', 'Stopped'])
+  }
+  // "Already running" (its job unknown to this page): the list showing the run's job ended ends it.
+  {
+    const { step, flush, advance } = pollingLoop()
+    step("record={...record,status:'stopped'}; job={...job,status:'stopped'}")
+    step('startPolling()')
+    await flush(400)
+    await advance(8000)
+    step("job={run_id:'p1',job_id:'j3',status:'running',engine:'kimi'}; continueReply={ok:false,status:'already_running',run_id:'p1'}")
+    await step("continueRun('p1')")
+    await flush(400)
+    assert.deepEqual([step('pollAwait?.job'), step('bar'), step("$('chat-stage').textContent")], ['', 'stop', 'Continuing…'])
+    await advance(12000)
+    assert.equal(step("$('chat-stage').textContent"), 'Continuing…')
+    // Its turn ends without writing the record.
+    step("job={...job,status:'failed'}")
+    await advance(19000)
+    assert.deepEqual([step('pollAwait'), step('bar'), step("$('chat-stage').textContent")], [null, 'continue', 'Stopped'])
+  }
+})
+
+// ── the wait for a turn, round 2 ──
+
+test('the run list showing a turn awaited ended (its record never written) has its record read at that list read, not at the await\'s next backed-off read: for ▶ Continue and for a turn that runs already (R2)', async () => {
+  for (const reply of ["{ok:true,status:'continuing',run_id:'p1',job_id:'j3'}", "{ok:false,status:'already_running',run_id:'p1'}"]) {
+    const { step, flush, advance, recordTimes } = pollingLoop()
+    step("record={...record,status:'stopped'}; job={...job,status:'stopped'}")
+    step('startPolling()')
+    await flush(400)
+    await advance(8000)
+    step(`job={run_id:'p1',job_id:'j3',status:'running',engine:'kimi'}; continueReply=${reply}`)
+    await step("continueRun('p1')")
+    await flush(400)
+    // Read at 8 s, 10 s and 13.2 s (the next at 18.2 s); the turn's job ends at 13.5 s without writing the record.
+    await advance(13500)
+    // The Continue's own read just before its request, then the poll's at 8 s, 10 s and 13.2 s.
+    assert.deepEqual(recordTimes(8000), [8000, 8000, 10000, 13200], reply)
+    step("job={...job,status:'failed'}")
+    // The list read at 15 s shows it ended: the poll's pending read is made then (no second poll), drawn as it reads.
+    await advance(15000)
+    assert.deepEqual([recordTimes(13500), step('pollAwait'), step('bar'), step("$('chat-stage').textContent"), step('pollActive')],
+      [[15000], null, 'continue', 'Stopped', false], reply)
+    await advance(40000)
+    assert.deepEqual(recordTimes(13500), [15000], reply)
+  }
+})
+
+test('record reads that fail while a turn is awaited (a deploy\'s restart: /api/run fails while the files answer) refresh nothing, neither the proof nor the chat; once its record reads again the turn is followed (R2)', async () => {
+  const { step, flush, advance, recordTimes } = pollingLoop()
+  step("record={...record,status:'stopped'}; job={...job,status:'stopped'}")
+  step('startPolling()')
+  await flush(400)
+  await advance(8000)
+  step("job={run_id:'p1',job_id:'j3',status:'running',engine:'kimi'}")
+  await step("continueRun('p1')")
+  await flush(400)
+  // Its record no longer reads from 9 s on (the fake network fails it).
+  await advance(9000)
+  step('globalThis.kept=record; record=null; proofs.length=0; chats.length=0')
+  await advance(40000)
+  assert.ok(recordTimes(9000).length >= 4, JSON.stringify(recordTimes(9000)))
+  assert.deepEqual([plain(step('proofs')), plain(step('chats')), step("$('chat-stage').textContent"), step('bar'), step('!!pollAwait')], [[], [], 'Continuing…', 'stop', true])
+  // It reads again, running: followed, its proof and chat read.
+  step("record={...globalThis.kept,status:'running',updated_at:'t2'}")
+  await advance(52000)
+  assert.deepEqual([step('drawn.at(-1)'), step('bar')], ['running', 'stop'])
+  assert.ok(step('proofs.length') >= 1 && step('chats.length') >= 1, JSON.stringify([plain(step('proofs')), plain(step('chats'))]))
+  // With no turn awaited, a record not read still refreshes the proof and the chat (its files may answer).
+  {
+    const { step, flush } = pollingLoop()
+    step('record=null; startPolling()')
+    await flush(400)
+    assert.deepEqual([plain(step('proofs')), plain(step('chats'))], [[0], [0]])
+  }
+  // An await left from before (the run left and opened again: a fresh poll, nothing on screen yet) does not stop
+  // the run opened again from drawing its proof and chat while its record does not read.
+  {
+    const { step, flush, advance } = pollingLoop()
+    step("record={...record,status:'stopped'}; job={...job,status:'stopped'}")
+    step('startPolling()')
+    await flush(400)
+    await advance(8000)
+    step("job={run_id:'p1',job_id:'j3',status:'running',engine:'kimi'}")
+    await step("continueRun('p1')")
+    await flush(400)
+    assert.equal(step('!!pollAwait'), true)
+    step('stopPolling(); record=null; proofs.length=0; chats.length=0; startPolling()')
+    await flush(400)
+    assert.ok(step('proofs.length') >= 1 && step('chats.length') >= 1, JSON.stringify([plain(step('proofs')), plain(step('chats'))]))
+  }
+})
+
+test('the proof is drawn anew (forced) only as a turn ends, never as one starts: the derived views moving after a turn ended (Lean, the DAG) and their end refresh it as its files say, never forced, so a PDF is not drawn again for them (R2)', async () => {
+  const { step, flush, advance } = pollingLoop()
+  const ap = n => `auto_pipeline:{status:'running',updated_at:'a${n}',stages:{lean:{status:'running',detail:'Lean: checking statement ${n} of 12'}}}`
+  // A turn ended with its proof: its derived pipeline runs (the run is polled for it), its Lean stage moving every 5 s.
+  step(`record={...record,status:'finished',${ap(0)}}; job={...job,status:'finished'}`)
+  step('startPolling()')
+  await flush(400)
+  // The run opened: its proof drawn at its first read (forced).
+  assert.deepEqual(plain(step('forced')), [0])
+  for (let n = 1; n <= 5; n++) { await advance(n * 5000 - 100); step(`record={...record,${ap(n)}}`) }
+  await advance(30000)
+  // Each change refreshed the proof (as its files say); none forced it.
+  assert.ok(step('proofs.length') >= 6, JSON.stringify(plain(step('proofs'))))
+  assert.deepEqual([plain(step('forced')), step('pollActive')], [[0], true])
+  // The pipeline ends: no turn, so its closing refresh (900 ms after) is not forced either; polling stops.
+  step("record={...record,auto_pipeline:{status:'done',updated_at:'a9',stages:{lean:{status:'done'}}}}")
+  await advance(45000)
+  assert.deepEqual([plain(step('forced')), step('pollActive'), step('delays.filter(d=>d===900).length')], [[0], false, 1])
+  // A turn's end is a turn's: another tab's turn followed to its end (at 52 s) draws the proof anew, and 900 ms later.
+  step("job={run_id:'p1',job_id:'j3',status:'running',engine:'kimi'}; record={...record,status:'running',updated_at:'t2'}")
+  await advance(50100)
+  step("record={...record,status:'finished',updated_at:'t3'}; job={...job,status:'finished'}")
+  await advance(60000)
+  assert.deepEqual(plain(step('forced')), [0, 52000, 52900])
 })

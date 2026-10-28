@@ -413,7 +413,7 @@ test('the console polls an analysis while a question is answered, says so, and l
   assert.notEqual(sig(finished), sig({ ...finished, analyze: { asks: [DONE, DONE] } }))
   // Polling goes on after the analysis while its question runs, and stops once it is answered.
   const poll = load(['tick', 'nextPollDelay', 'stopSettling'], ['POLL_MIN_MS', 'STOP_SETTLE_MS', 'STOPPING_RUNS'], `
-let record=null, runId='a1', pollSig='', pollQuiet=0, pollDelay=2000, pollListedEnd=null, pollEnded='', workspaceView='sandbox';
+let record=null, runId='a1', pollSig='', pollTurn='', pollQuiet=0, pollDelay=2000, pollListedEnd=null, pollEnded='', workspaceView='sandbox';
 const calls=[]; const $=()=>({textContent:''}); const setTimeout=()=>0;
 const fetch=async()=>({ok:true,json:async()=>JSON.parse(JSON.stringify(record))});
 const consoleRunSignature=run=>JSON.stringify(run);
@@ -939,7 +939,7 @@ const els={};
 const $=id=>els[id]||(els[id]={id,value:'',textContent:'',title:'',disabled:false,hidden:false,kids:[],scrollTop:0,scrollHeight:0,clientHeight:0,
   replaceChildren(...kids){ this.kids=kids; },querySelectorAll:()=>[]});
 let runId=null, jobId=null, lastProofMtime=0, lastChatKey='', convoKey='', dagRunKey='', leanRunKey='', leanDirty=false, autoPipelineKey='';
-let leanRefreshSeq=0, leanPollTimer=null, workspaceView='sandbox', lastSandboxRun=null, pollSig='', pollQuiet=0, pollDelay=2000, pollListedEnd=null, pollEnded='';
+let leanRefreshSeq=0, leanPollTimer=null, workspaceView='sandbox', lastSandboxRun=null, pollSig='', pollTurn='', pollQuiet=0, pollDelay=2000, pollListedEnd=null, pollEnded='';
 let manuscriptAskContext=null, manuscriptAskSending='', manuscriptAskRunId='';
 const manuscriptAskSent=new Map(), convoOpen=new Set(), RUN_KIND_BY_ID=new Map(), chatAttachments={clear(){}}, calls=[], requests=[];
 const syncLeanControls=()=>{}, syncRunAccess=()=>{}, resetProofView=()=>{}, syncRunToMonitor=()=>{}, refreshConversation=()=>{}, applyRunKindView=()=>{};

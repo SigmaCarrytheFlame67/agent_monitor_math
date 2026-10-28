@@ -181,7 +181,7 @@ test('a run stopped in another tab shows Stopping… until its worker is done', 
 
 test('the poll goes on while a Stop settles, then stops and lists the run as stopped', async () => {
   const step = load(['tick', 'nextPollDelay', 'stopSettling'], ['POLL_MIN_MS', ...STOP_STATE], `
-let clock=0, record=null, runId='r1', pollSig='', pollQuiet=0, pollDelay=8000, pollListedEnd=null, pollEnded='', workspaceView='sandbox';
+let clock=0, record=null, runId='r1', pollSig='', pollTurn='', pollQuiet=0, pollDelay=8000, pollListedEnd=null, pollEnded='', workspaceView='sandbox';
 const Date={now:()=>clock};
 const calls=[]; const $=()=>({textContent:''}); const setTimeout=()=>0;
 const fetch=async()=>({ok:true,json:async()=>JSON.parse(JSON.stringify(record))});
@@ -209,7 +209,7 @@ test('a Stop that settles while the proof refreshes still leaves ▶ Continue wh
   // the poll. Nothing drew the bar again, so it kept an inert "Stopping…" and
   // no ▶ Continue (review, 2026-10-27; reproduced in Chromium).
   const step = load(['tick', 'nextPollDelay', 'stopSettling', 'updateSessionButtons'], ['POLL_MIN_MS', ...STOP_STATE], BAR + `
-let clock=0, record=null, refreshMs=0, runId='r1', pollSig='', pollQuiet=0, pollDelay=2000, pollListedEnd=null, pollEnded='', workspaceView='sandbox';
+let clock=0, record=null, refreshMs=0, runId='r1', pollSig='', pollTurn='', pollQuiet=0, pollDelay=2000, pollListedEnd=null, pollEnded='', workspaceView='sandbox';
 const Date={now:()=>clock};
 const calls=[]; const $=id=>els[id]||{textContent:''}; const setTimeout=()=>0;
 const fetch=async()=>({ok:true,json:async()=>JSON.parse(JSON.stringify(record))});

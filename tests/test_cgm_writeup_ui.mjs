@@ -730,6 +730,38 @@ fetch=async url=>{ calls.fetches.push(url); if(/\\/files$/.test(url))return {ok:
   assert.equal(modes().at(-1), 'top')
 })
 
+test('a proof that is only a PDF, on screen, is drawn anew by a refresh not forced only for a new file: the derived views moving (a change that is no turn) leave its pages and the reader\'s place, though #md-view is empty (R2)', async () => {
+  const page = consolePage(), { context } = page, view = page.$('md-view'), pages = page.$('pdf-pages')
+  // As the real showProofPdf draws it (pdf.js is not loaded here): the pages shown, their URL kept; only proof.tex on the server.
+  page.run(`var pdfDrawn=[], texFile={path:'proof.tex',mtime:5,size:900}; showProofPdf=url=>{ pdfDrawn.push(url); $('md-view').style.display='none'; const pages=$('pdf-pages'); pages.style.display='flex'; pages.dataset.cur=url; };
+fetch=async url=>{ calls.fetches.push(url); if(/\\/files$/.test(url))return {ok:true,json:async()=>({files:[texFile]})}; throw new Error('unexpected fetch '+url); };`)
+  const finished = cgmRun(undefined, {}, { text: '', has_proof_md: false, has_proof_tex: true, revision: 'missing' })
+  // The run opened (the card emptied): drawn, with nothing in #md-view.
+  await context.refreshProofPreview(true, finished)
+  assert.deepEqual([page.run('pdfDrawn.length'), view.innerHTML, pages.style.display], [1, '', 'flex'])
+  // Refreshes not forced (a Lean stage moving, the periodic one): its file the same, the PDF stays as drawn.
+  await context.refreshProofPreview(false, finished)
+  await context.refreshProofPreview(false, finished)
+  assert.equal(page.run('pdfDrawn.length'), 1)
+  // A new proof.tex (another stamp) is drawn.
+  page.run("texFile={path:'proof.tex',mtime:6,size:950}")
+  await context.refreshProofPreview(false, finished)
+  assert.equal(page.run('pdfDrawn.length'), 2)
+  // With nothing on screen (the card emptied as the run opens again), the same file is drawn too.
+  pages.style.display = 'none'; pages.dataset.cur = ''
+  await context.refreshProofPreview(false, finished)
+  assert.equal(page.run('pdfDrawn.length'), 3)
+  // A draw that failed ('Preview failed' on screen, its text view still holding older text): the next refresh
+  // not forced draws it again, its file the same; once drawn, the same file is left as it is again.
+  pages.innerHTML = '<div class="pdf-status">Preview failed</div>'
+  view.innerHTML = '<p>older live text</p>'
+  await context.refreshProofPreview(false, finished)
+  assert.equal(page.run('pdfDrawn.length'), 4)
+  pages.innerHTML = '<div class="pdf-page"></div>'
+  await context.refreshProofPreview(false, finished)
+  assert.equal(page.run('pdfDrawn.length'), 4)
+})
+
 test('the engine\'s newer proof.md in an open editor keeps the reader\'s caret, and the thread\'s place (no typing, no scroll to its end)', () => {
   const page = consolePage(), { context, calls, $ } = page
   context.applySandboxPreview(cgmRun(undefined, { status: 'running' }))
