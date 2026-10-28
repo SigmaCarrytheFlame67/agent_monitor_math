@@ -171,6 +171,12 @@ Availability depends on the deployment and on the account’s connected provider
 
 A graph shows dependencies. It does not certify an argument on its own.
 
+### Papers and files for a proof run {#papers-and-files}
+
+- **Attach files** to the problem or to a message: text, TeX and PDF files (and images for engines that can see them). They reach the model when you select **Prove** or **Send**. Files only staged in the box are not sent; a sent file appears as a 📎 link on your message.
+- **Paste a paper link** (signed in): an arXiv link or `arXiv:` id, a GitHub link to one TeX, Markdown, text or PDF file, or a direct link to a PDF or TeX file is fetched before the run starts or the message is sent and attached like an upload. arXiv papers come as their TeX source when there is one. The conversation says which links were read; each paper is read once per run. Up to three links are read per message. Web pages are not read; download the document and attach it instead.
+- A long paper is cut to fit the model's reading budget, and text extracted from a PDF may have garbled formulas.
+
 ### Collaborate and share {#collaborate-and-share}
 
 - **Collaborative projects** (signed in): create a project, write the problem and notes together, and invite editors, who sign in and accept. Each member launches runs with their own account settings, and project runs appear in **Project results**. Members can inspect every project run, including its prompts and files, so invite only people who should have that access. Only the member who started a run can continue, stop or change it. Agents read the shared document, so once a member who is not a site administrator has joined a project, its runs use the tool-free engines (Ansatz CGM or Plain) on an API key, even after that member leaves.

@@ -2482,6 +2482,50 @@ class Handler(RunSharingMixin, ProjectsMixin, ResearchMixin, BaseHTTPRequestHand
     # The run start this request booked for a member (_admit_member_run).
     _member_booking: float | None = None
 
+    def _fetch_linked_papers(self, body: dict, text: object, run_id: str | None = None):
+        """Papers linked in a signed-in account's problem or message, added
+        to ``body["attachments"]`` as uploads (agent_monitor.link_sources).
+        Returns what was fetched, for :meth:`_report_linked_papers`; never
+        raises (a link that cannot be read is reported, not refused)."""
+        from agent_monitor import link_sources
+
+        if not isinstance(text, str) or not text.strip() or not link_sources.find_links(text):
+            return None
+        uploads = body.get("attachments")
+        if uploads is not None and not isinstance(uploads, list):
+            return None  # start_job refuses the malformed list itself
+        known: dict[str, str] = {}
+        run_files: list[dict] = []
+        if run_id:
+            workspace = RUNS_DIR / "workspaces" / run_id
+            known = link_sources.read_known(workspace)
+            try:
+                run_files = research_attachments.list_files(workspace)
+            except (OSError, ValueError):
+                run_files = []
+        try:
+            fetched = link_sources.fetch_links(text, existing=uploads or [], known=known, run_files=run_files)
+        except Exception:  # noqa: BLE001 - never block the run on a link
+            logger.exception("linked paper fetch failed")
+            return None
+        if fetched.items:
+            body["attachments"] = list(uploads or []) + fetched.items
+        return fetched
+
+    @staticmethod
+    def _report_linked_papers(run_id: object, fetched) -> None:
+        """Say in the run's conversation which links were read (or not)."""
+        from agent_monitor import link_sources
+
+        if fetched is None or not run_id:
+            return
+        try:
+            for note in fetched.notes:
+                job_manager._append_chat(str(run_id), "system", note)
+            link_sources.remember(RUNS_DIR / "workspaces" / str(run_id), fetched.read)
+        except Exception:  # noqa: BLE001
+            logger.exception("linked paper report failed")
+
     def _admit_member_run(self, user: dict) -> bool:
         self._member_booking = None
         if not account_policy.is_member(user):
@@ -4622,11 +4666,14 @@ class Handler(RunSharingMixin, ProjectsMixin, ResearchMixin, BaseHTTPRequestHand
                     if not self._admit_member_run(user):
                         return
                     try:
+                        # Papers linked in the problem are read for the model.
+                        linked = self._fetch_linked_papers(body, body.get("problem_text"))
                         job = start()
                     except Exception:
                         # A refused start (no key, bad input) starts nothing.
                         self._release_member_run(user)
                         raise
+                    self._report_linked_papers(job.get("run_id"), linked)
             except account_policy.ProjectPolicyError as exc:
                 # The project's tool-free rule.
                 self._send(403, json.dumps({"error": str(exc)}, ensure_ascii=False))
@@ -4733,6 +4780,8 @@ class Handler(RunSharingMixin, ProjectsMixin, ResearchMixin, BaseHTTPRequestHand
             # queued for a running run, and only then is the start returned.
             if not self._admit_member_run(user):
                 return
+            # Papers linked in the message are read for the model (once per run).
+            linked = self._fetch_linked_papers(body, body.get("message"), run_id)
             try:
                 result = job_manager.send_human_message(
                     run_id,
@@ -4761,6 +4810,9 @@ class Handler(RunSharingMixin, ProjectsMixin, ResearchMixin, BaseHTTPRequestHand
             if result.get("joined_follow_up"):
                 # It rides on a follow-up this account already paid for.
                 self._release_member_run(user)
+            self._report_linked_papers(run_id, linked)
+            if linked is not None and linked.notes and isinstance(result.get("messages"), list):
+                result["messages"] = job_manager.list_chat(run_id)
             self._send(200, json.dumps(result, ensure_ascii=False))
             return
 
