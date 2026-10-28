@@ -1136,6 +1136,43 @@ can create a guest identity, each client address also has its own budget:
   get HTTP 415, before the body is read. Tools that send neither header (curl,
   `smoke.sh`) are unaffected.
 
+## Easy requests on Plain
+
+A run started on Ansatz CGM by a signed-in account has each turn rated first
+by a small judge model (`agent_monitor/easy_route.py`). The first run is
+rated by its problem, and each follow-up by its message, with the session's
+first problem as context. A turn rated **easy** (a routine exercise, a short
+computation, a definition, a small edit) runs on **Plain**, one call of the
+same model on the same account route. Any other turn runs on Ansatz CGM. The
+thread says when a turn moves to Plain, and when a later turn goes back to
+Ansatz CGM. A message that asks for Ansatz CGM by name ("use Ansatz CGM")
+always gets it, without the judge.
+
+- **Setup.** `AGENT_MONITOR_EASY_ROUTE_OPENROUTER_KEY` in
+  `/etc/ansatze/console.env` (the operator's OpenRouter key; empty = off).
+  `AGENT_MONITOR_EASY_ROUTE_MODEL` is the judge, by default
+  `typesafe/jev-1.13`. `AGENT_MONITOR_EASY_ROUTE=0` switches it off.
+  `AGENT_MONITOR_EASY_ROUTE_URL` points it at another OpenRouter-compatible
+  endpoint (https, or this machine for tests).
+- **The key is the server's alone.** Only `easy_route.judge` reads it. It is
+  not `OPENROUTER_API_KEY`, which other features would pick up as a provider
+  key. `subprocess_env` strips it, and the other judge settings, from every
+  engine's environment. It is never in Settings, the run record or the chat.
+  LaTeX previews compile without the server's secrets too. The judge gets the
+  request text and nothing else.
+- **What is never moved to Plain.** Guests, Analyze and Readability, runs
+  started on another engine, Max and Max (API), a start or follow-up for
+  which Plain is not allowed (member policy) or would answer with another
+  model or on another route (a start that Plain would put on the sponsored
+  Kimi service is refused and starts Ansatz CGM), a bare Continue, and a
+  message with files (each keeps the run's current engine).
+- **Failures.** No key, the judge's error or timeout (12 s), or an answer
+  that is not clearly "easy": the turn runs on Ansatz CGM. Routing never stops
+  a run or a follow-up.
+- **Record.** The run's hidden `.easy_route.json` keeps the engine it started
+  on (`home`) and each turn's engine, verdict, reason and judge. The run
+  record's `engine` is the current turn's.
+
 ## Analyze runs
 
 Analyze checks an existing manuscript (a link, pasted text or uploads) into a

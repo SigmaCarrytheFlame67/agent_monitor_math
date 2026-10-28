@@ -18,6 +18,12 @@ _CONTROL_PLANE_ENV_NAMES = frozenset(
         "AGENT_MONITOR_BASE_PATH",
         "AGENT_MONITOR_DATA_ENCRYPTION_KEY",
         "AGENT_MONITOR_DATA_KEY_FILE",
+        # The easy-request judge's settings and OpenRouter key (easy_route):
+        # the server's alone.
+        "AGENT_MONITOR_EASY_ROUTE",
+        "AGENT_MONITOR_EASY_ROUTE_MODEL",
+        "AGENT_MONITOR_EASY_ROUTE_OPENROUTER_KEY",
+        "AGENT_MONITOR_EASY_ROUTE_URL",
         "AGENT_MONITOR_ENV_PATH",
         "AGENT_MONITOR_GUEST_KIMI_API_KEY",
         "AGENT_MONITOR_REQUIRE_DATA_KEY",
