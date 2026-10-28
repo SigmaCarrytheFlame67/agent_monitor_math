@@ -271,11 +271,16 @@ and DAG views are unchanged.
   the session's recovered copy of it), otherwise the record's problems
   (`problemItems`; for an analysis or a readable version its `problem_text`,
   focus included, and its source link). A later follow-up in the same words
-  is shown as a follow-up; the problem stays first. Then every chat line in
-  order: each message sent (with its files), the engine's replies, the run's
-  notices. The latest proof, report or readable version follows as a card
-  with its full toolbar, and questions and answers about a manuscript come
-  after the card. The card no longer repeats the problem; with several
+  is shown as a follow-up; the problem stays first. Then the run's opening
+  notices (the chat lines before the first message sent after the problem,
+  `#chat-msgs`). The latest proof, report or readable version follows as a
+  card with its full toolbar, then any questions and answers about a
+  manuscript. The rest of the chat comes last, in order, under the card and
+  just above the message box (`#chat-later`): each message sent (with its
+  files), the engine's replies and the notices after it. A message sent from
+  a thread at or near its bottom brings the thread there, and the thread
+  then follows what arrives after it (the queued notice, the reply), as a
+  chat does; a send error is shown there too. The card no longer repeats the problem; with several
   problems, each proof keeps a small "Problem N" heading (without the
   problem's length, which would read as the proof's).
 - **The card's header.** On a screen at least 761px wide and 560px tall

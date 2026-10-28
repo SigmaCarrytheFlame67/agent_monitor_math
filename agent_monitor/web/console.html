@@ -2365,9 +2365,9 @@ body { background:var(--bg); }
       <div class="run-access-note" role="note"><span class="badge">Read only</span><span>You can follow this run; only the member who started it can change it.</span></div>
       <div class="session-body">
         <div id="view-sandbox">
-          <!-- One conversation, ChatGPT-style: the run's problem and each message
-               sent, the engine's replies, the latest proof (or report) as a card,
-               then any questions and answers. #sandbox-thread is the Sandbox's
+          <!-- One conversation, ChatGPT-style: the run's problem and what came
+               with it, the latest proof (or report) as a card, any questions and
+               answers, then each message sent later with the engine's replies. #sandbox-thread is the Sandbox's
                only vertical scroller; the status line and the message box sit
                under it in .sandbox-dock. -->
           <div class="sandbox-thread" id="sandbox-thread" role="region" aria-label="Conversation">
@@ -2436,6 +2436,8 @@ body { background:var(--bg); }
               </div>
             </div>
             <ol class="ask-list" id="ask-list" aria-label="Questions and answers" hidden></ol>
+            <!-- Each message sent after the problem, and what follows it, under the card: the latest exchange sits just above the message box. -->
+            <div class="chat-msgs chat-later" id="chat-later"></div>
           </div>
           <div class="sandbox-dock" id="sandbox-dock" role="region" aria-labelledby="chat-title">
             <div class="dock-col">
@@ -9601,10 +9603,12 @@ $('lean-chat-input')?.addEventListener('keydown',e=>{
 
 /* ── the Sandbox thread ──
    One conversation in #sandbox-thread, the Sandbox's only vertical scroller:
-   the run's problem (#thread-problem), then its chat in order (#chat-msgs:
-   each message sent, the engine's replies, the run's notices), the latest
-   proof or report as a card (.proof-panel), then the questions and answers
-   (#ask-list). The lines the status line under the thread says already (a
+   the run's problem (#thread-problem), the chat lines before the first
+   message sent after it (#chat-msgs: the run's opening notices), the latest
+   proof or report as a card (.proof-panel), the questions and answers
+   (#ask-list), then the rest of the chat in order (#chat-later: each message
+   sent, the engine's replies, the notices after it), so the latest exchange
+   sits just above the message box. The lines the status line under the thread says already (a
    turn starting, continuing or ending) are left out, and so is an analysis's
    log; any other line stays, one this list does not know included.
 
@@ -9724,24 +9728,31 @@ function threadKind(run){
   if(run)return isAnalysisRun(run)?'analyze':isReadabilityRun(run)?'readability':'prove';
   return RUN_KIND_BY_ID.get(String(runId||''))||'prove';
 }
+// The chat's two places: above the card (#chat-msgs), its lines before the
+// first message sent after the problem; under it (#chat-later), that message
+// and everything after. Without #chat-later, all of it goes in #chat-msgs.
+function threadChatBoxes(){ const above=$('chat-msgs'); return {above,below:$('chat-later')||above}; }
+function threadSplit(items){ const at=items.findIndex(item=>item.kind==='user'); return at<0?[items,[]]:[items.slice(0,at),items.slice(at)]; }
+function threadChatNodes(){ const {above,below}=threadChatBoxes(); return [...(above?.children||[]),...(below&&below!==above?below.children:[])]; }
 /* Draw the thread from the chat last read (renderChat) and the run's record
    (each poll), changing only what changed. fresh: lines new since the chat
    was last drawn fade in and are said to a screen reader; sent: the message
    the reader just sent (the server's copy of it, or true) is brought into
    view, and the error of an earlier try goes. */
 function renderThread({fresh=false,sent=false}={}){
-  const problemBox=$('thread-problem'), box=$('chat-msgs'); if(!problemBox||!box)return;
+  const problemBox=$('thread-problem'), {above:box,below}=threadChatBoxes(); if(!problemBox||!box)return;
   const rid=String(runId||''), run=threadRun();
   const model=threadModel(threadMsgsRun===rid?threadMsgs:[],run,threadKind(run));
   const key=JSON.stringify([rid,model.problems.map(item=>item.key),model.items.map(item=>item.key)]);
-  const stale=sent?[...box.children].filter(el=>el.classList.contains('error')):[];
+  const stale=sent?threadChatNodes().filter(el=>el.classList.contains('error')):[];
   let added=[], note='';
   if(key!==threadRenderKey||stale.length){
     threadRenderKey=key;
     threadRedraw('keep',()=>{
       stale.forEach(el=>el.remove());
       threadPatch(problemBox,model.problems,threadUserNode,false);
-      added=threadPatch(box,model.items,threadItemNode,fresh);
+      if(below===box)added=threadPatch(box,model.items,threadItemNode,fresh);
+      else{ const [early,later]=threadSplit(model.items); added=[...threadPatch(box,early,threadItemNode,fresh),...threadPatch(below,later,threadItemNode,fresh)]; }
     });
   }
   if(sent){
@@ -9750,11 +9761,17 @@ function renderThread({fresh=false,sent=false}={}){
     const want=sent&&typeof sent==='object'?sent:null;
     const mine=(want&&model.items.find(item=>item.kind==='user'&&!item.recovered&&item.ts===String(want.ts||'')&&item.text===String(want.content||'')))
       ||[...model.items].reverse().find(item=>item.kind==='user'&&!item.recovered);
-    const node=mine?[...box.children].find(el=>el.dataset.key===mine.key):null;
+    const node=mine?threadChatNodes().find(el=>el.dataset.key===mine.key):null;
     // An open editor is never scrolled away: the message is brought into
     // view only where that needs no scroll, and said otherwise.
     if(node&&sandboxEditing){ if(!threadInView(node))note='Message sent.'; }
-    else if(node)threadReveal(node,'start');
+    else if(node){
+      threadReveal(node,'start');
+      // Under the card, the message just sent is the latest exchange: with
+      // the thread then at (or near) its bottom, it follows what comes after
+      // the message (the queued notice, the engine's reply), as a chat does.
+      if(below!==box&&node.parentElement===below)threadFollowNear();
+    }
   }
   if(fresh||note)threadAnnounce(fresh?added:[],note);
 }
@@ -9871,11 +9888,11 @@ function threadToggle(button){
 // It is an alert (said at once); it is brought into view, except over an
 // open editor, which is never scrolled away for it.
 function threadError(message){
-  const box=$('chat-msgs'); if(!box)return;
+  const {below:box}=threadChatBoxes(); if(!box)return;
   const node=analyzeEl('div','chat-msg system notice error');
   node.setAttribute('role','alert');
   node.append(analyzeEl('span','msg-text',String(message||'').trim()||'The message could not be sent. Try again.'));
-  threadRedraw('keep',()=>{ [...box.children].filter(el=>el.classList.contains('error')).forEach(el=>el.remove()); box.append(node); });
+  threadRedraw('keep',()=>{ threadChatNodes().filter(el=>el.classList.contains('error')).forEach(el=>el.remove()); box.append(node); });
   if(!sandboxEditing)threadReveal(node,'nearest');
 }
 // New replies and notices are said once, politely (after `note`, when there
@@ -9892,7 +9909,7 @@ function threadSay(text){
 }
 // Another run, or none: an empty thread at its top, which opens on that run's latest exchange.
 function resetSandboxThread(){
-  for(const id of ['thread-problem','chat-msgs']){ const box=$(id); if(box)box.replaceChildren(); }
+  for(const id of ['thread-problem','chat-msgs','chat-later']){ const box=$(id); if(box)box.replaceChildren(); }
   threadMsgs=[]; threadMsgsRun=''; threadRenderKey=''; threadExpanded.clear();
   // An analysis's stored copy is the run's it was chosen for: another opens on its report.
   analysisSourceShown=false;
@@ -9934,13 +9951,14 @@ function threadInView(el){
   const sc=sandboxThread(); if(!el||!threadLaidOut(sc))return false;
   const top=threadOffset(sc,el); return top>=0&&top+el.getBoundingClientRect().height<=sc.clientHeight;
 }
-// The blocks a reading point is kept by, in order: the problem, each
-// message, the card, the questions and answers.
+// The blocks a reading point is kept by, in order: the problem, the opening
+// notices, the card, the questions and answers, each later message.
 function threadBlocks(sc){
   const blocks=[];
   for(const id of ['thread-problem','chat-msgs'])blocks.push(...($(id)?.children||[]));
   const card=sc.querySelector('.proof-panel'); if(card)blocks.push(card);
   const asks=$('ask-list'); if(asks)blocks.push(asks);
+  const later=$('chat-later'); if(later)blocks.push(...later.children);
   return blocks.filter(el=>el.getClientRects().length);
 }
 // Whether the reader moved the thread since its place was last taken. A
@@ -9972,7 +9990,7 @@ function threadMark(){
 function threadOpenAnchor(){
   const asks=$('ask-list'), question=asks&&!asks.hidden?[...asks.children].filter(el=>el.classList.contains('ask-item')).pop():null;
   if(question?.getClientRects().length)return question;
-  return [...($('chat-msgs')?.children||[])].filter(el=>el.classList.contains('user')&&el.getClientRects().length).pop()||null;
+  return threadChatNodes().filter(el=>el.classList.contains('user')&&el.getClientRects().length).pop()||null;
 }
 // The reading point put back: the latest exchange while the run opens, the
 // bottom for a reader pinned there, else the block where it was (or the
@@ -10134,6 +10152,15 @@ function threadReveal(el,where='start'){
   threadPos.top=sc.scrollTop;
   threadMark();
 }
+// A thread at (or within THREAD_FOLLOW_PX of) its bottom goes to it and
+// follows what is added there, as if its reader had scrolled there.
+function threadFollowNear(){
+  const sc=sandboxThread(); if(!threadLaidOut(sc)||threadGap(sc)>THREAD_FOLLOW_PX)return;
+  sc.scrollTop=sc.scrollHeight;
+  threadPos.open=false; threadPos.held=false; threadPos.pinned=threadScrolls(sc);
+  threadPos.top=sc.scrollTop; threadPos.gap=threadGap(sc); threadPos.client=sc.clientHeight;
+  if(!threadPos.pinned)threadMark();
+}
 // The thread scrolled: the selection pop-up goes when its reader scrolled
 // it; what the scroll means is worked out once the frame is drawn.
 function threadScrolled(){
@@ -10205,7 +10232,7 @@ function threadSelPopCheck(){
     sc.addEventListener('click',event=>{ const button=event.target.closest?.('.msg-more'); if(button)threadToggle(button); });
     if(typeof ResizeObserver==='function'){
       const observer=new ResizeObserver(threadResized);
-      for(const el of [sc,$('thread-problem'),$('chat-msgs'),sc.querySelector('.proof-panel'),$('ask-list')])if(el)observer.observe(el);
+      for(const el of [sc,$('thread-problem'),$('chat-msgs'),sc.querySelector('.proof-panel'),$('ask-list'),$('chat-later')])if(el)observer.observe(el);
       // The card's sticky header as tall as it is drawn (CSS: the thread's
       // scroll padding, --proof-head); hidden with its view, it keeps the last.
       const head=sc.querySelector('.proof-head');

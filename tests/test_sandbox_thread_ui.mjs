@@ -139,9 +139,9 @@ test('the thread: the run\'s problem first (once), then every message and reply 
   assert.deepEqual(two.problems.map(item => [item.label, item.text]), [['Problem 1', 'Problem A.'], ['Problem 2', 'Problem B.']])
   // Before the record has arrived there is no problem to show yet, and nothing breaks.
   assert.deepEqual(model(chat, null, 'prove').problems, [])
-  // In the markup the card follows the conversation and comes before the answers.
+  // In the markup: the problem and its opening notices, the card, the answers, then the later messages (just above the message box).
   const thread = html.split('<div class="sandbox-thread" id="sandbox-thread"')[1].split('<div class="sandbox-dock"')[0]
-  const order = ['id="thread-problem"', 'id="chat-msgs"', '<div class="proof-panel">', 'id="ask-list"'].map(mark => thread.indexOf(mark))
+  const order = ['id="thread-problem"', 'id="chat-msgs"', '<div class="proof-panel">', 'id="ask-list"', 'id="chat-later"'].map(mark => thread.indexOf(mark))
   assert.ok(order.every((pos, i) => pos > 0 && (i === 0 || pos > order[i - 1])), 'thread order: ' + order)
 })
 
@@ -369,7 +369,7 @@ const extra={}, $=id=>({'sandbox-thread':sc,'thread-problem':problemBox,'chat-ms
 let threadPos={el:null,offset:0,top:0,gap:0,client:0,open:false,pinned:false,held:false,heldGap:0,coming:false,hidden:false}, threadDrawing=0;
 const top=b=>Math.round(b.getBoundingClientRect().top-100);
 const ask=(cls,height)=>{ const b=block(cls,height); askList.children.push(b); askList.height=askList.children.reduce((n,x)=>n+x.height,0)+16*Math.max(0,askList.children.length-1); return b; };`
-const PLACE = ['sandboxThread', 'threadLaidOut', 'threadGap', 'threadScrolls', 'threadShift', 'threadOffset', 'threadInView', 'threadBlocks', 'threadMovedByReader', 'threadMark', 'threadOpenAnchor', 'threadRestore',
+const PLACE = ['threadChatBoxes', 'threadChatNodes', 'threadFollowNear', 'sandboxThread', 'threadLaidOut', 'threadGap', 'threadScrolls', 'threadShift', 'threadOffset', 'threadInView', 'threadBlocks', 'threadMovedByReader', 'threadMark', 'threadOpenAnchor', 'threadRestore',
   'threadTopWhileHidden', 'threadRedraw', 'threadCardTop', 'threadHold', 'threadNoteClamp', 'threadReveal', 'threadFocus', 'threadNoteScroll', 'threadResized', 'threadSelPopCheck']
 function place() {
   const ctx = vm.createContext({ console })
@@ -733,7 +733,8 @@ const $=id=>({'thread-problem':problems,'chat-msgs':msgs}[id]||null);
 const threadRun=()=>null, threadKind=()=>'prove', problemItems=()=>[], threadInView=()=>inView, threadSay=text=>said.push(text);
 const threadAnnounce=(added,note)=>{ if(note)said.push(note); };
 ${['THREAD_ROUTINE_LINES', 'THREAD_ROUTINE_REPLIES'].map(constant).join('\n')}
-${['threadModel', 'threadHash', 'threadRoutineLine', 'threadRequest', 'renderThread'].map(fn).join('\n')}
+${['threadModel', 'threadHash', 'threadRoutineLine', 'threadRequest', 'renderThread', 'threadChatBoxes', 'threadSplit', 'threadChatNodes'].map(fn).join('\n')}
+const threadFollowNear=()=>{};
 ${NODES.map(fn).join('\n')}`, ctx)
   const step = code => vm.runInContext(code, ctx)
   const just = { role: 'user', content: 'Just sent', ts: at(30) }
@@ -751,6 +752,50 @@ ${NODES.map(fn).join('\n')}`, ctx)
   assert.deepEqual([plain(step('revealed')), plain(step('said'))], [[], ['Message sent.']])
   step('inView=true; renderThread({sent:true})')
   assert.deepEqual([plain(step('revealed')), plain(step('said'))], [[], ['Message sent.']])
+})
+
+test('a message sent after the problem goes under the card, just above the message box; the opening notices stay above it', () => {
+  const ctx = vm.createContext({ console })
+  vm.runInContext('const revealed=[];\n' + DOM.replace('threadReveal=()=>{}', 'threadReveal=(node,where)=>revealed.push([node.dataset.key,where])') + `
+let sandboxEditing=false, threadRenderKey='', threadMsgs=[], threadMsgsRun='p1', lastSandboxRun=null;
+const problems=document.createElement('div'), msgs=document.createElement('div'), later=document.createElement('div');
+const $=id=>({'thread-problem':problems,'chat-msgs':msgs,'chat-later':later}[id]||null);
+const threadRun=()=>null, threadKind=()=>'prove', problemItems=()=>[], threadInView=()=>true, threadAnnounce=()=>{};
+${['THREAD_ROUTINE_LINES', 'THREAD_ROUTINE_REPLIES'].map(constant).join('\n')}
+${['threadModel', 'threadHash', 'threadRoutineLine', 'threadRequest', 'renderThread', 'threadError', 'threadChatBoxes', 'threadSplit', 'threadChatNodes'].map(fn).join('\n')}
+const followed=[], threadFollowNear=()=>followed.push(1);
+${NODES.map(fn).join('\n')}`, ctx)
+  const step = code => vm.runInContext(code, ctx)
+  const texts = box => plain(step(`${box}.children.map(n=>n.textContent)`))
+  const opening = [user(0, 'Prove that every tree on n vertices has n-1 edges.'), sys(1, '▶ run started · engine math_harness · problem adhoc_1'), sys(2, 'Read for the model: File 1 "notes.pdf" (12 pp, all)')]
+  step(`threadMsgs=${JSON.stringify(opening)}; renderThread()`)
+  // Before any follow-up: the problem, its notice above the card, nothing under it.
+  assert.equal(step('problems.children.length'), 1)
+  assert.equal(step('msgs.children.length'), 1)
+  assert.equal(step('later.children.length'), 0)
+  const notice = step('msgs.children[0]')
+  const chat = [...opening, user(20, 'keep trying!'), sys(21, 'Feedback queued; it will run automatically as soon as the current harness finishes.'), { role: 'assistant', content: 'Closure complete.\nmore', ts: at(30) }]
+  const sent = chat[3]
+  step(`threadMsgs=${JSON.stringify(chat)}; renderThread({fresh:true,sent:${JSON.stringify(sent)}})`)
+  // The follow-up and everything after it under the card, in order; the opening notice is the same node, still above.
+  assert.equal(step('msgs.children.length'), 1)
+  assert.equal(step('msgs.children[0]'), notice)
+  assert.deepEqual(plain(step("later.children.map(n=>n.className.replace(' fresh',''))")), ['chat-msg user', 'chat-msg system notice', 'chat-msg assistant'])
+  assert.ok(texts('later')[0].includes('keep trying!'))
+  // The message just sent is the one brought into view, and the thread then follows what comes after it.
+  assert.deepEqual(plain(step('revealed')), [[plain(step('later.children[0].dataset.key')), 'start']])
+  assert.equal(step('followed.length'), 1)
+  // A send error is shown at the bottom too, one at a time; the next message sent takes it away.
+  step("threadError('The message could not be sent. Try again.'); threadError('Again.')")
+  assert.deepEqual(plain(step("later.children.filter(n=>n.classList.contains('error')).map(n=>n.textContent)")), ['Again.'])
+  assert.equal(step("msgs.children.filter(n=>n.classList.contains('error')).length"), 0)
+  const more = [...chat, user(40, 'Try a stronger induction.')]
+  step(`threadMsgs=${JSON.stringify(more)}; renderThread({sent:${JSON.stringify(more[6])}})`)
+  assert.equal(step("later.children.filter(n=>n.classList.contains('error')).length"), 0)
+  assert.equal(step('later.children.length'), 4)
+  // Without #chat-later (an older page), all of the chat stays in #chat-msgs, as before.
+  assert.deepEqual(plain(step("threadSplit([{kind:'notice'},{kind:'user'},{kind:'reply'}]).map(part=>part.map(item=>item.kind))")), [['notice'], ['user', 'reply']])
+  assert.deepEqual(plain(step("threadSplit([{kind:'notice'}]).map(part=>part.length)")), [1, 0])
 })
 
 test('an engine reply that is a chunk of its activity log is a collapsed "Engine log"; prose keeps its first line (J)', () => {
@@ -811,8 +856,8 @@ ${fn('sendChat')}`, ctx)
   assert.deepEqual(plain(step('rendered')), [[3, { role: 'user', content: 'Try again please.', ts: 't' }]])
   assert.equal(step("els['chat-input'].value"), '')
   // threadError keeps one notice; a message sent removes it (renderThread).
-  assert.match(fn('threadError'), /threadRedraw\('keep',\(\)=>\{ \[\.\.\.box\.children\]\.filter\(el=>el\.classList\.contains\('error'\)\)\.forEach\(el=>el\.remove\(\)\); box\.append\(node\); \}\);/)
-  assert.match(fn('renderThread'), /const stale=sent\?\[\.\.\.box\.children\]\.filter\(el=>el\.classList\.contains\('error'\)\):\[\];[\s\S]*stale\.forEach\(el=>el\.remove\(\)\);/)
+  assert.match(fn('threadError'), /threadRedraw\('keep',\(\)=>\{ threadChatNodes\(\)\.filter\(el=>el\.classList\.contains\('error'\)\)\.forEach\(el=>el\.remove\(\)\); box\.append\(node\); \}\);/)
+  assert.match(fn('renderThread'), /const stale=sent\?threadChatNodes\(\)\.filter\(el=>el\.classList\.contains\('error'\)\):\[\];[\s\S]*stale\.forEach\(el=>el\.remove\(\)\);/)
 })
 
 test('the selection pop-up goes with its selection after a redraw or a scroll, and follows it while it stays (N)', () => {
@@ -1373,7 +1418,8 @@ const problems=document.createElement('div'), msgs=document.createElement('div')
 const $=id=>({'thread-problem':problems,'chat-msgs':msgs}[id]||null);
 const threadRun=()=>null, threadKind=()=>'prove', problemItems=()=>[], threadInView=()=>true, threadAnnounce=()=>{};
 ${['THREAD_ROUTINE_LINES', 'THREAD_ROUTINE_REPLIES'].map(constant).join('\n')}
-${['threadModel', 'threadHash', 'threadRoutineLine', 'threadRequest', 'renderThread', 'threadError'].map(fn).join('\n')}
+${['threadModel', 'threadHash', 'threadRoutineLine', 'threadRequest', 'renderThread', 'threadError', 'threadChatBoxes', 'threadSplit', 'threadChatNodes'].map(fn).join('\n')}
+const followed=[], threadFollowNear=()=>followed.push(1);
 ${NODES.map(fn).join('\n')}`, ctx)
   const step = code => vm.runInContext(code, ctx)
   const errors = () => plain(step("msgs.children.filter(n=>n.classList.contains('error')).map(n=>[n.textContent,n.getAttribute('role')])"))
@@ -1575,6 +1621,24 @@ var toolbar=98; var body={isConnected:true,getClientRects:()=>[1],getBoundingCli
   assert.equal(step('top(card)'), 5)
   step('toolbar+=38; card.height+=38; threadResized();')
   assert.equal(step('top(card)'), 5)
+})
+
+test('a message sent under the card: a thread near its bottom goes there and follows what comes after; one read further up is left alone', () => {
+  const step = place()
+  step(`problemBox.children.push(block('chat-msg user problem',80)); chatBox.children.push(block('chat-msg user',50)); card.height=2000;`)
+  // 50px from the bottom: it goes to the bottom and is pinned there.
+  step('sc.scrollTop=sc.scrollHeight-sc.clientHeight-50; threadNoteScroll(); threadFollowNear();')
+  assert.equal(step('threadGap(sc)'), 0)
+  assert.equal(step('threadPos.pinned'), true)
+  // A reply added under it is followed.
+  step("chatBox.children.push(block('chat-msg assistant',120)); threadRedraw('keep',()=>{});")
+  assert.equal(step('threadGap(sc)'), 0)
+  // Read 600px up: nothing moves.
+  step('sc.scrollTop=sc.scrollHeight-sc.clientHeight-600; threadNoteScroll();')
+  const before = step('sc.scrollTop')
+  step('threadFollowNear()')
+  assert.equal(step('sc.scrollTop'), before)
+  assert.equal(step('threadPos.pinned'), false)
 })
 
 test('a send that fails while proof.md is open in the editor never scrolls the editor away; without the editor its notice is brought into view (code#9)', () => {
