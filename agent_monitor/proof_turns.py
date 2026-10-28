@@ -104,7 +104,11 @@ def end(ws: Path | str, n: int | None, *, status: str, finished_at: str) -> None
             for source, suffix in (("proof.md", ".md"), ("proof.tex", ".tex")):
                 path = ws / source
                 if path.is_file() and not path.is_symlink():
-                    text = path.read_text(encoding="utf-8", errors="replace")[:MAX_CHARS]
+                    # Only the part kept is read: a runaway proof.md is never
+                    # loaded whole (a UTF-8 character is at most 4 bytes).
+                    with path.open("rb") as fh:
+                        raw = fh.read(MAX_CHARS * 4)
+                    text = raw.decode("utf-8", errors="replace")[:MAX_CHARS]
                     if text.strip():
                         name = f"{n}{suffix}"
                         break
