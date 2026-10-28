@@ -466,3 +466,183 @@ class SponsoredRefusalTest(unittest.TestCase):
                                auth_route="api_key", easy_route=True)
             thread.assert_not_called()
         self.assertFalse((root / "runs" / "workspaces").exists() and any((root / "runs" / "workspaces").iterdir()))
+
+
+class AnswerOnlyTest(unittest.TestCase):
+    """A Plain turn on a run whose proof Ansatz CGM wrote answers and keeps the proof."""
+
+    def setUp(self) -> None:
+        root = Path(self.enterContext(tempfile.TemporaryDirectory()))
+        self.enterContext(patch.object(jobs, "RUNS_DIR", root / "runs"))
+        self.enterContext(patch.object(jobs, "CACHE_DIR", root / "cache"))
+        self.run_id = "math_harness_adhoc_ans"
+        self.ws = root / "runs" / "workspaces" / self.run_id
+        self.ws.mkdir(parents=True)
+        self.cgm_proof = "# Claim\n\nThe proof Ansatz CGM wrote.\n"
+        (self.ws / "proof.md").write_text(self.cgm_proof, encoding="utf-8")
+        self.addCleanup(jobs._STOP_EVENTS.pop, self.run_id, None)
+        jobs._stop_event(self.run_id).clear()
+        jobs._write_run({"run_id": self.run_id, "engine": "plain", "status": "finished", "problem_id": "adhoc",
+                         "problem_text": "Prove it.", "problems": [{"text": "Prove it.", "source": "initial"}],
+                         "agents": [{"trace_id": "t1", "output": "first", "status": "finished"}], "edges": []})
+
+    def state(self, *engines):
+        for engine in engines:
+            easy_route.note_turn(self.ws, home="math_harness", engine=engine, verdict=None, why="judged")
+
+    def test_when_a_plain_turn_is_answer_only(self) -> None:
+        record = jobs._load_run_record(self.run_id)
+        self.state("math_harness", "plain")
+        self.assertTrue(jobs._easy_answer_only(self.ws, record))
+        self.assertFalse(jobs._easy_answer_only(self.ws, {**record, "engine": "math_harness"}))
+        (self.ws / easy_route.STATE_FILE).unlink()
+        self.state("plain", "plain")  # never on Ansatz CGM: Plain may write the proof
+        self.assertFalse(jobs._easy_answer_only(self.ws, record))
+        (self.ws / easy_route.STATE_FILE).unlink()
+        self.state("math_harness", "plain")
+        (self.ws / "proof.md").write_text("", encoding="utf-8")
+        self.assertFalse(jobs._easy_answer_only(self.ws, record))
+        (self.ws / easy_route.STATE_FILE).unlink()
+        self.assertFalse(jobs._easy_answer_only(self.ws, record))
+
+    def test_the_turn_answers_keeps_the_proof_and_keeps_its_answer(self) -> None:
+        from agent_monitor import auto_pipeline, proof_turns
+
+        seen = {}
+
+        def engine(**kwargs):
+            seen.update(kwargs)
+            # What plain_runner does in answer-only mode.
+            (self.ws / proof_turns.ANSWER_FILE).write_text("Step 3 holds because $x^2 \\ge 0$.\n", encoding="utf-8")
+            return {"run_id": self.run_id, "status": "finished", "edges": [], "totals": {},
+                    "agents": [{"trace_id": "t2", "output": "answered", "status": "finished"}]}
+
+        job_id = "job_ans"
+        jobs._JOBS[job_id] = {"job_id": job_id, "run_id": self.run_id, "status": "running", "engine": "plain"}
+        self.addCleanup(jobs._JOBS.pop, job_id, None)
+        with patch.object(jobs, "_run_cli_engine_with_openclaude_retry", side_effect=engine), \
+                patch.object(jobs, "_launch_pending_feedback"), patch.object(auto_pipeline, "start") as pipeline:
+            jobs._execute_continue(job_id=job_id, run_id=self.run_id, engine="plain", message="Explain step 3.",
+                                   problem_text="Prove it.", model="gpt-6.1-sol", max_iterations=2,
+                                   workspace=str(self.ws), answer_only=True)
+        self.assertEqual(seen["extra_env"].get("AGENT_MONITOR_PLAIN_ANSWER_ONLY"), "1")
+        self.assertIn("Do NOT rewrite, repeat or replace the proof", seen["problem_text"])
+        self.assertIn("Explain step 3.", seen["problem_text"])
+        self.assertIn("The proof Ansatz CGM wrote.", seen["problem_text"])
+        pipeline.assert_not_called()
+        self.assertEqual((self.ws / "proof.md").read_text(encoding="utf-8"), self.cgm_proof)
+        turn = proof_turns.summary(self.ws)[-1]
+        self.assertEqual((turn["answer_only"], turn["status"], turn["file"]), (True, "finished", ".proof_turns/1.md"))
+        self.assertEqual((self.ws / turn["file"]).read_text(encoding="utf-8"), "Step 3 holds because $x^2 \\ge 0$.\n")
+        self.assertFalse((self.ws / proof_turns.ANSWER_FILE).exists())
+
+    def test_answer_only_is_plains_alone(self) -> None:
+        seen = {}
+
+        def engine(**kwargs):
+            seen.update(kwargs)
+            return {"run_id": self.run_id, "status": "finished", "edges": [], "totals": {},
+                    "agents": [{"trace_id": "t2", "output": "x", "status": "finished"}]}
+
+        from agent_monitor import auto_pipeline, proof_turns
+
+        job_id = "job_cgm"
+        jobs._JOBS[job_id] = {"job_id": job_id, "run_id": self.run_id, "status": "running", "engine": "kimi"}
+        self.addCleanup(jobs._JOBS.pop, job_id, None)
+        with patch.object(jobs, "_run_cli_engine_with_openclaude_retry", side_effect=engine), \
+                patch.object(jobs, "_launch_pending_feedback"), patch.object(auto_pipeline, "start"):
+            jobs._execute_continue(job_id=job_id, run_id=self.run_id, engine="kimi", message="Explain step 3.",
+                                   problem_text="Prove it.", model="kimi-k3", max_iterations=2,
+                                   workspace=str(self.ws), answer_only=True)
+        self.assertNotIn("AGENT_MONITOR_PLAIN_ANSWER_ONLY", seen["extra_env"])
+        self.assertFalse(proof_turns.summary(self.ws)[-1]["answer_only"])
+
+    def test_a_reply_or_a_kept_copy_is_never_promoted_to_the_proof(self) -> None:
+        from agent_monitor import proof_turns
+        from agent_monitor.runners import plain_runner
+
+        self.assertEqual(plain_runner.ANSWER_FILE, proof_turns.ANSWER_FILE)
+        for word in ("proof", "solution", "answer"):
+            self.assertNotIn(word, proof_turns.ANSWER_FILE)
+        import time as _time
+
+        _time.sleep(0.01)
+        (self.ws / proof_turns.ANSWER_FILE).write_text("A reply about the proof, long enough to be a candidate.\n", encoding="utf-8")
+        (self.ws / ".proof_turns").mkdir()
+        (self.ws / ".proof_turns" / "proof-answer.md").write_text("A kept copy, long enough to be a candidate too.\n", encoding="utf-8")
+        self.assertIn(jobs._promote_proof_artifact(self.ws), (None, self.ws / "proof.md"))
+        self.assertEqual((self.ws / "proof.md").read_text(encoding="utf-8"), self.cgm_proof)
+        # With a proof long enough to count, it stays the one promoted.
+        long_proof = self.cgm_proof + "More of the proof, so that it is a candidate.\n"
+        (self.ws / "proof.md").write_text(long_proof, encoding="utf-8")
+        _time.sleep(0.01)
+        (self.ws / proof_turns.ANSWER_FILE).write_text("A newer reply, long enough to be a candidate.\n", encoding="utf-8")
+        self.assertEqual(jobs._promote_proof_artifact(self.ws), self.ws / "proof.md")
+        self.assertEqual((self.ws / "proof.md").read_text(encoding="utf-8"), long_proof)
+
+    def test_the_plain_runner_in_answer_only_mode(self) -> None:
+        from agent_monitor.runners import plain_runner
+
+        cwd = os.getcwd()
+        os.chdir(self.ws)
+        self.addCleanup(os.chdir, cwd)
+        events = []
+        with patch.object(plain_runner, "emit_item", side_effect=events.append), \
+                patch.dict(os.environ, {plain_runner.ANSWER_ONLY_ENV: "1"}):
+            self.assertFalse(plain_runner._save_result("prompt", "Step 3 holds."))
+            with self.assertRaises(ValueError):
+                plain_runner._save_result("prompt", "   ")
+        self.assertEqual((self.ws / "proof.md").read_text(encoding="utf-8"), self.cgm_proof)
+        self.assertEqual((self.ws / plain_runner.ANSWER_FILE).read_text(encoding="utf-8").strip(), "Step 3 holds.")
+        self.assertEqual(events[0]["text"], "Answer written; proof.md left unchanged.")
+        with patch.object(plain_runner, "emit_item"), patch.dict(os.environ, {plain_runner.ANSWER_ONLY_ENV: ""}):
+            self.assertTrue(plain_runner._save_result("prompt", "# New proof"))
+        self.assertIn("New proof", (self.ws / "proof.md").read_text(encoding="utf-8"))
+
+    def test_the_turn_records_of_answer_only_turns(self) -> None:
+        from agent_monitor import proof_turns
+
+        (self.ws / proof_turns.ANSWER_FILE).write_text("stale", encoding="utf-8")
+        n = proof_turns.begin(self.ws, started_at="t1", answer_only=True)
+        self.assertFalse((self.ws / proof_turns.ANSWER_FILE).exists())  # a stale answer never counts
+        proof_turns.end(self.ws, n, status="failed", finished_at="t2")  # no answer written
+        self.assertEqual((proof_turns.summary(self.ws)[-1]["file"], proof_turns.summary(self.ws)[-1]["answer_only"]), ("", True))
+        self.assertEqual((self.ws / "proof.md").read_text(encoding="utf-8"), self.cgm_proof)
+        m = proof_turns.begin(self.ws, started_at="t3")
+        proof_turns.end(self.ws, m, status="finished", finished_at="t4")
+        self.assertEqual((proof_turns.summary(self.ws)[-1]["file"], proof_turns.summary(self.ws)[-1]["answer_only"]), (".proof_turns/2.md", False))
+
+
+class BudgetAndSettingsTest(unittest.TestCase):
+    def test_a_slow_judge_is_cut_at_the_budget(self) -> None:
+        import threading
+
+        release = threading.Event()
+
+        class Slow:
+            def open(self, req, timeout=None):
+                release.wait(5)
+                return _reply('{"difficulty":"easy"}')
+
+        self.addCleanup(release.set)
+        with patch.dict(os.environ, {easy_route.KEY_ENV: KEY}), patch.object(easy_route, "TIMEOUT_S", 0.2), \
+                patch("urllib.request.build_opener", return_value=Slow()):
+            verdict = easy_route.judge("Prove 1+1=2.")
+        self.assertEqual((verdict["verdict"], verdict["error"]), ("hard", "judge unavailable (TimeoutError)"))
+        self.assertLess(verdict["seconds"], 2)
+
+    def test_the_launcher_is_told_whether_the_judge_is_on_never_its_key(self) -> None:
+        from agent_monitor import settings
+
+        with patch.dict(os.environ, {easy_route.KEY_ENV: KEY}):
+            os.environ.pop(easy_route.SWITCH_ENV, None)
+            os.environ.pop(easy_route.MODEL_ENV, None)
+            self.assertEqual(settings._easy_route_setting({"id": 1}), {"enabled": True, "model": "typesafe/jev-1.13"})
+            self.assertEqual(settings._easy_route_setting({"id": 2, "guest": True}), {"enabled": False, "model": ""})
+            self.assertEqual(settings._easy_route_setting(None), {"enabled": False, "model": ""})
+            self.assertNotIn(KEY, json.dumps(settings._easy_route_setting({"id": 1})))
+        with patch.dict(os.environ, {easy_route.KEY_ENV: ""}):
+            self.assertEqual(settings._easy_route_setting({"id": 1}), {"enabled": False, "model": ""})
+        import inspect
+
+        self.assertIn('"easy_route": _easy_route_setting(user)', inspect.getsource(settings.get_settings))

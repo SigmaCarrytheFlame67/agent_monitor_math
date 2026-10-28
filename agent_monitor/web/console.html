@@ -3329,6 +3329,14 @@ function renderRunRuntime(){
     const strong=document.createElement('b'); strong.textContent=summary.strong; text.append(strong,'.');
   } else text.append(summary.text);
   if(summary.spare)text.append(summary.spare);
+  // Ansatz CGM's turns are rated by an external model first (easy_route): said where the run is chosen.
+  const note=easyRouteNotice();
+  if(note)text.append(' '+note);
+}
+function easyRouteNotice(){
+  const route=SETTINGS?.easy_route;
+  if(!route?.enabled||CURRENT_USER?.guest||engine!=='math_harness'||isCgmMax()||isCgmMaxApi())return '';
+  return `Easy requests may be rated by an external model (OpenRouter · ${route.model||'judge'}) and answered with Plain on the same model.`;
 }
 // keepEngine: a refresh (Settings opened, a refused start, a new login) keeps
 // the harness the user picked; only the first load applies the saved default.
@@ -9764,25 +9772,29 @@ function threadLayout(items,run,kind){
   if(!turns.length){ const [above,below]=threadSplit(items); return {above,below}; }
   const time=ts=>{ const t=Date.parse(ts||''); return Number.isFinite(t)?t:NaN; };
   const firstAfter=(list,at,users)=>Number.isFinite(at)?list.findIndex(item=>(!users||item.kind==='user')&&time(item.ts)>at):-1;
-  const live=turns[turns.length-1];
-  let cut=firstAfter(items,time(live.started_at),true); if(cut<0)cut=items.length;
-  const above=items.slice(0,cut), below=items.slice(cut), cards=[];
-  for(const t of turns.slice(0,-1)){
-    if(!t.file)continue;
-    let at=firstAfter(above,time(t.started_at),true);
-    const ended=firstAfter(above,time(t.finished_at),false);
+  // The live card is the latest turn that works on the proof; an answer-only
+  // turn (easy_route: Plain answering about a proof Ansatz CGM wrote) leaves
+  // the proof as it was, so its answer is a card of its own.
+  const live=turns.filter(t=>!t.answer_only).pop()||turns[turns.length-1];
+  const cards=[];
+  for(const t of turns){
+    if(t===live||!t.file)continue;
+    let at=firstAfter(items,time(t.started_at),true);
+    const ended=firstAfter(items,time(t.finished_at),false);
     if(at<0||ended>=0&&ended<at)at=ended;
-    if(at<0)at=above.length;
-    cards.push({at,item:{key:'turn|'+t.n+'|'+t.file+'|'+(t.chars||0),kind:'turn',n:Number(t.n),ts:String(t.finished_at||''),file:String(t.file),status:String(t.status||''),label:'Proof',text:'',url:'',attachments:[]}});
+    if(at<0)at=items.length;
+    cards.push({at,item:{key:'turn|'+t.n+'|'+t.file+'|'+(t.chars||0),kind:'turn',n:Number(t.n),ts:String(t.finished_at||''),file:String(t.file),status:String(t.status||''),answer:!!t.answer_only,label:t.answer_only?'Answer':'Proof',text:'',url:'',attachments:[]}});
   }
   cards.sort((a,b)=>a.at-b.at);
-  const out=[];
+  const all=[];
   let next=0;
-  for(let i=0;i<=above.length;i++){
-    while(next<cards.length&&cards[next].at<=i)out.push(cards[next++].item);
-    if(i<above.length)out.push(above[i]);
+  for(let i=0;i<=items.length;i++){
+    while(next<cards.length&&cards[next].at<=i)all.push(cards[next++].item);
+    if(i<items.length)all.push(items[i]);
   }
-  return {above:out,below};
+  // Under the live card: the first message sent after its turn started, and what follows.
+  let cut=firstAfter(all,time(live.started_at),true); if(cut<0)cut=all.length;
+  return {above:all.slice(0,cut),below:all.slice(cut)};
 }
 /* Draw the thread from the chat last read (renderChat) and the run's record
    (each poll), changing only what changed. fresh: lines new since the chat
@@ -9794,7 +9806,8 @@ function threadLayout(items,run,kind){
 // its toolbar says so, until the proof is rewritten or the turn ends.
 function threadTurnNote(run,kind){
   const note=$('proof-turn-note'); if(!note)return;
-  const turns=kind==='prove'&&Array.isArray(run?.proof_turns)?run.proof_turns:[], live=turns[turns.length-1];
+  // Answer-only turns never rewrite the proof: only a turn that works on it counts.
+  const turns=(kind==='prove'&&Array.isArray(run?.proof_turns)?run.proof_turns:[]).filter(t=>t&&!t.answer_only), live=turns[turns.length-1];
   const started=Date.parse(live?.started_at||''), written=Number(run?.sandbox_preview?.mtime||0)*1000;
   const stale=turns.length>1&&!live.finished_at&&Number.isFinite(started)&&written>0&&written<started&&!sandboxEditing;
   // The proof shown is the last one an earlier turn kept (or, none kept, an earlier one).
@@ -9931,13 +9944,15 @@ const threadTurnTexts=new Map(), THREAD_TURN_RETRIES=3, THREAD_TURN_RETRY_MS=150
 function threadTurnNode(item){
   const node=analyzeEl('div','chat-msg turn-card'), head=analyzeEl('div','turn-head');
   const status=item.status==='failed'?' · failed':item.status==='stopped'?' · stopped':item.status==='interrupted'?' · interrupted':'';
-  head.append(analyzeEl('span','title','Proof'),analyzeEl('span','sub','turn '+item.n+status+(item.ts?' · '+fmtTs(item.ts):'')));
+  const what=item.answer?'answer':'proof';
+  if(item.answer)node.classList.add('turn-answer');
+  head.append(analyzeEl('span','title',item.answer?'Answer':'Proof'),analyzeEl('span','sub','turn '+item.n+status+(item.ts?' · '+fmtTs(item.ts):'')));
   const download=analyzeEl('button','turn-dl','⬇ Download'); download.type='button'; download.disabled=true;
-  download.setAttribute('aria-label','Download the proof of turn '+item.n);
+  download.setAttribute('aria-label','Download the '+what+' of turn '+item.n);
   head.append(download);
   const body=analyzeEl('div','msg-text md-view turn-doc'); body.id='thread-msg-'+(++threadIds);
-  body.append(analyzeEl('span','turn-wait','Loading this turn\'s proof…'));
-  node.setAttribute('role','article'); node.setAttribute('aria-label','Proof, turn '+item.n);
+  body.append(analyzeEl('span','turn-wait','Loading this turn\'s '+what+'…'));
+  node.setAttribute('role','article'); node.setAttribute('aria-label',(item.answer?'Answer':'Proof')+', turn '+item.n);
   node.append(head,body);
   threadTurnLoad(node,item,body,download);
   return node;
@@ -9961,7 +9976,7 @@ async function threadTurnLoad(node,item,body,download,attempt=0){
   // A read that failed is tried again (a moment later, then longer) before the card says so.
   if(text===null&&attempt<THREAD_TURN_RETRIES)return threadTurnLoad(node,item,body,download,attempt+1);
   threadRedraw('keep',()=>{
-    if(text===null){ body.textContent=''; body.append(analyzeEl('span','turn-wait','This turn\'s proof could not be loaded.')); return; }
+    if(text===null){ body.textContent=''; body.append(analyzeEl('span','turn-wait','This turn\'s '+(item.answer?'answer':'proof')+' could not be loaded.')); return; }
     node._turnText=text;
     if(/\.tex$/i.test(item.file))body.innerHTML='<pre>'+escapeHtml(text)+'</pre>';
     else{ body.innerHTML='<div class="md-doc">'+mdToHtml(closureCitedLemmas(normalizeProofMarkdown(text)))+'</div>'; renderMathIn(body); }
@@ -9974,7 +9989,7 @@ function threadTurnDownload(button){
   const node=button.closest('.chat-msg.turn-card'), text=node?._turnText; if(typeof text!=='string')return;
   const n=String(node.dataset.key||'').split('|')[1]||'', tex=/\.tex$/i.test(String(node.dataset.key||'').split('|')[2]||'');
   const url=URL.createObjectURL(new Blob([text],{type:tex?'application/x-tex':'text/markdown'}));
-  const a=document.createElement('a'); a.href=url; a.download='proof-turn-'+n+(tex?'.tex':'.md');
+  const a=document.createElement('a'); a.href=url; a.download=(node.classList.contains('turn-answer')?'answer':'proof')+'-turn-'+n+(tex?'.tex':'.md');
   document.body.append(a); a.click(); a.remove(); setTimeout(()=>URL.revokeObjectURL(url),1000);
 }
 function threadMoreButton(node,text,key){
