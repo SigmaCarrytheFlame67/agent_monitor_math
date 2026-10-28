@@ -9797,7 +9797,9 @@ function threadTurnNote(run,kind){
   const turns=kind==='prove'&&Array.isArray(run?.proof_turns)?run.proof_turns:[], live=turns[turns.length-1];
   const started=Date.parse(live?.started_at||''), written=Number(run?.sandbox_preview?.mtime||0)*1000;
   const stale=turns.length>1&&!live.finished_at&&Number.isFinite(started)&&written>0&&written<started&&!sandboxEditing;
-  const text=stale?'Turn '+live.n+' is working · showing turn '+(live.n-1)+'\'s proof until it is rewritten':'';
+  // The proof shown is the last one an earlier turn kept (or, none kept, an earlier one).
+  const shown=turns.slice(0,-1).filter(t=>t&&t.file).pop();
+  const text=stale?'Turn '+live.n+' is working · showing '+(shown?'turn '+shown.n+'\'s':'an earlier')+' proof until it is rewritten':'';
   if(note.textContent!==text){ threadRedraw('keep',()=>{ note.textContent=text; note.hidden=!text; }); }
 }
 function renderThread({fresh=false,sent=false}={}){
@@ -9925,7 +9927,7 @@ function threadItemNode(item){ return item.kind==='user'?threadUserNode(item):it
 // An earlier turn's proof, as it was when the turn ended: read-only, typeset
 // as the live card's is, its start until Show more, with its own Download.
 // Its text is read once (threadTurnTexts) through the workspace file endpoint.
-const threadTurnTexts=new Map();
+const threadTurnTexts=new Map(), THREAD_TURN_RETRIES=3, THREAD_TURN_RETRY_MS=1500;
 function threadTurnNode(item){
   const node=analyzeEl('div','chat-msg turn-card'), head=analyzeEl('div','turn-head');
   const status=item.status==='failed'?' · failed':item.status==='stopped'?' · stopped':item.status==='interrupted'?' · interrupted':'';
@@ -9940,9 +9942,11 @@ function threadTurnNode(item){
   threadTurnLoad(node,item,body,download);
   return node;
 }
-async function threadTurnLoad(node,item,body,download){
+async function threadTurnLoad(node,item,body,download,attempt=0){
   const rid=String(runId||''), key=rid+'|'+item.key;
-  await Promise.resolve();
+  if(attempt)await new Promise(resolve=>setTimeout(resolve,THREAD_TURN_RETRY_MS*attempt));
+  else await Promise.resolve();
+  if(String(runId||'')!==rid||attempt&&!node.isConnected)return;
   let text=threadTurnTexts.get(key);
   if(text===undefined){
     try{
@@ -9954,6 +9958,8 @@ async function threadTurnLoad(node,item,body,download){
     if(text!==null)threadTurnTexts.set(key,text);
   }
   if(String(runId||'')!==rid||!node.isConnected)return;
+  // A read that failed is tried again (a moment later, then longer) before the card says so.
+  if(text===null&&attempt<THREAD_TURN_RETRIES)return threadTurnLoad(node,item,body,download,attempt+1);
   threadRedraw('keep',()=>{
     if(text===null){ body.textContent=''; body.append(analyzeEl('span','turn-wait','This turn\'s proof could not be loaded.')); return; }
     node._turnText=text;

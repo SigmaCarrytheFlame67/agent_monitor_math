@@ -849,7 +849,7 @@ test('while a later turn has not rewritten the proof yet, the live card says who
   vm.runInContext(`let sandboxEditing=false; const note={textContent:'',hidden:true}; const $=id=>id==='proof-turn-note'?note:null; const threadRedraw=(how,draw)=>draw();
 ${fn('threadTurnNote')}`, ctx)
   const step = code => vm.runInContext(code, ctx)
-  const turns = [{ n: 1, started_at: at(0), finished_at: at(60) }, { n: 2, started_at: at(100), finished_at: null }]
+  const turns = [{ n: 1, started_at: at(0), finished_at: at(60), file: '.proof_turns/1.md' }, { n: 2, started_at: at(100), finished_at: null }]
   const show = (run, kind = 'prove') => { step(`threadTurnNote(${JSON.stringify(run)},${JSON.stringify(kind)})`); return plain(step('[note.textContent,note.hidden]')) }
   const mtime = s => (Date.parse(at(s)) / 1000)
   assert.deepEqual(show({ proof_turns: turns, sandbox_preview: { mtime: mtime(50) } }), ["Turn 2 is working · showing turn 1's proof until it is rewritten", false])
@@ -861,21 +861,25 @@ ${fn('threadTurnNote')}`, ctx)
   assert.deepEqual(show({ sandbox_preview: { mtime: mtime(50) } }), ['', true])
   assert.deepEqual(show({ proof_turns: turns, sandbox_preview: { mtime: mtime(50) } }, 'analyze'), ['', true])
   assert.deepEqual(show({ proof_turns: turns, sandbox_preview: {} }), ['', true])
+  // It names the last turn that kept a proof (turn 2 failed before writing one), or an earlier one when none did.
+  const three = [turns[0], { n: 2, started_at: at(70), finished_at: at(90), file: '' }, { n: 3, started_at: at(100), finished_at: null }]
+  assert.deepEqual(show({ proof_turns: three, sandbox_preview: { mtime: mtime(50) } }), ["Turn 3 is working · showing turn 1's proof until it is rewritten", false])
+  assert.deepEqual(show({ proof_turns: [{ ...turns[0], file: '' }, turns[1]], sandbox_preview: { mtime: mtime(50) } }), ['Turn 2 is working · showing an earlier proof until it is rewritten', false])
   step('sandboxEditing=true')
   assert.deepEqual(show({ proof_turns: turns, sandbox_preview: { mtime: mtime(50) } }), ['', true])
 })
 
 test('an earlier turn\'s card loads its proof once, typeset, with Show more and its own Download; one that cannot be read says so', async () => {
-  const ctx = vm.createContext({ console })
+  const ctx = vm.createContext({ console, setTimeout })
   vm.runInContext(DOM + `
-const fetched=[]; let fail=false;
-const fetch=async url=>{ fetched.push(url); if(fail)return {ok:false,status:404}; return {ok:true,json:async()=>({content:'# Claim\\n'+'Line of the proof.\\n'.repeat(30)})}; };
+const fetched=[]; let fail=0;
+const fetch=async url=>{ fetched.push(url); if(fail){ fail--; return {ok:false,status:404}; } return {ok:true,json:async()=>({content:'# Claim\\n'+'Line of the proof.\\n'.repeat(30)})}; };
 const mdToHtml=text=>'<p>'+text.length+'</p>', closureCitedLemmas=t=>t, normalizeProofMarkdown=t=>t, escapeHtml=t=>t;
 const URL={createObjectURL:()=>'blob:x',revokeObjectURL:()=>{}};
 ${['threadTurnNode', 'threadTurnLoad', 'threadMoreButton'].map(fn).join('\n')}
-const threadTurnTexts=new Map();`, ctx)
+const threadTurnTexts=new Map(), THREAD_TURN_RETRIES=2, THREAD_TURN_RETRY_MS=1;`, ctx)
   const step = code => vm.runInContext(code, ctx)
-  const flush = () => new Promise(resolve => setTimeout(resolve, 0))
+  const flush = () => new Promise(resolve => setTimeout(resolve, 15))
   const item = { key: 'turn|2|.proof_turns/2.md|100', kind: 'turn', n: 2, ts: at(130), file: '.proof_turns/2.md', status: 'finished' }
   step(`var box=document.createElement('div'); var node=threadTurnNode(${JSON.stringify(item)}); node.dataset.key=${JSON.stringify(item.key)}; box.append(node); node.isConnected=true;`)
   assert.match(step('node.textContent'), /Proof.*turn 2/)
@@ -890,10 +894,16 @@ const threadTurnTexts=new Map();`, ctx)
   step(`var again=threadTurnNode(${JSON.stringify(item)}); box.append(again); again.isConnected=true;`)
   await flush(); await flush()
   assert.equal(step('fetched.length'), 1)
-  // A proof that cannot be read says so.
-  step(`fail=true; var bad=threadTurnNode(${JSON.stringify({ ...item, key: 'turn|3|.proof_turns/3.md|9', n: 3, file: '.proof_turns/3.md' })}); box.append(bad); bad.isConnected=true;`)
-  await flush(); await flush()
+  // A read that fails once is tried again and then drawn.
+  step(`fail=1; var flaky=threadTurnNode(${JSON.stringify({ ...item, key: 'turn|4|.proof_turns/4.md|9', n: 4, file: '.proof_turns/4.md' })}); box.append(flaky); flaky.isConnected=true;`)
+  for (let i = 0; i < 6; i++) await flush()
+  assert.match(step("flaky.querySelector('turn-doc').innerHTML"), /md-doc/)
+  assert.equal(step("flaky.querySelector('turn-dl').disabled"), false)
+  // A proof that cannot be read (after its retries) says so.
+  step(`fail=99; var bad=threadTurnNode(${JSON.stringify({ ...item, key: 'turn|3|.proof_turns/3.md|9', n: 3, file: '.proof_turns/3.md' })}); box.append(bad); bad.isConnected=true;`)
+  for (let i = 0; i < 8; i++) await flush()
   assert.match(step('bad.textContent'), /could not be loaded/)
+  assert.equal(step("fetched.filter(u=>u.includes('3.md')).length"), 3)
   assert.equal(step("bad.querySelector('turn-dl').disabled"), true)
 })
 
