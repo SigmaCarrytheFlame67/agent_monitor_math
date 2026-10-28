@@ -283,6 +283,36 @@ and DAG views are unchanged.
   chat does; a send error is shown there too. The card no longer repeats the problem; with several
   problems, each proof keeps a small "Problem N" heading (without the
   problem's length, which would read as the proof's).
+- **One proof per turn.** A proof run reads like a chat: you → proof → you →
+  proof. Each turn (the first run, then each follow-up) keeps a copy of its
+  proof as it was when the turn ended, in the hidden `.proof_turns/` folder of
+  the run's workspace (`agent_monitor/proof_turns.py`: `index.json` lists
+  each turn's number, start, end, status and kept file; `<n>.md`, or
+  `<n>.tex` for a LaTeX-only proof). A dot-folder, it is never in the run's
+  file list or export. The run record (`/api/runs/<id>`) carries the list as
+  `proof_turns`.
+  - The latest turn's proof is the live card (Edit, Download, Lean). It
+    follows the message that started that turn. A message sent after that
+    turn started, and what follows it, goes under the card (`#chat-later`)
+    until its own turn starts.
+  - Each earlier turn with a proof kept is a read-only card ("Proof · turn
+    N", with its status if it did not finish, and its end time). It sits
+    before the first message sent after that turn started, or else before
+    the first line after it ended. It shows its start until Show more, typeset
+    like the live card, with its own Download (`proof-turn-N.md`). Its text is
+    read once through the workspace file endpoint. A turn that kept no proof
+    (it failed before writing one) has no card.
+  - While a later turn works and has not rewritten `proof.md` yet (some
+    engines write it only at the end), the live card still shows the turn
+    before's proof. Its toolbar then says so ("Turn N is working · showing
+    turn N−1's proof until it is rewritten"), until the proof is rewritten
+    or the turn ends.
+  - A turn ends (its proof kept) before any feedback queued for the next
+    turn starts. A turn left running by a restart is marked `interrupted`
+    when the next one starts. A deleted run records nothing. A symlinked
+    `.proof_turns` is never written through.
+  - Runs from before this change have no turns: their chat splits at the
+    first message sent after the problem, as above.
 - **The card's header.** On a screen at least 761px wide and 560px tall
   the card's toolbar and, for a readable version, its tabs (Readable
   version, Original, Notation, Map) stay at the top of the conversation as

@@ -371,6 +371,9 @@ html.read-only-run .run-access-note { display: flex; }
 }
 .proof-toolbar .title { font-size: 12px; font-weight: 700; }
 .proof-toolbar .sub { font-size: 11px; color: var(--dim); font-family: var(--mono); flex: 1; }
+/* A turn still working on a proof it has not rewritten yet: the card says whose proof it shows. */
+.proof-toolbar .proof-turn-note { font-size: 11.5px; color: var(--warn, var(--muted)); font-weight: 600; }
+.proof-toolbar .proof-turn-note[hidden] { display: none; }
 .proof-toolbar button {
   border: 1px solid var(--border); background: var(--panel); color: var(--fg);
   border-radius: 8px; padding: 6px 12px; font-size: 12px; font-weight: 600; cursor: pointer;
@@ -634,6 +637,19 @@ html.guest-viewer body:not(.analysis-run):not(.readability-run) #sel-pop { displ
 .sandbox-thread .chat-msg.notice .msg-text { white-space: pre-line; }
 .sandbox-thread .chat-msg.notice .ts { color: var(--dim); font-size: 11px; }
 .sandbox-thread .chat-msg.notice.error { border-color: color-mix(in srgb, var(--err) 45%, var(--border)); background: color-mix(in srgb, var(--err) 7%, var(--panel)); color: var(--err); }
+/* An earlier turn's proof: a read-only card in the thread (proof_turns), its
+   start until Show more; the latest proof is the live card (.proof-panel). */
+.sandbox-thread .chat-msg.turn-card { align-self: stretch; gap: 0; border: 1px solid var(--border); border-radius: 14px; background: var(--bg); overflow: clip; }
+.sandbox-thread .chat-msg.turn-card .turn-head { display: flex; align-items: center; flex-wrap: wrap; gap: 4px 10px; padding: 8px 14px; background: var(--bg2); border-bottom: 1px solid var(--border); }
+.sandbox-thread .chat-msg.turn-card .turn-head .title { font-size: 12px; font-weight: 700; }
+.sandbox-thread .chat-msg.turn-card .turn-head .sub { flex: 1; min-width: 0; font: 11px var(--mono); color: var(--dim); }
+.sandbox-thread .chat-msg.turn-card .turn-dl { padding: 4px 10px; border: 1px solid var(--border); border-radius: 8px; background: var(--panel); color: var(--fg); font: inherit; font-size: 12px; font-weight: 600; cursor: pointer; }
+.sandbox-thread .chat-msg.turn-card .turn-dl:disabled { opacity: .4; cursor: not-allowed; }
+.sandbox-thread .chat-msg.turn-card .msg-text { display: block; white-space: normal; overflow-wrap: break-word; padding: 12px 22px 6px; }
+.sandbox-thread .chat-msg.turn-card .msg-text .md-doc { max-width: 760px; margin: 0 auto; font-size: 14px; line-height: 1.7; }
+.sandbox-thread .chat-msg.turn-card .msg-text.clamped { max-height: 18em; overflow: hidden; -webkit-mask-image: linear-gradient(to bottom, #000 70%, transparent); mask-image: linear-gradient(to bottom, #000 70%, transparent); }
+.sandbox-thread .chat-msg.turn-card .turn-wait { color: var(--dim); font-size: 13px; }
+.sandbox-thread .chat-msg.turn-card .msg-more { margin: 2px 0 10px 22px; }
 /* A reply that is a chunk of the engine's activity log: one line until it is
    opened, then the log as written, in a box of its own that scrolls sideways. */
 .sandbox-thread .chat-msg.log .msg-log-row { display: flex; flex-wrap: wrap; align-items: baseline; gap: 2px 10px; padding: 0 4px; }
@@ -2381,6 +2397,7 @@ body { background:var(--bg); }
                 <div class="proof-toolbar">
                   <span class="title" id="proof-title">Proof</span>
                   <span class="sub" id="proof-label">—</span>
+                  <span class="proof-turn-note" id="proof-turn-note" role="status" hidden></span>
                   <div class="auto-pipeline-status" id="auto-pipeline-status" hidden></div>
                   <span class="editor-save-status" id="editor-save-status"></span>
                   <a class="analysis-source-link" id="analysis-source-link" hidden target="_blank" rel="noopener noreferrer">Source ↗</a>
@@ -9734,16 +9751,62 @@ function threadKind(run){
 function threadChatBoxes(){ const above=$('chat-msgs'); return {above,below:$('chat-later')||above}; }
 function threadSplit(items){ const at=items.findIndex(item=>item.kind==='user'); return at<0?[items,[]]:[items.slice(0,at),items.slice(at)]; }
 function threadChatNodes(){ const {above,below}=threadChatBoxes(); return [...(above?.children||[]),...(below&&below!==above?below.children:[])]; }
+/* The thread around the run's turns (proof_turns: the first run, then each
+   follow-up). A proof run that has them reads like a chat: the latest turn's
+   proof is the live card, after the lines up to that turn (the message that
+   started it included); a message sent after it started, and what follows,
+   go under the card. Each earlier turn with its proof kept is a read-only
+   card at its place: before the first message sent after that turn started,
+   or else the first line after it ended. Without turns (an older run), the
+   chat is split at its first message sent after the problem (threadSplit). */
+function threadLayout(items,run,kind){
+  const turns=kind==='prove'&&Array.isArray(run?.proof_turns)?run.proof_turns.filter(t=>t&&typeof t==='object'&&Number.isFinite(Number(t.n))):[];
+  if(!turns.length){ const [above,below]=threadSplit(items); return {above,below}; }
+  const time=ts=>{ const t=Date.parse(ts||''); return Number.isFinite(t)?t:NaN; };
+  const firstAfter=(list,at,users)=>Number.isFinite(at)?list.findIndex(item=>(!users||item.kind==='user')&&time(item.ts)>at):-1;
+  const live=turns[turns.length-1];
+  let cut=firstAfter(items,time(live.started_at),true); if(cut<0)cut=items.length;
+  const above=items.slice(0,cut), below=items.slice(cut), cards=[];
+  for(const t of turns.slice(0,-1)){
+    if(!t.file)continue;
+    let at=firstAfter(above,time(t.started_at),true);
+    const ended=firstAfter(above,time(t.finished_at),false);
+    if(at<0||ended>=0&&ended<at)at=ended;
+    if(at<0)at=above.length;
+    cards.push({at,item:{key:'turn|'+t.n+'|'+t.file+'|'+(t.chars||0),kind:'turn',n:Number(t.n),ts:String(t.finished_at||''),file:String(t.file),status:String(t.status||''),label:'Proof',text:'',url:'',attachments:[]}});
+  }
+  cards.sort((a,b)=>a.at-b.at);
+  const out=[];
+  let next=0;
+  for(let i=0;i<=above.length;i++){
+    while(next<cards.length&&cards[next].at<=i)out.push(cards[next++].item);
+    if(i<above.length)out.push(above[i]);
+  }
+  return {above:out,below};
+}
 /* Draw the thread from the chat last read (renderChat) and the run's record
    (each poll), changing only what changed. fresh: lines new since the chat
    was last drawn fade in and are said to a screen reader; sent: the message
    the reader just sent (the server's copy of it, or true) is brought into
    view, and the error of an earlier try goes. */
+// While a later turn works and has not rewritten proof.md yet, the live card
+// still shows the turn before's proof (an earlier card above shows the same):
+// its toolbar says so, until the proof is rewritten or the turn ends.
+function threadTurnNote(run,kind){
+  const note=$('proof-turn-note'); if(!note)return;
+  const turns=kind==='prove'&&Array.isArray(run?.proof_turns)?run.proof_turns:[], live=turns[turns.length-1];
+  const started=Date.parse(live?.started_at||''), written=Number(run?.sandbox_preview?.mtime||0)*1000;
+  const stale=turns.length>1&&!live.finished_at&&Number.isFinite(started)&&written>0&&written<started&&!sandboxEditing;
+  const text=stale?'Turn '+live.n+' is working · showing turn '+(live.n-1)+'\'s proof until it is rewritten':'';
+  if(note.textContent!==text){ threadRedraw('keep',()=>{ note.textContent=text; note.hidden=!text; }); }
+}
 function renderThread({fresh=false,sent=false}={}){
   const problemBox=$('thread-problem'), {above:box,below}=threadChatBoxes(); if(!problemBox||!box)return;
   const rid=String(runId||''), run=threadRun();
+  if(typeof threadTurnNote==='function')threadTurnNote(run,threadKind(run));
   const model=threadModel(threadMsgsRun===rid?threadMsgs:[],run,threadKind(run));
-  const key=JSON.stringify([rid,model.problems.map(item=>item.key),model.items.map(item=>item.key)]);
+  const layout=threadLayout(model.items,run,threadKind(run));
+  const key=JSON.stringify([rid,model.problems.map(item=>item.key),layout.above.map(item=>item.key),layout.below.map(item=>item.key)]);
   const stale=sent?threadChatNodes().filter(el=>el.classList.contains('error')):[];
   let added=[], note='';
   if(key!==threadRenderKey||stale.length){
@@ -9754,8 +9817,8 @@ function renderThread({fresh=false,sent=false}={}){
     threadRedraw('keep',()=>{
       stale.forEach(el=>el.remove());
       threadPatch(problemBox,model.problems,threadUserNode,false);
-      if(below===box)added=threadPatch(box,model.items,threadItemNode,fresh);
-      else{ const [early,later]=threadSplit(model.items); added=[...threadPatch(box,early,threadItemNode,fresh),...threadPatch(below,later,threadItemNode,fresh)]; }
+      if(below===box)added=threadPatch(box,[...layout.above,...layout.below],threadItemNode,fresh);
+      else added=[...threadPatch(box,layout.above,threadItemNode,fresh),...threadPatch(below,layout.below,threadItemNode,fresh)];
     });
   }
   if(sent){
@@ -9858,7 +9921,56 @@ function threadNoticeNode(item){
   if(item.ts)node.append(analyzeEl('span','ts',fmtTs(item.ts)));
   return node;
 }
-function threadItemNode(item){ return item.kind==='user'?threadUserNode(item):item.kind==='reply'?threadReplyNode(item):threadNoticeNode(item); }
+function threadItemNode(item){ return item.kind==='user'?threadUserNode(item):item.kind==='reply'?threadReplyNode(item):item.kind==='turn'?threadTurnNode(item):threadNoticeNode(item); }
+// An earlier turn's proof, as it was when the turn ended: read-only, typeset
+// as the live card's is, its start until Show more, with its own Download.
+// Its text is read once (threadTurnTexts) through the workspace file endpoint.
+const threadTurnTexts=new Map();
+function threadTurnNode(item){
+  const node=analyzeEl('div','chat-msg turn-card'), head=analyzeEl('div','turn-head');
+  const status=item.status==='failed'?' · failed':item.status==='stopped'?' · stopped':item.status==='interrupted'?' · interrupted':'';
+  head.append(analyzeEl('span','title','Proof'),analyzeEl('span','sub','turn '+item.n+status+(item.ts?' · '+fmtTs(item.ts):'')));
+  const download=analyzeEl('button','turn-dl','⬇ Download'); download.type='button'; download.disabled=true;
+  download.setAttribute('aria-label','Download the proof of turn '+item.n);
+  head.append(download);
+  const body=analyzeEl('div','msg-text md-view turn-doc'); body.id='thread-msg-'+(++threadIds);
+  body.append(analyzeEl('span','turn-wait','Loading this turn\'s proof…'));
+  node.setAttribute('role','article'); node.setAttribute('aria-label','Proof, turn '+item.n);
+  node.append(head,body);
+  threadTurnLoad(node,item,body,download);
+  return node;
+}
+async function threadTurnLoad(node,item,body,download){
+  const rid=String(runId||''), key=rid+'|'+item.key;
+  await Promise.resolve();
+  let text=threadTurnTexts.get(key);
+  if(text===undefined){
+    try{
+      const response=await fetch('/api/workspace/'+encodeURIComponent(rid)+'/file?path='+encodeURIComponent(item.file));
+      if(response.ok===false)throw new Error('HTTP '+response.status);
+      const data=await response.json();
+      text=typeof data?.content==='string'?data.content:null;
+    }catch(e){ text=null; }
+    if(text!==null)threadTurnTexts.set(key,text);
+  }
+  if(String(runId||'')!==rid||!node.isConnected)return;
+  threadRedraw('keep',()=>{
+    if(text===null){ body.textContent=''; body.append(analyzeEl('span','turn-wait','This turn\'s proof could not be loaded.')); return; }
+    node._turnText=text;
+    if(/\.tex$/i.test(item.file))body.innerHTML='<pre>'+escapeHtml(text)+'</pre>';
+    else{ body.innerHTML='<div class="md-doc">'+mdToHtml(closureCitedLemmas(normalizeProofMarkdown(text)))+'</div>'; renderMathIn(body); }
+    download.disabled=false;
+    if(!node.querySelector('.msg-more')&&(text.length>900||text.split('\n').length>14))threadMoreButton(node,body,item.key);
+  });
+}
+// A turn's proof saved as a file (the text the card shows).
+function threadTurnDownload(button){
+  const node=button.closest('.chat-msg.turn-card'), text=node?._turnText; if(typeof text!=='string')return;
+  const n=String(node.dataset.key||'').split('|')[1]||'', tex=/\.tex$/i.test(String(node.dataset.key||'').split('|')[2]||'');
+  const url=URL.createObjectURL(new Blob([text],{type:tex?'application/x-tex':'text/markdown'}));
+  const a=document.createElement('a'); a.href=url; a.download='proof-turn-'+n+(tex?'.tex':'.md');
+  document.body.append(a); a.click(); a.remove(); setTimeout(()=>URL.revokeObjectURL(url),1000);
+}
 function threadMoreButton(node,text,key){
   const open=threadExpanded.has(key), button=analyzeEl('button','msg-more',open?'Show less':'Show more');
   button.type='button'; button.setAttribute('aria-expanded',String(open)); button.setAttribute('aria-controls',text.id);
@@ -9902,7 +10014,7 @@ function threadError(message){
 // is one); the thread is never read out again.
 function threadAnnounce(added,note=''){
   const words=[note,...added.map(({item})=>item.kind==='reply'?(threadIsLog(item.text)?'The engine\'s log was added.':'Reply: '+(String(item.text||'').trim().split('\n')[0]||'').slice(0,200))
-    :item.kind==='notice'?String(item.text||'').trim().slice(0,240):'')].filter(Boolean);
+    :item.kind==='notice'?String(item.text||'').trim().slice(0,240):item.kind==='turn'?'The proof of turn '+item.n+' was kept above.':'')].filter(Boolean);
   if(words.length)threadSay(words.join(' — '));
 }
 function threadSay(text){
@@ -9913,7 +10025,7 @@ function threadSay(text){
 // Another run, or none: an empty thread at its top, which opens on that run's latest exchange.
 function resetSandboxThread(){
   for(const id of ['thread-problem','chat-msgs','chat-later']){ const box=$(id); if(box)box.replaceChildren(); }
-  threadMsgs=[]; threadMsgsRun=''; threadRenderKey=''; threadExpanded.clear();
+  threadMsgs=[]; threadMsgsRun=''; threadRenderKey=''; threadExpanded.clear(); threadTurnTexts.clear();
   // An analysis's stored copy is the run's it was chosen for: another opens on its report.
   analysisSourceShown=false;
   threadPos={el:null,offset:0,top:0,gap:0,client:0,open:true,pinned:false,held:false,heldGap:0,coming:false,hidden:threadPos.hidden};
@@ -10232,7 +10344,10 @@ function threadSelPopCheck(){
     // then on the reader's own place is kept (Show more opens downwards). It
     // never pins the thread to its bottom: only the reader's scroll does.
     for(const type of ['pointerdown','keydown','touchstart'])sc.addEventListener(type,()=>{ if(threadPos.open){ threadPos.open=false; threadMark(); } },{passive:true});
-    sc.addEventListener('click',event=>{ const button=event.target.closest?.('.msg-more'); if(button)threadToggle(button); });
+    sc.addEventListener('click',event=>{
+      const button=event.target.closest?.('.msg-more'); if(button)return threadToggle(button);
+      const download=event.target.closest?.('.turn-dl'); if(download)threadTurnDownload(download);
+    });
     if(typeof ResizeObserver==='function'){
       const observer=new ResizeObserver(threadResized);
       for(const el of [sc,$('thread-problem'),$('chat-msgs'),sc.querySelector('.proof-panel'),$('ask-list'),$('chat-later')])if(el)observer.observe(el);
