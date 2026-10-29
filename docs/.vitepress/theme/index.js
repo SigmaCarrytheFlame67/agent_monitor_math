@@ -40,6 +40,8 @@ export default {
       href: '/sign-in',
       'aria-label': 'Sign up or sign in to Ansätze'
     }, 'Sign up'),
-    'home-hero-after': () => h(Fragment, [h(InstitutionRail), h(HomeReveal)])
+    'home-hero-after': () => h(Fragment, [h(InstitutionRail), h(HomeReveal)]),
+    // Pages with the sidebar hide VitePress's footer, so they carry the same credit.
+    'doc-after': () => h('p', { class: 'ansatz-credit' }, 'By Richard Cai and Eric Jiang')
   })
 }

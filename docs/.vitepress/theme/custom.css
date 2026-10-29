@@ -1264,3 +1264,12 @@ h3,
   .VPHome .VPHero .tagline { animation-delay: 230ms; }
   .VPHome .VPHero .actions { animation-delay: 320ms; }
 }
+
+.ansatz-credit {
+  margin: 32px 0 0;
+  padding-top: 16px;
+  border-top: 1px solid var(--vp-c-divider);
+  font-size: 13px;
+  color: var(--vp-c-text-2);
+  text-align: center;
+}

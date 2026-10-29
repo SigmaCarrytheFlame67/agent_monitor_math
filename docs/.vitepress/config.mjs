@@ -73,6 +73,9 @@ export default defineConfig({
         { text: 'Problems & Forum', link: '/problems' }
       ]}
     ],
-    outline: [2, 3]
+    outline: [2, 3],
+    footer: {
+      message: 'By Richard Cai and Eric Jiang'
+    }
   }
 })
