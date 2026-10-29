@@ -744,3 +744,15 @@ class KimiHomeTest(unittest.TestCase):
         self.assertEqual(data["engine"], "plain")
         # After a kimi turn, an easy one only answers (the proof is Ansatz CGM · Kimi K3's).
         self.assertTrue(jobs._easy_answer_only(ws, data))
+
+
+class PlainApiAnswerTest(unittest.TestCase):
+    def test_an_answer_needs_no_heading_but_never_carries_tool_markup(self) -> None:
+        from agent_monitor.runners import plain_runner
+
+        with patch.dict(os.environ, {plain_runner.ANSWER_ONLY_ENV: ""}):
+            self.assertEqual(plain_runner._api_artifact_issues("Step 3 holds."), ["missing level-one final heading"])
+            self.assertEqual(plain_runner._api_artifact_issues("# Proof\n\nok"), [])
+        with patch.dict(os.environ, {plain_runner.ANSWER_ONLY_ENV: "1"}):
+            self.assertEqual(plain_runner._api_artifact_issues("Step 3 holds because $x^2 \\ge 0$."), [])
+            self.assertEqual(plain_runner._api_artifact_issues("Sure. <function_calls><invoke name='x'>"), ["<function_calls>", "<invoke "])
