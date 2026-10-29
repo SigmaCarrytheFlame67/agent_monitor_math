@@ -93,7 +93,9 @@ def _api_artifact_issues(text: str) -> list[str]:
         "<parameter ",
     )
     issues = [marker for marker in markers if marker in lowered]
-    if not text.lstrip().startswith("# "):
+    # An answer-only turn (easy_route) answers a question about the proof:
+    # its reply is prose, not a write-up that opens with a heading.
+    if not text.lstrip().startswith("# ") and os.environ.get(ANSWER_ONLY_ENV) != "1":
         issues.append("missing level-one final heading")
     return issues
 
