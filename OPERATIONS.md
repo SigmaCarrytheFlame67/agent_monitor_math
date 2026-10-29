@@ -1154,8 +1154,9 @@ can create a guest identity, each client address also has its own budget:
 
 ## Easy requests on Plain
 
-A run started on Ansatz CGM by a signed-in account has each turn rated first
-by a small judge model (`agent_monitor/easy_route.py`). The first run is
+A run started on Ansatz CGM (`math_harness`) or on Ansatz CGM · Kimi K3
+(`kimi`) by a signed-in account has each turn rated first by a small judge
+model (`agent_monitor/easy_route.py`). The first run is
 rated by its problem, and each follow-up by its message, with the session's
 first problem as context. A turn rated **easy** (a routine exercise, a short
 computation, a definition, a small edit) runs on **Plain**, one call of the
@@ -1188,7 +1189,9 @@ always gets it, without the judge.
   started on another engine, Max and Max (API), a start or follow-up for
   which Plain is not allowed (member policy) or would answer with another
   model or on another route (a start that Plain would put on the sponsored
-  Kimi service is refused and starts Ansatz CGM), a bare Continue, and a
+  Kimi service is refused and starts Ansatz CGM; Ansatz CGM · Kimi K3 runs
+  on that service itself, through Plain, so its easy turns may), a bare
+  Continue, and a
   message with files (each keeps the run's current engine).
 - **Failures.** No key, the judge's error or timeout (6 s in all), or an answer
   that is not clearly "easy": the turn runs on Ansatz CGM. Routing never stops
@@ -1203,7 +1206,7 @@ always gets it, without the judge.
   message, and the live card keeps the proof Ansatz CGM wrote. A run that has
   only ever been on Plain lets Plain write the proof.
 - **Said where a run is chosen.** With the judge on, the launcher's "Runs on
-  …" line for Ansatz CGM (not Max) adds: "Easy requests may be rated by an
+  …" line for Ansatz CGM (not Max) and Ansatz CGM · Kimi K3 adds: "Easy requests may be rated by an
   external model (OpenRouter · <judge>) and answered with Plain on the same
   model." (`/api/settings` → `easy_route`: on or off and the judge's name,
   never its key.)

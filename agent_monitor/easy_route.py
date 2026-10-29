@@ -49,6 +49,9 @@ EASY_MIN_PROBABILITY = 0.6
 # The rating sits before a Start or a Send answers: a slow judge is skipped soon.
 TIMEOUT_S = 6.0
 HOME = "math_harness"
+# The engines a run started on is rated on: Ansatz CGM on any route, and
+# Ansatz CGM · Kimi K3 (``kimi``, whose sponsored transport is Plain anyway).
+HOMES = frozenset({"math_harness", "kimi"})
 EASY_ENGINE = "plain"
 STATE_FILE = ".easy_route.json"
 MAX_TEXT = 8_000
