@@ -9,7 +9,7 @@
 # unreviewed reports.  This unit never receives a provider key.
 [Unit]
 Description=Ansätze problem-status refresh
-Documentation=file:/home/repo/agent_monitor_math/deploy/ansatze/README.md
+Documentation=file:/home/ubuntu/Ansatze/deploy/ansatze/README.md
 After=network-online.target ansatze-kimi.service
 Wants=network-online.target
 
@@ -22,7 +22,7 @@ StateDirectory=ansatze-problems
 StateDirectoryMode=0755
 UMask=0022
 WorkingDirectory=/var/lib/ansatze-problems
-ExecStart=/home/repo/agent_monitor_math/.venv/bin/python /home/repo/agent_monitor_math/scripts/update_problem_status.py --output /var/lib/ansatze-problems/problem-status.json --state /var/lib/ansatze-problems/state.json --news /var/lib/ansatze-news/news.json
+ExecStart=/home/ubuntu/Ansatze/.venv/bin/python /home/ubuntu/Ansatze/scripts/update_problem_status.py --output /var/lib/ansatze-problems/problem-status.json --state /var/lib/ansatze-problems/state.json --news /var/lib/ansatze-news/news.json
 Environment=PYTHONNOUSERSITE=1
 Environment=PYTHONDONTWRITEBYTECODE=1
 Environment=HOME=/var/lib/ansatze-problems
@@ -33,9 +33,9 @@ Environment=AGENT_MONITOR_SPONSORED_KIMI_URL=http://127.0.0.1:4610
 TimeoutStartSec=20min
 
 ProtectHome=tmpfs
-BindReadOnlyPaths=/home/repo/agent_monitor_math
+BindReadOnlyPaths=/home/ubuntu/Ansatze
 BindReadOnlyPaths=/home/ubuntu/.local/share/uv/python/cpython-3.13-linux-x86_64-gnu
-InaccessiblePaths=-/home/repo/agent_monitor_math/.env -/home/repo/agent_monitor_math/.secrets -/home/repo/agent_monitor_math/data -/var/lib/ansatze
+InaccessiblePaths=-/home/ubuntu/Ansatze/.env -/home/ubuntu/Ansatze/.secrets -/home/ubuntu/Ansatze/data -/var/lib/ansatze
 
 NoNewPrivileges=yes
 CapabilityBoundingSet=

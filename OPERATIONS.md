@@ -239,7 +239,7 @@ Admin view → **Accounts** (`GET /api/admin/accounts`, administrators only;
   ansatze.ai:
 
   ```bash
-  cd /home/repo/agent_monitor_math
+  cd /home/ubuntu/Ansatze
   sudo runuser -u ubuntu -- env AGENT_MONITOR_DATA_DIR=/var/lib/ansatze/console \
     AGENT_MONITOR_ENV_PATH=/etc/ansatze/console.env PYTHONPATH="$PWD" \
     ./.venv/bin/python -m agent_monitor.accounts_admin list
@@ -1901,7 +1901,7 @@ mkdir -m 700 /tmp/news-check
 cp -a <the patched tree> /tmp/news-check/code
 sudo install -m 600 -o ubuntu /var/lib/ansatze-news/state.json /var/lib/ansatze-news/news.json /tmp/news-check/
 cd /tmp/news-check/code
-/home/repo/agent_monitor_math/.venv/bin/python scripts/update_math_news.py --output /tmp/news-check/news.json \
+/home/ubuntu/Ansatze/.venv/bin/python scripts/update_math_news.py --output /tmp/news-check/news.json \
   --state /tmp/news-check/state.json --seed agent_monitor/data/news_seed.json --no-model
 ```
 
@@ -2106,7 +2106,7 @@ drop-in replacement for the hosted backend.
 
 | Component | Where |
 |---|---|
-| Code and virtualenv | `/home/repo/agent_monitor_math` (this checkout, `.venv` on Python 3.13) |
+| Code and virtualenv | `/home/ubuntu/Ansatze` (this checkout, `.venv` on Python 3.13) |
 | Console | `agent-monitor.service`, user `ubuntu`, `127.0.0.1:4600`, data in `/var/lib/ansatze/console` |
 | Kimi key holder | `ansatze-kimi.service`, user `ansatze-kimi`, `127.0.0.1:4610`, data in `/var/lib/ansatze/kimi` |
 | Credentials | `/etc/ansatze/credentials/` (root 0400; loaded with `LoadCredential=`) |
@@ -2114,7 +2114,7 @@ drop-in replacement for the hosted backend.
 | Console mount | `/etc/ansatze/mount` |
 | Edge | `/etc/caddy/Caddyfile`; backups in `/etc/ansatze/backup/` |
 | Lean checks | `/run/agent-monitor-lean/{core,mathlib}.sock` (see `deploy/lean-broker/`) |
-| Static site | `/home/repo/agent_monitor_math/docs/.vitepress/dist` |
+| Static site | `/home/ubuntu/Ansatze/docs/.vitepress/dist` |
 
 On the host, inspect the effective configuration instead of guessing:
 

@@ -64,7 +64,7 @@ SystemCallFilter=~@privileged @resources @mount @reboot @swap @obsolete @debug @
 SystemCallErrorNumber=EPERM
 RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
 ReadOnlyPaths=@@RELEASE_ROOT@@
-InaccessiblePaths=-/home/repo/agent_monitor_math -/home/ubuntu/.codex -/home/ubuntu/.claude
+InaccessiblePaths=-/home/ubuntu/Ansatze -/home/ubuntu/.codex -/home/ubuntu/.claude
 
 TasksMax=64
 LimitNOFILE=512

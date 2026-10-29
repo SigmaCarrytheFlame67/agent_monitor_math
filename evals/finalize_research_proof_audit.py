@@ -836,7 +836,7 @@ def write_markdown(path: Path, snapshot: dict[str, Any]) -> None:
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--state", action="append", type=Path, required=True)
-    parser.add_argument("--data-dir", type=Path, default=Path("/home/repo/agent_monitor_math/data"))
+    parser.add_argument("--data-dir", type=Path, default=Path("/home/ubuntu/Ansatze/data"))
     parser.add_argument("--out", type=Path, required=True)
     args = parser.parse_args()
     snapshot = build_snapshot(args.state, args.data_dir)

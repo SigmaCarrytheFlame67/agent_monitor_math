@@ -29,7 +29,7 @@ class PublicKimiDeployTests(unittest.TestCase):
         self.assertRegex(unit, r"(?m)^CapabilityBoundingSet=\s*$")
         self.assertRegex(unit, r"(?m)^AmbientCapabilities=\s*$")
         self.assertNotIn("KIMI_API_KEY=", unit)
-        self.assertNotIn("/home/repo/agent_monitor_math/.env", unit)
+        self.assertNotIn("/home/ubuntu/Ansatze/.env", unit)
         self.assertNotIn("agent-monitor.service", unit)
 
     def test_caddy_allows_only_public_surface_and_preserves_session_cookie(self) -> None:

@@ -377,10 +377,10 @@ def test_console_unit_holds_no_kimi_key_and_keeps_registration_closed():
     env = _environment(unit)
     directives = dict(_directives(unit))
     assert directives["User"] == "ubuntu"
-    assert directives["WorkingDirectory"] == "/home/repo/agent_monitor_math"
+    assert directives["WorkingDirectory"] == "/home/ubuntu/Ansatze"
     assert "ProtectHome" not in directives  # app and CLIs live in /home
     assert directives["NoNewPrivileges"] == "yes"
-    assert env["PYTHONPATH"] == "/home/repo/agent_monitor_math"
+    assert env["PYTHONPATH"] == "/home/ubuntu/Ansatze"
     assert env["AGENT_MONITOR_DATA_DIR"] == "/var/lib/ansatze/console"
     assert env["AGENT_MONITOR_ENV_PATH"] == "/etc/ansatze/console.env"
     assert env["AGENT_MONITOR_HOST"] == "127.0.0.1"
@@ -425,11 +425,11 @@ def test_kimi_broker_unit_is_the_only_key_holder_and_is_loopback_only():
     assert "LoadCredential=kimi_api_base:/etc/ansatze/credentials/kimi_api_base" in unit
     assert "KIMI_API_KEY" not in env and "PUBLIC_KIMI_ENV_PATH" not in env
     assert single["ProtectHome"] == "tmpfs"
-    assert ("BindReadOnlyPaths", "/home/repo/agent_monitor_math") in directives
+    assert ("BindReadOnlyPaths", "/home/ubuntu/Ansatze") in directives
     assert single["ProtectSystem"] == "strict"
     assert single["NoNewPrivileges"] == "yes"
     assert single["CapabilityBoundingSet"] == ""
-    assert "/home/repo/agent_monitor_math/.secrets" in single["InaccessiblePaths"]
+    assert "/home/ubuntu/Ansatze/.secrets" in single["InaccessiblePaths"]
     assert "/var/lib/ansatze/console" in single["InaccessiblePaths"]
 
 
@@ -506,7 +506,7 @@ def test_rendered_units_pass_systemd_analyze_verify(tmp_path):
         unit = out / name
         source = unit.read_text(encoding="utf-8")
         if name.endswith(".service"):
-            production_command = "ExecStart=/home/repo/agent_monitor_math/.venv/bin/python "
+            production_command = "ExecStart=/home/ubuntu/Ansatze/.venv/bin/python "
             assert source.count(production_command) == 1
             unit.write_text(source.replace(production_command, f"ExecStart={Path(sys.executable).resolve()} "), encoding="utf-8")
     completed = subprocess.run(
@@ -596,7 +596,7 @@ def test_test_suite_never_uses_the_checkout_state():
 
 
 @pytest.mark.skipif(
-    not (sys.platform.startswith("linux") and ROOT == Path("/home/repo/agent_monitor_math")
+    not (sys.platform.startswith("linux") and ROOT == Path("/home/ubuntu/Ansatze")
          and (ROOT / ".venv" / "bin" / "python").exists()
          and os.environ.get("USER", "") in {"ubuntu", "root"}),
     reason="dry run needs the production checkout layout and service account",

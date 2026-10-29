@@ -2,7 +2,7 @@
 # ansatze-problems.service).
 [Unit]
 Description=Refresh the Ansätze problem-status overlay every six hours
-Documentation=file:/home/repo/agent_monitor_math/deploy/ansatze/README.md
+Documentation=file:/home/ubuntu/Ansatze/deploy/ansatze/README.md
 
 [Timer]
 OnCalendar=*-*-* 00/6:15:00

@@ -11,7 +11,7 @@
 # users.db with the agent_monitor_data_key credential.
 [Unit]
 Description=Ansätze proving console (agent_monitor.console_server)
-Documentation=file:/home/repo/agent_monitor_math/deploy/ansatze/README.md
+Documentation=file:/home/ubuntu/Ansatze/deploy/ansatze/README.md
 After=network-online.target ansatze-kimi.service
 Wants=network-online.target ansatze-kimi.service
 
@@ -19,9 +19,9 @@ Wants=network-online.target ansatze-kimi.service
 Type=simple
 User=ubuntu
 Group=ubuntu
-WorkingDirectory=/home/repo/agent_monitor_math
-ExecStart=/home/repo/agent_monitor_math/.venv/bin/python -m agent_monitor.console_server
-Environment=PYTHONPATH=/home/repo/agent_monitor_math
+WorkingDirectory=/home/ubuntu/Ansatze
+ExecStart=/home/ubuntu/Ansatze/.venv/bin/python -m agent_monitor.console_server
+Environment=PYTHONPATH=/home/ubuntu/Ansatze
 # stdout/stderr are journald sockets: without this Python block-buffers the
 # access log (minutes late, out of order with stderr, lost on every stop).
 Environment=PYTHONUNBUFFERED=1
@@ -93,7 +93,7 @@ LockPersonality=yes
 # pasted secrets and the operator's subscriptions.  Console runs never need
 # them: every Claude/Codex route gets an isolated CLAUDE_CONFIG_DIR or
 # CODEX_HOME under /var/lib/ansatze/console.
-InaccessiblePaths=-/var/lib/ansatze/kimi -/etc/ansatze/credentials -/home/repo/agent_monitor_math/.secrets -/run/user -/home/ubuntu/.claude -/home/ubuntu/.claude.json -/home/ubuntu/.codex
+InaccessiblePaths=-/var/lib/ansatze/kimi -/etc/ansatze/credentials -/home/ubuntu/Ansatze/.secrets -/run/user -/home/ubuntu/.claude -/home/ubuntu/.claude.json -/home/ubuntu/.codex
 
 [Install]
 WantedBy=multi-user.target

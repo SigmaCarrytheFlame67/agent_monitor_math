@@ -2,7 +2,7 @@
 # ansatze-news.service).
 [Unit]
 Description=Refresh the Ansätze math news feed twice an hour
-Documentation=file:/home/repo/agent_monitor_math/deploy/ansatze/README.md
+Documentation=file:/home/ubuntu/Ansatze/deploy/ansatze/README.md
 
 [Timer]
 OnCalendar=*-*-* *:00,30:00

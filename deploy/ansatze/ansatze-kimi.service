@@ -12,7 +12,7 @@
 # alternative is deploy/public-kimi/.  See deploy/ansatze/README.md.
 [Unit]
 Description=Ansätze sponsored Kimi broker (loopback 127.0.0.1:4610)
-Documentation=file:/home/repo/agent_monitor_math/deploy/ansatze/README.md
+Documentation=file:/home/ubuntu/Ansatze/deploy/ansatze/README.md
 After=network-online.target
 Wants=network-online.target
 
@@ -24,8 +24,8 @@ StateDirectory=ansatze/kimi
 StateDirectoryMode=0700
 WorkingDirectory=/var/lib/ansatze/kimi
 UMask=0077
-ExecStart=/home/repo/agent_monitor_math/.venv/bin/python -m agent_monitor.public_kimi_server
-Environment=PYTHONPATH=/home/repo/agent_monitor_math
+ExecStart=/home/ubuntu/Ansatze/.venv/bin/python -m agent_monitor.public_kimi_server
+Environment=PYTHONPATH=/home/ubuntu/Ansatze
 # Line-buffered journald output (stdout is a socket under systemd).
 Environment=PYTHONUNBUFFERED=1
 Environment=PYTHONNOUSERSITE=1
@@ -49,9 +49,9 @@ LoadCredential=kimi_api_base:/etc/ansatze/credentials/kimi_api_base
 
 # Only the checkout and its Python interpreter are visible under /home.
 ProtectHome=tmpfs
-BindReadOnlyPaths=/home/repo/agent_monitor_math
+BindReadOnlyPaths=/home/ubuntu/Ansatze
 BindReadOnlyPaths=/home/ubuntu/.local/share/uv/python/cpython-3.13-linux-x86_64-gnu
-InaccessiblePaths=-/home/repo/agent_monitor_math/.env -/home/repo/agent_monitor_math/.secrets -/home/repo/agent_monitor_math/data -/var/lib/ansatze/console
+InaccessiblePaths=-/home/ubuntu/Ansatze/.env -/home/ubuntu/Ansatze/.secrets -/home/ubuntu/Ansatze/data -/var/lib/ansatze/console
 
 NoNewPrivileges=yes
 CapabilityBoundingSet=

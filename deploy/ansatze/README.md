@@ -2,7 +2,7 @@
 
 This directory installs the public site **https://ansatze.ai** on this EC2 host
 (Ubuntu 26.04, public IP `44.196.29.12`) from the checkout at
-`/home/repo/agent_monitor_math`. The owner runs one script with `sudo`. Each
+`/home/ubuntu/Ansatze`. The owner runs one script with `sudo`. Each
 step announces itself and asks before it runs. Re-running the script is safe.
 
 ```text
@@ -51,7 +51,7 @@ so it is not a secret. Authentication is the security boundary.
    **DNS only** (grey cloud). The console's synchronous DAG and Lean requests
    can run longer than Cloudflare's 100-second origin timeout. If you must
    proxy, raise that timeout above 100 s first (Enterprise plans only).
-4. **Staged Kimi key.** `/home/repo/agent_monitor_math/.secrets/kimi.env`
+4. **Staged Kimi key.** `/home/ubuntu/Ansatze/.secrets/kimi.env`
    (mode 0600) contains `KIMI_API_KEY=` and `KIMI_API_BASE=`. The installer
    copies both into root-only systemd credentials. The console never receives
    either value.
@@ -83,7 +83,7 @@ so it is not a secret. Authentication is the security boundary.
 ## Install
 
 ```bash
-cd /home/repo/agent_monitor_math
+cd /home/ubuntu/Ansatze
 deploy/ansatze/install.sh --dry-run                    # print every privileged command
 deploy/ansatze/install.sh --render-to /tmp/ansatze-rendered   # inspect the exact files
 sudo deploy/ansatze/install.sh --acme-email you@example.com --admin-email you@example.com
@@ -205,7 +205,7 @@ The current key was pasted in chat, so treat it as exposed.
 4. Run `deploy/ansatze/smoke.sh --no-edge`, then **revoke the old key** at the
    provider.
 5. Delete the staged copy in the checkout if it still exists:
-   `shred -u /home/repo/agent_monitor_math/.secrets/kimi.env`.
+   `shred -u /home/ubuntu/Ansatze/.secrets/kimi.env`.
 
 The pasted key is also stored in plain text in the `ubuntu` account's Claude
 Code files (`~ubuntu/.claude/history.jsonl` and session transcripts under
@@ -444,7 +444,7 @@ restart `agent-monitor.service` after editing, once no proofs are running).
   host instead (it prompts for the new password and signs the account out):
 
   ```bash
-  cd /home/repo/agent_monitor_math
+  cd /home/ubuntu/Ansatze
   sudo runuser -u ubuntu -- env AGENT_MONITOR_DATA_DIR=/var/lib/ansatze/console \
     AGENT_MONITOR_ENV_PATH=/etc/ansatze/console.env PYTHONPATH="$PWD" \
     ./.venv/bin/python -m agent_monitor.cli set-password --email someone@ucla.edu
@@ -494,7 +494,7 @@ restart `agent-monitor.service` after editing, once no proofs are running).
   Copy-first checks and the one-time backfill are in `OPERATIONS.md` (News
   refresh).
 - **Analyze dependencies and settings.** Analyze needs `pylatexenc==2.11`
-  and `pypdf==6.20.0` in `/home/repo/agent_monitor_math/.venv` (one venv for
+  and `pypdf==6.20.0` in `/home/ubuntu/Ansatze/.venv` (one venv for
   `agent-monitor`, `ansatze-kimi` and `ansatze-news`): dry-run first, then
   `sudo -u ubuntu .venv/bin/python -m pip install --no-deps pylatexenc==2.11 pypdf==6.20.0`.
   Its caps, kill switches (`AGENT_MONITOR_ANALYZE_ENABLED`,
@@ -542,7 +542,7 @@ restart `agent-monitor.service` after editing, once no proofs are running).
 - **Old data is not migrated.** Accounts, runs and settings in the checkout's
   `data/` directory are not copied to the new data directory.
 - **The broker runs code from the checkout.** Anyone who can write to
-  `/home/repo/agent_monitor_math` controls the code the key holder runs.
+  `/home/ubuntu/Ansatze` controls the code the key holder runs.
   - The unit shows the broker only the checkout, read-only, and its
     interpreter. It hides the rest of `/home`, `.env`, `.secrets`, `data/` and
     the console's data.
@@ -565,7 +565,7 @@ restart `agent-monitor.service` after editing, once no proofs are running).
   guest runs by hand (for example with a shorter period):
 
   ```bash
-  cd /home/repo/agent_monitor_math
+  cd /home/ubuntu/Ansatze
   sudo -u ubuntu env AGENT_MONITOR_DATA_DIR=/var/lib/ansatze/console \
     AGENT_MONITOR_ENV_PATH=/etc/ansatze/console.env \
     .venv/bin/python -m agent_monitor.cli purge-guest-runs --older-than-days 30
@@ -627,7 +627,7 @@ stops calling when the broker is busy or over quota.
 
 | Symptom | Check |
 |---|---|
-| `ansatze-kimi` fails with `status=226/NAMESPACE` | systemd could not build its sandbox. Check that `/home/ubuntu/.local/share/uv/python/cpython-3.13-linux-x86_64-gnu` exists (`uv python install 3.13`) and that `/home/repo/agent_monitor_math/.venv` still points at it. |
+| `ansatze-kimi` fails with `status=226/NAMESPACE` | systemd could not build its sandbox. Check that `/home/ubuntu/.local/share/uv/python/cpython-3.13-linux-x86_64-gnu` exists (`uv python install 3.13`) and that `/home/ubuntu/Ansatze/.venv` still points at it. |
 | `ansatze-kimi` exits with "A valid Kimi LoadCredential is required" | `/etc/ansatze/credentials/kimi_api_key` is missing or empty. Re-run the `credentials` step with `--update-kimi-key`. |
 | `agent-monitor` exits with "refusing to start: account database/data key check failed" | The console opens `users.db` at startup. The data key credential is missing, not a valid Fernet key, or not the key that encrypted the saved settings. Restore `/etc/ansatze/credentials/agent_monitor_data_key` from backup; a newly generated key cannot read existing saved settings. |
 | The smoke check says "hosted guest Kimi available" failed | The console cannot reach `127.0.0.1:4610`. Run `systemctl status ansatze-kimi` and `journalctl -u ansatze-kimi`. |

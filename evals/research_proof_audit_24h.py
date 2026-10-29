@@ -471,8 +471,8 @@ def main() -> int:
     parser.add_argument("--user-id", type=int, required=True)
     parser.add_argument("--origin", default="http://127.0.0.1:4600")
     parser.add_argument("--base-path", required=True)
-    parser.add_argument("--server-root", default="/home/repo/agent_monitor_math")
-    parser.add_argument("--data-dir", default="/home/repo/agent_monitor_math/data")
+    parser.add_argument("--server-root", default="/home/ubuntu/Ansatze")
+    parser.add_argument("--data-dir", default="/home/ubuntu/Ansatze/data")
     parser.add_argument(
         "--targets",
         type=Path,

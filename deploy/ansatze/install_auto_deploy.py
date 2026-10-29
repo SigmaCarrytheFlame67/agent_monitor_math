@@ -17,7 +17,7 @@ import sys
 import time
 
 HERE = Path(__file__).resolve().parent
-LEGACY = Path("/home/repo/agent_monitor_math")
+LEGACY = Path("/home/ubuntu/Ansatze")
 RELEASE_ROOT = Path("/opt/ansatze")
 INSTALL = Path("/usr/local/lib/ansatze")
 CONFIG = Path("/etc/ansatze/auto-deploy.json")

@@ -25,7 +25,7 @@ shopt -u patsub_replacement 2>/dev/null || true
 SCRIPT_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)
 
 # Fixed host layout.  The unit and Caddyfile templates name these paths.
-APP_DIR=/home/repo/agent_monitor_math
+APP_DIR=/home/ubuntu/Ansatze
 SERVICE_USER=ubuntu
 DOMAIN=ansatze.ai
 ETC_DIR=/etc/ansatze
