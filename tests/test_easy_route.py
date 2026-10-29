@@ -456,7 +456,7 @@ class WiringTest(unittest.TestCase):
             self.assertLess(source.index("_easy_route_follow_up("), source.index('engine = run_data.get("engine")'))
         self.assertIn("has_files=bool(user_entry.get(\"attachments\"))", with_message)
         start = inspect.getsource(jobs.start_job)
-        self.assertLess(start.index("if easy_route and sponsored_kimi:"), start.index("_launch_run(") if "_launch_run(" in start else len(start))
+        self.assertLess(start.index("if easy_route and sponsored_kimi and easy_route_home != \"kimi\":"), start.index("_launch_run(") if "_launch_run(" in start else len(start))
 
 
 if __name__ == "__main__":
@@ -664,3 +664,83 @@ class BudgetAndSettingsTest(unittest.TestCase):
         import inspect
 
         self.assertIn('"easy_route": _easy_route_setting(user)', inspect.getsource(settings.get_settings))
+
+
+class KimiHomeTest(unittest.TestCase):
+    """Ansatz CGM · Kimi K3 (``kimi``) is rated too; its easy turns run on Plain on its own route."""
+
+    def test_a_kimi_start_routes_and_remembers_its_home(self) -> None:
+        root = Path(self.enterContext(tempfile.TemporaryDirectory()))
+        self.enterContext(patch.object(jobs, "RUNS_DIR", root / "runs"))
+        self.enterContext(patch.dict(os.environ, {easy_route.KEY_ENV: KEY}))
+        os.environ.pop(easy_route.SWITCH_ENV, None)
+        calls = []
+
+        def start_job(**kwargs):
+            calls.append(kwargs)
+            rid = f"{kwargs['engine']}_adhoc_{len(calls)}"
+            (root / "runs" / "workspaces" / rid).mkdir(parents=True)
+            return {"run_id": rid, "engine": kwargs["engine"]}
+
+        self.enterContext(patch.object(jobs, "start_job", side_effect=start_job))
+        self.enterContext(patch.object(jobs, "_append_chat"))
+        for verdict, want in (("easy", "plain"), ("hard", "kimi")):
+            calls.clear()
+            with patch.object(easy_route, "judge", return_value={"verdict": verdict, "reason": "", "model": "m", "error": ""}):
+                job = jobs.start_job_routed(engine="kimi", problem_text="What is 2+3?", model="kimi-k3",
+                                            auth_route="api_key", user={"id": 1, "is_admin": True})
+            self.assertEqual(job["engine"], want)
+            if want == "plain":
+                self.assertEqual((calls[0]["easy_route"], calls[0]["easy_route_home"], calls[0]["model"]), (True, "kimi", "kimi-k3"))
+            state = easy_route.load(root / "runs" / "workspaces" / job["run_id"])
+            self.assertEqual((state["home"], state["turns"][0]["engine"]), ("kimi", want))
+
+    def test_the_sponsored_route_is_kimis_own_so_plain_may_take_it(self) -> None:
+        from agent_monitor import sponsored_kimi_client
+
+        root = Path(self.enterContext(tempfile.TemporaryDirectory()))
+        self.enterContext(patch.object(jobs, "RUNS_DIR", root / "runs"))
+        self.enterContext(patch.object(jobs, "CACHE_DIR", root / "cache"))
+        self.enterContext(patch.object(sponsored_kimi_client, "configured", return_value=True))
+        self.enterContext(patch.object(sponsored_kimi_client, "supports_engine", return_value=True))
+        self.enterContext(patch.object(sponsored_kimi_client, "endpoint", return_value="http://127.0.0.1:9/v1"))
+        for name in ("KIMI_API_KEY", "KIMI_API_BASE", "KIMI_BASE_URL"):
+            self.enterContext(patch.dict(os.environ, {name: ""}))
+        admin = {"id": 1, "is_admin": True, "email": "admin@example.test"}
+        # Home Ansatz CGM (math_harness): refused before anything is written.
+        with patch.object(jobs.threading, "Thread") as thread:
+            with self.assertRaisesRegex(ValueError, "sponsored Kimi service"):
+                jobs.start_job(engine="plain", problem_text="Show 1+1=2.", model="kimi-k3", user=admin,
+                               auth_route="api_key", easy_route=True, easy_route_home="math_harness")
+            thread.assert_not_called()
+        # Home Ansatz CGM · Kimi K3: that refusal never applies (whatever else start_job then checks).
+        with patch.object(jobs.threading, "Thread"):
+            try:
+                jobs.start_job(engine="plain", problem_text="Show 1+1=2.", model="kimi-k3", user=admin,
+                               auth_route="api_key", easy_route=True, easy_route_home="kimi")
+            except ValueError as exc:
+                self.assertNotIn("Plain would run on the sponsored Kimi service", str(exc))
+
+    def test_a_kimi_runs_follow_ups_go_back_to_kimi(self) -> None:
+        root = Path(self.enterContext(tempfile.TemporaryDirectory()))
+        self.enterContext(patch.object(jobs, "RUNS_DIR", root / "runs"))
+        self.enterContext(patch.object(jobs, "CACHE_DIR", root / "cache"))
+        self.enterContext(patch.dict(os.environ, {easy_route.KEY_ENV: KEY}))
+        os.environ.pop(easy_route.SWITCH_ENV, None)
+        run_id = "plain_adhoc_kimihome"
+        ws = root / "runs" / "workspaces" / run_id
+        ws.mkdir(parents=True)
+        (ws / "proof.md").write_text("# Proof\n\nA proof long enough to count as one.\n", encoding="utf-8")
+        jobs._write_run({"run_id": run_id, "engine": "plain", "status": "finished", "problem_text": "Prove it.",
+                         "problems": [{"text": "Prove it.", "source": "initial"}], "agents": [], "edges": []})
+        easy_route.note_turn(ws, home="kimi", engine="plain", verdict=None, why="judged")
+        self.enterContext(patch.object(jobs, "_append_chat"))
+        self.enterContext(patch.object(jobs, "_easy_plain_follow_up_ok", return_value=True))
+        with patch.object(easy_route, "judge", return_value={"verdict": "hard", "reason": "", "model": "m", "error": ""}):
+            data = jobs._easy_route_follow_up(run_id, jobs._load_run_record(run_id), ws, message="keep trying!", user=None, model="kimi-k3")
+        self.assertEqual(data["engine"], "kimi")
+        with patch.object(easy_route, "judge", return_value={"verdict": "easy", "reason": "", "model": "m", "error": ""}):
+            data = jobs._easy_route_follow_up(run_id, jobs._load_run_record(run_id), ws, message="what is 2+3?", user=None, model="kimi-k3")
+        self.assertEqual(data["engine"], "plain")
+        # After a kimi turn, an easy one only answers (the proof is Ansatz CGM · Kimi K3's).
+        self.assertTrue(jobs._easy_answer_only(ws, data))

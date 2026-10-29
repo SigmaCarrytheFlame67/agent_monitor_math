@@ -889,7 +889,10 @@ const isCgmMax=()=>maxOn, isCgmMaxApi=()=>maxApiOn;`, ctx)
   assert.equal(step('made.download'), 'answer-turn-2.md')
   // The launcher's notice: only for Ansatz CGM (not Max), signed in, with the judge on.
   assert.equal(step('easyRouteNotice()'), 'Easy requests may be rated by an external model (OpenRouter · typesafe/jev-1.13) and answered with Plain on the same model.')
-  for (const change of ["engine='plain'", 'maxOn=true', 'maxApiOn=true', 'CURRENT_USER={guest:true}', 'SETTINGS={easy_route:{enabled:false}}', 'SETTINGS={}']) {
+  // Ansatz CGM · Kimi K3 (kimi) is rated too.
+  step("engine='kimi'")
+  assert.match(step('easyRouteNotice()'), /^Easy requests may be rated/)
+  for (const change of ["engine='plain'", "engine='claude'", 'maxOn=true', 'maxApiOn=true', 'CURRENT_USER={guest:true}', 'SETTINGS={easy_route:{enabled:false}}', 'SETTINGS={}']) {
     step("SETTINGS={easy_route:{enabled:true,model:'typesafe/jev-1.13'}}; CURRENT_USER={id:1}; engine='math_harness'; maxOn=false; maxApiOn=false;" + change)
     assert.equal(step('easyRouteNotice()'), '', change)
   }

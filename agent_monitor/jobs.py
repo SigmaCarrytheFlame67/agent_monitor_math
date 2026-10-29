@@ -1821,6 +1821,7 @@ def start_job(
     readability: object = None,
     tool_free: bool = False,
     easy_route: bool = False,
+    easy_route_home: str = "",
 ) -> dict[str, Any]:
     """Start one run (``run_kind`` ``"prove"``, the default, ``"analyze"`` or
     ``"readability"``).
@@ -2107,10 +2108,11 @@ def start_job(
             "choose a model from your own API keys or linked accounts, or add your own "
             "Kimi API key in Settings"
         )
-    if easy_route and sponsored_kimi:
+    if easy_route and sponsored_kimi and easy_route_home != "kimi":
         # An easy request moves to Plain only on the account route Ansatz CGM
         # would use, never onto the sponsored service (start_job_routed then
-        # starts Ansatz CGM as asked).
+        # starts Ansatz CGM as asked).  Ansatz CGM · Kimi K3 takes the same
+        # sponsored route itself (through Plain), so its easy requests may.
         raise ValueError("Plain would run on the sponsored Kimi service")
     if sponsored_kimi:
         # The sponsored service asks for Kimi K3 whatever any engine names, so
@@ -2742,7 +2744,7 @@ def start_job_routed(**kwargs: Any) -> dict[str, Any]:
     user = kwargs.get("user") or {}
     kind = str(kwargs.get("run_kind") or "prove").strip().lower()
     if (
-        kwargs.get("engine") != easy_route.HOME
+        kwargs.get("engine") not in easy_route.HOMES
         or kind != "prove"
         or user.get("guest")
         or not easy_route.enabled()
@@ -2752,6 +2754,7 @@ def start_job_routed(**kwargs: Any) -> dict[str, Any]:
         or cgm_max.is_max_api_model(kwargs.get("model"))
     ):
         return start_job(**kwargs)
+    home = str(kwargs.get("engine"))
     text = str(kwargs.get("problem_text") or "").strip()
     verdict: dict[str, Any] | None = None
     why = "judged"
@@ -2764,16 +2767,17 @@ def start_job_routed(**kwargs: Any) -> dict[str, Any]:
     job = None
     if verdict and verdict.get("verdict") == "easy" and _easy_plain_allowed(user, kwargs):
         try:
-            job = start_job(**{**kwargs, "engine": easy_route.EASY_ENGINE, "easy_route": True})
+            job = start_job(**{**kwargs, "engine": easy_route.EASY_ENGINE, "easy_route": True,
+                               "easy_route_home": home})
         except (ValueError, account_policy.ProjectPolicyError):
             job = None
-    engine = easy_route.EASY_ENGINE if job is not None else easy_route.HOME
+    engine = easy_route.EASY_ENGINE if job is not None else home
     if job is None:
         job = start_job(**kwargs)
     run_id = str(job.get("run_id") or "")
     if run_id:
         easy_route.note_turn(
-            RUNS_DIR / "workspaces" / run_id, home=easy_route.HOME, engine=engine, verdict=verdict, why=why
+            RUNS_DIR / "workspaces" / run_id, home=home, engine=engine, verdict=verdict, why=why
         )
         if engine == easy_route.EASY_ENGINE and verdict:
             _append_chat(run_id, "system", easy_route.plain_note(verdict))
@@ -2815,26 +2819,27 @@ def _easy_route_follow_up(
     from agent_monitor import easy_route
 
     try:
-        if not easy_route.enabled() or easy_route.home(ws) != easy_route.HOME:
+        home = easy_route.home(ws)
+        if not easy_route.enabled() or home not in easy_route.HOMES:
             return run_data
         current = str(run_data.get("engine") or "")
-        if current not in {easy_route.HOME, easy_route.EASY_ENGINE}:
+        if current not in {home, easy_route.EASY_ENGINE}:
             return run_data
         text = (message or "").strip()
         if not text or text.startswith(_BARE_CONTINUE_PREFIX) or has_files:
             return run_data
         verdict: dict[str, Any] | None = None
         if easy_route.asks_for_cgm(text):
-            target, why = easy_route.HOME, "asked"
+            target, why = home, "asked"
         else:
             problems = ensure_problems(run_data, run_id)
             first = _problem_item_text(problems[0]) if problems else str(run_data.get("problem_text") or "")
             verdict = easy_route.judge(text, problem=first)
             why = "judged"
-            target = easy_route.EASY_ENGINE if verdict.get("verdict") == "easy" else easy_route.HOME
+            target = easy_route.EASY_ENGINE if verdict.get("verdict") == "easy" else home
         if target == easy_route.EASY_ENGINE and not _easy_plain_follow_up_ok(run_id, run_data, user, model):
-            target = easy_route.HOME
-        easy_route.note_turn(ws, home=easy_route.HOME, engine=target, verdict=verdict, why=why)
+            target = home
+        easy_route.note_turn(ws, home=home, engine=target, verdict=verdict, why=why)
         if target == current:
             return run_data
         with _RUN_WRITE_LOCK:
@@ -2864,10 +2869,11 @@ def _easy_answer_only(ws: Path, run_data: dict[str, Any]) -> bool:
         if str(run_data.get("engine") or "") != easy_route.EASY_ENGINE:
             return False
         state = easy_route.load(ws)
-        if state.get("home") != easy_route.HOME:
+        home = state.get("home")
+        if home not in easy_route.HOMES:
             return False
         earlier = (state.get("turns") or [])[:-1]
-        return any(isinstance(t, dict) and t.get("engine") == easy_route.HOME for t in earlier) and (
+        return any(isinstance(t, dict) and t.get("engine") == home for t in earlier) and (
             (ws / "proof.md").is_file() and (ws / "proof.md").stat().st_size > 0
         )
     except Exception:  # noqa: BLE001

@@ -3342,7 +3342,7 @@ function renderRunRuntime(){
 }
 function easyRouteNotice(){
   const route=SETTINGS?.easy_route;
-  if(!route?.enabled||CURRENT_USER?.guest||engine!=='math_harness'||isCgmMax()||isCgmMaxApi())return '';
+  if(!route?.enabled||CURRENT_USER?.guest||!['math_harness','kimi'].includes(engine)||isCgmMax()||isCgmMaxApi())return '';
   return `Easy requests may be rated by an external model (OpenRouter · ${route.model||'judge'}) and answered with Plain on the same model.`;
 }
 // keepEngine: a refresh (Settings opened, a refused start, a new login) keeps
